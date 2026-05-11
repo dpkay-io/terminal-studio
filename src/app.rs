@@ -3138,7 +3138,7 @@ impl eframe::App for App {
                         self.resize_snapshots.insert(sid, snap);
                     }
                     let entry = &self.sessions[idx];
-                    SessionManager::resize(&*entry.master, cols, rows);
+                    SessionManager::resize(&entry.master, cols, rows);
                     entry.session.write().resize(cols, rows);
                 }
             }

@@ -98,11 +98,13 @@ impl SessionManager {
         Ok((id, session, pty_pair.master, writer, shell_pid, alive))
     }
 
+    #[allow(clippy::borrowed_box)]
     pub fn write(writer: &mut Box<dyn Write + Send>, data: &[u8]) {
         let _ = writer.write_all(data);
     }
 
-    pub fn resize(master: &(dyn portable_pty::MasterPty + Send), cols: u16, rows: u16) {
+    #[allow(clippy::borrowed_box)]
+    pub fn resize(master: &Box<dyn portable_pty::MasterPty + Send>, cols: u16, rows: u16) {
         let _ = master.resize(PtySize {
             rows,
             cols,
