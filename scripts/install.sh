@@ -14,10 +14,7 @@ case "$os" in
     asset="terminal-studio-linux"
     ;;
   darwin)
-    case "$arch" in
-      arm64) asset="terminal-studio-macos-arm" ;;
-      *)     asset="terminal-studio-macos-intel" ;;
-    esac
+    asset="terminal-studio-macos-arm"
     ;;
   *)
     echo "Unsupported OS: $os. Build from source: https://github.com/$REPO" >&2

@@ -45,43 +45,41 @@ impl TerminalView {
         ui: &mut egui::Ui,
         is_focused: bool,
         scroll_offset: usize,
+        cursor_visible: bool,
     ) -> TerminalGeometry {
         let rect = ui.available_rect_before_wrap();
 
-        // Fill background
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::BASE);
 
         let session = self.session.read();
 
         let font_id = FontId::monospace(14.0);
-        // Measure cell width and height using text metrics for precision
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
-        // Measure character width using a long string of identical chars to average out padding
-        let cell_width = ui.fonts(|fonts| {
-            let test_str = "MMMMMMMMMMMMMMMMMMMM"; // 20 identical wide chars
-            let galley = fonts.layout_no_wrap(test_str.to_string(), font_id.clone(), theme::TEXT);
-            galley.rect.width() / test_str.len() as f32
-        });
+        // glyph_width reads directly from font metrics — no galley allocation
+        let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
 
         let visible_cols = (rect.width() / cell_width) as u16;
         let visible_rows = (rect.height() / cell_height) as u16;
-
         let grid_cols = session.grid.cols.min(visible_cols);
 
         // ── Scrollback setup ─────────────────────────────────────────────────
         let scrollback_len = session.grid.scrollback.len();
-        // How many scrollback rows to show at the top of the viewport.
         let show_sb = scroll_offset.min(scrollback_len).min(visible_rows as usize);
-        // Index into scrollback where the displayed window starts
-        // (scrollback[sb_start] is the oldest visible scrollback line).
         let sb_start = scrollback_len.saturating_sub(show_sb);
 
         // ── Cell rendering ───────────────────────────────────────────────────
+        // Batch adjacent cells with the same background color into one rect_filled
+        // and adjacent cells with the same foreground style into one painter.text.
+        // This reduces draw calls from O(cols*rows) to O(style_changes*rows).
+        let mut text_buf = String::with_capacity(grid_cols as usize);
+
         for screen_row in 0..(visible_rows as usize) {
-            for col in 0..grid_cols {
-                // Pick cell from scrollback or live grid
-                let cell: Cell = if screen_row < show_sb {
+            let y = rect.min.y + screen_row as f32 * cell_height;
+
+            // Closure to fetch a cell from scrollback or live grid
+            let get_cell = |col: u16| -> Cell {
+                if screen_row < show_sb {
                     let sb_idx = sb_start + screen_row;
                     session
                         .grid
@@ -97,68 +95,134 @@ impl TerminalView {
                     } else {
                         Cell::default()
                     }
-                };
+                }
+            };
 
-                let cell_rect = Rect::from_min_size(
-                    rect.min + vec2(col as f32 * cell_width, screen_row as f32 * cell_height),
-                    vec2(cell_width, cell_height),
-                );
+            // ── Single merged pass: BG and FG in one cell read per column ────
+            // BG run state
+            let mut bg_run_start = 0u16;
+            let mut bg_run_color = egui::Color32::TRANSPARENT;
 
-                // Determine effective fg/bg, respecting inverse attribute
-                let (eff_fg, eff_bg) = if cell.attrs.inverse {
-                    (cell.bg, cell.fg)
+            // FG span state
+            let mut span_start = 0u16;
+            let mut span_fg = egui::Color32::TRANSPARENT;
+            let mut span_underline = false;
+            let mut span_strike = false;
+            let mut span_bold = false;
+            let mut span_italic = false;
+
+            for col in 0..=grid_cols {
+                let is_end = col == grid_cols;
+
+                // Read cell once; derive all render attributes from it.
+                let (new_bg, cell_fg, cell_underline, cell_strike, cell_bold, cell_italic, cell_char) = if !is_end {
+                    let cell = get_cell(col);
+                    let inv = cell.attrs.inverse();
+                    let eff_bg = if inv { cell.fg } else { cell.bg };
+                    let eff_fg = if inv { cell.bg } else { cell.fg };
+                    let mut fg = resolve_color(eff_fg, true);
+                    if cell.attrs.dim() {
+                        let [r, g, b, a] = fg.to_array();
+                        fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
+                    }
+                    let ch = if cell.attrs.invisible() { ' ' } else { cell.c };
+                    (
+                        resolve_color(eff_bg, false),
+                        fg,
+                        cell.attrs.underline(),
+                        cell.attrs.strikethrough(),
+                        cell.attrs.bold(),
+                        cell.attrs.italic(),
+                        ch,
+                    )
                 } else {
-                    (cell.fg, cell.bg)
+                    (egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT, false, false, false, false, ' ')
                 };
 
-                // Paint background if not transparent
-                let bg_color = resolve_color(eff_bg, false);
-                if bg_color != egui::Color32::TRANSPARENT {
-                    painter.rect_filled(cell_rect, 0.0, bg_color);
+                // ── BG flush ────────────────────────────────────────────────────
+                if new_bg != bg_run_color {
+                    if bg_run_color != egui::Color32::TRANSPARENT {
+                        painter.rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(rect.min.x + bg_run_start as f32 * cell_width, y),
+                                egui::pos2(rect.min.x + col as f32 * cell_width, y + cell_height),
+                            ),
+                            0.0,
+                            bg_run_color,
+                        );
+                    }
+                    bg_run_start = col;
+                    bg_run_color = new_bg;
                 }
 
-                // Paint character if visible and not a space
-                if !cell.attrs.invisible && cell.c != ' ' {
-                    let mut fg_color = resolve_color(eff_fg, true);
-                    if cell.attrs.dim {
-                        let [r, g, b, a] = fg_color.to_array();
-                        fg_color = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
+                // ── FG flush ────────────────────────────────────────────────────
+                let fg_changed = is_end
+                    || cell_fg != span_fg
+                    || cell_underline != span_underline
+                    || cell_strike != span_strike
+                    || cell_bold != span_bold
+                    || cell_italic != span_italic;
+
+                if fg_changed {
+                    if !text_buf.is_empty() {
+                        let visible = text_buf.trim_end_matches(' ');
+                        if !visible.is_empty() {
+                            // Bold uses a slight font-size bump (0.5 pt) as a visual-weight
+                            // proxy until a real bold font face is loaded. Italic reuses the
+                            // regular monospace face (no italic variant is bundled).
+                            let span_font = if span_bold {
+                                FontId::monospace(14.5)
+                            } else {
+                                FontId::monospace(14.0)
+                            };
+                            painter.text(
+                                egui::pos2(rect.min.x + span_start as f32 * cell_width, y),
+                                egui::Align2::LEFT_TOP,
+                                visible,
+                                span_font,
+                                span_fg,
+                            );
+                        }
+                        if span_underline && col > span_start {
+                            let uy = y + cell_height - 1.5;
+                            painter.line_segment(
+                                [
+                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, uy),
+                                    egui::pos2(rect.min.x + col as f32 * cell_width, uy),
+                                ],
+                                egui::Stroke::new(1.0, span_fg),
+                            );
+                        }
+                        if span_strike && col > span_start {
+                            let sy = y + cell_height * 0.5;
+                            painter.line_segment(
+                                [
+                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, sy),
+                                    egui::pos2(rect.min.x + col as f32 * cell_width, sy),
+                                ],
+                                egui::Stroke::new(1.0, span_fg),
+                            );
+                        }
+                        text_buf.clear();
                     }
-                    painter.text(
-                        egui::pos2(cell_rect.min.x, cell_rect.min.y),
-                        egui::Align2::LEFT_TOP,
-                        cell.c.to_string(),
-                        font_id.clone(),
-                        fg_color,
-                    );
-                    if cell.attrs.underline {
-                        let y = cell_rect.max.y - 1.5;
-                        painter.line_segment(
-                            [
-                                egui::pos2(cell_rect.min.x, y),
-                                egui::pos2(cell_rect.max.x, y),
-                            ],
-                            egui::Stroke::new(1.0, fg_color),
-                        );
-                    }
-                    if cell.attrs.strikethrough {
-                        let y = cell_rect.center().y;
-                        painter.line_segment(
-                            [
-                                egui::pos2(cell_rect.min.x, y),
-                                egui::pos2(cell_rect.max.x, y),
-                            ],
-                            egui::Stroke::new(1.0, fg_color),
-                        );
-                    }
+                    span_start = col;
+                    span_fg = cell_fg;
+                    span_underline = cell_underline;
+                    span_strike = cell_strike;
+                    span_bold = cell_bold;
+                    span_italic = cell_italic;
+                }
+
+                if !is_end {
+                    text_buf.push(cell_char);
                 }
             }
         }
 
         // Draw cursor only when in live view (not scrolled back).
-        // We always render our own software cursor and ignore cursor_visible —
-        // ?25l/?25h control the hardware console cursor, not our GUI block cursor.
-        if scroll_offset == 0 {
+        // When focused, hide cursor during the "off" phase of the blink cycle.
+        // When unfocused, always show the cursor (outline style).
+        if scroll_offset == 0 && session.cursor_visible && (cursor_visible || !is_focused) {
             let cx = session.cursor_x;
             let cy = session.cursor_y;
             if cx < session.grid.cols && cy < session.grid.rows {
@@ -185,21 +249,27 @@ impl TerminalView {
             }
         }
 
-        // Draw a subtle scrollback indicator bar on the right edge when scrolled.
-        if show_sb > 0 && scrollback_len > 0 {
+        // Scrollback indicator: a proper thumb showing position within total content.
+        if scrollback_len > 0 {
             let bar_w = 3.0_f32;
-            let frac = show_sb as f32 / scrollback_len as f32;
-            // The indicator thumb covers the fraction of the right edge that
-            // corresponds to how far back the user has scrolled.
-            let bar_h = rect.height() * frac;
-            let bar_rect = Rect::from_min_size(
-                egui::pos2(rect.max.x - bar_w, rect.min.y),
-                egui::vec2(bar_w, bar_h),
+            let total_lines = scrollback_len + visible_rows as usize;
+            // Thumb height = fraction of content that is visible
+            let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
+            let thumb_h = (rect.height() * thumb_frac).max(4.0);
+            // Thumb top = fraction of content above the viewport
+            // When scroll_offset == 0 (live view) the content above is all of scrollback.
+            // When scroll_offset == scrollback_len the content above is 0.
+            let lines_above = scrollback_len.saturating_sub(scroll_offset);
+            let top_frac = lines_above as f32 / total_lines as f32;
+            let thumb_y = rect.min.y + rect.height() * top_frac;
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.max.x - bar_w, thumb_y),
+                egui::vec2(bar_w, thumb_h),
             );
             painter.rect_filled(
                 bar_rect,
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(180, 180, 180, 120),
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(180, 180, 180, 150),
             );
         }
 

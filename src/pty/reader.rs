@@ -10,14 +10,17 @@ use crate::terminal::{performer::Performer, Session};
 
 /// Spawned as a dedicated OS thread per PTY session.
 /// Blocks on PTY reads, feeds bytes through the VTE parser, then requests a repaint.
+/// `is_active` controls repaint cadence: focused sessions repaint at 8 ms, background
+/// sessions at 50 ms to avoid thrashing the GPU with invisible repaints.
 pub fn reader_thread(
     mut reader: Box<dyn Read + Send>,
     session: Arc<RwLock<Session>>,
     ctx: Context,
     alive: Arc<AtomicBool>,
+    is_active: Arc<AtomicBool>,
 ) {
     let mut parser = Parser::new();
-    let mut buf = [0u8; 8192];
+    let mut buf = [0u8; 65536];
 
     loop {
         let n = match reader.read(&mut buf) {
@@ -43,10 +46,11 @@ pub fn reader_thread(
             }
         }
 
-        // Batch repaints: schedule one repaint 8 ms from now rather than painting
-        // immediately. Multiple reads within that window are coalesced, preventing
-        // mid-update render artifacts when escape sequences span two reads.
-        ctx.request_repaint_after(std::time::Duration::from_millis(8));
+        // Active pane: repaint quickly (8 ms) for responsive output.
+        // Background pane: throttle to 50 ms — data is still processed, just
+        // not rendered immediately, reducing unnecessary GPU work.
+        let repaint_ms = if is_active.load(Ordering::Relaxed) { 8 } else { 50 };
+        ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }
 
     alive.store(false, Ordering::SeqCst);

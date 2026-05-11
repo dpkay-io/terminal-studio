@@ -12,24 +12,120 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::terminal::Session;
 
-/// On each prompt display, PowerShell emits an OSC 7 CWD notification followed by
-/// the standard "PS path> " prompt text. `-NoExit` keeps the shell alive after init.
+// ── Shell kind ────────────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShellKind {
+    PowerShell, // powershell.exe — Windows
+    Pwsh,       // pwsh.exe — Windows (PowerShell Core)
+    Cmd,        // cmd.exe — Windows
+    Bash,       // bash
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    Zsh,        // zsh — Unix
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    Fish,       // fish — Unix
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    Sh,         // sh — Unix
+}
+
+impl ShellKind {
+    pub fn display_name(&self) -> &str {
+        match self {
+            ShellKind::PowerShell => "PowerShell",
+            ShellKind::Pwsh => "PowerShell Core (pwsh)",
+            ShellKind::Cmd => "Command Prompt",
+            ShellKind::Bash => "Bash",
+            ShellKind::Zsh => "Zsh",
+            ShellKind::Fish => "Fish",
+            ShellKind::Sh => "Sh",
+        }
+    }
+
+    fn executable(&self) -> &str {
+        match self {
+            ShellKind::PowerShell => "powershell.exe",
+            ShellKind::Pwsh => {
+                if cfg!(target_os = "windows") {
+                    "pwsh.exe"
+                } else {
+                    "pwsh"
+                }
+            }
+            ShellKind::Cmd => "cmd.exe",
+            ShellKind::Bash => "bash",
+            ShellKind::Zsh => "zsh",
+            ShellKind::Fish => "fish",
+            ShellKind::Sh => "sh",
+        }
+    }
+}
+
+fn find_in_path(name: &str) -> bool {
+    let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
+    std::env::var("PATH").map_or(false, |path_var| {
+        path_var
+            .split(sep)
+            .any(|dir| std::path::Path::new(dir).join(name).exists())
+    })
+}
+
+/// Returns the shells available on this system, in display order.
 #[cfg(target_os = "windows")]
-const SHELL: &str = "powershell.exe";
-#[cfg(target_os = "windows")]
-const SHELL_INIT_ARGS: &[&str] = &[
-    "-NoExit",
-    "-Command",
-    concat!(
-        "function prompt {",
-        r#"  "$([char]27)]7;file:///$($PWD.Path.Replace('\','/'))`a" +"#,
-        r#"  "PS $($PWD.Path)> ""#,
-        "}"
-    ),
-];
+pub fn available_shells() -> Vec<ShellKind> {
+    let mut shells = vec![ShellKind::PowerShell]; // always present on Windows
+    if find_in_path("pwsh.exe") {
+        shells.push(ShellKind::Pwsh);
+    }
+    shells.push(ShellKind::Cmd); // always present on Windows
+    if find_in_path("bash.exe") {
+        shells.push(ShellKind::Bash);
+    }
+    shells
+}
 
 #[cfg(not(target_os = "windows"))]
-const SHELL: &str = "bash";
+pub fn available_shells() -> Vec<ShellKind> {
+    [
+        ("bash", ShellKind::Bash),
+        ("zsh", ShellKind::Zsh),
+        ("fish", ShellKind::Fish),
+        ("sh", ShellKind::Sh),
+    ]
+    .into_iter()
+    .filter(|(name, _)| find_in_path(name))
+    .map(|(_, kind)| kind)
+    .collect()
+}
+
+/// Returns the most appropriate default shell for this system.
+#[cfg(target_os = "windows")]
+pub fn default_shell() -> ShellKind {
+    ShellKind::PowerShell
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn default_shell() -> ShellKind {
+    if let Ok(shell) = std::env::var("SHELL") {
+        let name = std::path::Path::new(&shell)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        match name {
+            "bash" => return ShellKind::Bash,
+            "zsh" => return ShellKind::Zsh,
+            "fish" => return ShellKind::Fish,
+            "sh" => return ShellKind::Sh,
+            _ => {}
+        }
+    }
+    if find_in_path("bash") {
+        ShellKind::Bash
+    } else {
+        ShellKind::Sh
+    }
+}
+
+// ── Type alias ────────────────────────────────────────────────────────────────
 
 type SpawnResult = (
     u32,
@@ -38,6 +134,7 @@ type SpawnResult = (
     Box<dyn Write + Send>,
     u32,
     Arc<AtomicBool>,
+    Arc<AtomicBool>, // is_active: true when this session is the focused pane
 );
 
 pub struct SessionManager {
@@ -56,6 +153,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         cwd: Option<std::path::PathBuf>,
+        shell: &ShellKind,
     ) -> anyhow::Result<SpawnResult> {
         let id = self.next_id;
         self.next_id += 1;
@@ -68,7 +166,7 @@ impl SessionManager {
             pixel_height: 0,
         })?;
 
-        let mut cmd = self.build_command();
+        let mut cmd = self.build_command(shell);
         cmd.env("TERM", "xterm-256color");
         if let Some(ref dir) = cwd {
             cmd.cwd(dir);
@@ -86,16 +184,25 @@ impl SessionManager {
         let alive = Arc::new(AtomicBool::new(true));
         let alive_for_thread = Arc::clone(&alive);
 
+        let is_active = Arc::new(AtomicBool::new(false));
+        let is_active_for_thread = Arc::clone(&is_active);
+
         // Spawn the dedicated reader thread
         let session_clone = Arc::clone(&session);
         let ctx_clone = self.ctx.clone();
         thread::Builder::new()
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
-                reader::reader_thread(reader, session_clone, ctx_clone, alive_for_thread)
+                reader::reader_thread(
+                    reader,
+                    session_clone,
+                    ctx_clone,
+                    alive_for_thread,
+                    is_active_for_thread,
+                )
             })?;
 
-        Ok((id, session, pty_pair.master, writer, shell_pid, alive))
+        Ok((id, session, pty_pair.master, writer, shell_pid, alive, is_active))
     }
 
     #[allow(clippy::borrowed_box)]
@@ -113,21 +220,44 @@ impl SessionManager {
         });
     }
 
-    #[cfg(target_os = "windows")]
-    fn build_command(&self) -> CommandBuilder {
-        let mut cmd = CommandBuilder::new(SHELL);
-        cmd.args(SHELL_INIT_ARGS);
-        cmd
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn build_command(&self) -> CommandBuilder {
-        let mut cmd = CommandBuilder::new(SHELL);
-        // Set PROMPT_COMMAND to emit OSC 7 before every prompt
-        cmd.env(
-            "PROMPT_COMMAND",
-            r#"printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD""#,
-        );
-        cmd
+    fn build_command(&self, shell: &ShellKind) -> CommandBuilder {
+        match shell {
+            ShellKind::PowerShell | ShellKind::Pwsh => {
+                let mut cmd = CommandBuilder::new(shell.executable());
+                // -NoExit keeps the shell alive; the prompt function emits OSC 7 CWD
+                // notifications so the sidebar can track the working directory.
+                cmd.args(&[
+                    "-NoExit",
+                    "-Command",
+                    concat!(
+                        "function prompt {",
+                        r#"  "$([char]27)]7;file:///$($PWD.Path.Replace('\','/'))`a" +"#,
+                        r#"  "PS $($PWD.Path)> ""#,
+                        "}"
+                    ),
+                ]);
+                cmd
+            }
+            ShellKind::Cmd => CommandBuilder::new("cmd.exe"),
+            ShellKind::Bash | ShellKind::Sh => {
+                let mut cmd = CommandBuilder::new(shell.executable());
+                // PROMPT_COMMAND runs before every prompt — emit OSC 7 for CWD tracking.
+                cmd.env(
+                    "PROMPT_COMMAND",
+                    r#"printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD""#,
+                );
+                cmd
+            }
+            ShellKind::Zsh => {
+                let mut cmd = CommandBuilder::new("zsh");
+                // zsh uses precmd; PROMPT_COMMAND works as a compat shim in many setups.
+                cmd.env(
+                    "PROMPT_COMMAND",
+                    r#"printf '\e]7;file://%s%s\a' "$HOST" "$PWD""#,
+                );
+                cmd
+            }
+            ShellKind::Fish => CommandBuilder::new("fish"),
+        }
     }
 }

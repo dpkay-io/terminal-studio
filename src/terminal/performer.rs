@@ -74,24 +74,21 @@ impl<'a> Performer<'a> {
                     self.session.current_bg = Color::Default;
                     self.session.current_attrs = CellAttrs::default();
                 }
-                1 => self.session.current_attrs.bold = true,
-                2 => self.session.current_attrs.dim = true,
-                3 => self.session.current_attrs.italic = true,
-                4 => self.session.current_attrs.underline = true,
-                5 | 6 => self.session.current_attrs.blink = true,
-                7 => self.session.current_attrs.inverse = true,
-                8 => self.session.current_attrs.invisible = true,
-                9 => self.session.current_attrs.strikethrough = true,
-                22 => {
-                    self.session.current_attrs.bold = false;
-                    self.session.current_attrs.dim = false;
-                }
-                23 => self.session.current_attrs.italic = false,
-                24 => self.session.current_attrs.underline = false,
-                25 => self.session.current_attrs.blink = false,
-                27 => self.session.current_attrs.inverse = false,
-                28 => self.session.current_attrs.invisible = false,
-                29 => self.session.current_attrs.strikethrough = false,
+                1 => self.session.current_attrs.0 |= CellAttrs::BOLD,
+                2 => self.session.current_attrs.0 |= CellAttrs::DIM,
+                3 => self.session.current_attrs.0 |= CellAttrs::ITALIC,
+                4 => self.session.current_attrs.0 |= CellAttrs::UNDERLINE,
+                5 | 6 => self.session.current_attrs.0 |= CellAttrs::BLINK,
+                7 => self.session.current_attrs.0 |= CellAttrs::INVERSE,
+                8 => self.session.current_attrs.0 |= CellAttrs::INVISIBLE,
+                9 => self.session.current_attrs.0 |= CellAttrs::STRIKETHROUGH,
+                22 => self.session.current_attrs.0 &= !(CellAttrs::BOLD | CellAttrs::DIM),
+                23 => self.session.current_attrs.0 &= !CellAttrs::ITALIC,
+                24 => self.session.current_attrs.0 &= !CellAttrs::UNDERLINE,
+                25 => self.session.current_attrs.0 &= !CellAttrs::BLINK,
+                27 => self.session.current_attrs.0 &= !CellAttrs::INVERSE,
+                28 => self.session.current_attrs.0 &= !CellAttrs::INVISIBLE,
+                29 => self.session.current_attrs.0 &= !CellAttrs::STRIKETHROUGH,
                 30..=37 => self.session.current_fg = Color::Indexed(p[i] as u8 - 30),
                 38 => {
                     if p.get(i + 1).copied() == Some(2) && p.len() > i + 4 {

@@ -390,7 +390,7 @@ fn test_sgr_reset() {
     use super::grid::{CellAttrs, Color};
     let mut s = Session::new(1, 10, 3, None);
     feed(&mut s, b"\x1b[1;31m"); // bold + red fg
-    assert!(s.current_attrs.bold);
+    assert!(s.current_attrs.bold());
     assert!(matches!(s.current_fg, Color::Indexed(1)));
     feed(&mut s, b"\x1b[0m"); // reset
     assert_eq!(s.current_attrs, CellAttrs::default());
@@ -811,21 +811,21 @@ fn test_sgr_all_attributes() {
     let mut s = Session::new(1, 10, 3, None);
     // Set all attributes
     feed(&mut s, b"\x1b[2m"); // dim
-    assert!(s.current_attrs.dim);
+    assert!(s.current_attrs.dim());
     feed(&mut s, b"\x1b[3m"); // italic
-    assert!(s.current_attrs.italic);
+    assert!(s.current_attrs.italic());
     feed(&mut s, b"\x1b[4m"); // underline
-    assert!(s.current_attrs.underline);
+    assert!(s.current_attrs.underline());
     feed(&mut s, b"\x1b[5m"); // blink
-    assert!(s.current_attrs.blink);
+    assert!(s.current_attrs.blink());
     feed(&mut s, b"\x1b[6m"); // blink (alt)
-    assert!(s.current_attrs.blink);
+    assert!(s.current_attrs.blink());
     feed(&mut s, b"\x1b[7m"); // inverse
-    assert!(s.current_attrs.inverse);
+    assert!(s.current_attrs.inverse());
     feed(&mut s, b"\x1b[8m"); // invisible
-    assert!(s.current_attrs.invisible);
+    assert!(s.current_attrs.invisible());
     feed(&mut s, b"\x1b[9m"); // strikethrough
-    assert!(s.current_attrs.strikethrough);
+    assert!(s.current_attrs.strikethrough());
 }
 
 #[test]
@@ -833,23 +833,23 @@ fn test_sgr_individual_reset_codes() {
     let mut s = Session::new(1, 10, 3, None);
     // Set all attrs then individually unset each
     feed(&mut s, b"\x1b[1;2;3;4;5;7;8;9m");
-    assert!(s.current_attrs.bold && s.current_attrs.italic);
+    assert!(s.current_attrs.bold() && s.current_attrs.italic());
 
     feed(&mut s, b"\x1b[22m"); // un-bold and un-dim
-    assert!(!s.current_attrs.bold);
-    assert!(!s.current_attrs.dim);
+    assert!(!s.current_attrs.bold());
+    assert!(!s.current_attrs.dim());
     feed(&mut s, b"\x1b[23m");
-    assert!(!s.current_attrs.italic);
+    assert!(!s.current_attrs.italic());
     feed(&mut s, b"\x1b[24m");
-    assert!(!s.current_attrs.underline);
+    assert!(!s.current_attrs.underline());
     feed(&mut s, b"\x1b[25m");
-    assert!(!s.current_attrs.blink);
+    assert!(!s.current_attrs.blink());
     feed(&mut s, b"\x1b[27m");
-    assert!(!s.current_attrs.inverse);
+    assert!(!s.current_attrs.inverse());
     feed(&mut s, b"\x1b[28m");
-    assert!(!s.current_attrs.invisible);
+    assert!(!s.current_attrs.invisible());
     feed(&mut s, b"\x1b[29m");
-    assert!(!s.current_attrs.strikethrough);
+    assert!(!s.current_attrs.strikethrough());
 }
 
 #[test]

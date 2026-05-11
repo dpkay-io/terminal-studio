@@ -7,16 +7,37 @@ pub enum Color {
     Rgb(u8, u8, u8),
 }
 
+/// Packed attribute bitmask — 1 byte instead of 8 separate bools.
+/// Reduces Cell from 20 bytes to 16 bytes for better cache utilization
+/// and lower memory pressure when many sessions have deep scrollback.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CellAttrs {
-    pub bold: bool,
-    pub dim: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub blink: bool,
-    pub inverse: bool,
-    pub invisible: bool,
-    pub strikethrough: bool,
+pub struct CellAttrs(pub u8);
+
+#[allow(dead_code)]
+impl CellAttrs {
+    pub const BOLD:          u8 = 1 << 0;
+    pub const DIM:           u8 = 1 << 1;
+    pub const ITALIC:        u8 = 1 << 2;
+    pub const UNDERLINE:     u8 = 1 << 3;
+    pub const BLINK:         u8 = 1 << 4;
+    pub const INVERSE:       u8 = 1 << 5;
+    pub const INVISIBLE:     u8 = 1 << 6;
+    pub const STRIKETHROUGH: u8 = 1 << 7;
+
+    #[inline] pub fn bold(self) -> bool          { self.0 & Self::BOLD != 0 }
+    #[inline] pub fn dim(self) -> bool            { self.0 & Self::DIM != 0 }
+    #[inline] pub fn italic(self) -> bool         { self.0 & Self::ITALIC != 0 }
+    #[inline] pub fn underline(self) -> bool      { self.0 & Self::UNDERLINE != 0 }
+    #[inline] pub fn blink(self) -> bool          { self.0 & Self::BLINK != 0 }
+    #[inline] pub fn inverse(self) -> bool        { self.0 & Self::INVERSE != 0 }
+    #[inline] pub fn invisible(self) -> bool      { self.0 & Self::INVISIBLE != 0 }
+    #[inline] pub fn strikethrough(self) -> bool  { self.0 & Self::STRIKETHROUGH != 0 }
+
+    #[inline]
+    #[allow(dead_code)]
+    pub fn set(&mut self, flag: u8, on: bool) {
+        if on { self.0 |= flag } else { self.0 &= !flag }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -54,7 +75,7 @@ impl Grid {
             rows,
             cells: vec![Cell::default(); n],
             scrollback: VecDeque::new(),
-            scrollback_limit: 10_000,
+            scrollback_limit: 2_000,
         }
     }
 
@@ -81,91 +102,79 @@ impl Grid {
     /// Scroll the visible grid up by `count` lines within [top, bottom].
     /// Only saves to scrollback when top == 0 (normal terminal scroll).
     pub fn scroll_up(&mut self, top: u16, bottom: u16, count: u16) {
+        let cols = self.cols as usize;
         for _ in 0..count {
             if top == 0 {
-                let row_end = self.cols as usize;
-                let saved: Vec<Cell> = self.cells[..row_end].to_vec();
+                // When at capacity, reuse the evicted front buffer to avoid
+                // a malloc+free on every scroll line (the common steady state).
+                let saved = if self.scrollback.len() >= self.scrollback_limit {
+                    let mut buf = self.scrollback.pop_front().unwrap();
+                    buf.clear();
+                    buf.extend_from_slice(&self.cells[..cols]);
+                    buf
+                } else {
+                    self.cells[..cols].to_vec()
+                };
                 self.scrollback.push_back(saved);
-                if self.scrollback.len() > self.scrollback_limit {
-                    self.scrollback.pop_front();
-                }
             }
 
-            // Shift rows up within [top, bottom]
-            for row in top..bottom {
-                for col in 0..self.cols {
-                    let above = self.idx(row, col);
-                    let below = self.idx(row + 1, col);
-                    self.cells[above] = self.cells[below];
-                }
+            if bottom > top {
+                let src = self.idx(top + 1, 0);
+                let dst = self.idx(top, 0);
+                let n = (bottom - top) as usize * cols;
+                self.cells.copy_within(src..src + n, dst);
             }
-            // Clear the bottom row
-            for col in 0..self.cols {
-                let i = self.idx(bottom, col);
-                self.cells[i] = Cell::default();
-            }
+            let bot = self.idx(bottom, 0);
+            self.cells[bot..bot + cols].fill(Cell::default());
         }
     }
 
     /// Scroll down (insert blank lines at top, push bottom rows off).
     pub fn scroll_down(&mut self, top: u16, bottom: u16, count: u16) {
+        let cols = self.cols as usize;
         for _ in 0..count {
-            for row in (top..bottom).rev() {
-                for col in 0..self.cols {
-                    let src = self.idx(row, col);
-                    let dst = self.idx(row + 1, col);
-                    self.cells[dst] = self.cells[src];
-                }
+            if bottom > top {
+                let src = self.idx(top, 0);
+                let dst = self.idx(top + 1, 0);
+                let n = (bottom - top) as usize * cols;
+                // copy_within uses memmove semantics, safe for overlapping ranges
+                self.cells.copy_within(src..src + n, dst);
             }
-            for col in 0..self.cols {
-                let i = self.idx(top, col);
-                self.cells[i] = Cell::default();
-            }
+            let top_start = self.idx(top, 0);
+            self.cells[top_start..top_start + cols].fill(Cell::default());
         }
     }
 
     /// Erase cells in [col_start, col_end] on the given row, inclusive.
     /// Uses `bg` as the erase background color (BCE — background color erase).
     pub fn erase_line_range(&mut self, row: u16, col_start: u16, col_end: u16, bg: Color) {
-        let end = col_end.min(self.cols - 1);
-        for col in col_start..=end {
-            let i = self.idx(row, col);
-            self.cells[i] = Cell {
-                c: ' ',
-                fg: Color::Default,
-                bg,
-                attrs: CellAttrs::default(),
-            };
-        }
+        let col_end = col_end.min(self.cols - 1);
+        let blank = Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() };
+        let start = self.idx(row, col_start);
+        let end = self.idx(row, col_end) + 1;
+        self.cells[start..end].fill(blank);
     }
 
     /// Erase all cells in [row_start, row_end] inclusive, full rows.
     /// Uses `bg` as the erase background color (BCE).
     pub fn erase_row_range(&mut self, row_start: u16, row_end: u16, bg: Color) {
-        let end = row_end.min(self.rows - 1);
-        for row in row_start..=end {
-            for col in 0..self.cols {
-                let i = self.idx(row, col);
-                self.cells[i] = Cell {
-                    c: ' ',
-                    fg: Color::Default,
-                    bg,
-                    attrs: CellAttrs::default(),
-                };
-            }
-        }
+        let row_end = row_end.min(self.rows - 1);
+        let blank = Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() };
+        let start = self.idx(row_start, 0);
+        let end = self.idx(row_end, 0) + self.cols as usize;
+        self.cells[start..end].fill(blank);
     }
 
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) {
         let mut new_cells = vec![Cell::default(); new_cols as usize * new_rows as usize];
         let copy_rows = self.rows.min(new_rows) as usize;
         let copy_cols = self.cols.min(new_cols) as usize;
+        let old_cols = self.cols as usize;
+        let new_cols_usize = new_cols as usize;
         for row in 0..copy_rows {
-            for col in 0..copy_cols {
-                let src = row * self.cols as usize + col;
-                let dst = row * new_cols as usize + col;
-                new_cells[dst] = self.cells[src];
-            }
+            let src = row * old_cols;
+            let dst = row * new_cols_usize;
+            new_cells[dst..dst + copy_cols].copy_from_slice(&self.cells[src..src + copy_cols]);
         }
         self.cols = new_cols;
         self.rows = new_rows;
