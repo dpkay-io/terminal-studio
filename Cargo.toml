@@ -33,6 +33,9 @@ parking_lot = "0.12"
 log = "0.4"
 env_logger = "0.11"
 
+# File-system watching (cross-platform: ReadDirectoryChangesW / inotify / FSEvents)
+notify = "6"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
@@ -40,9 +43,6 @@ windows-sys = { version = "0.52", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Diagnostics_ToolHelp",
 ] }
-
-# File-system watching (OS-native: ReadDirectoryChangesW on Windows)
-notify = "6"
 
 [profile.release]
 opt-level = 3
