@@ -1,0 +1,58 @@
+name: Bug Report
+description: Something isn't working correctly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Terminal Studio is alpha software — your reports are the most useful contribution right now.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - Linux
+        - macOS
+    validations:
+      required: true
+
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      placeholder: "e.g. PowerShell 7.4, bash 5.2, zsh 5.9"
+    validations:
+      required: true
+
+  - type: input
+    id: app
+    attributes:
+      label: Application or command that triggered the bug
+      placeholder: "e.g. vim, htop, git log, a specific escape sequence"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect to see?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a terminal pane
+        2. Run `…`
+        3. See …
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
+      description: Logs (`RUST_LOG=debug cargo run`), screenshots, or anything else that might help.

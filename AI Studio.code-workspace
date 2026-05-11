@@ -1,0 +1,19 @@
+{
+  "folders": [
+    {
+      "name": "AI Studio [master]",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "window.title": "Terminal Studio ${separator} ${activeRepositoryBranchName} ${separator} ${activeEditorShort}",
+    "workbench.colorCustomizations": {
+      "titleBar.activeBackground": "#dbe91c",
+      "titleBar.inactiveBackground": "#dbe91c",
+      "titleBar.activeForeground": "#1e1e1e",
+      "titleBar.inactiveForeground": "#1e1e1e",
+      "statusBar.background": "#dbe91c",
+      "statusBar.foreground": "#1e1e1e"
+    }
+  }
+}

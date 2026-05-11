@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sh --version)",
+      "Bash(jq --version)",
+      "Bash(echo '{\"model\":{\"display_name\":\"Claude Sonnet 4.6\"},\"workspace\":{\"current_dir\":\"C:\\\\\\\\Users\\\\\\\\dpk\\\\\\\\ws\\\\\\\\ai-studio\"},\"context_window\":{\"used_percentage\":12},\"rate_limits\":{\"five_hour\":{\"used_percentage\":8,\"resets_at\":1746900000},\"seven_day\":{\"used_percentage\":55,\"resets_at\":1747200000}}}')",
+      "Bash(powershell -NoProfile -NonInteractive -File \"C:\\\\Users\\\\dpk\\\\.claude\\\\statusline-command.ps1\")",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(node dist/index.js preview)",
+      "Bash(node dist/index.js --help)"
+    ]
+  }
+}

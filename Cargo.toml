@@ -1,0 +1,53 @@
+[package]
+name = "terminal-studio"
+version = "0.1.0"
+edition = "2021"
+description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
+license = "Apache-2.0"
+repository = "https://github.com/dpkay-io/terminal-studio"
+keywords = ["terminal", "multiplexer", "egui", "tui", "wgpu"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+rust-version = "1.75"
+
+[dependencies]
+# UI framework (wgpu-backed, handles winit + egui integration)
+eframe = { version = "0.28", features = ["wgpu", "default_fonts", "persistence"] }
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+egui = "0.28"
+
+# VT/ANSI byte-stream parser (same as Alacritty)
+vte = "0.13"
+
+# Cross-platform PTY: ConPTY on Windows, openpty on Unix
+portable-pty = "0.8"
+
+# Error handling
+anyhow = "1"
+
+# Concurrency
+parking_lot = "0.12"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Diagnostics_ToolHelp",
+] }
+
+# File-system watching (OS-native: ReadDirectoryChangesW on Windows)
+notify = "6"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[profile.dev]
+opt-level = 1
