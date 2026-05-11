@@ -1,12 +1,12 @@
 use std::io::Read;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use egui::Context;
 use parking_lot::RwLock;
 use vte::Parser;
 
-use crate::terminal::{Session, performer::Performer};
+use crate::terminal::{performer::Performer, Session};
 
 /// Spawned as a dedicated OS thread per PTY session.
 /// Blocks on PTY reads, feeds bytes through the VTE parser, then requests a repaint.
@@ -21,7 +21,7 @@ pub fn reader_thread(
 
     loop {
         let n = match reader.read(&mut buf) {
-            Ok(0) => break,         // EOF — shell exited
+            Ok(0) => break, // EOF — shell exited
             Ok(n) => n,
             Err(e) => {
                 log::debug!("PTY read error: {}", e);

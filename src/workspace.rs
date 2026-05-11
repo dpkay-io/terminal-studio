@@ -1,12 +1,12 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Workspace {
-    pub id:    u64,
-    pub name:  String,
-    pub path:  PathBuf,
+    pub id: u64,
+    pub name: String,
+    pub path: PathBuf,
     pub color: [u8; 3],
 }
 
@@ -17,13 +17,19 @@ pub struct WorkspaceStore {
 
 impl WorkspaceStore {
     pub fn load() -> Self {
-        let Some(path) = Self::data_path() else { return Self::default() };
-        let Ok(text) = std::fs::read_to_string(&path) else { return Self::default() };
+        let Some(path) = Self::data_path() else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
         serde_json::from_str(&text).unwrap_or_default()
     }
 
     pub fn save(&self) {
-        let Some(path) = Self::data_path() else { return };
+        let Some(path) = Self::data_path() else {
+            return;
+        };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -38,7 +44,8 @@ impl WorkspaceStore {
 
     /// Finds the most specific workspace whose path is a prefix of `cwd`.
     pub fn find_for_cwd(&self, cwd: &Path) -> Option<&Workspace> {
-        self.workspaces.iter()
+        self.workspaces
+            .iter()
             .filter(|w| cwd.starts_with(&w.path))
             .max_by_key(|w| w.path.components().count())
     }
@@ -51,7 +58,9 @@ impl WorkspaceStore {
         #[cfg(target_os = "windows")]
         {
             std::env::var("APPDATA").ok().map(|base| {
-                PathBuf::from(base).join("terminal-studio").join("workspaces.json")
+                PathBuf::from(base)
+                    .join("terminal-studio")
+                    .join("workspaces.json")
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -76,13 +85,19 @@ pub struct NoteStore {
 
 impl NoteStore {
     pub fn load() -> Self {
-        let Some(path) = Self::data_path() else { return Self::default() };
-        let Ok(text) = std::fs::read_to_string(&path) else { return Self::default() };
+        let Some(path) = Self::data_path() else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
         serde_json::from_str(&text).unwrap_or_default()
     }
 
     pub fn save(&self) {
-        let Some(path) = Self::data_path() else { return };
+        let Some(path) = Self::data_path() else {
+            return;
+        };
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -92,7 +107,10 @@ impl NoteStore {
     }
 
     pub fn get(&self, group: Option<u64>) -> &str {
-        self.notes.get(&Self::key(group)).map(|s| s.as_str()).unwrap_or("")
+        self.notes
+            .get(&Self::key(group))
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
 
     pub fn set(&mut self, group: Option<u64>, text: String) {
@@ -107,7 +125,7 @@ impl NoteStore {
     fn key(group: Option<u64>) -> String {
         match group {
             Some(id) => id.to_string(),
-            None     => "other".to_string(),
+            None => "other".to_string(),
         }
     }
 
@@ -115,7 +133,9 @@ impl NoteStore {
         #[cfg(target_os = "windows")]
         {
             std::env::var("APPDATA").ok().map(|base| {
-                PathBuf::from(base).join("terminal-studio").join("notes.json")
+                PathBuf::from(base)
+                    .join("terminal-studio")
+                    .join("notes.json")
             })
         }
         #[cfg(not(target_os = "windows"))]
@@ -136,9 +156,16 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_store(workspaces: Vec<(&str, &str)>) -> WorkspaceStore {
-        let workspaces = workspaces.into_iter().enumerate().map(|(i, (name, path))| {
-            Workspace { id: i as u64 + 1, name: name.to_string(), path: PathBuf::from(path), color: [0, 0, 0] }
-        }).collect();
+        let workspaces = workspaces
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, path))| Workspace {
+                id: i as u64 + 1,
+                name: name.to_string(),
+                path: PathBuf::from(path),
+                color: [0, 0, 0],
+            })
+            .collect();
         WorkspaceStore { workspaces }
     }
 

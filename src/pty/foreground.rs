@@ -22,8 +22,8 @@ mod platform {
     use super::ForegroundProcess;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW,
-        PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
     };
 
     // Process names that are infrastructure, not user commands.
@@ -136,8 +136,7 @@ mod platform {
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
         let child_pid = find_child_pid(shell_pid)?;
-        let cmdline_bytes =
-            std::fs::read(format!("/proc/{}/cmdline", child_pid)).ok()?;
+        let cmdline_bytes = std::fs::read(format!("/proc/{}/cmdline", child_pid)).ok()?;
         if cmdline_bytes.is_empty() {
             return None; // zombie
         }
@@ -149,12 +148,11 @@ mod platform {
         if args.is_empty() {
             return None;
         }
-        let name = args[0]
-            .rsplit('/')
-            .next()
-            .unwrap_or(&args[0])
-            .to_string();
-        Some(ForegroundProcess { name, cmdline: args })
+        let name = args[0].rsplit('/').next().unwrap_or(&args[0]).to_string();
+        Some(ForegroundProcess {
+            name,
+            cmdline: args,
+        })
     }
 
     fn find_child_pid(shell_pid: u32) -> Option<u32> {
@@ -168,11 +166,10 @@ mod platform {
             if child_pid == shell_pid {
                 continue;
             }
-            let stat =
-                match std::fs::read_to_string(format!("/proc/{}/stat", child_pid)) {
-                    Ok(s) => s,
-                    Err(_) => continue,
-                };
+            let stat = match std::fs::read_to_string(format!("/proc/{}/stat", child_pid)) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
             if ppid_from_stat(&stat) == Some(shell_pid) {
                 return Some(child_pid);
             }
@@ -220,7 +217,10 @@ mod platform {
         }
         let args: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
         let name = args.first()?.rsplit('/').next()?.to_string();
-        Some(ForegroundProcess { name, cmdline: args })
+        Some(ForegroundProcess {
+            name,
+            cmdline: args,
+        })
     }
 }
 

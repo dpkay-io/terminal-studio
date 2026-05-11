@@ -1,8 +1,8 @@
-mod theme;
 mod app;
-mod terminal;
 mod pty;
 mod renderer;
+mod terminal;
+mod theme;
 mod workspace;
 
 // Generates a 32×32 "TS" icon using Catppuccin Mocha base + blue.

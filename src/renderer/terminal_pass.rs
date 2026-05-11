@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use egui::{vec2, FontId, Rect, Sense, Pos2};
+use egui::{vec2, FontId, Pos2, Rect, Sense};
 use parking_lot::RwLock;
 
+use crate::terminal::grid::{ansi_color, Cell, Color};
 use crate::terminal::Session;
-use crate::terminal::grid::{Cell, Color, ansi_color};
 use crate::theme;
 
 pub struct TerminalGeometry {
-    pub rect:   Rect,
+    pub rect: Rect,
     pub cell_w: f32,
     pub cell_h: f32,
 }
@@ -17,7 +17,9 @@ impl TerminalGeometry {
     /// Convert a screen position to zero-based (col, row) terminal cell coords.
     /// Returns None if the position is outside the terminal rect.
     pub fn to_cell(&self, pos: Pos2) -> Option<(u16, u16)> {
-        if !self.rect.contains(pos) { return None; }
+        if !self.rect.contains(pos) {
+            return None;
+        }
         let col = ((pos.x - self.rect.min.x) / self.cell_w) as u16;
         let row = ((pos.y - self.rect.min.y) / self.cell_h) as u16;
         Some((col, row))
@@ -38,7 +40,12 @@ impl TerminalView {
     /// `scroll_offset` is the number of scrollback lines to show above the
     /// live grid (0 = live view, >0 = scrolled back). The cursor is hidden
     /// and mouse-coordinate mapping still uses the full live rect.
-    pub fn show(&self, ui: &mut egui::Ui, is_focused: bool, scroll_offset: usize) -> TerminalGeometry {
+    pub fn show(
+        &self,
+        ui: &mut egui::Ui,
+        is_focused: bool,
+        scroll_offset: usize,
+    ) -> TerminalGeometry {
         let rect = ui.available_rect_before_wrap();
 
         // Fill background
@@ -53,11 +60,7 @@ impl TerminalView {
         // Measure character width using a long string of identical chars to average out padding
         let cell_width = ui.fonts(|fonts| {
             let test_str = "MMMMMMMMMMMMMMMMMMMM"; // 20 identical wide chars
-            let galley = fonts.layout_no_wrap(
-                test_str.to_string(),
-                font_id.clone(),
-                theme::TEXT,
-            );
+            let galley = fonts.layout_no_wrap(test_str.to_string(), font_id.clone(), theme::TEXT);
             galley.rect.width() / test_str.len() as f32
         });
 
@@ -80,7 +83,9 @@ impl TerminalView {
                 // Pick cell from scrollback or live grid
                 let cell: Cell = if screen_row < show_sb {
                     let sb_idx = sb_start + screen_row;
-                    session.grid.scrollback
+                    session
+                        .grid
+                        .scrollback
                         .get(sb_idx)
                         .and_then(|r| r.get(col as usize))
                         .copied()
@@ -129,14 +134,20 @@ impl TerminalView {
                     if cell.attrs.underline {
                         let y = cell_rect.max.y - 1.5;
                         painter.line_segment(
-                            [egui::pos2(cell_rect.min.x, y), egui::pos2(cell_rect.max.x, y)],
+                            [
+                                egui::pos2(cell_rect.min.x, y),
+                                egui::pos2(cell_rect.max.x, y),
+                            ],
                             egui::Stroke::new(1.0, fg_color),
                         );
                     }
                     if cell.attrs.strikethrough {
                         let y = cell_rect.center().y;
                         painter.line_segment(
-                            [egui::pos2(cell_rect.min.x, y), egui::pos2(cell_rect.max.x, y)],
+                            [
+                                egui::pos2(cell_rect.min.x, y),
+                                egui::pos2(cell_rect.max.x, y),
+                            ],
                             egui::Stroke::new(1.0, fg_color),
                         );
                     }
@@ -165,7 +176,10 @@ impl TerminalView {
                     painter.rect_stroke(
                         cursor_rect,
                         0.0,
-                        egui::Stroke::new(1.5, egui::Color32::from_rgba_premultiplied(255, 255, 255, 160)),
+                        egui::Stroke::new(
+                            1.5,
+                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 160),
+                        ),
                     );
                 }
             }
@@ -182,19 +196,31 @@ impl TerminalView {
                 egui::pos2(rect.max.x - bar_w, rect.min.y),
                 egui::vec2(bar_w, bar_h),
             );
-            painter.rect_filled(bar_rect, 0.0, egui::Color32::from_rgba_unmultiplied(180, 180, 180, 120));
+            painter.rect_filled(
+                bar_rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(180, 180, 180, 120),
+            );
         }
 
         ui.allocate_rect(rect, Sense::click_and_drag());
 
-        TerminalGeometry { rect, cell_w: cell_width, cell_h: cell_height }
+        TerminalGeometry {
+            rect,
+            cell_w: cell_width,
+            cell_h: cell_height,
+        }
     }
 }
 
 fn resolve_color(color: Color, is_fg: bool) -> egui::Color32 {
     match color {
         Color::Default => {
-            if is_fg { theme::TEXT } else { egui::Color32::TRANSPARENT }
+            if is_fg {
+                theme::TEXT
+            } else {
+                egui::Color32::TRANSPARENT
+            }
         }
         Color::Indexed(i) => {
             let (r, g, b) = ansi_color(i);

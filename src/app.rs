@@ -1,8 +1,8 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::FontId;
@@ -11,25 +11,25 @@ use parking_lot::RwLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::pty::SessionManager;
 use crate::pty::foreground::ForegroundProcess;
-use crate::terminal::{MouseMode, Session};
-use crate::terminal::grid::Cell;
+use crate::pty::SessionManager;
 use crate::renderer::terminal_pass::TerminalGeometry;
-use crate::workspace::{NoteStore, Workspace, WorkspaceStore};
+use crate::terminal::grid::Cell;
+use crate::terminal::{MouseMode, Session};
 use crate::theme;
+use crate::workspace::{NoteStore, Workspace, WorkspaceStore};
 
 // ── Preset workspace colours ──────────────────────────────────────────────────
 
 const PRESET_COLORS: &[[u8; 3]] = &[
     [100, 140, 230], // blue
-    [80,  200, 100], // green
-    [220, 120,  80], // orange
-    [200,  80, 160], // pink
+    [80, 200, 100],  // green
+    [220, 120, 80],  // orange
+    [200, 80, 160],  // pink
     [140, 100, 220], // purple
-    [80,  200, 200], // teal
-    [220, 200,  60], // yellow
-    [200,  80,  80], // red
+    [80, 200, 200],  // teal
+    [220, 200, 60],  // yellow
+    [200, 80, 80],   // red
 ];
 
 // ── Right-panel tab ───────────────────────────────────────────────────────────
@@ -45,10 +45,10 @@ enum RightTab {
 
 #[derive(Clone, Debug)]
 struct FileEditorState {
-    path:         PathBuf,
-    content:      String,
-    dirty:        bool,
-    save_error:   bool,
+    path: PathBuf,
+    content: String,
+    dirty: bool,
+    save_error: bool,
     workspace_id: Option<u64>,
 }
 
@@ -59,12 +59,11 @@ enum PaneContent {
 }
 
 struct PaneEntry {
-    id:           u32,
-    content:      PaneContent,
+    id: u32,
+    content: PaneContent,
     manual_width: Option<f32>,
-    last_size:    (u16, u16),
+    last_size: (u16, u16),
 }
-
 
 // ── Session persistence ───────────────────────────────────────────────────────
 
@@ -77,13 +76,20 @@ struct SavedSession {
 
 #[derive(Serialize, Deserialize)]
 enum SavedPaneContent {
-    Terminal { session_index: usize },
-    FileEditor { path: PathBuf, content: String, dirty: bool, workspace_id: Option<u64> },
+    Terminal {
+        session_index: usize,
+    },
+    FileEditor {
+        path: PathBuf,
+        content: String,
+        dirty: bool,
+        workspace_id: Option<u64>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
 struct SavedPane {
-    content:      SavedPaneContent,
+    content: SavedPaneContent,
     manual_width: Option<f32>,
 }
 
@@ -96,31 +102,36 @@ enum SavedRightTab {
 
 #[derive(Serialize, Deserialize)]
 struct AppSession {
-    sessions:                  Vec<SavedSession>,
-    panes:                     Vec<SavedPane>,
-    active_pane_index:         Option<usize>,
-    active_session_index:      Option<usize>,
-    active_group:              Option<u64>,
-    last_pane_per_group:       Vec<(Option<u64>, usize)>,
-    workspace_panel_ratio:     f32,
+    sessions: Vec<SavedSession>,
+    panes: Vec<SavedPane>,
+    active_pane_index: Option<usize>,
+    active_session_index: Option<usize>,
+    active_group: Option<u64>,
+    last_pane_per_group: Vec<(Option<u64>, usize)>,
+    workspace_panel_ratio: f32,
     workspace_panel_collapsed: bool,
-    notes_panel_ratio:         f32,
-    notes_panel_collapsed:     bool,
-    right_tab:                 SavedRightTab,
-    shown_md_tabs:             Vec<PathBuf>,
+    notes_panel_ratio: f32,
+    notes_panel_collapsed: bool,
+    right_tab: SavedRightTab,
+    shown_md_tabs: Vec<PathBuf>,
 }
 
 fn session_data_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base).join("terminal-studio").join("session.json")
+            PathBuf::from(base)
+                .join("terminal-studio")
+                .join("session.json")
         })
     }
     #[cfg(not(target_os = "windows"))]
     {
         std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base).join(".config").join("terminal-studio").join("session.json")
+            PathBuf::from(base)
+                .join(".config")
+                .join("terminal-studio")
+                .join("session.json")
         })
     }
 }
@@ -135,7 +146,10 @@ struct AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        AppSettings { default_workspace_id: None, restore_last_session: true }
+        AppSettings {
+            default_workspace_id: None,
+            restore_last_session: true,
+        }
     }
 }
 
@@ -143,27 +157,40 @@ fn settings_data_path() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base).join("terminal-studio").join("settings.json")
+            PathBuf::from(base)
+                .join("terminal-studio")
+                .join("settings.json")
         })
     }
     #[cfg(not(target_os = "windows"))]
     {
         std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base).join(".config").join("terminal-studio").join("settings.json")
+            PathBuf::from(base)
+                .join(".config")
+                .join("terminal-studio")
+                .join("settings.json")
         })
     }
 }
 
 impl AppSettings {
     fn load() -> Self {
-        let Some(path) = settings_data_path() else { return Self::default() };
-        let Ok(text) = std::fs::read_to_string(&path) else { return Self::default() };
+        let Some(path) = settings_data_path() else {
+            return Self::default();
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Self::default();
+        };
         serde_json::from_str(&text).unwrap_or_default()
     }
 
     fn save(&self) {
-        let Some(path) = settings_data_path() else { return };
-        if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+        let Some(path) = settings_data_path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Ok(text) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(path, text);
         }
@@ -174,8 +201,8 @@ impl AppSettings {
 
 #[derive(Clone)]
 struct FileEntry {
-    name:   String,
-    path:   PathBuf,
+    name: String,
+    path: PathBuf,
     is_dir: bool,
 }
 
@@ -184,17 +211,24 @@ fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
     if let Ok(rd) = std::fs::read_dir(path) {
         for e in rd.flatten() {
             let p = e.path();
-            let name = p.file_name()
+            let name = p
+                .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if name.starts_with('.') { continue; }
-            entries.push(FileEntry { is_dir: p.is_dir(), name, path: p });
+            if name.starts_with('.') {
+                continue;
+            }
+            entries.push(FileEntry {
+                is_dir: p.is_dir(),
+                name,
+                path: p,
+            });
         }
     }
     entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true,  false) => std::cmp::Ordering::Less,
-        (false, true)  => std::cmp::Ordering::Greater,
-        _              => a.name.cmp(&b.name),
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => a.name.cmp(&b.name),
     });
     entries
 }
@@ -202,25 +236,28 @@ fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
 // ── Per-directory data ────────────────────────────────────────────────────────
 
 struct DirData {
-    is_git:         bool,
-    git_diff:       String,
-    git_status:     String,
+    is_git: bool,
+    git_diff: String,
+    git_status: String,
     git_refresh_at: Option<Instant>,
-    md_files:       HashMap<PathBuf, String>,
-    dir_entries:    Vec<FileEntry>,
+    md_files: HashMap<PathBuf, String>,
+    dir_entries: Vec<FileEntry>,
 }
 
 impl DirData {
     fn new(path: &Path) -> Self {
         let is_git = path.join(".git").exists();
-        let (git_diff, git_status) =
-            if is_git { run_git_info(path) } else { (String::new(), String::new()) };
+        let (git_diff, git_status) = if is_git {
+            run_git_info(path)
+        } else {
+            (String::new(), String::new())
+        };
         DirData {
             is_git,
             git_diff,
             git_status,
             git_refresh_at: None,
-            md_files:    HashMap::new(),
+            md_files: HashMap::new(),
             dir_entries: list_dir_entries(path),
         }
     }
@@ -229,18 +266,22 @@ impl DirData {
 fn run_git_info(dir: &Path) -> (String, String) {
     use std::process::Command;
     let git = |args: &[&str]| -> String {
-        Command::new("git").args(args).current_dir(dir).output()
-            .ok().filter(|o| o.status.success())
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_default()
     };
-    let staged   = git(&["diff", "--cached", "--no-color"]);
+    let staged = git(&["diff", "--cached", "--no-color"]);
     let unstaged = git(&["diff", "--no-color"]);
-    let status   = git(&["status", "--porcelain"]);
+    let status = git(&["status", "--porcelain"]);
     let diff = match (staged.is_empty(), unstaged.is_empty()) {
-        (true,  true)  => String::new(),
-        (false, true)  => format!("=== Staged ===\n{staged}"),
-        (true,  false) => format!("=== Unstaged ===\n{unstaged}"),
+        (true, true) => String::new(),
+        (false, true) => format!("=== Staged ===\n{staged}"),
+        (true, false) => format!("=== Unstaged ===\n{unstaged}"),
         (false, false) => format!("=== Staged ===\n{staged}\n=== Unstaged ===\n{unstaged}"),
     };
     (diff, status)
@@ -249,27 +290,29 @@ fn run_git_info(dir: &Path) -> (String, String) {
 // ── File-watcher ──────────────────────────────────────────────────────────────
 
 struct WatchState {
-    watcher:  RecommendedWatcher,
-    watched:  HashSet<PathBuf>,
+    watcher: RecommendedWatcher,
+    watched: HashSet<PathBuf>,
     git_dirs: HashMap<PathBuf, PathBuf>,
-    events:   Arc<std::sync::Mutex<Vec<Event>>>,
+    events: Arc<std::sync::Mutex<Vec<Event>>>,
     dir_data: HashMap<PathBuf, DirData>,
 }
 
 impl WatchState {
     fn new(ctx: egui::Context) -> Option<Self> {
-        let events: Arc<std::sync::Mutex<Vec<Event>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
         let ev = Arc::clone(&events);
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
             if let Ok(event) = res {
-                if let Ok(mut g) = ev.lock() { g.push(event); }
+                if let Ok(mut g) = ev.lock() {
+                    g.push(event);
+                }
                 ctx.request_repaint();
             }
-        }).ok()?;
+        })
+        .ok()?;
         Some(WatchState {
             watcher,
-            watched:  HashSet::new(),
+            watched: HashSet::new(),
             git_dirs: HashMap::new(),
             events,
             dir_data: HashMap::new(),
@@ -277,18 +320,25 @@ impl WatchState {
     }
 
     fn sync(&mut self, sessions: &[SessionEntry]) {
-        let current: HashSet<PathBuf> = sessions.iter()
+        let current: HashSet<PathBuf> = sessions
+            .iter()
             .map(|e| e.session.read().cwd.clone())
             .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
             .collect();
 
-        let to_remove: Vec<PathBuf> = self.watched.iter()
+        let to_remove: Vec<PathBuf> = self
+            .watched
+            .iter()
             .filter(|d| !current.contains(*d))
-            .cloned().collect();
+            .cloned()
+            .collect();
         for dir in to_remove {
             let _ = self.watcher.unwatch(&dir);
-            if let Some(gd) = self.git_dirs.iter()
-                .find(|(_, v)| **v == dir).map(|(k, _)| k.clone())
+            if let Some(gd) = self
+                .git_dirs
+                .iter()
+                .find(|(_, v)| **v == dir)
+                .map(|(k, _)| k.clone())
             {
                 let _ = self.watcher.unwatch(&gd);
                 self.git_dirs.remove(&gd);
@@ -297,10 +347,16 @@ impl WatchState {
             self.dir_data.remove(&dir);
         }
 
-        let to_add: Vec<PathBuf> = current.into_iter()
-            .filter(|d| !self.watched.contains(d)).collect();
+        let to_add: Vec<PathBuf> = current
+            .into_iter()
+            .filter(|d| !self.watched.contains(d))
+            .collect();
         for dir in to_add {
-            if self.watcher.watch(&dir, RecursiveMode::NonRecursive).is_ok() {
+            if self
+                .watcher
+                .watch(&dir, RecursiveMode::NonRecursive)
+                .is_ok()
+            {
                 let gd = dir.join(".git");
                 if gd.is_dir() && self.watcher.watch(&gd, RecursiveMode::NonRecursive).is_ok() {
                     self.git_dirs.insert(gd, dir.clone());
@@ -313,11 +369,13 @@ impl WatchState {
 
     fn process_events(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let events: Vec<Event> = {
-            let Ok(mut g) = self.events.lock() else { return (vec![], vec![]); };
+            let Ok(mut g) = self.events.lock() else {
+                return (vec![], vec![]);
+            };
             std::mem::take(&mut *g)
         };
 
-        let now      = Instant::now();
+        let now = Instant::now();
         let debounce = Duration::from_millis(500);
         let mut created_md: Vec<PathBuf> = Vec::new();
         let mut removed_md: Vec<PathBuf> = Vec::new();
@@ -325,11 +383,13 @@ impl WatchState {
         for event in events {
             for path in &event.paths {
                 let dir: PathBuf = match path.parent().map(PathBuf::from) {
-                    Some(p) if self.watched.contains(&p)      => p,
+                    Some(p) if self.watched.contains(&p) => p,
                     Some(p) if self.git_dirs.contains_key(&p) => self.git_dirs[&p].clone(),
                     _ => continue,
                 };
-                let Some(data) = self.dir_data.get_mut(&dir) else { continue };
+                let Some(data) = self.dir_data.get_mut(&dir) else {
+                    continue;
+                };
                 let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
 
                 match &event.kind {
@@ -340,21 +400,27 @@ impl WatchState {
                             created_md.push(path.clone());
                         }
                         data.dir_entries = list_dir_entries(&dir);
-                        if data.is_git { data.git_refresh_at.get_or_insert(now + debounce); }
+                        if data.is_git {
+                            data.git_refresh_at.get_or_insert(now + debounce);
+                        }
                     }
                     EventKind::Modify(_) => {
                         if is_md && path.is_file() && data.md_files.contains_key(path) {
                             let content = std::fs::read_to_string(path).unwrap_or_default();
                             data.md_files.insert(path.clone(), content);
                         }
-                        if data.is_git { data.git_refresh_at.get_or_insert(now + debounce); }
+                        if data.is_git {
+                            data.git_refresh_at.get_or_insert(now + debounce);
+                        }
                     }
                     EventKind::Remove(_) => {
                         if data.md_files.remove(path).is_some() {
                             removed_md.push(path.clone());
                         }
                         data.dir_entries = list_dir_entries(&dir);
-                        if data.is_git { data.git_refresh_at.get_or_insert(now + debounce); }
+                        if data.is_git {
+                            data.git_refresh_at.get_or_insert(now + debounce);
+                        }
                     }
                     _ => {}
                 }
@@ -364,8 +430,8 @@ impl WatchState {
         for (dir, data) in &mut self.dir_data {
             if data.git_refresh_at.map(|t| now >= t).unwrap_or(false) {
                 let (diff, status) = run_git_info(dir);
-                data.git_diff       = diff;
-                data.git_status     = status;
+                data.git_diff = diff;
+                data.git_status = status;
                 data.git_refresh_at = None;
             }
         }
@@ -377,25 +443,26 @@ impl WatchState {
 // ── Workspace dialog state ────────────────────────────────────────────────────
 
 struct WorkspaceDialog {
-    name:               String,
-    path:               PathBuf,
-    selected_color:     [u8; 3],
-    custom_color:       [f32; 3],
+    name: String,
+    path: PathBuf,
+    selected_color: [u8; 3],
+    custom_color: [f32; 3],
     show_custom_picker: bool,
-    focus_requested:    bool,
+    focus_requested: bool,
 }
 
 impl WorkspaceDialog {
     fn new(path: PathBuf) -> Self {
         WorkspaceDialog {
-            name:               path.file_name()
+            name: path
+                .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             path,
-            selected_color:     PRESET_COLORS[0],
-            custom_color:       [0.4, 0.55, 0.9],
+            selected_color: PRESET_COLORS[0],
+            custom_color: [0.4, 0.55, 0.9],
             show_custom_picker: false,
-            focus_requested:    false,
+            focus_requested: false,
         }
     }
 }
@@ -403,26 +470,30 @@ impl WorkspaceDialog {
 // ── Workspace edit dialog state ───────────────────────────────────────────────
 
 struct WorkspaceEditDialog {
-    workspace_id:       u64,
-    name:               String,
-    selected_color:     [u8; 3],
-    custom_color:       [f32; 3],
+    workspace_id: u64,
+    name: String,
+    selected_color: [u8; 3],
+    custom_color: [f32; 3],
     show_custom_picker: bool,
-    confirm_delete:     bool,
-    focus_requested:    bool,
+    confirm_delete: bool,
+    focus_requested: bool,
 }
 
 impl WorkspaceEditDialog {
     fn new(id: u64, name: String, color: [u8; 3]) -> Self {
         let is_preset = PRESET_COLORS.contains(&color);
         WorkspaceEditDialog {
-            workspace_id:       id,
+            workspace_id: id,
             name,
-            selected_color:     color,
-            custom_color:       [color[0] as f32 / 255.0, color[1] as f32 / 255.0, color[2] as f32 / 255.0],
+            selected_color: color,
+            custom_color: [
+                color[0] as f32 / 255.0,
+                color[1] as f32 / 255.0,
+                color[2] as f32 / 255.0,
+            ],
             show_custom_picker: !is_preset,
-            confirm_delete:     false,
-            focus_requested:    false,
+            confirm_delete: false,
+            focus_requested: false,
         }
     }
 }
@@ -430,12 +501,12 @@ impl WorkspaceEditDialog {
 // ── Session entry ─────────────────────────────────────────────────────────────
 
 struct SessionEntry {
-    id:              u32,
-    session:         Arc<RwLock<Session>>,
-    writer:          Box<dyn Write + Send>,
-    master:          Box<dyn portable_pty::MasterPty + Send>,
-    shell_pid:       u32,
-    alive:           Arc<AtomicBool>,
+    id: u32,
+    session: Arc<RwLock<Session>>,
+    writer: Box<dyn Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    shell_pid: u32,
+    alive: Arc<AtomicBool>,
     pending_command: Option<String>,
 }
 
@@ -444,12 +515,14 @@ fn display_title(title: &str) -> String {
     let looks_like_path = t.starts_with('/')
         || t.starts_with('~')
         || (t.len() >= 3
-            && t.chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+            && t.chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic())
+                .unwrap_or(false)
             && &t[1..3] == ":\\");
     if looks_like_path {
-        t.split(|c: char| c == '/' || c == '\\')
-            .filter(|s| !s.is_empty())
-            .last()
+        t.split(['/', '\\'])
+            .rfind(|s| !s.is_empty())
             .unwrap_or(t)
             .to_string()
     } else {
@@ -460,14 +533,19 @@ fn display_title(title: &str) -> String {
 /// Wraps an argument in shell-appropriate quoting when it contains special characters.
 fn shell_escape_arg(s: &str) -> String {
     let safe = !s.is_empty()
-        && s.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '='));
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '='));
     if safe {
         return s.to_string();
     }
     #[cfg(target_os = "windows")]
-    { format!("\"{}\"", s.replace('"', "\"\"")) }
+    {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    }
     #[cfg(not(target_os = "windows"))]
-    { format!("'{}'", s.replace('\'', "'\\''")) }
+    {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
 }
 
 // When the shell hasn't set a meaningful title, show the cwd's last path fragment.
@@ -479,7 +557,10 @@ fn effective_title(title: &str, cwd: &std::path::Path) -> String {
         || tl == "powershell.exe"
         || tl == "windows powershell"
         || tl == "cmd.exe"
-        || tl == "bash" || tl == "zsh" || tl == "sh" || tl == "fish";
+        || tl == "bash"
+        || tl == "zsh"
+        || tl == "sh"
+        || tl == "fish";
     if is_shell_default {
         cwd.file_name()
             .and_then(|n| n.to_str())
@@ -491,123 +572,66 @@ fn effective_title(title: &str, cwd: &std::path::Path) -> String {
     }
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn display_title_plain_text_unchanged() {
-        assert_eq!(display_title("  vim  "), "vim");
-    }
-
-    #[test]
-    fn display_title_unix_path_returns_last_segment() {
-        assert_eq!(display_title("/home/user/projects/myapp"), "myapp");
-    }
-
-    #[test]
-    fn display_title_tilde_path_returns_last_segment() {
-        assert_eq!(display_title("~/projects/myapp"), "myapp");
-    }
-
-    #[test]
-    fn display_title_windows_path_returns_last_segment() {
-        assert_eq!(display_title("C:\\Users\\dpk\\proj"), "proj");
-    }
-
-    #[test]
-    fn effective_title_shell_default_uses_cwd() {
-        let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("bash", cwd), "myproject");
-        assert_eq!(effective_title("Session 1", cwd), "myproject");
-        assert_eq!(effective_title("PowerShell.exe", cwd), "myproject");
-        assert_eq!(effective_title("", cwd), "myproject");
-    }
-
-    #[test]
-    fn effective_title_real_title_uses_display_title() {
-        let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("vim README.md", cwd), "vim README.md");
-    }
-
-    #[test]
-    fn effective_title_real_title_strips_path() {
-        let cwd = Path::new("/home/user");
-        assert_eq!(effective_title("/home/user/projects/src", cwd), "src");
-    }
-
-    #[test]
-    fn effective_title_empty_cwd_falls_back_to_title() {
-        let cwd = Path::new("");
-        // cwd has no file_name → falls back to the title text itself
-        let result = effective_title("Session 1", cwd);
-        assert_eq!(result, "Session 1");
-    }
-}
-
 struct ResizeSnapshot {
     cursor_y: u16,
-    cells:    Vec<Cell>,
-    expires:  Instant,
+    cells: Vec<Cell>,
+    expires: Instant,
 }
 
 struct CachedForeground {
     session_id: u32,
-    result:     Option<ForegroundProcess>,
+    result: Option<ForegroundProcess>,
     checked_at: Instant,
 }
 
 pub struct App {
     session_manager: SessionManager,
-    sessions:        Vec<SessionEntry>,
-    active_id:      Option<u32>,
+    sessions: Vec<SessionEntry>,
+    active_id: Option<u32>,
 
-    panes:            Vec<PaneEntry>,
-    active_pane_id:   Option<u32>,
-    next_pane_id:     u32,
-    right_tab:     RightTab,
+    panes: Vec<PaneEntry>,
+    active_pane_id: Option<u32>,
+    next_pane_id: u32,
+    right_tab: RightTab,
     shown_md_tabs: HashSet<PathBuf>,
-    watch_state:   Option<WatchState>,
+    watch_state: Option<WatchState>,
 
-    workspace_store:     WorkspaceStore,
-    active_group:        Option<u64>,
+    workspace_store: WorkspaceStore,
+    active_group: Option<u64>,
     last_pane_per_group: HashMap<Option<u64>, u32>,
-    workspace_dialog:      Option<WorkspaceDialog>,
+    workspace_dialog: Option<WorkspaceDialog>,
     workspace_edit_dialog: Option<WorkspaceEditDialog>,
 
-    workspace_panel_ratio:     f32,
+    workspace_panel_ratio: f32,
     workspace_panel_collapsed: bool,
 
-    note_store:              NoteStore,
-    notes_panel_ratio:       f32,
-    notes_panel_collapsed:   bool,
+    note_store: NoteStore,
+    notes_panel_ratio: f32,
+    notes_panel_collapsed: bool,
 
-    show_left_panel:  bool,
+    show_left_panel: bool,
     show_right_panel: bool,
-    show_settings:    bool,
-    settings:         AppSettings,
+    show_settings: bool,
+    settings: AppSettings,
 
     // Per-frame terminal geometry for mouse coordinate conversion
-    active_term_geo:   Option<TerminalGeometry>,
+    active_term_geo: Option<TerminalGeometry>,
     // Last focused session, for sending focus-in/focus-out events
-    last_focused_sid:  Option<u32>,
+    last_focused_sid: Option<u32>,
     // Cursor-row snapshot taken before each PTY resize; restored each frame
     // if the shell clears the prompt without immediately redrawing it.
-    resize_snapshots:   HashMap<u32, ResizeSnapshot>,
+    resize_snapshots: HashMap<u32, ResizeSnapshot>,
     // Debounced PTY resize targets: (cols, rows, stable_since). PTY is only
     // notified after the size has been stable for 150 ms, preventing ConPTY
     // from clearing the screen on every drag frame.
-    resize_debounce:    HashMap<u32, (u16, u16, Instant)>,
+    resize_debounce: HashMap<u32, (u16, u16, Instant)>,
     // Per-session scrollback offset (lines above grid visible on screen).
     // Only active when mouse_mode == None; reset to 0 on any key input.
     term_scroll_offset: HashMap<u32, usize>,
     // Cached foreground-process detection result (500 ms TTL)
-    foreground_cache:   Option<CachedForeground>,
+    foreground_cache: Option<CachedForeground>,
     // Used to detect when the window gains focus so we can flush stale GPU frames.
-    was_focused:        bool,
+    was_focused: bool,
 }
 
 impl App {
@@ -618,18 +642,18 @@ impl App {
         {
             use egui::{Rounding, Shadow, Stroke, Visuals};
             let mut vis = Visuals::dark();
-            vis.panel_fill      = theme::BG_PANEL_FILL;
-            vis.window_fill     = theme::BG_TERM;
+            vis.panel_fill = theme::BG_PANEL_FILL;
+            vis.window_fill = theme::BG_TERM;
             vis.window_rounding = Rounding::same(6.0);
-            vis.window_shadow   = Shadow::NONE;
-            vis.popup_shadow    = Shadow::NONE;
-            vis.widgets.noninteractive.bg_fill   = theme::SURFACE0;
-            vis.widgets.inactive.bg_fill         = theme::SURFACE0;
-            vis.widgets.hovered.bg_fill          = theme::SURFACE1;
-            vis.widgets.active.bg_fill           = theme::SURFACE2;
-            vis.widgets.inactive.fg_stroke       = Stroke::new(1.0, theme::SUBTEXT0);
+            vis.window_shadow = Shadow::NONE;
+            vis.popup_shadow = Shadow::NONE;
+            vis.widgets.noninteractive.bg_fill = theme::SURFACE0;
+            vis.widgets.inactive.bg_fill = theme::SURFACE0;
+            vis.widgets.hovered.bg_fill = theme::SURFACE1;
+            vis.widgets.active.bg_fill = theme::SURFACE2;
+            vis.widgets.inactive.fg_stroke = Stroke::new(1.0, theme::SUBTEXT0);
             vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, theme::OVERLAY0);
-            vis.selection.bg_fill                = egui::Color32::from_rgb(75, 85, 130);
+            vis.selection.bg_fill = egui::Color32::from_rgb(75, 85, 130);
             for state in [
                 &mut vis.widgets.noninteractive,
                 &mut vis.widgets.inactive,
@@ -650,15 +674,16 @@ impl App {
         {
             use egui::{FontData, FontDefinitions, FontFamily};
             let mut fonts = FontDefinitions::default();
-            let win_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+            let win_root =
+                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
             let font_path = format!("{}\\Fonts\\seguisym.ttf", win_root);
             if let Ok(data) = std::fs::read(&font_path) {
-                fonts.font_data.insert(
-                    "segoe_ui_symbol".to_owned(),
-                    FontData::from_owned(data),
-                );
+                fonts
+                    .font_data
+                    .insert("segoe_ui_symbol".to_owned(), FontData::from_owned(data));
                 for family in [&FontFamily::Proportional, &FontFamily::Monospace] {
-                    fonts.families
+                    fonts
+                        .families
                         .entry(family.clone())
                         .or_default()
                         .push("segoe_ui_symbol".to_owned());
@@ -669,36 +694,36 @@ impl App {
 
         let mgr = SessionManager::new(ctx.clone());
         let mut app = App {
-            session_manager:            mgr,
-            sessions:                   vec![],
-            active_id:                  None,
-            panes:                      vec![],
-            active_pane_id:             None,
-            next_pane_id:               0,
-            right_tab:                  RightTab::Directory,
-            shown_md_tabs:              HashSet::new(),
-            watch_state:                WatchState::new(ctx),
-            workspace_store:     WorkspaceStore::load(),
-            active_group:        None,
+            session_manager: mgr,
+            sessions: vec![],
+            active_id: None,
+            panes: vec![],
+            active_pane_id: None,
+            next_pane_id: 0,
+            right_tab: RightTab::Directory,
+            shown_md_tabs: HashSet::new(),
+            watch_state: WatchState::new(ctx),
+            workspace_store: WorkspaceStore::load(),
+            active_group: None,
             last_pane_per_group: HashMap::new(),
-            workspace_dialog:      None,
+            workspace_dialog: None,
             workspace_edit_dialog: None,
-            workspace_panel_ratio:     0.35,
+            workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
-            note_store:              NoteStore::load(),
-            notes_panel_ratio:       0.30,
-            notes_panel_collapsed:   false,
-            show_left_panel:         true,
-            show_right_panel:        true,
-            show_settings:           false,
-            settings:                AppSettings::load(),
-            active_term_geo:         None,
-            last_focused_sid:        None,
-            resize_snapshots:        HashMap::new(),
-            resize_debounce:         HashMap::new(),
-            term_scroll_offset:      HashMap::new(),
-            foreground_cache:        None,
-            was_focused:             true,
+            note_store: NoteStore::load(),
+            notes_panel_ratio: 0.30,
+            notes_panel_collapsed: false,
+            show_left_panel: true,
+            show_right_panel: true,
+            show_settings: false,
+            settings: AppSettings::load(),
+            active_term_geo: None,
+            last_focused_sid: None,
+            resize_snapshots: HashMap::new(),
+            resize_debounce: HashMap::new(),
+            term_scroll_offset: HashMap::new(),
+            foreground_cache: None,
+            was_focused: true,
         };
         // Estimate initial terminal size from window dimensions. Fonts aren't available
         // until after the first Context::run(), so use empirical cell dimensions for
@@ -715,7 +740,9 @@ impl App {
 
         let did_restore = app.settings.restore_last_session && app.restore_session();
         if !did_restore {
-            let cwd = app.settings.default_workspace_id
+            let cwd = app
+                .settings
+                .default_workspace_id
                 .and_then(|id| app.workspace_store.workspaces.iter().find(|w| w.id == id))
                 .map(|w| w.path.clone());
             app.spawn_session(init_cols, init_rows, cwd);
@@ -729,23 +756,36 @@ impl App {
     fn spawn_session(&mut self, cols: u16, rows: u16, cwd: Option<PathBuf>) -> Option<u32> {
         match self.session_manager.spawn(cols, rows, cwd) {
             Ok((id, session, master, writer, shell_pid, alive)) => {
-                let entry = SessionEntry { id, session, writer, master, shell_pid, alive, pending_command: None };
-                if self.active_id.is_none() { self.active_id = Some(id); }
+                let entry = SessionEntry {
+                    id,
+                    session,
+                    writer,
+                    master,
+                    shell_pid,
+                    alive,
+                    pending_command: None,
+                };
+                if self.active_id.is_none() {
+                    self.active_id = Some(id);
+                }
                 self.sessions.push(entry);
                 if self.panes.is_empty() {
                     let pane_id = self.next_pane_id;
                     self.next_pane_id += 1;
                     self.panes.push(PaneEntry {
-                        id:           pane_id,
-                        content:      PaneContent::Terminal(id),
+                        id: pane_id,
+                        content: PaneContent::Terminal(id),
                         manual_width: None,
-                        last_size:    (cols, rows),
+                        last_size: (cols, rows),
                     });
                     self.active_pane_id = Some(pane_id);
                 }
                 Some(id)
             }
-            Err(e) => { log::error!("Failed to spawn session: {e}"); None }
+            Err(e) => {
+                log::error!("Failed to spawn session: {e}");
+                None
+            }
         }
     }
 
@@ -757,22 +797,29 @@ impl App {
     fn active_cwd(&self) -> Option<PathBuf> {
         let idx = self.active_session_index()?;
         let p = self.sessions[idx].session.read().cwd.clone();
-        if p.as_os_str().is_empty() { None } else { Some(p) }
+        if p.as_os_str().is_empty() {
+            None
+        } else {
+            Some(p)
+        }
     }
 
     /// Computes which workspace group a pane belongs to.
     /// Terminal panes: group = workspace whose path is a prefix of the session's CWD.
     /// File editor panes: group = the workspace_id stored at open time.
-    fn pane_group(sessions: &[SessionEntry], ws_store: &WorkspaceStore, pane: &PaneEntry) -> Option<u64> {
+    fn pane_group(
+        sessions: &[SessionEntry],
+        ws_store: &WorkspaceStore,
+        pane: &PaneEntry,
+    ) -> Option<u64> {
         match &pane.content {
-            PaneContent::Terminal(sid) => {
-                sessions.iter().find(|e| e.id == *sid)
-                    .and_then(|e| {
-                        let cwd = e.session.read().cwd.clone();
-                        if cwd.as_os_str().is_empty() { return None; }
-                        ws_store.find_for_cwd(&cwd).map(|w| w.id)
-                    })
-            }
+            PaneContent::Terminal(sid) => sessions.iter().find(|e| e.id == *sid).and_then(|e| {
+                let cwd = e.session.read().cwd.clone();
+                if cwd.as_os_str().is_empty() {
+                    return None;
+                }
+                ws_store.find_for_cwd(&cwd).map(|w| w.id)
+            }),
             PaneContent::FileEditor(ed) => ed.workspace_id,
         }
     }
@@ -780,7 +827,10 @@ impl App {
     /// Active workspace: whichever group is currently selected.
     fn active_workspace(&self) -> Option<&Workspace> {
         let ws_id = self.active_group?;
-        self.workspace_store.workspaces.iter().find(|w| w.id == ws_id)
+        self.workspace_store
+            .workspaces
+            .iter()
+            .find(|w| w.id == ws_id)
     }
 
     /// Focus a pane and sync active_id for terminal panes.
@@ -798,7 +848,9 @@ impl App {
     fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
         self.active_group = group;
 
-        let panes_in_group: Vec<u32> = self.panes.iter()
+        let panes_in_group: Vec<u32> = self
+            .panes
+            .iter()
             .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == group)
             .map(|p| p.id)
             .collect();
@@ -819,21 +871,27 @@ impl App {
 
         // No panes in this group — spawn a new session
         let cwd = group.and_then(|ws_id| {
-            self.workspace_store.workspaces.iter()
+            self.workspace_store
+                .workspaces
+                .iter()
                 .find(|w| w.id == ws_id)
                 .map(|w| w.path.clone())
         });
         if let Some(sid) = self.spawn_session(cols, rows, cwd) {
             self.active_id = Some(sid);
             // spawn_session only auto-creates a pane when panes is empty; add one explicitly here
-            if !self.panes.iter().any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid)) {
+            if !self
+                .panes
+                .iter()
+                .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid))
+            {
                 let pane_id = self.next_pane_id;
                 self.next_pane_id += 1;
                 self.panes.push(PaneEntry {
-                    id:           pane_id,
-                    content:      PaneContent::Terminal(sid),
+                    id: pane_id,
+                    content: PaneContent::Terminal(sid),
                     manual_width: None,
-                    last_size:    (cols, rows),
+                    last_size: (cols, rows),
                 });
                 self.active_pane_id = Some(pane_id);
             }
@@ -843,63 +901,99 @@ impl App {
     fn spawn_session_no_pane(&mut self, cols: u16, rows: u16, cwd: Option<PathBuf>) -> Option<u32> {
         match self.session_manager.spawn(cols, rows, cwd) {
             Ok((id, session, master, writer, shell_pid, alive)) => {
-                self.sessions.push(SessionEntry { id, session, writer, master, shell_pid, alive, pending_command: None });
+                self.sessions.push(SessionEntry {
+                    id,
+                    session,
+                    writer,
+                    master,
+                    shell_pid,
+                    alive,
+                    pending_command: None,
+                });
                 Some(id)
             }
-            Err(e) => { log::error!("Failed to restore session: {e}"); None }
+            Err(e) => {
+                log::error!("Failed to restore session: {e}");
+                None
+            }
         }
     }
 
     fn save_session(&self) {
-        let Some(path) = session_data_path() else { return };
+        let Some(path) = session_data_path() else {
+            return;
+        };
 
-        let session_id_to_index: HashMap<u32, usize> = self.sessions.iter()
-            .enumerate().map(|(i, e)| (e.id, i)).collect();
-        let pane_id_to_index: HashMap<u32, usize> = self.panes.iter()
-            .enumerate().map(|(i, p)| (p.id, i)).collect();
+        let session_id_to_index: HashMap<u32, usize> = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.id, i))
+            .collect();
+        let pane_id_to_index: HashMap<u32, usize> = self
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.id, i))
+            .collect();
 
-        let sessions = self.sessions.iter()
+        let sessions = self
+            .sessions
+            .iter()
             .map(|e| {
                 let cwd = e.session.read().cwd.clone();
                 let command = crate::pty::foreground::detect_child(e.shell_pid).map(|fp| {
-                    let parts: Vec<String> = fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
+                    let parts: Vec<String> =
+                        fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
                     let joined = parts.join(" ");
                     #[cfg(target_os = "windows")]
-                    { format!("& {}", joined) }
+                    {
+                        format!("& {}", joined)
+                    }
                     #[cfg(not(target_os = "windows"))]
-                    { joined }
+                    {
+                        joined
+                    }
                 });
                 SavedSession { cwd, command }
             })
             .collect();
 
-        let panes = self.panes.iter().map(|p| SavedPane {
-            content: match &p.content {
-                PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
-                    session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
+        let panes = self
+            .panes
+            .iter()
+            .map(|p| SavedPane {
+                content: match &p.content {
+                    PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
+                        session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
+                    },
+                    PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
+                        path: ed.path.clone(),
+                        content: ed.content.clone(),
+                        dirty: ed.dirty,
+                        workspace_id: ed.workspace_id,
+                    },
                 },
-                PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
-                    path:         ed.path.clone(),
-                    content:      ed.content.clone(),
-                    dirty:        ed.dirty,
-                    workspace_id: ed.workspace_id,
-                },
-            },
-            manual_width: p.manual_width,
-        }).collect();
+                manual_width: p.manual_width,
+            })
+            .collect();
 
-        let active_pane_index = self.active_pane_id
+        let active_pane_index = self
+            .active_pane_id
             .and_then(|pid| pane_id_to_index.get(&pid).copied());
-        let active_session_index = self.active_id
+        let active_session_index = self
+            .active_id
             .and_then(|sid| session_id_to_index.get(&sid).copied());
-        let last_pane_per_group = self.last_pane_per_group.iter()
+        let last_pane_per_group = self
+            .last_pane_per_group
+            .iter()
             .filter_map(|(&g, &pid)| pane_id_to_index.get(&pid).map(|&i| (g, i)))
             .collect();
 
         let right_tab = match &self.right_tab {
-            RightTab::Directory       => SavedRightTab::Directory,
-            RightTab::GitDiff         => SavedRightTab::GitDiff,
-            RightTab::Markdown(p)    => SavedRightTab::Markdown(p.clone()),
+            RightTab::Directory => SavedRightTab::Directory,
+            RightTab::GitDiff => SavedRightTab::GitDiff,
+            RightTab::Markdown(p) => SavedRightTab::Markdown(p.clone()),
         };
 
         let state = AppSession {
@@ -909,29 +1003,43 @@ impl App {
             active_session_index,
             active_group: self.active_group,
             last_pane_per_group,
-            workspace_panel_ratio:     self.workspace_panel_ratio,
+            workspace_panel_ratio: self.workspace_panel_ratio,
             workspace_panel_collapsed: self.workspace_panel_collapsed,
-            notes_panel_ratio:         self.notes_panel_ratio,
-            notes_panel_collapsed:     self.notes_panel_collapsed,
+            notes_panel_ratio: self.notes_panel_ratio,
+            notes_panel_collapsed: self.notes_panel_collapsed,
             right_tab,
             shown_md_tabs: self.shown_md_tabs.iter().cloned().collect(),
         };
 
-        if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Ok(text) = serde_json::to_string_pretty(&state) {
             let _ = std::fs::write(path, text);
         }
     }
 
     fn restore_session(&mut self) -> bool {
-        let Some(path) = session_data_path() else { return false };
-        let Ok(text) = std::fs::read_to_string(&path) else { return false };
-        let Ok(state) = serde_json::from_str::<AppSession>(&text) else { return false };
-        if state.sessions.is_empty() && state.panes.is_empty() { return false; }
+        let Some(path) = session_data_path() else {
+            return false;
+        };
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return false;
+        };
+        let Ok(state) = serde_json::from_str::<AppSession>(&text) else {
+            return false;
+        };
+        if state.sessions.is_empty() && state.panes.is_empty() {
+            return false;
+        }
 
         let mut session_ids: Vec<u32> = Vec::new();
         for s in &state.sessions {
-            let cwd = if s.cwd.as_os_str().is_empty() { None } else { Some(s.cwd.clone()) };
+            let cwd = if s.cwd.as_os_str().is_empty() {
+                None
+            } else {
+                Some(s.cwd.clone())
+            };
             if let Some(sid) = self.spawn_session_no_pane(80, 24, cwd) {
                 if let Some(cmd) = s.command.clone() {
                     if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
@@ -946,35 +1054,50 @@ impl App {
         for saved in &state.panes {
             let content = match &saved.content {
                 SavedPaneContent::Terminal { session_index } => {
-                    let Some(&sid) = session_ids.get(*session_index) else { continue };
+                    let Some(&sid) = session_ids.get(*session_index) else {
+                        continue;
+                    };
                     PaneContent::Terminal(sid)
                 }
-                SavedPaneContent::FileEditor { path, content, dirty, workspace_id } => {
-                    PaneContent::FileEditor(FileEditorState {
-                        path:         path.clone(),
-                        content:      content.clone(),
-                        dirty:        *dirty,
-                        save_error:   false,
-                        workspace_id: *workspace_id,
-                    })
-                }
+                SavedPaneContent::FileEditor {
+                    path,
+                    content,
+                    dirty,
+                    workspace_id,
+                } => PaneContent::FileEditor(FileEditorState {
+                    path: path.clone(),
+                    content: content.clone(),
+                    dirty: *dirty,
+                    save_error: false,
+                    workspace_id: *workspace_id,
+                }),
             };
             let pane_id = self.next_pane_id;
             self.next_pane_id += 1;
             pane_ids.push(pane_id);
             // last_size (0, 0) forces a resize on the first rendered frame so the PTY
             // gets the actual terminal dimensions rather than the 80x24 spawn size.
-            self.panes.push(PaneEntry { id: pane_id, content, manual_width: saved.manual_width, last_size: (0, 0) });
+            self.panes.push(PaneEntry {
+                id: pane_id,
+                content,
+                manual_width: saved.manual_width,
+                last_size: (0, 0),
+            });
         }
 
         if let Some(idx) = state.active_pane_index {
-            if let Some(&pid) = pane_ids.get(idx) { self.activate_pane(pid); }
+            if let Some(&pid) = pane_ids.get(idx) {
+                self.activate_pane(pid);
+            }
         }
         if self.active_pane_id.is_none() {
-            if let Some(&pid) = pane_ids.first() { self.activate_pane(pid); }
+            if let Some(&pid) = pane_ids.first() {
+                self.activate_pane(pid);
+            }
         }
         if self.active_id.is_none() {
-            let sid = state.active_session_index
+            let sid = state
+                .active_session_index
                 .and_then(|i| session_ids.get(i).copied())
                 .or_else(|| session_ids.first().copied());
             self.active_id = sid;
@@ -987,14 +1110,14 @@ impl App {
             }
         }
 
-        self.workspace_panel_ratio     = state.workspace_panel_ratio;
+        self.workspace_panel_ratio = state.workspace_panel_ratio;
         self.workspace_panel_collapsed = state.workspace_panel_collapsed;
-        self.notes_panel_ratio         = state.notes_panel_ratio;
-        self.notes_panel_collapsed     = state.notes_panel_collapsed;
+        self.notes_panel_ratio = state.notes_panel_ratio;
+        self.notes_panel_collapsed = state.notes_panel_collapsed;
 
         self.right_tab = match &state.right_tab {
-            SavedRightTab::Directory    => RightTab::Directory,
-            SavedRightTab::GitDiff      => RightTab::GitDiff,
+            SavedRightTab::Directory => RightTab::Directory,
+            SavedRightTab::GitDiff => RightTab::GitDiff,
             SavedRightTab::Markdown(p) => RightTab::Markdown(p.clone()),
         };
         self.shown_md_tabs = state.shown_md_tabs.into_iter().collect();
@@ -1067,7 +1190,11 @@ impl eframe::App for App {
         }
 
         // Poll quickly while any session is still initializing (CWD not set yet)
-        if self.sessions.iter().any(|e| e.session.read().cwd.as_os_str().is_empty()) {
+        if self
+            .sessions
+            .iter()
+            .any(|e| e.session.read().cwd.as_os_str().is_empty())
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
@@ -1075,7 +1202,8 @@ impl eframe::App for App {
         // without immediately redrawing (common PSReadLine/Windows behavior).
         if !self.resize_snapshots.is_empty() {
             let now = Instant::now();
-            let snaps: Vec<(u32, u16, Vec<Cell>)> = self.resize_snapshots
+            let snaps: Vec<(u32, u16, Vec<Cell>)> = self
+                .resize_snapshots
                 .iter()
                 .filter(|(_, s)| now <= s.expires)
                 .map(|(&sid, s)| (sid, s.cursor_y, s.cells.clone()))
@@ -1084,8 +1212,7 @@ impl eframe::App for App {
             for (sid, snap_cy, snap_cells) in snaps {
                 if let Some(entry) = self.sessions.iter().find(|e| e.id == sid) {
                     let mut sess = entry.session.write();
-                    let row_blank = (0..sess.grid.cols)
-                        .all(|c| sess.grid.get(snap_cy, c).c == ' ');
+                    let row_blank = (0..sess.grid.cols).all(|c| sess.grid.get(snap_cy, c).c == ' ');
                     if row_blank {
                         for (c, &cell) in snap_cells.iter().enumerate() {
                             if (c as u16) < sess.grid.cols {
@@ -1104,24 +1231,33 @@ impl eframe::App for App {
         if let Some(ws) = &mut self.watch_state {
             ws.sync(&self.sessions);
             let (created_md, removed_md) = ws.process_events();
-            for path in created_md { self.shown_md_tabs.insert(path); }
-            for path in removed_md { self.shown_md_tabs.remove(&path); }
+            for path in created_md {
+                self.shown_md_tabs.insert(path);
+            }
+            for path in removed_md {
+                self.shown_md_tabs.remove(&path);
+            }
         }
 
         // Validate current right_tab; fall back to Directory if stale
         {
             let keep = match &self.right_tab {
-                RightTab::Directory   => true,
-                RightTab::GitDiff     => self.active_cwd()
+                RightTab::Directory => true,
+                RightTab::GitDiff => self
+                    .active_cwd()
                     .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
-                    .map(|d| d.is_git).unwrap_or(false),
+                    .map(|d| d.is_git)
+                    .unwrap_or(false),
                 RightTab::Markdown(p) => self.shown_md_tabs.contains(p),
             };
-            if !keep { self.right_tab = RightTab::Directory; }
+            if !keep {
+                self.right_tab = RightTab::Directory;
+            }
         }
 
         // ── Update window title with active workspace ───────────────────────
-        let ws_title: String = self.active_workspace()
+        let ws_title: String = self
+            .active_workspace()
             .map(|w| format!("Terminal Studio — {}", w.name))
             .unwrap_or_else(|| "Terminal Studio".to_string());
         let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
@@ -1130,54 +1266,70 @@ impl eframe::App for App {
         // ── Custom titlebar ─────────────────────────────────────────────────
         let tb_bg = match active_ws_color {
             Some(c) => theme::from_rgb(c),
-            None    => theme::BG_PANEL_FILL,
+            None => theme::BG_PANEL_FILL,
         };
         let tb_fg = active_ws_color
-            .map(|c| theme::text_on(c))
+            .map(theme::text_on)
             .unwrap_or(theme::SUBTEXT1);
 
         egui::TopBottomPanel::top("titlebar")
             .exact_height(theme::TITLEBAR_H)
             .frame(egui::Frame::none().fill(tb_bg))
             .show(ctx, |ui| {
-                let r       = ui.max_rect();
+                let r = ui.max_rect();
                 let painter = ui.painter().clone();
 
                 // Drag the whole bar to move the window
-                if ui.interact(r, egui::Id::new("tb_drag"), egui::Sense::drag()).dragged() {
+                if ui
+                    .interact(r, egui::Id::new("tb_drag"), egui::Sense::drag())
+                    .dragged()
+                {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
 
                 // ── macOS: traffic lights on the left ──────────────────────
                 #[cfg(target_os = "macos")]
                 {
-                    let btn_y   = r.center().y;
+                    let btn_y = r.center().y;
                     // hover_any: show colour only when any circle is hovered
                     let hover_pos = ctx.input(|i| i.pointer.hover_pos());
-                    let hover_any = hover_pos.map(|p| {
-                        [18.0_f32, 38.0, 58.0].iter().any(|&ox| {
-                            (p.x - (r.min.x + ox)).abs() < 8.0 && (p.y - btn_y).abs() < 8.0
+                    let hover_any = hover_pos
+                        .map(|p| {
+                            [18.0_f32, 38.0, 58.0].iter().any(|&ox| {
+                                (p.x - (r.min.x + ox)).abs() < 8.0 && (p.y - btn_y).abs() < 8.0
+                            })
                         })
-                    }).unwrap_or(false);
+                        .unwrap_or(false);
 
                     let circles: &[(f32, egui::Color32, usize)] = &[
-                        (r.min.x + 18.0, egui::Color32::from_rgb(255,  96,  89), 0), // close
-                        (r.min.x + 38.0, egui::Color32::from_rgb(255, 189,  68), 1), // minimize
-                        (r.min.x + 58.0, egui::Color32::from_rgb( 39, 201,  63), 2), // maximize
+                        (r.min.x + 18.0, egui::Color32::from_rgb(255, 96, 89), 0), // close
+                        (r.min.x + 38.0, egui::Color32::from_rgb(255, 189, 68), 1), // minimize
+                        (r.min.x + 58.0, egui::Color32::from_rgb(39, 201, 63), 2), // maximize
                     ];
                     for &(cx, color, idx) in circles {
-                        let pos   = egui::pos2(cx, btn_y);
+                        let pos = egui::pos2(cx, btn_y);
                         let brect = egui::Rect::from_center_size(pos, egui::vec2(14.0, 14.0));
-                        let resp  = ui.interact(brect, egui::Id::new(("tb_mac", idx)), egui::Sense::click());
-                        let fill  = if hover_any { color } else { egui::Color32::from_gray(80) };
+                        let resp = ui.interact(
+                            brect,
+                            egui::Id::new(("tb_mac", idx)),
+                            egui::Sense::click(),
+                        );
+                        let fill = if hover_any {
+                            color
+                        } else {
+                            egui::Color32::from_gray(80)
+                        };
                         painter.circle_filled(pos, 6.0, fill);
                         if resp.clicked() {
                             match idx {
                                 0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                                 1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
                                 _ => {
-                                    let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+                                    let is_max =
+                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                        !is_max,
+                                    ));
                                 }
                             }
                         }
@@ -1188,37 +1340,82 @@ impl eframe::App for App {
                         egui::pos2(r.min.x + 72.0, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let left_resp = ui.interact(left_tbr, egui::Id::new("tb_left_toggle"), egui::Sense::click());
-                    if left_resp.hovered() { painter.rect_filled(left_tbr, 0.0, theme::SURFACE1); }
+                    let left_resp = ui.interact(
+                        left_tbr,
+                        egui::Id::new("tb_left_toggle"),
+                        egui::Sense::click(),
+                    );
+                    if left_resp.hovered() {
+                        painter.rect_filled(left_tbr, 0.0, theme::SURFACE1);
+                    }
                     let left_icon = if self.show_left_panel { "◀" } else { "▶" };
-                    painter.text(left_tbr.center(), egui::Align2::CENTER_CENTER, left_icon, egui::FontId::proportional(12.0), tb_fg);
-                    if left_resp.clicked() { self.show_left_panel = !self.show_left_panel; }
+                    painter.text(
+                        left_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        left_icon,
+                        egui::FontId::proportional(12.0),
+                        tb_fg,
+                    );
+                    if left_resp.clicked() {
+                        self.show_left_panel = !self.show_left_panel;
+                    }
 
                     // Gear / Settings (rightmost on macOS)
                     let gear_mac_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.max.x - mac_btn_w, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let gear_mac_resp = ui.interact(gear_mac_tbr, egui::Id::new("tb_settings"), egui::Sense::click());
-                    if gear_mac_resp.hovered() || self.show_settings { painter.rect_filled(gear_mac_tbr, 0.0, theme::SURFACE1); }
-                    painter.text(gear_mac_tbr.center(), egui::Align2::CENTER_CENTER, "⚙", egui::FontId::proportional(14.0), tb_fg);
-                    if gear_mac_resp.clicked() { self.show_settings = !self.show_settings; }
+                    let gear_mac_resp = ui.interact(
+                        gear_mac_tbr,
+                        egui::Id::new("tb_settings"),
+                        egui::Sense::click(),
+                    );
+                    if gear_mac_resp.hovered() || self.show_settings {
+                        painter.rect_filled(gear_mac_tbr, 0.0, theme::SURFACE1);
+                    }
+                    painter.text(
+                        gear_mac_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "⚙",
+                        egui::FontId::proportional(14.0),
+                        tb_fg,
+                    );
+                    if gear_mac_resp.clicked() {
+                        self.show_settings = !self.show_settings;
+                    }
 
                     // Right panel toggle (before gear on macOS)
                     let right_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.max.x - mac_btn_w * 2.0, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let right_resp = ui.interact(right_tbr, egui::Id::new("tb_right_toggle"), egui::Sense::click());
-                    if right_resp.hovered() { painter.rect_filled(right_tbr, 0.0, theme::SURFACE1); }
+                    let right_resp = ui.interact(
+                        right_tbr,
+                        egui::Id::new("tb_right_toggle"),
+                        egui::Sense::click(),
+                    );
+                    if right_resp.hovered() {
+                        painter.rect_filled(right_tbr, 0.0, theme::SURFACE1);
+                    }
                     let right_icon = if self.show_right_panel { "▶" } else { "◀" };
-                    painter.text(right_tbr.center(), egui::Align2::CENTER_CENTER, right_icon, egui::FontId::proportional(12.0), tb_fg);
-                    if right_resp.clicked() { self.show_right_panel = !self.show_right_panel; }
+                    painter.text(
+                        right_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        right_icon,
+                        egui::FontId::proportional(12.0),
+                        tb_fg,
+                    );
+                    if right_resp.clicked() {
+                        self.show_right_panel = !self.show_right_panel;
+                    }
 
                     // Title centered between the two toggles
                     painter.text(
-                        r.center(), egui::Align2::CENTER_CENTER,
-                        &ws_title, egui::FontId::proportional(13.0), tb_fg,
+                        r.center(),
+                        egui::Align2::CENTER_CENTER,
+                        &ws_title,
+                        egui::FontId::proportional(13.0),
+                        tb_fg,
                     );
                 }
 
@@ -1228,76 +1425,132 @@ impl eframe::App for App {
                     let btn_w = theme::TITLEBAR_BTN_W;
                     // right-to-left: close(0), maximize(1), minimize(2)
                     let btns: &[(&str, usize, bool)] = &[
-                        ("×", 0, true),   // close   — danger colour on hover
-                        ("□", 1, false),  // maximize
-                        ("–", 2, false),  // minimize
+                        ("×", 0, true),  // close   — danger colour on hover
+                        ("□", 1, false), // maximize
+                        ("–", 2, false), // minimize
                     ];
 
                     // Left panel toggle — leftmost button
                     {
                         let br = egui::Rect::from_min_size(
-                            egui::pos2(r.min.x, r.min.y), egui::vec2(btn_w, r.height()),
+                            egui::pos2(r.min.x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
                         );
-                        let resp = ui.interact(br, egui::Id::new("tb_left_toggle"), egui::Sense::click());
-                        let bg = if resp.hovered() { theme::SURFACE1 } else { egui::Color32::TRANSPARENT };
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_left_toggle"), egui::Sense::click());
+                        let bg = if resp.hovered() {
+                            theme::SURFACE1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
                         painter.rect_filled(br, 0.0, bg);
                         let icon = if self.show_left_panel { "◀" } else { "▶" };
-                        painter.text(br.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(12.0), tb_fg);
-                        if resp.clicked() { self.show_left_panel = !self.show_left_panel; }
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            icon,
+                            egui::FontId::proportional(12.0),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_left_panel = !self.show_left_panel;
+                        }
                     }
 
                     // Gear / Settings button — just before window controls
                     {
                         let gear_x = r.max.x - btn_w * (btns.len() as f32 + 1.0);
                         let br = egui::Rect::from_min_size(
-                            egui::pos2(gear_x, r.min.y), egui::vec2(btn_w, r.height()),
+                            egui::pos2(gear_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
                         );
-                        let resp = ui.interact(br, egui::Id::new("tb_settings"), egui::Sense::click());
-                        let bg = if resp.hovered() || self.show_settings { theme::SURFACE1 } else { egui::Color32::TRANSPARENT };
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_settings"), egui::Sense::click());
+                        let bg = if resp.hovered() || self.show_settings {
+                            theme::SURFACE1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
                         painter.rect_filled(br, 0.0, bg);
-                        painter.text(br.center(), egui::Align2::CENTER_CENTER, "⚙", egui::FontId::proportional(14.0), tb_fg);
-                        if resp.clicked() { self.show_settings = !self.show_settings; }
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "⚙",
+                            egui::FontId::proportional(14.0),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_settings = !self.show_settings;
+                        }
                     }
 
                     // Right panel toggle — just before gear button
                     let right_toggle_x = r.max.x - btn_w * (btns.len() as f32 + 2.0);
                     {
                         let br = egui::Rect::from_min_size(
-                            egui::pos2(right_toggle_x, r.min.y), egui::vec2(btn_w, r.height()),
+                            egui::pos2(right_toggle_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
                         );
-                        let resp = ui.interact(br, egui::Id::new("tb_right_toggle"), egui::Sense::click());
-                        let bg = if resp.hovered() { theme::SURFACE1 } else { egui::Color32::TRANSPARENT };
-                        painter.rect_filled(br, 0.0, bg);
-                        let icon = if self.show_right_panel { "▶" } else { "◀" };
-                        painter.text(br.center(), egui::Align2::CENTER_CENTER, icon, egui::FontId::proportional(12.0), tb_fg);
-                        if resp.clicked() { self.show_right_panel = !self.show_right_panel; }
-                    }
-
-                    for &(symbol, idx, is_danger) in btns {
-                        let x  = r.max.x - btn_w * (idx as f32 + 1.0);
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(x, r.min.y), egui::vec2(btn_w, r.height()),
-                        );
-                        let resp = ui.interact(
-                            br, egui::Id::new(("tb_btn", idx)), egui::Sense::click(),
-                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_right_toggle"), egui::Sense::click());
                         let bg = if resp.hovered() {
-                            if is_danger { theme::DANGER_BG } else { theme::SURFACE1 }
+                            theme::SURFACE1
                         } else {
                             egui::Color32::TRANSPARENT
                         };
                         painter.rect_filled(br, 0.0, bg);
-                        let fg = if resp.hovered() && is_danger { egui::Color32::WHITE } else { tb_fg };
+                        let icon = if self.show_right_panel { "▶" } else { "◀" };
                         painter.text(
-                            br.center(), egui::Align2::CENTER_CENTER,
-                            symbol, egui::FontId::proportional(12.0), fg,
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            icon,
+                            egui::FontId::proportional(12.0),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_right_panel = !self.show_right_panel;
+                        }
+                    }
+
+                    for &(symbol, idx, is_danger) in btns {
+                        let x = r.max.x - btn_w * (idx as f32 + 1.0);
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new(("tb_btn", idx)), egui::Sense::click());
+                        let bg = if resp.hovered() {
+                            if is_danger {
+                                theme::DANGER_BG
+                            } else {
+                                theme::SURFACE1
+                            }
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        let fg = if resp.hovered() && is_danger {
+                            egui::Color32::WHITE
+                        } else {
+                            tb_fg
+                        };
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            symbol,
+                            egui::FontId::proportional(12.0),
+                            fg,
                         );
                         if resp.clicked() {
                             match idx {
                                 0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                                 1 => {
-                                    let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+                                    let is_max =
+                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                        !is_max,
+                                    ));
                                 }
                                 2 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
                                 _ => {}
@@ -1307,16 +1560,18 @@ impl eframe::App for App {
                     // Title between left toggle and right toggle
                     let clip_min_x = r.min.x + btn_w + 4.0;
                     let clip_max_x = right_toggle_x - 4.0;
-                    painter.with_clip_rect(egui::Rect::from_min_max(
-                        egui::pos2(clip_min_x, r.min.y),
-                        egui::pos2(clip_max_x, r.max.y),
-                    )).text(
-                        r.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &ws_title,
-                        egui::FontId::proportional(13.0),
-                        tb_fg,
-                    );
+                    painter
+                        .with_clip_rect(egui::Rect::from_min_max(
+                            egui::pos2(clip_min_x, r.min.y),
+                            egui::pos2(clip_max_x, r.max.y),
+                        ))
+                        .text(
+                            r.center(),
+                            egui::Align2::CENTER_CENTER,
+                            &ws_title,
+                            egui::FontId::proportional(13.0),
+                            tb_fg,
+                        );
                 }
             });
 
@@ -1328,17 +1583,20 @@ impl eframe::App for App {
                     || c.checked_at.elapsed() > Duration::from_millis(500)
             });
             if need_refresh {
-                let result = self.active_id
+                let result = self
+                    .active_id
                     .and_then(|sid| self.sessions.iter().find(|e| e.id == sid))
                     .filter(|e| e.alive.load(Ordering::Relaxed))
                     .and_then(|e| crate::pty::foreground::detect_child(e.shell_pid));
                 self.foreground_cache = Some(CachedForeground {
-                    session_id:  self.active_id.unwrap_or(0),
+                    session_id: self.active_id.unwrap_or(0),
                     result,
-                    checked_at:  Instant::now(),
+                    checked_at: Instant::now(),
                 });
             }
-            self.foreground_cache.as_ref().and_then(|c| c.result.clone())
+            self.foreground_cache
+                .as_ref()
+                .and_then(|c| c.result.clone())
         };
 
         // ── Left panel: sessions (top) + workspaces (bottom) ───────────────
@@ -1346,11 +1604,12 @@ impl eframe::App for App {
         let mut duplicate_session = false;
         let mut open_workspace_id: Option<u64> = None;
         let mut edit_workspace_id: Option<u64> = None;
-        let mut quit_session_id:   Option<u32>  = None;
+        let mut quit_session_id: Option<u32> = None;
         let mut clicked_session_id: Option<u32> = None;
         let mut clicked_session_ws_group: Option<u64> = None;
 
-        if self.show_left_panel { egui::SidePanel::left("sessions")
+        if self.show_left_panel {
+            egui::SidePanel::left("sessions")
             .default_width(theme::LEFT_SIDEBAR_W)
             .width_range(80.0..=400.0)
             .resizable(true)
@@ -1486,7 +1745,7 @@ impl eframe::App for App {
                                 )).text(
                                     egui::pos2(text_x, row_rect.center().y),
                                     egui::Align2::LEFT_CENTER,
-                                    &effective_title(&title, &cwd),
+                                    effective_title(&title, &cwd),
                                     egui::FontId::proportional(theme::SESSION_FONT_SZ),
                                     if is_active { theme::TEXT } else { theme::SUBTEXT0 },
                                 );
@@ -1720,14 +1979,22 @@ impl eframe::App for App {
         }
 
         if let Some(ws_id) = edit_workspace_id {
-            if let Some(ws) = self.workspace_store.workspaces.iter().find(|w| w.id == ws_id) {
-                self.workspace_edit_dialog = Some(WorkspaceEditDialog::new(ws.id, ws.name.clone(), ws.color));
+            if let Some(ws) = self
+                .workspace_store
+                .workspaces
+                .iter()
+                .find(|w| w.id == ws_id)
+            {
+                self.workspace_edit_dialog =
+                    Some(WorkspaceEditDialog::new(ws.id, ws.name.clone(), ws.color));
             }
         }
 
         if let Some(qid) = quit_session_id {
             // Remove all panes referencing this session
-            let pane_ids: Vec<u32> = self.panes.iter()
+            let pane_ids: Vec<u32> = self
+                .panes
+                .iter()
                 .filter(|p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == qid))
                 .map(|p| p.id)
                 .collect();
@@ -1747,10 +2014,10 @@ impl eframe::App for App {
                     let pane_id = self.next_pane_id;
                     self.next_pane_id += 1;
                     self.panes.push(PaneEntry {
-                        id:           pane_id,
-                        content:      PaneContent::Terminal(new_sid),
+                        id: pane_id,
+                        content: PaneContent::Terminal(new_sid),
                         manual_width: None,
-                        last_size:    (0, 0),
+                        last_size: (0, 0),
                     });
                     self.active_pane_id = Some(pane_id);
                 }
@@ -1760,38 +2027,50 @@ impl eframe::App for App {
 
         if let Some(clicked_sid) = clicked_session_id {
             self.active_group = clicked_session_ws_group;
-            let pid_opt = self.panes.iter()
+            let pid_opt = self
+                .panes
+                .iter()
                 .find(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == clicked_sid))
                 .map(|p| p.id);
             if let Some(pid) = pid_opt {
                 self.activate_pane(pid);
-                self.last_pane_per_group.insert(clicked_session_ws_group, pid);
+                self.last_pane_per_group
+                    .insert(clicked_session_ws_group, pid);
             } else {
                 self.active_id = Some(clicked_sid);
             }
         }
 
         if spawn_new_session {
-            let cwd = self.active_cwd()
-                .or_else(|| self.active_group.and_then(|gid|
-                    self.workspace_store.workspaces.iter()
+            let cwd = self.active_cwd().or_else(|| {
+                self.active_group.and_then(|gid| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
                         .find(|w| w.id == gid)
                         .map(|w| w.path.clone())
-                ));
-            let (cols, rows) = self.panes.iter()
+                })
+            });
+            let (cols, rows) = self
+                .panes
+                .iter()
                 .find(|p| Some(p.id) == self.active_pane_id)
                 .map(|p| p.last_size)
                 .unwrap_or_else(|| self.panes.first().map(|p| p.last_size).unwrap_or((80, 24)));
             if let Some(new_id) = self.spawn_session(cols, rows, cwd) {
                 self.active_id = Some(new_id);
-                if !self.panes.iter().any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id)) {
+                if !self
+                    .panes
+                    .iter()
+                    .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
+                {
                     let pane_id = self.next_pane_id;
                     self.next_pane_id += 1;
                     self.panes.push(PaneEntry {
-                        id:           pane_id,
-                        content:      PaneContent::Terminal(new_id),
+                        id: pane_id,
+                        content: PaneContent::Terminal(new_id),
                         manual_width: None,
-                        last_size:    (cols, rows),
+                        last_size: (cols, rows),
                     });
                     self.activate_pane(pane_id);
                 }
@@ -1799,13 +2078,18 @@ impl eframe::App for App {
         }
 
         if duplicate_session {
-            let cwd = self.active_cwd()
-                .or_else(|| self.active_group.and_then(|gid|
-                    self.workspace_store.workspaces.iter()
+            let cwd = self.active_cwd().or_else(|| {
+                self.active_group.and_then(|gid| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
                         .find(|w| w.id == gid)
                         .map(|w| w.path.clone())
-                ));
-            let (cols, rows) = self.panes.iter()
+                })
+            });
+            let (cols, rows) = self
+                .panes
+                .iter()
                 .find(|p| Some(p.id) == self.active_pane_id)
                 .map(|p| p.last_size)
                 .unwrap_or_else(|| self.panes.first().map(|p| p.last_size).unwrap_or((80, 24)));
@@ -1816,26 +2100,39 @@ impl eframe::App for App {
                 // PowerShell does not invoke a quoted path string as a command without
                 // the call operator; & works for both bare names and quoted full paths.
                 #[cfg(target_os = "windows")]
-                { format!("& {}", joined) }
+                {
+                    format!("& {}", joined)
+                }
                 #[cfg(not(target_os = "windows"))]
-                { joined }
+                {
+                    joined
+                }
             });
             if let Some(new_id) = self.spawn_session(cols, rows, cwd) {
                 self.active_id = Some(new_id);
-                if !self.panes.iter().any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id)) {
+                if !self
+                    .panes
+                    .iter()
+                    .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
+                {
                     // Insert new pane immediately after the current active pane
-                    let insert_at = self.panes.iter()
+                    let insert_at = self
+                        .panes
+                        .iter()
                         .position(|p| Some(p.id) == self.active_pane_id)
                         .map(|i| i + 1)
                         .unwrap_or(self.panes.len());
                     let pane_id = self.next_pane_id;
                     self.next_pane_id += 1;
-                    self.panes.insert(insert_at, PaneEntry {
-                        id:           pane_id,
-                        content:      PaneContent::Terminal(new_id),
-                        manual_width: None,
-                        last_size:    (cols, rows),
-                    });
+                    self.panes.insert(
+                        insert_at,
+                        PaneEntry {
+                            id: pane_id,
+                            content: PaneContent::Terminal(new_id),
+                            manual_width: None,
+                            last_size: (cols, rows),
+                        },
+                    );
                     self.activate_pane(pane_id);
                 }
                 // Queue the command; it will be sent once the new shell emits OSC 7 (prompt ready).
@@ -1859,254 +2156,310 @@ impl eframe::App for App {
                         d.git_diff.clone(),
                         d.git_status.clone(),
                         d.dir_entries.clone(),
-                        d.md_files.iter().map(|(p, c)| (p.clone(), c.clone())).collect::<Vec<_>>(),
+                        d.md_files
+                            .iter()
+                            .map(|(p, c)| (p.clone(), c.clone()))
+                            .collect::<Vec<_>>(),
                     ),
                     None => (false, String::new(), String::new(), vec![], vec![]),
                 },
                 _ => (false, String::new(), String::new(), vec![], vec![]),
             };
 
-        let mut md_tabs: Vec<(PathBuf, String)> = raw_md.into_iter()
+        let mut md_tabs: Vec<(PathBuf, String)> = raw_md
+            .into_iter()
             .filter(|(p, _)| self.shown_md_tabs.contains(p))
             .collect();
         md_tabs.sort_by(|(a, _), (b, _)| a.file_name().cmp(&b.file_name()));
 
-        let mut new_tab:        Option<RightTab> = None;
-        let mut close_tab:      Option<PathBuf>  = None;
-        let mut open_md:        Option<PathBuf>  = None;
-        let mut open_editor:    Option<PathBuf>  = None;
-        let mut open_ws_dialog: Option<PathBuf>  = None;
+        let mut new_tab: Option<RightTab> = None;
+        let mut close_tab: Option<PathBuf> = None;
+        let mut open_md: Option<PathBuf> = None;
+        let mut open_editor: Option<PathBuf> = None;
+        let mut open_ws_dialog: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
 
         // ── Right panel ──────────────────────────────────────────────────────
-        if self.show_right_panel { egui::SidePanel::right("right_panel")
-            .default_width(300.0)
-            .width_range(100.0..=600.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                let panel_rect = ui.max_rect();
-                let panel_w    = panel_rect.width();
-                let total_h    = panel_rect.height();
+        if self.show_right_panel {
+            egui::SidePanel::right("right_panel")
+                .default_width(300.0)
+                .width_range(100.0..=600.0)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    let panel_rect = ui.max_rect();
+                    let panel_w = panel_rect.width();
+                    let total_h = panel_rect.height();
 
-                const DIV_H:       f32 = 4.0;
-                const COLLAPSED_H: f32 = theme::HEADER_H;
+                    const DIV_H: f32 = 4.0;
+                    const COLLAPSED_H: f32 = theme::HEADER_H;
 
-                let (content_h, notes_h) = if self.notes_panel_collapsed {
-                    (total_h - COLLAPSED_H - DIV_H, COLLAPSED_H)
-                } else {
-                    let nh = (total_h * self.notes_panel_ratio).max(60.0);
-                    let ch = (total_h - nh - DIV_H).max(60.0);
-                    (ch, nh)
-                };
+                    let (content_h, notes_h) = if self.notes_panel_collapsed {
+                        (total_h - COLLAPSED_H - DIV_H, COLLAPSED_H)
+                    } else {
+                        let nh = (total_h * self.notes_panel_ratio).max(60.0);
+                        let ch = (total_h - nh - DIV_H).max(60.0);
+                        (ch, nh)
+                    };
 
-                ui.allocate_rect(panel_rect, egui::Sense::hover());
+                    ui.allocate_rect(panel_rect, egui::Sense::hover());
 
-                // ── Top: directory / git / markdown tabs ─────────────────────
-                let content_rect = egui::Rect::from_min_size(
-                    panel_rect.min,
-                    egui::vec2(panel_w, content_h),
-                );
-                ui.allocate_ui_at_rect(content_rect, |ui| {
-                    egui::Frame::none()
-                        .fill(theme::SURFACE0)
-                        .inner_margin(egui::Margin::ZERO)
-                        .show(ui, |ui| {
-                            egui::ScrollArea::horizontal()
-                                .id_source("right_tab_bar")
-                                .max_height(theme::HEADER_H)
-                                .show(ui, |ui| {
-                                    ui.set_min_height(theme::HEADER_H);
-                                    ui.horizontal(|ui| {
+                    // ── Top: directory / git / markdown tabs ─────────────────────
+                    let content_rect =
+                        egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, content_h));
+                    ui.allocate_ui_at_rect(content_rect, |ui| {
+                        egui::Frame::none()
+                            .fill(theme::SURFACE0)
+                            .inner_margin(egui::Margin::ZERO)
+                            .show(ui, |ui| {
+                                egui::ScrollArea::horizontal()
+                                    .id_source("right_tab_bar")
+                                    .max_height(theme::HEADER_H)
+                                    .show(ui, |ui| {
                                         ui.set_min_height(theme::HEADER_H);
-                                        ui.spacing_mut().item_spacing.x = 2.0;
-
-                                        if ui.selectable_label(
-                                            active_tab == RightTab::Directory,
-                                            egui::RichText::new("Directory").size(theme::HEADER_FONT_SZ),
-                                        ).clicked() {
-                                            new_tab = Some(RightTab::Directory);
-                                        }
-
-                                        if is_git && ui.selectable_label(
-                                            active_tab == RightTab::GitDiff,
-                                            egui::RichText::new("Git Diff").size(theme::HEADER_FONT_SZ),
-                                        ).clicked() {
-                                            new_tab = Some(RightTab::GitDiff);
-                                        }
-
-                                        for (path, _) in &md_tabs {
-                                            let name = path.file_name()
-                                                .map(|n| n.to_string_lossy().into_owned())
-                                                .unwrap_or_default();
-                                            let is_active = active_tab == RightTab::Markdown(path.clone());
-                                            if ui.selectable_label(
-                                                is_active,
-                                                egui::RichText::new(&name).size(theme::HEADER_FONT_SZ),
-                                            ).clicked() {
-                                                new_tab = Some(RightTab::Markdown(path.clone()));
-                                            }
-                                            if ui.add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("×")
-                                                        .size(theme::HEADER_FONT_SZ)
-                                                        .color(theme::OVERLAY1)
-                                                ).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                                            ).on_hover_text("Close tab").clicked() {
-                                                close_tab = Some(path.clone());
-                                            }
-                                        }
-                                    });
-                                });
-                        });
-
-                    ui.separator();
-
-                    egui::ScrollArea::vertical()
-                        .id_source("right_content")
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            match &active_tab {
-                                RightTab::Directory => {
-                                    if let Some(cwd) = active_cwd.as_ref() {
                                         ui.horizontal(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(theme::short_path(cwd))
-                                                    .monospace().size(theme::CWD_FONT_SZ)
-                                                    .color(theme::FG_PATH)
-                                            ).on_hover_text(cwd.display().to_string());
-                                            let already_saved = self.workspace_store
-                                                .find_for_path(cwd).is_some();
-                                            let (btn_text, tip) = if already_saved {
-                                                ("✓ Saved", "Already saved as workspace")
-                                            } else {
-                                                ("🔖 Save", "Save as workspace")
-                                            };
-                                            let save_btn = ui.add_enabled(
-                                                !already_saved,
-                                                egui::Button::new(
-                                                    egui::RichText::new(btn_text).size(12.0)
-                                                ).frame(false),
-                                            );
-                                            if save_btn.on_hover_text(tip).clicked() {
-                                                open_ws_dialog = Some(cwd.clone());
+                                            ui.set_min_height(theme::HEADER_H);
+                                            ui.spacing_mut().item_spacing.x = 2.0;
+
+                                            if ui
+                                                .selectable_label(
+                                                    active_tab == RightTab::Directory,
+                                                    egui::RichText::new("Directory")
+                                                        .size(theme::HEADER_FONT_SZ),
+                                                )
+                                                .clicked()
+                                            {
+                                                new_tab = Some(RightTab::Directory);
+                                            }
+
+                                            if is_git
+                                                && ui
+                                                    .selectable_label(
+                                                        active_tab == RightTab::GitDiff,
+                                                        egui::RichText::new("Git Diff")
+                                                            .size(theme::HEADER_FONT_SZ),
+                                                    )
+                                                    .clicked()
+                                            {
+                                                new_tab = Some(RightTab::GitDiff);
+                                            }
+
+                                            for (path, _) in &md_tabs {
+                                                let name = path
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().into_owned())
+                                                    .unwrap_or_default();
+                                                let is_active =
+                                                    active_tab == RightTab::Markdown(path.clone());
+                                                if ui
+                                                    .selectable_label(
+                                                        is_active,
+                                                        egui::RichText::new(&name)
+                                                            .size(theme::HEADER_FONT_SZ),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    new_tab =
+                                                        Some(RightTab::Markdown(path.clone()));
+                                                }
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new("×")
+                                                                .size(theme::HEADER_FONT_SZ)
+                                                                .color(theme::OVERLAY1),
+                                                        )
+                                                        .frame(false)
+                                                        .min_size(egui::vec2(
+                                                            theme::HEADER_H,
+                                                            theme::HEADER_H,
+                                                        )),
+                                                    )
+                                                    .on_hover_text("Close tab")
+                                                    .clicked()
+                                                {
+                                                    close_tab = Some(path.clone());
+                                                }
                                             }
                                         });
-                                        ui.add_space(4.0);
-                                        render_dir_tree(ui, &dir_entries, &mut open_md, &mut open_editor);
-                                    } else {
-                                        ui.label(
-                                            egui::RichText::new("(no active session)")
-                                                .italics().color(theme::OVERLAY0).size(12.0)
-                                        );
+                                    });
+                            });
+
+                        ui.separator();
+
+                        egui::ScrollArea::vertical()
+                            .id_source("right_content")
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                match &active_tab {
+                                    RightTab::Directory => {
+                                        if let Some(cwd) = active_cwd.as_ref() {
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(theme::short_path(cwd))
+                                                        .monospace()
+                                                        .size(theme::CWD_FONT_SZ)
+                                                        .color(theme::FG_PATH),
+                                                )
+                                                .on_hover_text(cwd.display().to_string());
+                                                let already_saved = self
+                                                    .workspace_store
+                                                    .find_for_path(cwd)
+                                                    .is_some();
+                                                let (btn_text, tip) = if already_saved {
+                                                    ("✓ Saved", "Already saved as workspace")
+                                                } else {
+                                                    ("🔖 Save", "Save as workspace")
+                                                };
+                                                let save_btn = ui.add_enabled(
+                                                    !already_saved,
+                                                    egui::Button::new(
+                                                        egui::RichText::new(btn_text).size(12.0),
+                                                    )
+                                                    .frame(false),
+                                                );
+                                                if save_btn.on_hover_text(tip).clicked() {
+                                                    open_ws_dialog = Some(cwd.clone());
+                                                }
+                                            });
+                                            ui.add_space(4.0);
+                                            render_dir_tree(
+                                                ui,
+                                                &dir_entries,
+                                                &mut open_md,
+                                                &mut open_editor,
+                                            );
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("(no active session)")
+                                                    .italics()
+                                                    .color(theme::OVERLAY0)
+                                                    .size(12.0),
+                                            );
+                                        }
+                                    }
+                                    RightTab::GitDiff => {
+                                        render_git_diff(ui, &git_diff, &git_status);
+                                    }
+                                    RightTab::Markdown(path) => {
+                                        let content = md_tabs
+                                            .iter()
+                                            .find(|(p, _)| p == path)
+                                            .map(|(_, c)| c.as_str())
+                                            .unwrap_or("(file not found)");
+                                        render_markdown(ui, content);
                                     }
                                 }
-                                RightTab::GitDiff => {
-                                    render_git_diff(ui, &git_diff, &git_status);
-                                }
-                                RightTab::Markdown(path) => {
-                                    let content = md_tabs.iter()
-                                        .find(|(p, _)| p == path)
-                                        .map(|(_, c)| c.as_str())
-                                        .unwrap_or("(file not found)");
-                                    render_markdown(ui, content);
-                                }
-                            }
-                        });
-                });
-
-                // ── Draggable divider ────────────────────────────────────────
-                let div_top  = panel_rect.min.y + content_h;
-                let div_rect = egui::Rect::from_min_size(
-                    egui::pos2(panel_rect.left(), div_top),
-                    egui::vec2(panel_w, DIV_H),
-                );
-                let div_resp = ui.interact(
-                    div_rect,
-                    egui::Id::new("notes_panel_divider"),
-                    egui::Sense::drag(),
-                );
-                if div_resp.hovered() || div_resp.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                }
-                ui.painter().rect_filled(
-                    div_rect, 0.0,
-                    if div_resp.hovered() || div_resp.dragged() {
-                        theme::WS_DIV_ACTIVE
-                    } else {
-                        theme::WS_DIV_IDLE
-                    },
-                );
-                if !self.notes_panel_collapsed && div_resp.dragged() {
-                    let delta       = div_resp.drag_delta().y;
-                    // drag down → notes shrinks; drag up → notes grows
-                    let new_notes_h = notes_h - delta;
-                    if new_notes_h < 40.0 {
-                        self.notes_panel_collapsed = true;
-                    } else {
-                        self.notes_panel_ratio = new_notes_h.min(total_h - 60.0 - DIV_H) / total_h;
-                    }
-                } else if self.notes_panel_collapsed && div_resp.dragged() {
-                    let delta       = div_resp.drag_delta().y;
-                    // drag up from collapsed → expand
-                    let new_notes_h = COLLAPSED_H - delta;
-                    if new_notes_h >= 40.0 {
-                        self.notes_panel_collapsed  = false;
-                        self.notes_panel_ratio      = new_notes_h.min(total_h - 60.0 - DIV_H) / total_h;
-                    }
-                }
-
-                // ── Notes section ────────────────────────────────────────────
-                let notes_top  = div_top + DIV_H;
-                let notes_rect = egui::Rect::from_min_size(
-                    egui::pos2(panel_rect.left(), notes_top),
-                    egui::vec2(panel_w, notes_h),
-                );
-                ui.allocate_ui_at_rect(notes_rect, |ui| {
-                    ui.painter().rect_filled(notes_rect, 0.0, theme::BG_WORKSPACE_FILL);
-
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), theme::HEADER_H),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            let arrow = if self.notes_panel_collapsed { "▶" } else { "▼" };
-                            if ui.add(
-                                egui::Button::new(egui::RichText::new(arrow).size(11.0))
-                                    .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                                    .frame(true)
-                            ).clicked() {
-                                self.notes_panel_collapsed = !self.notes_panel_collapsed;
-                            }
-                            ui.label(egui::RichText::new("Notes").strong().size(theme::HEADER_FONT_SZ));
-                        }
-                    );
-
-                    if !self.notes_panel_collapsed {
-                        ui.painter().rect_filled(
-                            egui::Rect::from_min_max(
-                                egui::pos2(notes_rect.left(), notes_rect.min.y + COLLAPSED_H),
-                                notes_rect.max,
-                            ),
-                            0.0,
-                            theme::BG_TERM,
-                        );
-                        egui::ScrollArea::both()
-                            .id_source("notes_scroll")
-                            .auto_shrink([false; 2])
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut note_text)
-                                        .id(egui::Id::new("notes_textedit"))
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text("Notes for this workspace…")
-                                        .frame(false),
-                                );
                             });
+                    });
+
+                    // ── Draggable divider ────────────────────────────────────────
+                    let div_top = panel_rect.min.y + content_h;
+                    let div_rect = egui::Rect::from_min_size(
+                        egui::pos2(panel_rect.left(), div_top),
+                        egui::vec2(panel_w, DIV_H),
+                    );
+                    let div_resp = ui.interact(
+                        div_rect,
+                        egui::Id::new("notes_panel_divider"),
+                        egui::Sense::drag(),
+                    );
+                    if div_resp.hovered() || div_resp.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
                     }
+                    ui.painter().rect_filled(
+                        div_rect,
+                        0.0,
+                        if div_resp.hovered() || div_resp.dragged() {
+                            theme::WS_DIV_ACTIVE
+                        } else {
+                            theme::WS_DIV_IDLE
+                        },
+                    );
+                    if !self.notes_panel_collapsed && div_resp.dragged() {
+                        let delta = div_resp.drag_delta().y;
+                        // drag down → notes shrinks; drag up → notes grows
+                        let new_notes_h = notes_h - delta;
+                        if new_notes_h < 40.0 {
+                            self.notes_panel_collapsed = true;
+                        } else {
+                            self.notes_panel_ratio =
+                                new_notes_h.min(total_h - 60.0 - DIV_H) / total_h;
+                        }
+                    } else if self.notes_panel_collapsed && div_resp.dragged() {
+                        let delta = div_resp.drag_delta().y;
+                        // drag up from collapsed → expand
+                        let new_notes_h = COLLAPSED_H - delta;
+                        if new_notes_h >= 40.0 {
+                            self.notes_panel_collapsed = false;
+                            self.notes_panel_ratio =
+                                new_notes_h.min(total_h - 60.0 - DIV_H) / total_h;
+                        }
+                    }
+
+                    // ── Notes section ────────────────────────────────────────────
+                    let notes_top = div_top + DIV_H;
+                    let notes_rect = egui::Rect::from_min_size(
+                        egui::pos2(panel_rect.left(), notes_top),
+                        egui::vec2(panel_w, notes_h),
+                    );
+                    ui.allocate_ui_at_rect(notes_rect, |ui| {
+                        ui.painter()
+                            .rect_filled(notes_rect, 0.0, theme::BG_WORKSPACE_FILL);
+
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), theme::HEADER_H),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                let arrow = if self.notes_panel_collapsed {
+                                    "▶"
+                                } else {
+                                    "▼"
+                                };
+                                if ui
+                                    .add(
+                                        egui::Button::new(egui::RichText::new(arrow).size(11.0))
+                                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
+                                            .frame(true),
+                                    )
+                                    .clicked()
+                                {
+                                    self.notes_panel_collapsed = !self.notes_panel_collapsed;
+                                }
+                                ui.label(
+                                    egui::RichText::new("Notes")
+                                        .strong()
+                                        .size(theme::HEADER_FONT_SZ),
+                                );
+                            },
+                        );
+
+                        if !self.notes_panel_collapsed {
+                            ui.painter().rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(notes_rect.left(), notes_rect.min.y + COLLAPSED_H),
+                                    notes_rect.max,
+                                ),
+                                0.0,
+                                theme::BG_TERM,
+                            );
+                            egui::ScrollArea::both()
+                                .id_source("notes_scroll")
+                                .auto_shrink([false; 2])
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut note_text)
+                                            .id(egui::Id::new("notes_textedit"))
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(f32::INFINITY)
+                                            .hint_text("Notes for this workspace…")
+                                            .frame(false),
+                                    );
+                                });
+                        }
+                    });
                 });
-            });
         } // end if self.show_right_panel
 
         // Persist note if it changed
@@ -2118,7 +2471,9 @@ impl eframe::App for App {
             }
         }
 
-        if let Some(tab) = new_tab { self.right_tab = tab; }
+        if let Some(tab) = new_tab {
+            self.right_tab = tab;
+        }
         if let Some(path) = close_tab {
             self.shown_md_tabs.remove(&path);
             if self.right_tab == RightTab::Markdown(path) {
@@ -2152,41 +2507,53 @@ impl eframe::App for App {
         });
 
         // ── Snapshot editor contents for TextEdit (must be mutable locals) ─
-        let mut editor_texts: Vec<(u32, Option<String>)> = self.panes.iter().map(|p| {
-            let text = match &p.content {
-                PaneContent::FileEditor(ed) => Some(ed.content.clone()),
-                _ => None,
-            };
-            (p.id, text)
-        }).collect();
+        let mut editor_texts: Vec<(u32, Option<String>)> = self
+            .panes
+            .iter()
+            .map(|p| {
+                let text = match &p.content {
+                    PaneContent::FileEditor(ed) => Some(ed.content.clone()),
+                    _ => None,
+                };
+                (p.id, text)
+            })
+            .collect();
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
-        let ws_colors: Vec<Option<[u8; 3]>> = self.panes.iter().map(|p| {
-            match &p.content {
+        let ws_colors: Vec<Option<[u8; 3]>> = self
+            .panes
+            .iter()
+            .map(|p| match &p.content {
                 PaneContent::Terminal(sid) => {
                     let sid = *sid;
-                    self.sessions.iter()
-                        .find(|e| e.id == sid)
-                        .and_then(|e| {
-                            let cwd = e.session.read().cwd.clone();
-                            if cwd.as_os_str().is_empty() { return None; }
-                            self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
-                        })
-                }
-                PaneContent::FileEditor(ed) => {
-                    ed.workspace_id.and_then(|id| {
-                        self.workspace_store.workspaces.iter().find(|w| w.id == id).map(|w| w.color)
+                    self.sessions.iter().find(|e| e.id == sid).and_then(|e| {
+                        let cwd = e.session.read().cwd.clone();
+                        if cwd.as_os_str().is_empty() {
+                            return None;
+                        }
+                        self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
                     })
                 }
-            }
-        }).collect();
+                PaneContent::FileEditor(ed) => ed.workspace_id.and_then(|id| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == id)
+                        .map(|w| w.color)
+                }),
+            })
+            .collect();
 
         // ── Group membership + visible pane indices for active group ─────────
-        let pane_groups: Vec<Option<u64>> = self.panes.iter()
+        let pane_groups: Vec<Option<u64>> = self
+            .panes
+            .iter()
             .map(|p| Self::pane_group(&self.sessions, &self.workspace_store, p))
             .collect();
         let active_group_snap = self.active_group;
-        let visible_indices: Vec<usize> = pane_groups.iter().enumerate()
+        let visible_indices: Vec<usize> = pane_groups
+            .iter()
+            .enumerate()
             .filter(|(_, g)| **g == active_group_snap)
             .map(|(i, _)| i)
             .collect();
@@ -2205,16 +2572,16 @@ impl eframe::App for App {
         }
 
         // ── Output variables collected inside the central panel closure ─────
-        let divider_drags:    Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
-        let mut close_pane_id:    Option<u32> = None;
-        let mut clicked_pane_id:  Option<u32> = None;
-        let mut editor_saves:     Vec<u32>     = vec![];
+        let divider_drags: Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
+        let mut close_pane_id: Option<u32> = None;
+        let mut clicked_pane_id: Option<u32> = None;
+        let mut editor_saves: Vec<u32> = vec![];
         let mut pane_widths_snap: Vec<(u32, f32)> = vec![];
-        let mut resize_total_h:   f32 = 0.0;
-        let mut resize_cell_w:    f32 = 0.0;
-        let mut resize_cell_h:    f32 = 0.0;
+        let mut resize_total_h: f32 = 0.0;
+        let mut resize_cell_w: f32 = 0.0;
+        let mut resize_cell_h: f32 = 0.0;
         let equalize_widths: bool = false;
-        let mut panel_w_snap:    f32  = 0.0;
+        let mut panel_w_snap: f32 = 0.0;
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -2612,7 +2979,7 @@ impl eframe::App for App {
 
         // 1. Divider drags → freeze manual widths on both adjacent panes
         for (left_idx, right_idx, delta_x, left_w, right_w) in divider_drags {
-            self.panes[left_idx].manual_width  = Some((left_w  + delta_x).max(theme::MIN_PANE_W));
+            self.panes[left_idx].manual_width = Some((left_w + delta_x).max(theme::MIN_PANE_W));
             self.panes[right_idx].manual_width = Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
@@ -2636,14 +3003,21 @@ impl eframe::App for App {
 
         // 3. Equalize pane widths for visible panes (split icon clicked)
         if equalize_widths {
-            for &i in &visible_indices { self.panes[i].manual_width = None; }
+            for &i in &visible_indices {
+                self.panes[i].manual_width = None;
+            }
             loop {
-                let nv2 = visible_indices.iter()
+                let nv2 = visible_indices
+                    .iter()
                     .filter(|&&i| i < self.panes.len())
                     .count();
-                if nv2 <= 1 { break; }
+                if nv2 <= 1 {
+                    break;
+                }
                 let avail = panel_w_snap - (nv2 - 1) as f32 * theme::DIVIDER_W;
-                if avail / nv2 as f32 >= theme::MIN_PANE_W { break; }
+                if avail / nv2 as f32 >= theme::MIN_PANE_W {
+                    break;
+                }
                 // Remove the first visible pane
                 if let Some(&first_vi) = visible_indices.first() {
                     let removed = self.panes.remove(first_vi);
@@ -2672,8 +3046,8 @@ impl eframe::App for App {
                 if i < self.panes.len() && self.panes[i].id == *pane_id {
                     if let PaneContent::FileEditor(ref mut ed) = self.panes[i].content {
                         if *new_text != ed.content {
-                            ed.content    = new_text.clone();
-                            ed.dirty      = true;
+                            ed.content = new_text.clone();
+                            ed.dirty = true;
                             ed.save_error = false;
                         }
                     }
@@ -2686,7 +3060,10 @@ impl eframe::App for App {
             if let Some(p) = self.panes.iter_mut().find(|p| p.id == *save_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     match std::fs::write(&ed.path, &ed.content) {
-                        Ok(()) => { ed.dirty = false; ed.save_error = false; }
+                        Ok(()) => {
+                            ed.dirty = false;
+                            ed.save_error = false;
+                        }
                         Err(e) => {
                             log::error!("Failed to save {}: {e}", ed.path.display());
                             ed.save_error = true;
@@ -2710,12 +3087,10 @@ impl eframe::App for App {
                     if target != self.panes[pane_idx].last_size {
                         // Reset debounce timer only if the target itself changed
                         // (not just re-entering the same pending target each frame).
-                        let need_reset = match self.resize_debounce.get(&sid) {
-                            Some(&(dc, dr, _)) if (dc, dr) == target => false,
-                            _ => true,
-                        };
+                        let need_reset = !matches!(self.resize_debounce.get(&sid), Some(&(dc, dr, _)) if (dc, dr) == target);
                         if need_reset {
-                            self.resize_debounce.insert(sid, (cols, rows, Instant::now()));
+                            self.resize_debounce
+                                .insert(sid, (cols, rows, Instant::now()));
                         }
                     }
                 }
@@ -2726,14 +3101,18 @@ impl eframe::App for App {
         {
             const DEBOUNCE: Duration = Duration::from_millis(150);
             let now = Instant::now();
-            let stable: Vec<(u32, u16, u16)> = self.resize_debounce.iter()
+            let stable: Vec<(u32, u16, u16)> = self
+                .resize_debounce
+                .iter()
                 .filter(|(_, &(_, _, t))| now.duration_since(t) >= DEBOUNCE)
                 .map(|(&sid, &(c, r, _))| (sid, c, r))
                 .collect();
             for (sid, cols, rows) in stable {
                 self.resize_debounce.remove(&sid);
                 // Update pane's recorded size
-                if let Some(pane) = self.panes.iter_mut()
+                if let Some(pane) = self
+                    .panes
+                    .iter_mut()
                     .find(|p| matches!(p.content, PaneContent::Terminal(s) if s == sid))
                 {
                     pane.last_size = (cols, rows);
@@ -2742,7 +3121,7 @@ impl eframe::App for App {
                     // Snapshot the prompt row before PTY resize (PSReadLine workaround)
                     let snap = {
                         let sess = self.sessions[idx].session.read();
-                        let cy    = sess.cursor_y;
+                        let cy = sess.cursor_y;
                         let ncols = sess.grid.cols;
                         if (0..ncols).any(|c| sess.grid.get(cy, c).c != ' ') {
                             let cells = (0..ncols).map(|c| *sess.grid.get(cy, c)).collect();
@@ -2759,7 +3138,7 @@ impl eframe::App for App {
                         self.resize_snapshots.insert(sid, snap);
                     }
                     let entry = &self.sessions[idx];
-                    SessionManager::resize(&entry.master, cols, rows);
+                    SessionManager::resize(&*entry.master, cols, rows);
                     entry.session.write().resize(cols, rows);
                 }
             }
@@ -2771,7 +3150,9 @@ impl eframe::App for App {
 
         // 9. File opened from right panel → add FileEditor pane (or focus existing)
         if let Some((path, content)) = pending_open_editor {
-            let existing_id = self.panes.iter()
+            let existing_id = self
+                .panes
+                .iter()
                 .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
                 .map(|p| p.id);
             if let Some(pid) = existing_id {
@@ -2780,16 +3161,16 @@ impl eframe::App for App {
                 let pane_id = self.next_pane_id;
                 self.next_pane_id += 1;
                 self.panes.push(PaneEntry {
-                    id:      pane_id,
+                    id: pane_id,
                     content: PaneContent::FileEditor(FileEditorState {
                         path,
                         content,
-                        dirty:        false,
-                        save_error:   false,
+                        dirty: false,
+                        save_error: false,
                         workspace_id: self.active_group,
                     }),
                     manual_width: None,
-                    last_size:    (0, 0),
+                    last_size: (0, 0),
                 });
                 self.activate_pane(pane_id);
             }
@@ -2798,10 +3179,10 @@ impl eframe::App for App {
         // ── Settings overlay ───────────────────────────────────────────────
         if self.show_settings {
             let mut settings_changed = false;
-            let mut close_settings   = false;
+            let mut close_settings = false;
             let screen_rect = ctx.screen_rect();
-            let dialog_w    = (screen_rect.width() * 0.38).clamp(320.0, 520.0);
-            let dialog_h    = 220.0_f32;
+            let dialog_w = (screen_rect.width() * 0.38).clamp(320.0, 520.0);
+            let dialog_h = 220.0_f32;
 
             egui::Area::new(egui::Id::new("settings_dim"))
                 .fixed_pos(screen_rect.min)
@@ -2812,8 +3193,14 @@ impl eframe::App for App {
                         egui::Id::new("settings_dim_click"),
                         egui::Sense::click(),
                     );
-                    ui.painter().rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(160));
-                    if resp.clicked() { close_settings = true; }
+                    ui.painter().rect_filled(
+                        screen_rect,
+                        0.0,
+                        egui::Color32::from_black_alpha(160),
+                    );
+                    if resp.clicked() {
+                        close_settings = true;
+                    }
                 });
 
             egui::Area::new(egui::Id::new("settings_dialog"))
@@ -2890,15 +3277,19 @@ impl eframe::App for App {
                     });
                 });
 
-            if settings_changed { self.settings.save(); }
-            if close_settings   { self.show_settings = false; }
+            if settings_changed {
+                self.settings.save();
+            }
+            if close_settings {
+                self.show_settings = false;
+            }
         }
 
         // ── Workspace save dialog (modal overlay) ──────────────────────────
         if self.workspace_dialog.is_some() {
-            let mut save_it  = false;
-            let mut cancel   = false;
-            let screen_rect  = ctx.screen_rect();
+            let mut save_it = false;
+            let mut cancel = false;
+            let screen_rect = ctx.screen_rect();
             let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
 
             egui::Area::new(egui::Id::new("ws_dialog_dim"))
@@ -2927,7 +3318,7 @@ impl eframe::App for App {
                             let name_resp = ui.add(
                                 egui::TextEdit::singleline(&mut dlg.name)
                                     .hint_text("e.g. My Project")
-                                    .desired_width(f32::INFINITY)
+                                    .desired_width(f32::INFINITY),
                             );
                             if !dlg.focus_requested {
                                 name_resp.request_focus();
@@ -2937,16 +3328,19 @@ impl eframe::App for App {
 
                             ui.label(
                                 egui::RichText::new(theme::short_path(&dlg.path))
-                                    .monospace().size(11.0)
-                                    .color(theme::FG_PATH)
-                            ).on_hover_text(dlg.path.display().to_string());
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(theme::FG_PATH),
+                            )
+                            .on_hover_text(dlg.path.display().to_string());
                             ui.add_space(8.0);
 
                             ui.label("Color");
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                                 for &preset in PRESET_COLORS {
-                                    let selected = dlg.selected_color == preset && !dlg.show_custom_picker;
+                                    let selected =
+                                        dlg.selected_color == preset && !dlg.show_custom_picker;
                                     let swatch = egui::Button::new("")
                                         .fill(theme::from_rgb(preset))
                                         .stroke(if selected {
@@ -2957,14 +3351,21 @@ impl eframe::App for App {
                                         .min_size(egui::vec2(24.0, 24.0))
                                         .rounding(4.0);
                                     if ui.add(swatch).clicked() {
-                                        dlg.selected_color   = preset;
+                                        dlg.selected_color = preset;
                                         dlg.show_custom_picker = false;
-                                        dlg.custom_color = [preset[0] as f32 / 255.0, preset[1] as f32 / 255.0, preset[2] as f32 / 255.0];
+                                        dlg.custom_color = [
+                                            preset[0] as f32 / 255.0,
+                                            preset[1] as f32 / 255.0,
+                                            preset[2] as f32 / 255.0,
+                                        ];
                                     }
                                 }
 
                                 // Custom — inline picker, one click opens directly
-                                let picker_resp = egui::color_picker::color_edit_button_rgb(ui, &mut dlg.custom_color);
+                                let picker_resp = egui::color_picker::color_edit_button_rgb(
+                                    ui,
+                                    &mut dlg.custom_color,
+                                );
                                 if picker_resp.changed() {
                                     dlg.show_custom_picker = true;
                                     dlg.selected_color = [
@@ -2978,7 +3379,10 @@ impl eframe::App for App {
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 let can_save = !dlg.name.trim().is_empty();
-                                if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
+                                if ui
+                                    .add_enabled(can_save, egui::Button::new("Save"))
+                                    .clicked()
+                                {
                                     save_it = true;
                                 }
                                 if ui.button("Cancel").clicked() {
@@ -2994,8 +3398,8 @@ impl eframe::App for App {
                     let id = self.workspace_store.next_id();
                     self.workspace_store.workspaces.push(Workspace {
                         id,
-                        name:  dlg.name.trim().to_string(),
-                        path:  dlg.path,
+                        name: dlg.name.trim().to_string(),
+                        path: dlg.path,
                         color: dlg.selected_color,
                     });
                     self.workspace_store.save();
@@ -3009,10 +3413,10 @@ impl eframe::App for App {
 
         // ── Workspace edit dialog (modal overlay) ──────────────────────────
         if self.workspace_edit_dialog.is_some() {
-            let mut save_it   = false;
+            let mut save_it = false;
             let mut delete_it = false;
-            let mut cancel    = false;
-            let screen_rect   = ctx.screen_rect();
+            let mut cancel = false;
+            let screen_rect = ctx.screen_rect();
             let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
 
             egui::Area::new(egui::Id::new("ws_edit_dim"))
@@ -3033,7 +3437,11 @@ impl eframe::App for App {
                     egui::Frame::window(&ctx.style()).show(ui, |ui| {
                         ui.set_min_width(dialog_w);
 
-                        ui.label(egui::RichText::new("⚙ Workspace Settings").strong().size(15.0));
+                        ui.label(
+                            egui::RichText::new("⚙ Workspace Settings")
+                                .strong()
+                                .size(15.0),
+                        );
                         ui.add_space(8.0);
 
                         if let Some(dlg) = &mut self.workspace_edit_dialog {
@@ -3041,7 +3449,7 @@ impl eframe::App for App {
                             let name_resp = ui.add(
                                 egui::TextEdit::singleline(&mut dlg.name)
                                     .hint_text("Workspace name")
-                                    .desired_width(f32::INFINITY)
+                                    .desired_width(f32::INFINITY),
                             );
                             if !dlg.focus_requested {
                                 name_resp.request_focus();
@@ -3053,7 +3461,8 @@ impl eframe::App for App {
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                                 for &preset in PRESET_COLORS {
-                                    let selected = dlg.selected_color == preset && !dlg.show_custom_picker;
+                                    let selected =
+                                        dlg.selected_color == preset && !dlg.show_custom_picker;
                                     let swatch = egui::Button::new("")
                                         .fill(theme::from_rgb(preset))
                                         .stroke(if selected {
@@ -3064,14 +3473,21 @@ impl eframe::App for App {
                                         .min_size(egui::vec2(24.0, 24.0))
                                         .rounding(4.0);
                                     if ui.add(swatch).clicked() {
-                                        dlg.selected_color     = preset;
+                                        dlg.selected_color = preset;
                                         dlg.show_custom_picker = false;
-                                        dlg.custom_color = [preset[0] as f32 / 255.0, preset[1] as f32 / 255.0, preset[2] as f32 / 255.0];
+                                        dlg.custom_color = [
+                                            preset[0] as f32 / 255.0,
+                                            preset[1] as f32 / 255.0,
+                                            preset[2] as f32 / 255.0,
+                                        ];
                                     }
                                 }
 
                                 // Custom — inline picker, one click opens directly
-                                let picker_resp = egui::color_picker::color_edit_button_rgb(ui, &mut dlg.custom_color);
+                                let picker_resp = egui::color_picker::color_edit_button_rgb(
+                                    ui,
+                                    &mut dlg.custom_color,
+                                );
                                 if picker_resp.changed() {
                                     dlg.show_custom_picker = true;
                                     dlg.selected_color = [
@@ -3081,7 +3497,6 @@ impl eframe::App for App {
                                     ];
                                 }
                             });
-
 
                             ui.add_space(12.0);
                             ui.separator();
@@ -3094,13 +3509,16 @@ impl eframe::App for App {
                                 );
                                 ui.add_space(6.0);
                                 ui.horizontal(|ui| {
-                                    if ui.add(
-                                        egui::Button::new(
-                                            egui::RichText::new("Delete Workspace")
-                                                .color(egui::Color32::WHITE)
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("Delete Workspace")
+                                                    .color(egui::Color32::WHITE),
+                                            )
+                                            .fill(egui::Color32::from_rgb(180, 40, 40)),
                                         )
-                                        .fill(egui::Color32::from_rgb(180, 40, 40))
-                                    ).clicked() {
+                                        .clicked()
+                                    {
                                         delete_it = true;
                                     }
                                     if ui.button("Cancel").clicked() {
@@ -3110,23 +3528,36 @@ impl eframe::App for App {
                             } else {
                                 ui.horizontal(|ui| {
                                     let can_save = !dlg.name.trim().is_empty();
-                                    if ui.add_enabled(can_save, egui::Button::new("Save")).clicked() {
+                                    if ui
+                                        .add_enabled(can_save, egui::Button::new("Save"))
+                                        .clicked()
+                                    {
                                         save_it = true;
                                     }
                                     if ui.button("Cancel").clicked() {
                                         cancel = true;
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.add(
-                                            egui::Button::new(
-                                                egui::RichText::new("Delete")
-                                                    .color(egui::Color32::from_rgb(220, 80, 80))
-                                            )
-                                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(220, 80, 80)))
-                                        ).clicked() {
-                                            dlg.confirm_delete = true;
-                                        }
-                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("Delete").color(
+                                                            egui::Color32::from_rgb(220, 80, 80),
+                                                        ),
+                                                    )
+                                                    .stroke(egui::Stroke::new(
+                                                        1.0,
+                                                        egui::Color32::from_rgb(220, 80, 80),
+                                                    )),
+                                                )
+                                                .clicked()
+                                            {
+                                                dlg.confirm_delete = true;
+                                            }
+                                        },
+                                    );
                                 });
                             }
                         }
@@ -3135,15 +3566,22 @@ impl eframe::App for App {
 
             if save_it {
                 if let Some(dlg) = self.workspace_edit_dialog.take() {
-                    if let Some(ws) = self.workspace_store.workspaces.iter_mut().find(|w| w.id == dlg.workspace_id) {
-                        ws.name  = dlg.name.trim().to_string();
+                    if let Some(ws) = self
+                        .workspace_store
+                        .workspaces
+                        .iter_mut()
+                        .find(|w| w.id == dlg.workspace_id)
+                    {
+                        ws.name = dlg.name.trim().to_string();
                         ws.color = dlg.selected_color;
                     }
                     self.workspace_store.save();
                 }
             } else if delete_it {
                 if let Some(dlg) = self.workspace_edit_dialog.take() {
-                    self.workspace_store.workspaces.retain(|w| w.id != dlg.workspace_id);
+                    self.workspace_store
+                        .workspaces
+                        .retain(|w| w.id != dlg.workspace_id);
                     self.workspace_store.save();
                     if self.active_group == Some(dlg.workspace_id) {
                         self.active_group = None;
@@ -3170,7 +3608,9 @@ fn render_dir_tree(
     if entries.is_empty() {
         ui.label(
             egui::RichText::new("(empty directory)")
-                .italics().color(theme::OVERLAY0).size(12.0)
+                .italics()
+                .color(theme::OVERLAY0)
+                .size(12.0),
         );
         return;
     }
@@ -3181,7 +3621,9 @@ fn render_dir_tree(
         if entry.is_dir {
             let id = ui.make_persistent_id(&entry.path);
             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(), id, false,
+                ui.ctx(),
+                id,
+                false,
             );
             let chevron = if state.is_open() { "▼" } else { "▶" };
             let resp = ui.add(
@@ -3200,9 +3642,17 @@ fn render_dir_tree(
                 render_dir_tree(ui, &children, open_md, open_editor);
             });
         } else {
-            let ext = entry.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let ext = entry
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
             let is_md = ext == "md";
-            let color = if is_md { theme::FG_MD_FILE } else { theme::FG_OTHER_FILE };
+            let color = if is_md {
+                theme::FG_MD_FILE
+            } else {
+                theme::FG_OTHER_FILE
+            };
             let resp = ui.add(
                 egui::Label::new(
                     egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
@@ -3222,15 +3672,15 @@ fn render_dir_tree(
 
 fn file_icon(ext: &str) -> &'static str {
     match ext {
-        "rs"                         => "⚙",
-        "md"                         => "📝",
-        "toml" | "yaml" | "yml"      => "≡",
-        "json"                       => "≡",
-        "txt"                        => "≡",
+        "rs" => "⚙",
+        "md" => "📝",
+        "toml" | "yaml" | "yml" => "≡",
+        "json" => "≡",
+        "txt" => "≡",
         "sh" | "bat" | "ps1" | "cmd" => "▸",
-        "py"                         => "▸",
-        "js" | "ts" | "jsx" | "tsx"  => "▸",
-        _                            => "·",
+        "py" => "▸",
+        "js" | "ts" | "jsx" | "tsx" => "▸",
+        _ => "·",
     }
 }
 
@@ -3240,31 +3690,44 @@ fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) {
     use crate::theme;
 
     if !status.is_empty() {
-        ui.label(egui::RichText::new("Status").strong().size(theme::STATUS_FONT_SZ));
+        ui.label(
+            egui::RichText::new("Status")
+                .strong()
+                .size(theme::STATUS_FONT_SZ),
+        );
         ui.add_space(4.0);
         for line in status.lines() {
-            if line.len() < 3 { continue; }
+            if line.len() < 3 {
+                continue;
+            }
             let code = line[..2].trim();
             let path = line[3..].trim();
             let (tag, color) = match code {
                 "M" | "MM" | " M" => ("M", theme::GIT_MODIFIED),
-                "A" | " A"        => ("A", theme::GIT_ADDED),
-                "D" | " D"        => ("D", theme::GIT_REMOVED),
-                "R" | " R"        => ("R", theme::GIT_RENAMED),
-                "??"              => ("?", theme::GIT_UNTRACKED),
-                _                 => ("?", theme::GIT_UNTRACKED),
+                "A" | " A" => ("A", theme::GIT_ADDED),
+                "D" | " D" => ("D", theme::GIT_REMOVED),
+                "R" | " R" => ("R", theme::GIT_RENAMED),
+                "??" => ("?", theme::GIT_UNTRACKED),
+                _ => ("?", theme::GIT_UNTRACKED),
             };
             ui.horizontal(|ui| {
                 // Coloured badge with subtle background tint
-                let (badge_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(16.0, 14.0), egui::Sense::hover()
-                );
-                ui.painter().rect_filled(badge_rect, 3.0, color.gamma_multiply(0.25));
+                let (badge_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+                ui.painter()
+                    .rect_filled(badge_rect, 3.0, color.gamma_multiply(0.25));
                 ui.painter().text(
-                    badge_rect.center(), egui::Align2::CENTER_CENTER,
-                    tag, egui::FontId::monospace(10.0), color,
+                    badge_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    tag,
+                    egui::FontId::monospace(10.0),
+                    color,
                 );
-                ui.label(egui::RichText::new(path).monospace().size(theme::STATUS_FONT_SZ));
+                ui.label(
+                    egui::RichText::new(path)
+                        .monospace()
+                        .size(theme::STATUS_FONT_SZ),
+                );
             });
         }
         ui.add_space(6.0);
@@ -3275,8 +3738,17 @@ fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) {
     if diff.is_empty() {
         ui.add_space(8.0);
         ui.vertical_centered(|ui| {
-            ui.label(egui::RichText::new("No changes").italics().color(theme::OVERLAY0).size(13.0));
-            ui.label(egui::RichText::new("Working tree is clean").size(11.0).color(theme::OVERLAY0));
+            ui.label(
+                egui::RichText::new("No changes")
+                    .italics()
+                    .color(theme::OVERLAY0)
+                    .size(13.0),
+            );
+            ui.label(
+                egui::RichText::new("Working tree is clean")
+                    .size(11.0)
+                    .color(theme::OVERLAY0),
+            );
         });
         return;
     }
@@ -3289,29 +3761,53 @@ fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) {
             skip_meta = false;
         } else if line.starts_with("diff --git ") {
             ui.add_space(6.0);
-            let fname = line.strip_prefix("diff --git ")
+            let fname = line
+                .strip_prefix("diff --git ")
                 .and_then(|s| s.split(" b/").last())
                 .unwrap_or(line);
-            ui.label(egui::RichText::new(fname).strong().color(theme::GIT_FILENAME).size(13.0));
+            ui.label(
+                egui::RichText::new(fname)
+                    .strong()
+                    .color(theme::GIT_FILENAME)
+                    .size(13.0),
+            );
             skip_meta = true;
-        } else if skip_meta && (line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ")) {
+        } else if skip_meta
+            && (line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ "))
+        {
             // skip file header meta lines
         } else if line.starts_with("@@") {
             skip_meta = false;
-            ui.label(egui::RichText::new(line)
-                .monospace().size(theme::DIFF_FONT_SZ).color(theme::GIT_HUNK));
+            ui.label(
+                egui::RichText::new(line)
+                    .monospace()
+                    .size(theme::DIFF_FONT_SZ)
+                    .color(theme::GIT_HUNK),
+            );
         } else if line.starts_with('+') {
             skip_meta = false;
-            ui.label(egui::RichText::new(line)
-                .monospace().size(theme::DIFF_FONT_SZ).color(theme::GIT_ADDED));
+            ui.label(
+                egui::RichText::new(line)
+                    .monospace()
+                    .size(theme::DIFF_FONT_SZ)
+                    .color(theme::GIT_ADDED),
+            );
         } else if line.starts_with('-') {
             skip_meta = false;
-            ui.label(egui::RichText::new(line)
-                .monospace().size(theme::DIFF_FONT_SZ).color(theme::GIT_REMOVED));
+            ui.label(
+                egui::RichText::new(line)
+                    .monospace()
+                    .size(theme::DIFF_FONT_SZ)
+                    .color(theme::GIT_REMOVED),
+            );
         } else {
             skip_meta = false;
-            ui.label(egui::RichText::new(line)
-                .monospace().size(theme::DIFF_FONT_SZ).color(theme::SUBTEXT0));
+            ui.label(
+                egui::RichText::new(line)
+                    .monospace()
+                    .size(theme::DIFF_FONT_SZ)
+                    .color(theme::SUBTEXT0),
+            );
         }
     }
 }
@@ -3320,7 +3816,7 @@ fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) {
 
 fn render_markdown(ui: &mut egui::Ui, content: &str) {
     use crate::theme;
-    let mut in_code  = false;
+    let mut in_code = false;
     let mut code_buf: Vec<&str> = Vec::new();
 
     for line in content.lines() {
@@ -3338,7 +3834,9 @@ fn render_markdown(ui: &mut egui::Ui, content: &str) {
                         for code_line in &code_buf {
                             ui.label(
                                 egui::RichText::new(*code_line)
-                                    .monospace().size(12.0).color(theme::MD_CODE)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(theme::MD_CODE),
                             );
                         }
                     });
@@ -3375,7 +3873,8 @@ fn render_markdown(ui: &mut egui::Ui, content: &str) {
             ui.horizontal(|ui| {
                 // Left border strip
                 let bar_h = ui.text_style_height(&egui::TextStyle::Body);
-                let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(3.0, bar_h), egui::Sense::hover());
+                let (bar_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(3.0, bar_h), egui::Sense::hover());
                 ui.painter().rect_filled(bar_rect, 0.0, theme::OVERLAY0);
                 ui.add_space(6.0);
                 ui.label(egui::RichText::new(t).italics().color(theme::MD_BLOCKQUOTE));
@@ -3394,38 +3893,80 @@ fn render_markdown(ui: &mut egui::Ui, content: &str) {
 
 fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key::*;
-    let ctrl  = modifiers.ctrl;
+    let ctrl = modifiers.ctrl;
     let shift = modifiers.shift;
-    let alt   = modifiers.alt;
+    let alt = modifiers.alt;
 
     // Ctrl+letter → bytes 1–26 (no other modifiers active)
     if ctrl && !shift && !alt {
         let byte: Option<u8> = match key {
-            A => Some(1),  B => Some(2),  C => Some(3),  D => Some(4),
-            E => Some(5),  F => Some(6),  G => Some(7),  H => Some(8),
-            I => Some(9),  J => Some(10), K => Some(11), L => Some(12),
-            M => Some(13), N => Some(14), O => Some(15), P => Some(16),
-            Q => Some(17), R => Some(18), S => Some(19), T => Some(20),
-            U => Some(21), V => Some(22), W => Some(23), X => Some(24),
-            Y => Some(25), Z => Some(26),
+            A => Some(1),
+            B => Some(2),
+            C => Some(3),
+            D => Some(4),
+            E => Some(5),
+            F => Some(6),
+            G => Some(7),
+            H => Some(8),
+            I => Some(9),
+            J => Some(10),
+            K => Some(11),
+            L => Some(12),
+            M => Some(13),
+            N => Some(14),
+            O => Some(15),
+            P => Some(16),
+            Q => Some(17),
+            R => Some(18),
+            S => Some(19),
+            T => Some(20),
+            U => Some(21),
+            V => Some(22),
+            W => Some(23),
+            X => Some(24),
+            Y => Some(25),
+            Z => Some(26),
             _ => None,
         };
-        if let Some(b) = byte { return Some(vec![b]); }
+        if let Some(b) = byte {
+            return Some(vec![b]);
+        }
     }
 
     // Alt+letter → ESC + lowercase letter
     if alt && !ctrl && !shift {
         let ch: Option<u8> = match key {
-            A => Some(b'a'), B => Some(b'b'), C => Some(b'c'), D => Some(b'd'),
-            E => Some(b'e'), F => Some(b'f'), G => Some(b'g'), H => Some(b'h'),
-            I => Some(b'i'), J => Some(b'j'), K => Some(b'k'), L => Some(b'l'),
-            M => Some(b'm'), N => Some(b'n'), O => Some(b'o'), P => Some(b'p'),
-            Q => Some(b'q'), R => Some(b'r'), S => Some(b's'), T => Some(b't'),
-            U => Some(b'u'), V => Some(b'v'), W => Some(b'w'), X => Some(b'x'),
-            Y => Some(b'y'), Z => Some(b'z'),
+            A => Some(b'a'),
+            B => Some(b'b'),
+            C => Some(b'c'),
+            D => Some(b'd'),
+            E => Some(b'e'),
+            F => Some(b'f'),
+            G => Some(b'g'),
+            H => Some(b'h'),
+            I => Some(b'i'),
+            J => Some(b'j'),
+            K => Some(b'k'),
+            L => Some(b'l'),
+            M => Some(b'm'),
+            N => Some(b'n'),
+            O => Some(b'o'),
+            P => Some(b'p'),
+            Q => Some(b'q'),
+            R => Some(b'r'),
+            S => Some(b's'),
+            T => Some(b't'),
+            U => Some(b'u'),
+            V => Some(b'v'),
+            W => Some(b'w'),
+            X => Some(b'x'),
+            Y => Some(b'y'),
+            Z => Some(b'z'),
             _ => None,
         };
-        if let Some(c) = ch { return Some(vec![0x1b, c]); }
+        if let Some(c) = ch {
+            return Some(vec![0x1b, c]);
+        }
     }
 
     // Alt+Backspace → word delete
@@ -3436,21 +3977,21 @@ fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<
     // Arrow keys with modifier: \x1b[1;<mod><dir>
     // Modifier codes: 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=all
     let arrow_mod: Option<u8> = match (shift, alt, ctrl) {
-        (true,  false, false) => Some(b'2'),
-        (false, true,  false) => Some(b'3'),
-        (true,  true,  false) => Some(b'4'),
-        (false, false, true ) => Some(b'5'),
-        (true,  false, true ) => Some(b'6'),
-        (false, true,  true ) => Some(b'7'),
-        (true,  true,  true ) => Some(b'8'),
+        (true, false, false) => Some(b'2'),
+        (false, true, false) => Some(b'3'),
+        (true, true, false) => Some(b'4'),
+        (false, false, true) => Some(b'5'),
+        (true, false, true) => Some(b'6'),
+        (false, true, true) => Some(b'7'),
+        (true, true, true) => Some(b'8'),
         _ => None,
     };
     if let Some(m) = arrow_mod {
         let dir: Option<u8> = match key {
-            ArrowUp    => Some(b'A'),
-            ArrowDown  => Some(b'B'),
+            ArrowUp => Some(b'A'),
+            ArrowDown => Some(b'B'),
             ArrowRight => Some(b'C'),
-            ArrowLeft  => Some(b'D'),
+            ArrowLeft => Some(b'D'),
             _ => None,
         };
         if let Some(d) = dir {
@@ -3459,34 +4000,34 @@ fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<
     }
 
     Some(match key {
-        Enter      => b"\r".to_vec(),
-        Backspace  => b"\x7f".to_vec(),
+        Enter => b"\r".to_vec(),
+        Backspace => b"\x7f".to_vec(),
         Tab if !shift => b"\t".to_vec(),
-        Tab        => b"\x1b[Z".to_vec(),
-        Escape     => b"\x1b".to_vec(),
-        ArrowUp    => b"\x1b[A".to_vec(),
-        ArrowDown  => b"\x1b[B".to_vec(),
+        Tab => b"\x1b[Z".to_vec(),
+        Escape => b"\x1b".to_vec(),
+        ArrowUp => b"\x1b[A".to_vec(),
+        ArrowDown => b"\x1b[B".to_vec(),
         ArrowRight => b"\x1b[C".to_vec(),
-        ArrowLeft  => b"\x1b[D".to_vec(),
-        Home       => b"\x1b[H".to_vec(),
-        End        => b"\x1b[F".to_vec(),
-        PageUp     => b"\x1b[5~".to_vec(),
-        PageDown   => b"\x1b[6~".to_vec(),
-        Delete     => b"\x1b[3~".to_vec(),
-        Insert     => b"\x1b[2~".to_vec(),
-        F1  => b"\x1bOP".to_vec(),
-        F2  => b"\x1bOQ".to_vec(),
-        F3  => b"\x1bOR".to_vec(),
-        F4  => b"\x1bOS".to_vec(),
-        F5  => b"\x1b[15~".to_vec(),
-        F6  => b"\x1b[17~".to_vec(),
-        F7  => b"\x1b[18~".to_vec(),
-        F8  => b"\x1b[19~".to_vec(),
-        F9  => b"\x1b[20~".to_vec(),
+        ArrowLeft => b"\x1b[D".to_vec(),
+        Home => b"\x1b[H".to_vec(),
+        End => b"\x1b[F".to_vec(),
+        PageUp => b"\x1b[5~".to_vec(),
+        PageDown => b"\x1b[6~".to_vec(),
+        Delete => b"\x1b[3~".to_vec(),
+        Insert => b"\x1b[2~".to_vec(),
+        F1 => b"\x1bOP".to_vec(),
+        F2 => b"\x1bOQ".to_vec(),
+        F3 => b"\x1bOR".to_vec(),
+        F4 => b"\x1bOS".to_vec(),
+        F5 => b"\x1b[15~".to_vec(),
+        F6 => b"\x1b[17~".to_vec(),
+        F7 => b"\x1b[18~".to_vec(),
+        F8 => b"\x1b[19~".to_vec(),
+        F9 => b"\x1b[20~".to_vec(),
         F10 => b"\x1b[21~".to_vec(),
         F11 => b"\x1b[23~".to_vec(),
         F12 => b"\x1b[24~".to_vec(),
-        _   => return None,
+        _ => return None,
     })
 }
 
@@ -3494,13 +4035,76 @@ fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr: bool) -> V
     if sgr {
         // SGR extended: \x1b[<btn;col;rowM (press) or \x1b[<btn;col;rowm (release)
         let final_char = if pressed { b'M' } else { b'm' };
-        format!("\x1b[<{};{};{}{}", btn, col + 1, row + 1, final_char as char)
-            .into_bytes()
+        format!(
+            "\x1b[<{};{};{}{}",
+            btn,
+            col + 1,
+            row + 1,
+            final_char as char
+        )
+        .into_bytes()
     } else {
         // X10/normal: \x1b[M + (btn+32) + (col+33) + (row+33), clamped to 255
-        let b = (btn + 32).min(255);
+        let b = btn + 32;
         let x = ((col + 1) + 32).min(255) as u8;
         let y = ((row + 1) + 32).min(255) as u8;
         vec![0x1b, b'[', b'M', b, x, y]
+    }
+}
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn display_title_plain_text_unchanged() {
+        assert_eq!(display_title("  vim  "), "vim");
+    }
+
+    #[test]
+    fn display_title_unix_path_returns_last_segment() {
+        assert_eq!(display_title("/home/user/projects/myapp"), "myapp");
+    }
+
+    #[test]
+    fn display_title_tilde_path_returns_last_segment() {
+        assert_eq!(display_title("~/projects/myapp"), "myapp");
+    }
+
+    #[test]
+    fn display_title_windows_path_returns_last_segment() {
+        assert_eq!(display_title("C:\\Users\\testuser\\proj"), "proj");
+    }
+
+    #[test]
+    fn effective_title_shell_default_uses_cwd() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(effective_title("bash", cwd), "myproject");
+        assert_eq!(effective_title("Session 1", cwd), "myproject");
+        assert_eq!(effective_title("PowerShell.exe", cwd), "myproject");
+        assert_eq!(effective_title("", cwd), "myproject");
+    }
+
+    #[test]
+    fn effective_title_real_title_uses_display_title() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(effective_title("vim README.md", cwd), "vim README.md");
+    }
+
+    #[test]
+    fn effective_title_real_title_strips_path() {
+        let cwd = Path::new("/home/user");
+        assert_eq!(effective_title("/home/user/projects/src", cwd), "src");
+    }
+
+    #[test]
+    fn effective_title_empty_cwd_falls_back_to_title() {
+        let cwd = Path::new("");
+        // cwd has no file_name → falls back to the title text itself
+        let result = effective_title("Session 1", cwd);
+        assert_eq!(result, "Session 1");
     }
 }

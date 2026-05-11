@@ -2,15 +2,15 @@ pub mod grid;
 pub mod performer;
 mod tests;
 
-use std::path::PathBuf;
 use grid::{CellAttrs, Color, Grid};
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum MouseMode {
     None,
-    Basic,          // ?1000 — click only
-    ButtonMotion,   // ?1002 — click + drag
-    AllMotion,      // ?1003 — all movement
+    Basic,        // ?1000 — click only
+    ButtonMotion, // ?1002 — click + drag
+    AllMotion,    // ?1003 — all movement
 }
 
 pub struct Session {
@@ -42,7 +42,7 @@ pub struct Session {
     pub bracketed_paste: bool,
     pub focus_tracking: bool,
     pub mouse_mode: MouseMode,
-    pub mouse_sgr: bool,   // ?1006 — SGR extended mouse coords
+    pub mouse_sgr: bool, // ?1006 — SGR extended mouse coords
 
     // Response bytes to be written back to the PTY on the next update tick
     pub pending_dsr_response: Vec<String>,

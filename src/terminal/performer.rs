@@ -1,8 +1,8 @@
+use super::grid::{Cell, CellAttrs, Color, Grid};
+use super::{MouseMode, Session};
 use std::mem;
 use std::path::PathBuf;
 use vte::Perform;
-use super::{Session, MouseMode};
-use super::grid::{Cell, CellAttrs, Color, Grid};
 
 pub struct Performer<'a> {
     pub session: &'a mut Session,
@@ -15,9 +15,9 @@ impl<'a> Performer<'a> {
 
     fn newline(&mut self) {
         self.session.pending_wrap = false;
-        let top    = self.session.scroll_top;
+        let top = self.session.scroll_top;
         let bottom = self.session.scroll_bottom;
-        let rows   = self.session.grid.rows;
+        let rows = self.session.grid.rows;
         if self.session.cursor_y == bottom {
             // At the bottom of the scroll region — scroll the region up.
             self.session.grid.scroll_up(top, bottom, 1);
@@ -33,8 +33,7 @@ impl<'a> Performer<'a> {
             return; // already in alt screen
         }
         if save_cursor {
-            self.session.alt_saved_cursor =
-                Some((self.session.cursor_x, self.session.cursor_y));
+            self.session.alt_saved_cursor = Some((self.session.cursor_x, self.session.cursor_y));
         }
         let cols = self.session.grid.cols;
         let rows = self.session.grid.rows;
@@ -96,11 +95,8 @@ impl<'a> Performer<'a> {
                 30..=37 => self.session.current_fg = Color::Indexed(p[i] as u8 - 30),
                 38 => {
                     if p.get(i + 1).copied() == Some(2) && p.len() > i + 4 {
-                        self.session.current_fg = Color::Rgb(
-                            p[i + 2] as u8,
-                            p[i + 3] as u8,
-                            p[i + 4] as u8,
-                        );
+                        self.session.current_fg =
+                            Color::Rgb(p[i + 2] as u8, p[i + 3] as u8, p[i + 4] as u8);
                         i += 4;
                     } else if p.get(i + 1).copied() == Some(5) && p.len() > i + 2 {
                         self.session.current_fg = Color::Indexed(p[i + 2] as u8);
@@ -111,11 +107,8 @@ impl<'a> Performer<'a> {
                 40..=47 => self.session.current_bg = Color::Indexed(p[i] as u8 - 40),
                 48 => {
                     if p.get(i + 1).copied() == Some(2) && p.len() > i + 4 {
-                        self.session.current_bg = Color::Rgb(
-                            p[i + 2] as u8,
-                            p[i + 3] as u8,
-                            p[i + 4] as u8,
-                        );
+                        self.session.current_bg =
+                            Color::Rgb(p[i + 2] as u8, p[i + 3] as u8, p[i + 4] as u8);
                         i += 4;
                     } else if p.get(i + 1).copied() == Some(5) && p.len() > i + 2 {
                         self.session.current_bg = Color::Indexed(p[i + 2] as u8);
@@ -123,7 +116,7 @@ impl<'a> Performer<'a> {
                     }
                 }
                 49 => self.session.current_bg = Color::Default,
-                90..=97  => self.session.current_fg = Color::Indexed(p[i] as u8 - 90 + 8),
+                90..=97 => self.session.current_fg = Color::Indexed(p[i] as u8 - 90 + 8),
                 100..=107 => self.session.current_bg = Color::Indexed(p[i] as u8 - 100 + 8),
                 _ => {}
             }
@@ -149,7 +142,9 @@ impl<'a> Perform for Performer<'a> {
             self.newline(); // handles scroll region, clears pending_wrap
         }
 
-        self.session.grid.set(self.session.cursor_y, self.session.cursor_x, cell);
+        self.session
+            .grid
+            .set(self.session.cursor_y, self.session.cursor_x, cell);
         self.session.cursor_x += 1;
 
         if self.session.cursor_x >= cols {
@@ -161,18 +156,17 @@ impl<'a> Perform for Performer<'a> {
     fn execute(&mut self, byte: u8) {
         match byte {
             0x07 => {} // BEL — ignore
-            0x08 => {
+            0x08
                 // Backspace
-                if self.session.cursor_x > 0 {
+                if self.session.cursor_x > 0 => {
                     self.session.cursor_x -= 1;
                 }
-            }
             0x09 => {
                 // Horizontal tab — advance to next 8-col tab stop
                 let next = (self.session.cursor_x / 8 + 1) * 8;
                 self.session.cursor_x = next.min(self.session.grid.cols - 1);
             }
-            0x0A | 0x0B | 0x0C => self.newline(),
+            0x0A..=0x0C => self.newline(),
             0x0D => {
                 self.session.cursor_x = 0;
                 self.session.pending_wrap = false;
@@ -181,7 +175,13 @@ impl<'a> Perform for Performer<'a> {
         }
     }
 
-    fn csi_dispatch(&mut self, params: &vte::Params, intermediates: &[u8], _ignore: bool, action: char) {
+    fn csi_dispatch(
+        &mut self,
+        params: &vte::Params,
+        intermediates: &[u8],
+        _ignore: bool,
+        action: char,
+    ) {
         let mut iter = params.iter();
         let p0 = iter.next().and_then(|p| p.first()).copied().unwrap_or(0);
         let p1 = iter.next().and_then(|p| p.first()).copied().unwrap_or(0);
@@ -280,7 +280,12 @@ impl<'a> Perform for Performer<'a> {
                     let cell = if col >= cx + n {
                         *self.session.grid.get(cy, (col - n) as u16)
                     } else {
-                        Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() }
+                        Cell {
+                            c: ' ',
+                            fg: Color::Default,
+                            bg,
+                            attrs: CellAttrs::default(),
+                        }
                     };
                     self.session.grid.set(cy, col as u16, cell);
                 }
@@ -289,13 +294,17 @@ impl<'a> Perform for Performer<'a> {
                 // IL — insert lines (scroll down within scroll region from cursor)
                 let n = p0.max(1);
                 let cy = self.session.cursor_y;
-                self.session.grid.scroll_down(cy, self.session.scroll_bottom, n);
+                self.session
+                    .grid
+                    .scroll_down(cy, self.session.scroll_bottom, n);
             }
             'M' => {
                 // DL — delete lines (scroll up within scroll region from cursor)
                 let n = p0.max(1);
                 let cy = self.session.cursor_y;
-                self.session.grid.scroll_up(cy, self.session.scroll_bottom, n);
+                self.session
+                    .grid
+                    .scroll_up(cy, self.session.scroll_bottom, n);
             }
             'P' => {
                 // DCH — delete characters (shift left, blank right with current bg)
@@ -309,18 +318,21 @@ impl<'a> Perform for Performer<'a> {
                     let cell = if src < end {
                         *self.session.grid.get(cy, src as u16)
                     } else {
-                        Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() }
+                        Cell {
+                            c: ' ',
+                            fg: Color::Default,
+                            bg,
+                            attrs: CellAttrs::default(),
+                        }
                     };
                     self.session.grid.set(cy, col as u16, cell);
                 }
             }
             'S' => {
                 let n = p0.max(1);
-                self.session.grid.scroll_up(
-                    self.session.scroll_top,
-                    self.session.scroll_bottom,
-                    n,
-                );
+                self.session
+                    .grid
+                    .scroll_up(self.session.scroll_top, self.session.scroll_bottom, n);
             }
             'T' => {
                 let n = p0.max(1);
@@ -341,56 +353,57 @@ impl<'a> Perform for Performer<'a> {
             }
             'c' if intermediates == b"" => {
                 // DA1 — Primary Device Attributes: claim VT220 with color
-                self.session.pending_dsr_response
+                self.session
+                    .pending_dsr_response
                     .push("\x1b[?62;1;22c".to_string());
             }
             'c' if intermediates == b">" => {
                 // DA2 — Secondary Device Attributes: xterm-compatible
-                self.session.pending_dsr_response
+                self.session
+                    .pending_dsr_response
                     .push("\x1b[>0;10;1c".to_string());
             }
             'd' => {
                 self.session.pending_wrap = false;
                 self.session.cursor_y = (p0.max(1) - 1).min(rows - 1);
             }
-            'h' if intermediates == b"?" => {
-                match p0 {
-                    25   => self.session.cursor_visible = true,
-                    47 | 1047 => self.enter_alt_screen(false),
-                    1049 => self.enter_alt_screen(true),
-                    1000 => self.session.mouse_mode = MouseMode::Basic,
-                    1002 => self.session.mouse_mode = MouseMode::ButtonMotion,
-                    1003 => self.session.mouse_mode = MouseMode::AllMotion,
-                    1004 => self.session.focus_tracking = true,
-                    1006 => self.session.mouse_sgr = true,
-                    2004 => self.session.bracketed_paste = true,
-                    _ => {}
-                }
-            }
-            'l' if intermediates == b"?" => {
-                match p0 {
-                    25   => self.session.cursor_visible = false,
-                    47 | 1047 => self.leave_alt_screen(false),
-                    1049 => self.leave_alt_screen(true),
-                    1000 | 1002 | 1003 => self.session.mouse_mode = MouseMode::None,
-                    1004 => self.session.focus_tracking = false,
-                    1006 => self.session.mouse_sgr = false,
-                    2004 => self.session.bracketed_paste = false,
-                    _ => {}
-                }
-            }
+            'h' if intermediates == b"?" => match p0 {
+                25 => self.session.cursor_visible = true,
+                47 | 1047 => self.enter_alt_screen(false),
+                1049 => self.enter_alt_screen(true),
+                1000 => self.session.mouse_mode = MouseMode::Basic,
+                1002 => self.session.mouse_mode = MouseMode::ButtonMotion,
+                1003 => self.session.mouse_mode = MouseMode::AllMotion,
+                1004 => self.session.focus_tracking = true,
+                1006 => self.session.mouse_sgr = true,
+                2004 => self.session.bracketed_paste = true,
+                _ => {}
+            },
+            'l' if intermediates == b"?" => match p0 {
+                25 => self.session.cursor_visible = false,
+                47 | 1047 => self.leave_alt_screen(false),
+                1049 => self.leave_alt_screen(true),
+                1000 | 1002 | 1003 => self.session.mouse_mode = MouseMode::None,
+                1004 => self.session.focus_tracking = false,
+                1006 => self.session.mouse_sgr = false,
+                2004 => self.session.bracketed_paste = false,
+                _ => {}
+            },
             'm' => self.sgr(params),
             'n' => {
                 match p0 {
                     5 => {
                         // DSR — device status: terminal OK
-                        self.session.pending_dsr_response.push("\x1b[0n".to_string());
+                        self.session
+                            .pending_dsr_response
+                            .push("\x1b[0n".to_string());
                     }
                     6 => {
                         // CPR — cursor position report (1-based)
                         let row = self.session.cursor_y + 1;
                         let col = self.session.cursor_x + 1;
-                        self.session.pending_dsr_response
+                        self.session
+                            .pending_dsr_response
                             .push(format!("\x1b[{};{}R", row, col));
                     }
                     _ => {}
@@ -414,8 +427,7 @@ impl<'a> Perform for Performer<'a> {
                 self.session.pending_wrap = false;
             }
             's' => {
-                self.session.saved_cursor =
-                    Some((self.session.cursor_x, self.session.cursor_y));
+                self.session.saved_cursor = Some((self.session.cursor_x, self.session.cursor_y));
             }
             'u' => {
                 if let Some((x, y)) = self.session.saved_cursor {
@@ -431,8 +443,7 @@ impl<'a> Perform for Performer<'a> {
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
         match (intermediates, byte) {
             (b"", b'7') | (b"", b's') => {
-                self.session.saved_cursor =
-                    Some((self.session.cursor_x, self.session.cursor_y));
+                self.session.saved_cursor = Some((self.session.cursor_x, self.session.cursor_y));
             }
             (b"", b'8') | (b"", b'u') => {
                 if let Some((x, y)) = self.session.saved_cursor {

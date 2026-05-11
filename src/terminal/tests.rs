@@ -1,13 +1,12 @@
-﻿/// End-to-end tests for the VTE performer → grid pipeline.
-///
-/// Each test feeds raw escape sequences through the same parser stack used by
-/// the reader thread, then asserts on Session state.  No GUI, no PTY — pure
-/// logic verification.
-
+// End-to-end tests for the VTE performer → grid pipeline.
+//
+// Each test feeds raw escape sequences through the same parser stack used by
+// the reader thread, then asserts on Session state.  No GUI, no PTY — pure
+// logic verification.
+#[cfg(test)]
+use super::{performer::Performer, MouseMode, Session};
 #[cfg(test)]
 use vte::Parser;
-#[cfg(test)]
-use super::{Session, MouseMode, performer::Performer};
 
 /// Feed a byte slice through a fresh VTE parser into a Performer that owns
 /// `session`, returning the session for inspection.
@@ -58,19 +57,19 @@ fn test_cr_lf() {
 #[test]
 fn test_cursor_up_down_left_right() {
     let mut s = Session::new(1, 20, 10, None);
-    feed(&mut s, b"\x1b[5;5H");   // CUP → (row 5, col 5) 1-based → (4,4)
+    feed(&mut s, b"\x1b[5;5H"); // CUP → (row 5, col 5) 1-based → (4,4)
     assert_eq!((s.cursor_y, s.cursor_x), (4, 4));
 
-    feed(&mut s, b"\x1b[2A");     // CUU 2 → row 2
+    feed(&mut s, b"\x1b[2A"); // CUU 2 → row 2
     assert_eq!(s.cursor_y, 2);
 
-    feed(&mut s, b"\x1b[3B");     // CUD 3 → row 5
+    feed(&mut s, b"\x1b[3B"); // CUD 3 → row 5
     assert_eq!(s.cursor_y, 5);
 
-    feed(&mut s, b"\x1b[2D");     // CUB 2 → col 2
+    feed(&mut s, b"\x1b[2D"); // CUB 2 → col 2
     assert_eq!(s.cursor_x, 2);
 
-    feed(&mut s, b"\x1b[4C");     // CUF 4 → col 6
+    feed(&mut s, b"\x1b[4C"); // CUF 4 → col 6
     assert_eq!(s.cursor_x, 6);
 }
 
@@ -78,8 +77,8 @@ fn test_cursor_up_down_left_right() {
 fn test_cup_clamps_to_grid() {
     let mut s = Session::new(1, 10, 5, None);
     feed(&mut s, b"\x1b[999;999H");
-    assert_eq!(s.cursor_y, 4);   // clamped to rows-1
-    assert_eq!(s.cursor_x, 9);   // clamped to cols-1
+    assert_eq!(s.cursor_y, 4); // clamped to rows-1
+    assert_eq!(s.cursor_x, 9); // clamped to cols-1
 }
 
 // ── Wrap / pending_wrap ────────────────────────────────────────────────────
@@ -121,7 +120,7 @@ fn test_decstbm_sets_region() {
     let mut s = Session::new(1, 80, 24, None);
     // Set scroll region rows 5–20 (1-based)
     feed(&mut s, b"\x1b[5;20r");
-    assert_eq!(s.scroll_top, 4);     // 0-based
+    assert_eq!(s.scroll_top, 4); // 0-based
     assert_eq!(s.scroll_bottom, 19);
     // DECSTBM always homes cursor
     assert_eq!((s.cursor_y, s.cursor_x), (0, 0));
@@ -141,21 +140,24 @@ fn test_decstbm_reset() {
 fn test_newline_at_scroll_bottom_scrolls_region() {
     // 10-row terminal, scroll region rows 3–7 (1-based, 0-based: 2–6)
     let mut s = Session::new(1, 5, 10, None);
-    feed(&mut s, b"\x1b[3;7r");          // set region
+    feed(&mut s, b"\x1b[3;7r"); // set region
     assert_eq!(s.scroll_top, 2);
     assert_eq!(s.scroll_bottom, 6);
 
     // Write a known char on every row of the region
     for row in 2u16..=6 {
-        feed(&mut s, &[0x1b, b'[', b'0' + (row as u8 + 1), b';', b'1', b'H']); // won't work for >9
-        // Use CUP properly: ESC [ row ; col H
+        feed(
+            &mut s,
+            &[0x1b, b'[', b'0' + (row as u8 + 1), b';', b'1', b'H'],
+        ); // won't work for >9
+           // Use CUP properly: ESC [ row ; col H
         let cup = format!("\x1b[{};1H", row + 1);
         feed(&mut s, cup.as_bytes());
         let ch = b'A' + (row as u8 - 2);
         feed(&mut s, &[ch]);
     }
     // Move cursor to scroll_bottom (row 6, 0-based)
-    feed(&mut s, b"\x1b[7;1H");   // 1-based row 7 = 0-based row 6
+    feed(&mut s, b"\x1b[7;1H"); // 1-based row 7 = 0-based row 6
     assert_eq!(s.cursor_y, 6);
 
     // LF at scroll bottom should scroll region up, NOT scrollback
@@ -164,8 +166,10 @@ fn test_newline_at_scroll_bottom_scrolls_region() {
     let scrollback_after = s.grid.scrollback.len();
 
     // Scrollback must not grow (region scroll, top > 0)
-    assert_eq!(scrollback_before, scrollback_after,
-        "region scroll must not pollute scrollback");
+    assert_eq!(
+        scrollback_before, scrollback_after,
+        "region scroll must not pollute scrollback"
+    );
 
     // Cursor stays at scroll_bottom
     assert_eq!(s.cursor_y, 6);
@@ -184,22 +188,25 @@ fn test_newline_outside_scroll_region_does_not_scroll() {
     // Cursor BELOW the scroll region — LF must just move the cursor down,
     // never scroll the region.
     let mut s = Session::new(1, 5, 10, None);
-    feed(&mut s, b"\x1b[2;5r");   // scroll region rows 2-5 (0-based 1-4)
+    feed(&mut s, b"\x1b[2;5r"); // scroll region rows 2-5 (0-based 1-4)
 
     // Position cursor at row 7 (below the scroll region)
     feed(&mut s, b"\x1b[8;1H");
     assert_eq!(s.cursor_y, 7);
 
     // Write something in the scroll region so we can see if it moves
-    feed(&mut s, b"\x1b[2;1H");   // top of scroll region
+    feed(&mut s, b"\x1b[2;1H"); // top of scroll region
     feed(&mut s, b"MARK");
-    feed(&mut s, b"\x1b[8;1H");   // back to row 7
+    feed(&mut s, b"\x1b[8;1H"); // back to row 7
 
     let before = row_text_trimmed(&s, 1); // row 1 = top of scroll region
     feed(&mut s, b"\n");
     let after = row_text_trimmed(&s, 1);
 
-    assert_eq!(before, after, "scroll region must not change when cursor is below it");
+    assert_eq!(
+        before, after,
+        "scroll region must not change when cursor is below it"
+    );
     assert_eq!(s.cursor_y, 8, "cursor should have moved to row 8");
 }
 
@@ -236,7 +243,7 @@ fn test_alt_screen_enter_leave() {
 fn test_alt_screen_1049_saves_and_restores_cursor() {
     let mut s = Session::new(1, 20, 10, None);
     // Position cursor on primary screen
-    feed(&mut s, b"\x1b[4;7H");   // row 4, col 7 (1-based) → (3, 6) 0-based
+    feed(&mut s, b"\x1b[4;7H"); // row 4, col 7 (1-based) → (3, 6) 0-based
     assert_eq!((s.cursor_y, s.cursor_x), (3, 6));
 
     // Enter ?1049h — cursor saved, cursor reset to (0,0) on alt
@@ -271,7 +278,7 @@ fn test_alt_screen_47_no_cursor_save() {
 #[test]
 fn test_alt_screen_resets_scroll_region() {
     let mut s = Session::new(1, 80, 24, None);
-    feed(&mut s, b"\x1b[5;20r");  // set non-default scroll region
+    feed(&mut s, b"\x1b[5;20r"); // set non-default scroll region
     feed(&mut s, b"\x1b[?1049h"); // enter alt
     assert_eq!(s.scroll_top, 0);
     assert_eq!(s.scroll_bottom, 23);
@@ -285,7 +292,7 @@ fn test_alt_screen_resets_scroll_region() {
 #[test]
 fn test_da1_response_queued() {
     let mut s = Session::new(1, 80, 24, None);
-    feed(&mut s, b"\x1b[c");   // DA1 query
+    feed(&mut s, b"\x1b[c"); // DA1 query
     assert!(!s.pending_dsr_response.is_empty());
     assert_eq!(s.pending_dsr_response[0], "\x1b[?62;1;22c");
 }
@@ -293,7 +300,7 @@ fn test_da1_response_queued() {
 #[test]
 fn test_da2_response_queued() {
     let mut s = Session::new(1, 80, 24, None);
-    feed(&mut s, b"\x1b[>c");  // DA2 query
+    feed(&mut s, b"\x1b[>c"); // DA2 query
     assert!(!s.pending_dsr_response.is_empty());
     assert!(s.pending_dsr_response[0].starts_with("\x1b[>"));
 }
@@ -302,7 +309,7 @@ fn test_da2_response_queued() {
 fn test_dsr_cursor_position() {
     let mut s = Session::new(1, 80, 24, None);
     feed(&mut s, b"\x1b[5;10H"); // move to row 5, col 10 (1-based) → (4,9)
-    feed(&mut s, b"\x1b[6n");    // DSR cursor pos query
+    feed(&mut s, b"\x1b[6n"); // DSR cursor pos query
     assert!(!s.pending_dsr_response.is_empty());
     assert_eq!(s.pending_dsr_response[0], "\x1b[5;10R");
 }
@@ -312,8 +319,11 @@ fn test_multiple_responses_all_queued() {
     // DA1 + DA2 + DSR in one burst — all three must be queued (not overwritten)
     let mut s = Session::new(1, 80, 24, None);
     feed(&mut s, b"\x1b[c\x1b[>c\x1b[6n");
-    assert_eq!(s.pending_dsr_response.len(), 3,
-        "all three responses must be queued independently");
+    assert_eq!(
+        s.pending_dsr_response.len(),
+        3,
+        "all three responses must be queued independently"
+    );
 }
 
 // ── Erase operations ───────────────────────────────────────────────────────
@@ -338,10 +348,13 @@ fn test_bce_erase_uses_current_bg() {
     // Set a non-default background color
     feed(&mut s, b"\x1b[41m"); // bg = red (Color::Indexed(1))
     feed(&mut s, b"\x1b[1;4H"); // col 4 (1-based = col 3 zero-based)
-    feed(&mut s, b"\x1b[K");    // EL0: erase to end of line with red bg
-    // Erased cells should carry the red background
+    feed(&mut s, b"\x1b[K"); // EL0: erase to end of line with red bg
+                             // Erased cells should carry the red background
     let cell = s.grid.get(0, 4);
-    assert!(matches!(cell.bg, Color::Indexed(1)), "erased cell should have current bg color");
+    assert!(
+        matches!(cell.bg, Color::Indexed(1)),
+        "erased cell should have current bg color"
+    );
     // Non-erased cells should be unchanged
     let intact = s.grid.get(0, 0);
     assert_eq!(intact.c, 'A');
@@ -350,10 +363,10 @@ fn test_bce_erase_uses_current_bg() {
 #[test]
 fn test_ich_inserts_blank_chars() {
     let mut s = Session::new(1, 10, 3, None);
-    feed(&mut s, b"ABCDE");      // row 0: ABCDE
+    feed(&mut s, b"ABCDE"); // row 0: ABCDE
     feed(&mut s, b"\x1b[1;2H"); // cursor to col 2 (1-based = col 1)
-    feed(&mut s, b"\x1b[2@");   // ICH: insert 2 blank chars
-    // A stays at col 0; B,C,D,E shift right by 2; cols 1-2 become spaces
+    feed(&mut s, b"\x1b[2@"); // ICH: insert 2 blank chars
+                              // A stays at col 0; B,C,D,E shift right by 2; cols 1-2 become spaces
     assert_eq!(s.grid.get(0, 0).c, 'A');
     assert_eq!(s.grid.get(0, 1).c, ' ');
     assert_eq!(s.grid.get(0, 2).c, ' ');
@@ -364,9 +377,9 @@ fn test_ich_inserts_blank_chars() {
 #[test]
 fn test_ek_erases_to_eol() {
     let mut s = Session::new(1, 10, 3, None);
-    feed(&mut s, b"ABCDEFGH");   // 8 chars on row 0
-    feed(&mut s, b"\x1b[1;4H");  // move to col 4 (1-based)
-    feed(&mut s, b"\x1b[K");     // erase to EOL
+    feed(&mut s, b"ABCDEFGH"); // 8 chars on row 0
+    feed(&mut s, b"\x1b[1;4H"); // move to col 4 (1-based)
+    feed(&mut s, b"\x1b[K"); // erase to EOL
     assert_eq!(row_text_trimmed(&s, 0), "ABC");
 }
 
@@ -376,10 +389,10 @@ fn test_ek_erases_to_eol() {
 fn test_sgr_reset() {
     use super::grid::{CellAttrs, Color};
     let mut s = Session::new(1, 10, 3, None);
-    feed(&mut s, b"\x1b[1;31m");  // bold + red fg
+    feed(&mut s, b"\x1b[1;31m"); // bold + red fg
     assert!(s.current_attrs.bold);
     assert!(matches!(s.current_fg, Color::Indexed(1)));
-    feed(&mut s, b"\x1b[0m");    // reset
+    feed(&mut s, b"\x1b[0m"); // reset
     assert_eq!(s.current_attrs, CellAttrs::default());
     assert!(matches!(s.current_fg, Color::Default));
 }
@@ -397,12 +410,12 @@ fn test_sgr_rgb_fg() {
 #[test]
 fn test_ri_at_top_of_region_scrolls_down() {
     let mut s = Session::new(1, 5, 10, None);
-    feed(&mut s, b"\x1b[3;7r");    // region rows 3-7 (0-based 2-6)
-    feed(&mut s, b"\x1b[3;1H");    // cursor at top of region (row 3 1-based = row 2 0-based)
-    feed(&mut s, b"MARK");         // write something
-    feed(&mut s, b"\x1b[3;1H");    // back to top of region
-    feed(&mut s, b"\x1bM");        // RI — should scroll down, MARK moves to row 3
-    // Row 2 (top of region) should now be blank
+    feed(&mut s, b"\x1b[3;7r"); // region rows 3-7 (0-based 2-6)
+    feed(&mut s, b"\x1b[3;1H"); // cursor at top of region (row 3 1-based = row 2 0-based)
+    feed(&mut s, b"MARK"); // write something
+    feed(&mut s, b"\x1b[3;1H"); // back to top of region
+    feed(&mut s, b"\x1bM"); // RI — should scroll down, MARK moves to row 3
+                            // Row 2 (top of region) should now be blank
     assert_eq!(row_text_trimmed(&s, 2), "");
     // MARK should have moved to row 3
     assert_eq!(row_text_trimmed(&s, 3), "MARK");
@@ -411,8 +424,8 @@ fn test_ri_at_top_of_region_scrolls_down() {
 #[test]
 fn test_ri_not_at_top_moves_cursor_up() {
     let mut s = Session::new(1, 5, 10, None);
-    feed(&mut s, b"\x1b[5;1H");    // row 5 (0-based 4)
-    feed(&mut s, b"\x1bM");        // RI — cursor not at scroll_top (0), just move up
+    feed(&mut s, b"\x1b[5;1H"); // row 5 (0-based 4)
+    feed(&mut s, b"\x1bM"); // RI — cursor not at scroll_top (0), just move up
     assert_eq!(s.cursor_y, 3);
 }
 
@@ -421,10 +434,10 @@ fn test_ri_not_at_top_moves_cursor_up() {
 #[test]
 fn test_decsc_decrc() {
     let mut s = Session::new(1, 20, 10, None);
-    feed(&mut s, b"\x1b[4;8H");   // (3,7) 0-based
-    feed(&mut s, b"\x1b7");       // DECSC save
-    feed(&mut s, b"\x1b[1;1H");   // move elsewhere
-    feed(&mut s, b"\x1b8");       // DECRC restore
+    feed(&mut s, b"\x1b[4;8H"); // (3,7) 0-based
+    feed(&mut s, b"\x1b7"); // DECSC save
+    feed(&mut s, b"\x1b[1;1H"); // move elsewhere
+    feed(&mut s, b"\x1b8"); // DECRC restore
     assert_eq!((s.cursor_y, s.cursor_x), (3, 7));
 }
 
@@ -434,9 +447,9 @@ fn test_decsc_decrc() {
 fn test_il_inserts_blank_line() {
     let mut s = Session::new(1, 5, 5, None);
     feed(&mut s, b"AAAAA\r\nBBBBB\r\nCCCCC");
-    feed(&mut s, b"\x1b[2;1H");   // cursor at row 2 (1-based)
-    feed(&mut s, b"\x1b[L");      // IL 1 — insert blank at row 1, push B and C down
-    assert_eq!(row_text_trimmed(&s, 1), "");    // new blank row
+    feed(&mut s, b"\x1b[2;1H"); // cursor at row 2 (1-based)
+    feed(&mut s, b"\x1b[L"); // IL 1 — insert blank at row 1, push B and C down
+    assert_eq!(row_text_trimmed(&s, 1), ""); // new blank row
     assert_eq!(row_text_trimmed(&s, 2), "BBBBB");
 }
 
@@ -444,8 +457,8 @@ fn test_il_inserts_blank_line() {
 fn test_dl_deletes_line() {
     let mut s = Session::new(1, 5, 5, None);
     feed(&mut s, b"AAAAA\r\nBBBBB\r\nCCCCC");
-    feed(&mut s, b"\x1b[2;1H");   // cursor at row 2 (1-based) = row 1 (0-based)
-    feed(&mut s, b"\x1b[M");      // DL 1 — delete row 1, C moves to row 1
+    feed(&mut s, b"\x1b[2;1H"); // cursor at row 2 (1-based) = row 1 (0-based)
+    feed(&mut s, b"\x1b[M"); // DL 1 — delete row 1, C moves to row 1
     assert_eq!(row_text_trimmed(&s, 1), "CCCCC");
 }
 
@@ -612,7 +625,7 @@ fn test_tab_clamps_at_last_col() {
 fn test_cnl_cursor_next_line() {
     let mut s = Session::new(1, 20, 10, None);
     feed(&mut s, b"\x1b[5;5H"); // (4,4) 0-based
-    feed(&mut s, b"\x1b[2E");   // CNL 2 → row 6, col 0
+    feed(&mut s, b"\x1b[2E"); // CNL 2 → row 6, col 0
     assert_eq!(s.cursor_y, 6);
     assert_eq!(s.cursor_x, 0);
 }
@@ -621,7 +634,7 @@ fn test_cnl_cursor_next_line() {
 fn test_cpl_cursor_prev_line() {
     let mut s = Session::new(1, 20, 10, None);
     feed(&mut s, b"\x1b[5;5H"); // (4,4) 0-based
-    feed(&mut s, b"\x1b[2F");   // CPL 2 → row 2, col 0
+    feed(&mut s, b"\x1b[2F"); // CPL 2 → row 2, col 0
     assert_eq!(s.cursor_y, 2);
     assert_eq!(s.cursor_x, 0);
 }
@@ -630,7 +643,7 @@ fn test_cpl_cursor_prev_line() {
 fn test_cha_cursor_horizontal_absolute() {
     let mut s = Session::new(1, 20, 10, None);
     feed(&mut s, b"\x1b[5;5H");
-    feed(&mut s, b"\x1b[8G");   // CHA → col 8 (1-based) = 7 (0-based)
+    feed(&mut s, b"\x1b[8G"); // CHA → col 8 (1-based) = 7 (0-based)
     assert_eq!(s.cursor_x, 7);
     assert_eq!(s.cursor_y, 4); // row unchanged
 }
@@ -639,7 +652,7 @@ fn test_cha_cursor_horizontal_absolute() {
 fn test_vpa_vertical_position_absolute() {
     let mut s = Session::new(1, 20, 10, None);
     feed(&mut s, b"\x1b[5;5H");
-    feed(&mut s, b"\x1b[3d");   // VPA → row 3 (1-based) = 2 (0-based)
+    feed(&mut s, b"\x1b[3d"); // VPA → row 3 (1-based) = 2 (0-based)
     assert_eq!(s.cursor_y, 2);
     assert_eq!(s.cursor_x, 4); // col unchanged
 }
@@ -652,9 +665,9 @@ fn test_ed1_erases_from_top_to_cursor() {
     feed(&mut s, b"AAAAAAAAAA"); // row 0 full
     feed(&mut s, b"\r\n");
     feed(&mut s, b"BBBBBBBBBB"); // row 1 full
-    feed(&mut s, b"\x1b[2;5H");  // cursor row 2 (1-based), col 5
-    feed(&mut s, b"\x1b[1J");    // ED1: erase from top to cursor (inclusive)
-    // Row 0 should be blank
+    feed(&mut s, b"\x1b[2;5H"); // cursor row 2 (1-based), col 5
+    feed(&mut s, b"\x1b[1J"); // ED1: erase from top to cursor (inclusive)
+                              // Row 0 should be blank
     assert_eq!(row_text_trimmed(&s, 0), "");
     // Row 1 should be blank up to col 4 (0-based)
     assert_eq!(&row_text(&s, 1)[..5], "     ");
@@ -663,10 +676,10 @@ fn test_ed1_erases_from_top_to_cursor() {
 #[test]
 fn test_el1_erases_from_bol_to_cursor() {
     let mut s = Session::new(1, 10, 3, None);
-    feed(&mut s, b"ABCDEFGH");    // 8 chars
-    feed(&mut s, b"\x1b[1;4H");  // cursor at col 4 (1-based) = 3 (0-based)
-    feed(&mut s, b"\x1b[1K");    // EL1: erase from BOL to cursor
-    // Cols 0..3 should be blank, cols 4..7 should remain
+    feed(&mut s, b"ABCDEFGH"); // 8 chars
+    feed(&mut s, b"\x1b[1;4H"); // cursor at col 4 (1-based) = 3 (0-based)
+    feed(&mut s, b"\x1b[1K"); // EL1: erase from BOL to cursor
+                              // Cols 0..3 should be blank, cols 4..7 should remain
     assert_eq!(&row_text(&s, 0)[..4], "    ");
     assert_eq!(&row_text(&s, 0)[4..8], "EFGH");
 }
@@ -676,7 +689,7 @@ fn test_el2_erases_entire_line() {
     let mut s = Session::new(1, 10, 3, None);
     feed(&mut s, b"ABCDEFGH");
     feed(&mut s, b"\x1b[1;4H");
-    feed(&mut s, b"\x1b[2K");    // EL2: erase entire line
+    feed(&mut s, b"\x1b[2K"); // EL2: erase entire line
     assert_eq!(row_text_trimmed(&s, 0), "");
 }
 
@@ -684,9 +697,9 @@ fn test_el2_erases_entire_line() {
 fn test_dch_delete_characters() {
     // DCH 'P': delete 2 chars at cursor; trailing chars shift left
     let mut s = Session::new(1, 10, 3, None);
-    feed(&mut s, b"ABCDEFGH");   // row 0: A B C D E F G H _ _
+    feed(&mut s, b"ABCDEFGH"); // row 0: A B C D E F G H _ _
     feed(&mut s, b"\x1b[1;3H"); // cursor col 3 (1-based) = 2 (0-based)
-    feed(&mut s, b"\x1b[2P");   // DCH 2: delete C and D, shift EFGH left
+    feed(&mut s, b"\x1b[2P"); // DCH 2: delete C and D, shift EFGH left
     let r = row_text(&s, 0);
     assert_eq!(&r[..6], "ABEFGH");
     assert_eq!(&r[6..8], "  "); // two trailing blank cells
@@ -697,7 +710,7 @@ fn test_ech_erase_characters() {
     let mut s = Session::new(1, 10, 3, None);
     feed(&mut s, b"ABCDEFGH");
     feed(&mut s, b"\x1b[1;3H"); // cursor col 3 (1-based) = 2 (0-based)
-    feed(&mut s, b"\x1b[3X");   // ECH 3: erase C, D, E
+    feed(&mut s, b"\x1b[3X"); // ECH 3: erase C, D, E
     let r = row_text(&s, 0);
     assert_eq!(&r[0..2], "AB");
     assert_eq!(&r[2..5], "   ");
@@ -709,7 +722,7 @@ fn test_sd_scroll_down() {
     let mut s = Session::new(1, 5, 5, None);
     feed(&mut s, b"AAAAA\r\nBBBBB\r\nCCCCC");
     feed(&mut s, b"\x1b[2T"); // SD 2: scroll visible area down by 2
-    // Row 0 and 1 should be blank (blank lines inserted at top)
+                              // Row 0 and 1 should be blank (blank lines inserted at top)
     assert_eq!(row_text_trimmed(&s, 0), "");
     assert_eq!(row_text_trimmed(&s, 1), "");
     assert_eq!(row_text_trimmed(&s, 2), "AAAAA");
@@ -721,9 +734,9 @@ fn test_sd_scroll_down() {
 fn test_csi_save_restore_cursor() {
     let mut s = Session::new(1, 20, 10, None);
     feed(&mut s, b"\x1b[4;8H"); // (3,7) 0-based
-    feed(&mut s, b"\x1b[s");    // CSI s — save
+    feed(&mut s, b"\x1b[s"); // CSI s — save
     feed(&mut s, b"\x1b[1;1H"); // move elsewhere
-    feed(&mut s, b"\x1b[u");    // CSI u — restore
+    feed(&mut s, b"\x1b[u"); // CSI u — restore
     assert_eq!((s.cursor_y, s.cursor_x), (3, 7));
 }
 
@@ -743,11 +756,11 @@ fn test_dsr_status_ok() {
 fn test_ris_resets_state() {
     use super::grid::{CellAttrs, Color};
     let mut s = Session::new(1, 20, 10, None);
-    feed(&mut s, b"\x1b[5;5H");  // move cursor
+    feed(&mut s, b"\x1b[5;5H"); // move cursor
     feed(&mut s, b"\x1b[1;31m"); // bold + red
-    feed(&mut s, b"\x1b[3;7r");  // set scroll region
-    feed(&mut s, b"Hello");       // put chars on screen
-    feed(&mut s, b"\x1bc");      // RIS
+    feed(&mut s, b"\x1b[3;7r"); // set scroll region
+    feed(&mut s, b"Hello"); // put chars on screen
+    feed(&mut s, b"\x1bc"); // RIS
     assert_eq!((s.cursor_y, s.cursor_x), (0, 0));
     assert_eq!(s.scroll_top, 0);
     assert_eq!(s.scroll_bottom, 9);
@@ -778,8 +791,10 @@ fn test_osc7_sets_cwd_file_uri() {
     // Use a Unix-style file:// URI (cross-platform path logic in performer)
     feed(&mut s, b"\x1b]7;file:///home/user/projects\x07");
     let cwd = s.cwd.to_string_lossy().into_owned();
-    assert!(cwd.contains("home") || cwd.contains("projects"),
-        "CWD not set correctly: {cwd}");
+    assert!(
+        cwd.contains("home") || cwd.contains("projects"),
+        "CWD not set correctly: {cwd}"
+    );
 }
 
 #[test]
@@ -795,21 +810,21 @@ fn test_osc_empty_params_no_crash() {
 fn test_sgr_all_attributes() {
     let mut s = Session::new(1, 10, 3, None);
     // Set all attributes
-    feed(&mut s, b"\x1b[2m");  // dim
+    feed(&mut s, b"\x1b[2m"); // dim
     assert!(s.current_attrs.dim);
-    feed(&mut s, b"\x1b[3m");  // italic
+    feed(&mut s, b"\x1b[3m"); // italic
     assert!(s.current_attrs.italic);
-    feed(&mut s, b"\x1b[4m");  // underline
+    feed(&mut s, b"\x1b[4m"); // underline
     assert!(s.current_attrs.underline);
-    feed(&mut s, b"\x1b[5m");  // blink
+    feed(&mut s, b"\x1b[5m"); // blink
     assert!(s.current_attrs.blink);
-    feed(&mut s, b"\x1b[6m");  // blink (alt)
+    feed(&mut s, b"\x1b[6m"); // blink (alt)
     assert!(s.current_attrs.blink);
-    feed(&mut s, b"\x1b[7m");  // inverse
+    feed(&mut s, b"\x1b[7m"); // inverse
     assert!(s.current_attrs.inverse);
-    feed(&mut s, b"\x1b[8m");  // invisible
+    feed(&mut s, b"\x1b[8m"); // invisible
     assert!(s.current_attrs.invisible);
-    feed(&mut s, b"\x1b[9m");  // strikethrough
+    feed(&mut s, b"\x1b[9m"); // strikethrough
     assert!(s.current_attrs.strikethrough);
 }
 
@@ -823,12 +838,18 @@ fn test_sgr_individual_reset_codes() {
     feed(&mut s, b"\x1b[22m"); // un-bold and un-dim
     assert!(!s.current_attrs.bold);
     assert!(!s.current_attrs.dim);
-    feed(&mut s, b"\x1b[23m"); assert!(!s.current_attrs.italic);
-    feed(&mut s, b"\x1b[24m"); assert!(!s.current_attrs.underline);
-    feed(&mut s, b"\x1b[25m"); assert!(!s.current_attrs.blink);
-    feed(&mut s, b"\x1b[27m"); assert!(!s.current_attrs.inverse);
-    feed(&mut s, b"\x1b[28m"); assert!(!s.current_attrs.invisible);
-    feed(&mut s, b"\x1b[29m"); assert!(!s.current_attrs.strikethrough);
+    feed(&mut s, b"\x1b[23m");
+    assert!(!s.current_attrs.italic);
+    feed(&mut s, b"\x1b[24m");
+    assert!(!s.current_attrs.underline);
+    feed(&mut s, b"\x1b[25m");
+    assert!(!s.current_attrs.blink);
+    feed(&mut s, b"\x1b[27m");
+    assert!(!s.current_attrs.inverse);
+    feed(&mut s, b"\x1b[28m");
+    assert!(!s.current_attrs.invisible);
+    feed(&mut s, b"\x1b[29m");
+    assert!(!s.current_attrs.strikethrough);
 }
 
 #[test]
@@ -892,12 +913,18 @@ fn test_sgr_rgb_bg() {
 #[test]
 fn test_mouse_modes() {
     let mut s = Session::new(1, 80, 24, None);
-    feed(&mut s, b"\x1b[?1000h"); assert_eq!(s.mouse_mode, MouseMode::Basic);
-    feed(&mut s, b"\x1b[?1000l"); assert_eq!(s.mouse_mode, MouseMode::None);
-    feed(&mut s, b"\x1b[?1002h"); assert_eq!(s.mouse_mode, MouseMode::ButtonMotion);
-    feed(&mut s, b"\x1b[?1002l"); assert_eq!(s.mouse_mode, MouseMode::None);
-    feed(&mut s, b"\x1b[?1003h"); assert_eq!(s.mouse_mode, MouseMode::AllMotion);
-    feed(&mut s, b"\x1b[?1003l"); assert_eq!(s.mouse_mode, MouseMode::None);
+    feed(&mut s, b"\x1b[?1000h");
+    assert_eq!(s.mouse_mode, MouseMode::Basic);
+    feed(&mut s, b"\x1b[?1000l");
+    assert_eq!(s.mouse_mode, MouseMode::None);
+    feed(&mut s, b"\x1b[?1002h");
+    assert_eq!(s.mouse_mode, MouseMode::ButtonMotion);
+    feed(&mut s, b"\x1b[?1002l");
+    assert_eq!(s.mouse_mode, MouseMode::None);
+    feed(&mut s, b"\x1b[?1003h");
+    assert_eq!(s.mouse_mode, MouseMode::AllMotion);
+    feed(&mut s, b"\x1b[?1003l");
+    assert_eq!(s.mouse_mode, MouseMode::None);
 }
 
 #[test]

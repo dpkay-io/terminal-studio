@@ -28,7 +28,7 @@ Open an issue using the [feature request template](https://github.com/dpkay-io/t
 
 ## Sending a Pull Request
 
-1. Fork the repository and create a branch from `main`.
+1. Fork the repository and create a branch from `master`.
 2. Keep the change focused — one fix or feature per PR.
 3. Run `cargo test` and `cargo clippy` before submitting; the PR should not introduce new warnings.
 4. Write a clear PR description explaining what changed and why.

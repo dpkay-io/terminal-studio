@@ -130,7 +130,12 @@ impl Grid {
         let end = col_end.min(self.cols - 1);
         for col in col_start..=end {
             let i = self.idx(row, col);
-            self.cells[i] = Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() };
+            self.cells[i] = Cell {
+                c: ' ',
+                fg: Color::Default,
+                bg,
+                attrs: CellAttrs::default(),
+            };
         }
     }
 
@@ -141,7 +146,12 @@ impl Grid {
         for row in row_start..=end {
             for col in 0..self.cols {
                 let i = self.idx(row, col);
-                self.cells[i] = Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() };
+                self.cells[i] = Cell {
+                    c: ' ',
+                    fg: Color::Default,
+                    bg,
+                    attrs: CellAttrs::default(),
+                };
             }
         }
     }
@@ -168,7 +178,12 @@ impl Grid {
 
     /// Clear all cells using `bg` as the erase background color (BCE).
     pub fn clear_all_with_bg(&mut self, bg: Color) {
-        let cell = Cell { c: ' ', fg: Color::Default, bg, attrs: CellAttrs::default() };
+        let cell = Cell {
+            c: ' ',
+            fg: Color::Default,
+            bg,
+            attrs: CellAttrs::default(),
+        };
         self.cells.fill(cell);
     }
 }

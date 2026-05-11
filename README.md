@@ -1,162 +1,171 @@
 # Terminal Studio
 
-> **Alpha software** — core features work, but expect bugs, rough edges, and breaking changes between releases. Bug reports and feedback are very welcome.
+[![CI](https://github.com/dpkay-io/terminal-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/dpkay-io/terminal-studio/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/dpkay-io/terminal-studio?include_prereleases)](https://github.com/dpkay-io/terminal-studio/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+> **Alpha software** — core features work, but expect bugs and breaking changes between releases. Bug reports are very welcome.
 
 ![Terminal Studio](assets/screenshot.png)
 
-**Terminal Studio** is a GPU-accelerated terminal multiplexer built with Rust, [egui](https://github.com/emilk/egui), and the wgpu renderer. It combines a full-featured multi-pane terminal with an integrated file browser, git diff viewer, markdown renderer, and a workspace system — all in a single, frameless desktop window with crisp, hardware-accelerated text rendering.
+**Terminal Studio** is a GPU-accelerated terminal multiplexer built with Rust, [egui](https://github.com/emilk/egui), and the wgpu renderer. It combines multi-pane terminals with an integrated file browser, git diff viewer, markdown renderer, and a workspace system — all in a single frameless window with hardware-accelerated text rendering.
 
 ---
 
 ## Features
 
-- **Multi-pane terminal** — split the center panel into as many side-by-side terminal panes as you need, each independently resizable
-- **GPU rendering via wgpu** — text and UI are rendered on the GPU through egui's wgpu backend, delivering smooth, pixel-perfect output
-- **Full VTE/ANSI emulation** — 256-color support, SGR attributes, mouse reporting, bracketed paste, alternate screen, and more, using the same VTE parser as Alacritty
-- **Workspace system** — create named workspaces bound to directory paths; each workspace gets a custom accent color and switches automatically as you navigate your filesystem
-- **File browser** — recursive directory tree in the right-hand panel; click any file to open it, `.md` files open in the markdown previewer
-- **Git integration** — live diff viewer shows working-tree changes with colored hunks and inline status badges
-- **Integrated markdown renderer** — renders headers, bold, inline code, fenced code blocks, lists, and blockquotes
-- **Integrated file editor** — edit any file directly in a center pane with `Ctrl+S` to save
-- **Per-workspace notes** — a scratch-pad panel scoped to each workspace, auto-saved across sessions
-- **Session persistence** — all open terminals and their working directories are saved on exit and restored on the next launch
-- **Catppuccin Mocha theme** — consistent, low-eye-strain dark theme throughout
+- **Multi-pane terminal** — split into as many side-by-side panes as you need, each independently resizable
+- **GPU rendering via wgpu** — smooth, pixel-perfect text rendered on the GPU through egui's wgpu backend
+- **Full VTE/ANSI emulation** — 256-color, SGR attributes, mouse reporting, bracketed paste, alternate screen (same VTE parser as Alacritty)
+- **Workspace system** — named workspaces bound to directories; custom accent color auto-activates when your CWD matches
+- **File browser** — recursive directory tree; click any file to open it, `.md` files open in the markdown previewer
+- **Git integration** — live diff viewer with colored hunks and inline status badges
+- **Integrated markdown renderer** — headers, bold, code blocks, lists, blockquotes
+- **Integrated file editor** — edit any file in a center pane with `Ctrl+S` to save
+- **Per-workspace notes** — scratch-pad scoped to each workspace, auto-saved
+- **Session persistence** — open terminals and their CWDs are restored on next launch
+- **Catppuccin Mocha theme** — consistent dark theme throughout
 
-See [FEATURES.md](FEATURES.md) for the full feature breakdown.
+See [FEATURES.md](FEATURES.md) for the full feature list.
 
 ---
 
-## Building from Source
+## Installation
 
-### Prerequisites
+### Pre-built binaries (recommended)
 
-**All platforms**
+**Linux / macOS**
 
-- Rust stable toolchain, version 1.75 or newer
-  ```
-  curl https://sh.rustup.rs -sSf | sh   # Linux / macOS
-  winget install Rustlang.Rustup         # Windows
-  ```
+```sh
+curl -fsSL https://raw.githubusercontent.com/dpkay-io/terminal-studio/master/scripts/install.sh | sh
+```
 
-**Windows**
+Downloads the latest release binary to `~/.local/bin/terminal-studio`. Override the destination with `INSTALL_DIR=/your/path`.
 
-- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload — required by wgpu/winit for MSVC linking
+**Windows (PowerShell)**
+
+```powershell
+iwr https://raw.githubusercontent.com/dpkay-io/terminal-studio/master/scripts/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\terminal-studio\terminal-studio.exe`.
+
+**Manual download**
+
+Download the binary for your platform from the [latest release](https://github.com/dpkay-io/terminal-studio/releases/latest), make it executable, and place it on your `PATH`.
+
+| Platform | File |
+|---|---|
+| Windows x86-64 | `terminal-studio-windows.exe` |
+| Linux x86-64 | `terminal-studio-linux` |
+| macOS Apple Silicon | `terminal-studio-macos-arm` |
+| macOS Intel | `terminal-studio-macos-intel` |
+
+---
+
+### Building from Source
+
+#### Prerequisites
+
+**All platforms** — Rust stable toolchain 1.75 or newer:
+
+```sh
+curl https://sh.rustup.rs -sSf | sh        # Linux / macOS
+winget install Rustlang.Rustup              # Windows
+```
+
+**Windows** — [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload (required for MSVC linking).
 
 **Linux**
 
-```
-# Debian / Ubuntu
+```sh
 sudo apt install pkg-config libxkbcommon-dev libwayland-dev
-# For X11 instead of Wayland:
+# X11 (optional):
 sudo apt install libx11-dev libxcb1-dev
 ```
 
 **macOS**
 
-```
+```sh
 xcode-select --install
 ```
 
-### Build steps
+#### Build
 
-```
-# Clone the repository
+```sh
 git clone https://github.com/dpkay-io/terminal-studio
 cd terminal-studio
-
-# Release build (recommended)
 cargo build --release
-
-# The binary is placed at:
-#   Windows  → target\release\terminal-studio.exe
-#   Linux    → target/release/terminal-studio
-#   macOS    → target/release/terminal-studio
-```
-
-### Run
-
-```
-cargo run --release
+# Binary: target/release/terminal-studio  (terminal-studio.exe on Windows)
 ```
 
 ---
 
 ## Usage
 
-### Starting the app
-
-Launch the binary directly, or run `cargo run --release` from the repository root. On first launch the workspace list will be empty and a single terminal pane will open in your current working directory.
-
 ### Keyboard shortcuts
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+S` | Save the file in the active file-editor pane |
-| `Ctrl+C` | Send SIGINT to the foreground process in the active terminal |
-| `Ctrl+Shift+C` | Copy selection (when mouse selection is active) |
+| `Ctrl+S` | Save the active file-editor pane |
+| `Ctrl+C` | Send SIGINT to the foreground process |
+| `Ctrl+Shift+C` | Copy selection |
 
-> Terminal key sequences (e.g. `Ctrl+L` to clear, `Ctrl+D` to exit a shell) are passed directly to the running process, the same as any terminal emulator.
+Terminal key sequences (`Ctrl+L`, `Ctrl+D`, etc.) pass through directly to the running shell.
 
 ### Managing panes
 
-- Click the **+** button in the pane header area to open a new terminal pane.
-- Drag the vertical divider between panes to resize them.
-- Close a pane with its **×** button in the header.
+- Click **+** in the pane header to open a new terminal pane.
+- Drag the vertical divider between panes to resize.
+- Close a pane with its **×** button.
 
 ### Workspaces
 
 1. Click **+ Workspace** in the left sidebar.
-2. Enter a name and choose the root directory for the workspace.
-3. An accent color is assigned automatically (or pick one from the preset palette).
-4. Whenever a terminal's CWD is under a workspace path, that workspace becomes active and its color tints the titlebar and pane headers.
+2. Enter a name and select the root directory.
+3. An accent color is assigned automatically (pick from the preset palette to override).
+4. Whenever a terminal's CWD falls under a workspace path, that workspace activates and its color tints the UI.
 
 ### File browser and editor
 
-- The right panel shows the directory tree for the currently active terminal's CWD.
-- Click any file to open it in a new editor pane in the center.
-- `.md` files open in the markdown preview tab instead.
-- Press `Ctrl+S` in an editor pane to write changes to disk.
+- The right panel shows the directory tree for the active terminal's CWD.
+- Click any file to open it in an editor pane; `.md` files open in the markdown previewer.
+- `Ctrl+S` saves changes.
 
 ### Git diff viewer
 
-Switch to the **Git** tab in the right panel to see a live diff of the working tree relative to HEAD. Changed files are listed with status badges; click a file to expand its hunk view.
+Switch to the **Git** tab in the right panel for a live diff of the working tree relative to HEAD. Click any file to expand its hunk view.
 
 ---
 
 ## Development
 
-```
-# Debug build (faster compile, opt-level 1)
-cargo run
-
-# Run tests
-cargo test
-
-# Enable debug logging
-RUST_LOG=debug cargo run          # Linux / macOS
-$env:RUST_LOG="debug"; cargo run  # Windows PowerShell
+```sh
+cargo run                           # debug build (faster compile)
+cargo test                          # all unit tests
+cargo clippy                        # lints
+RUST_LOG=debug cargo run            # with debug logging (Linux / macOS)
+$env:RUST_LOG="debug"; cargo run    # Windows PowerShell
 ```
 
 ---
 
 ## Data and Configuration
 
-Terminal Studio stores all persistent data in a platform-specific directory — no configuration files are written next to the binary.
+All state is stored in a platform-specific directory — no config files next to the binary.
 
 | Platform | Path |
 |---|---|
 | Windows | `%APPDATA%\terminal-studio\` |
 | Linux / macOS | `~/.config/terminal-studio/` |
 
-Files written under that directory:
-
 | File | Contents |
 |---|---|
-| `session.json` | Open panes, terminal CWDs, active workspace, panel layout |
-| `workspaces.json` | Named workspace definitions (name, path, color) |
+| `session.json` | Open panes, CWDs, active workspace, panel layout |
+| `workspaces.json` | Workspace definitions (name, path, color) |
 | `notes.json` | Per-workspace scratch-pad notes |
 
-To reset all state, delete the directory. The app will start fresh on the next launch.
+Delete the directory to reset all state.
 
 ---
 
@@ -168,18 +177,16 @@ To reset all state, delete the directory. The app will start fresh on the next l
 | Default shell | PowerShell | Bash | Bash |
 | File watcher | ReadDirectoryChangesW | inotify | FSEvents |
 | State directory | `%APPDATA%` | `~/.config` | `~/.config` |
-| Window controls | Right-aligned | Right-aligned | Traffic lights |
 
 ---
 
 ## Alpha Status
 
-Terminal Studio is **alpha** software. Things that are known to be incomplete or rough:
+Known gaps:
 
-- No binary releases yet — must build from source
 - Linux and macOS are less tested than Windows
-- The terminal emulator handles most applications well but may have gaps with advanced TUI apps
-- No configuration file yet — theme and fonts are not user-customizable
+- The terminal emulator handles most TUI apps well but may have gaps with advanced escape sequences
+- No user-configurable theme or font yet
 
 If you hit a bug, please [open an issue](https://github.com/dpkay-io/terminal-studio/issues). Include your OS, shell, and the app or escape sequence that triggered the problem.
 
@@ -187,7 +194,7 @@ If you hit a bug, please [open an issue](https://github.com/dpkay-io/terminal-st
 
 ## Contributing
 
-Bug reports are the most helpful contribution right now. The architecture is still evolving, so for non-trivial code changes, please open an issue to discuss before sending a PR.
+Bug reports are the most helpful contribution right now. For non-trivial code changes, open an issue to discuss first.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
@@ -195,4 +202,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## License
 
-Terminal Studio is released under the [Apache License, Version 2.0](LICENSE).
+Apache License, Version 2.0 — see [LICENSE](LICENSE).

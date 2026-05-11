@@ -1,9 +1,9 @@
-pub mod reader;
 pub mod foreground;
+pub mod reader;
 
 use std::io::Write;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::thread;
 
 use egui::Context;
@@ -31,6 +31,15 @@ const SHELL_INIT_ARGS: &[&str] = &[
 #[cfg(not(target_os = "windows"))]
 const SHELL: &str = "bash";
 
+type SpawnResult = (
+    u32,
+    Arc<RwLock<Session>>,
+    Box<dyn portable_pty::MasterPty + Send>,
+    Box<dyn Write + Send>,
+    u32,
+    Arc<AtomicBool>,
+);
+
 pub struct SessionManager {
     ctx: Context,
     next_id: u32,
@@ -47,7 +56,7 @@ impl SessionManager {
         cols: u16,
         rows: u16,
         cwd: Option<std::path::PathBuf>,
-    ) -> anyhow::Result<(u32, Arc<RwLock<Session>>, Box<dyn portable_pty::MasterPty + Send>, Box<dyn Write + Send>, u32, Arc<AtomicBool>)> {
+    ) -> anyhow::Result<SpawnResult> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -66,7 +75,7 @@ impl SessionManager {
         }
 
         let child = pty_pair.slave.spawn_command(cmd)?;
-        let shell_pid = child.process_id().unwrap_or(0);
+        let shell_pid = child.process_id().unwrap_or(u32::MAX);
         drop(child);
 
         let writer = pty_pair.master.take_writer()?;
@@ -82,7 +91,9 @@ impl SessionManager {
         let ctx_clone = self.ctx.clone();
         thread::Builder::new()
             .name(format!("pty-reader-{}", id))
-            .spawn(move || reader::reader_thread(reader, session_clone, ctx_clone, alive_for_thread))?;
+            .spawn(move || {
+                reader::reader_thread(reader, session_clone, ctx_clone, alive_for_thread)
+            })?;
 
         Ok((id, session, pty_pair.master, writer, shell_pid, alive))
     }
@@ -91,7 +102,7 @@ impl SessionManager {
         let _ = writer.write_all(data);
     }
 
-    pub fn resize(master: &Box<dyn portable_pty::MasterPty + Send>, cols: u16, rows: u16) {
+    pub fn resize(master: &(dyn portable_pty::MasterPty + Send), cols: u16, rows: u16) {
         let _ = master.resize(PtySize {
             rows,
             cols,
