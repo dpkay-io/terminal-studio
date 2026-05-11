@@ -509,7 +509,7 @@ impl<'a> Perform for Performer<'a> {
                         #[cfg(target_os = "windows")]
                         let path_str = path_str.replace('/', "\\");
 
-                        self.session.cwd = PathBuf::from(&*path_str);
+                        self.session.cwd = PathBuf::from(path_str);
                         self.session.prompt_ready = true;
                         log::debug!("CWD: {:?}", self.session.cwd);
                     }
