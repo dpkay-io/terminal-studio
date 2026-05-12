@@ -152,12 +152,48 @@ pub enum RemoveResult {
     NotFound,
 }
 
+/// Split a rect into two according to direction and ratio.
+/// Returns `(rect_a, divider_rect, rect_b)`.
+pub fn split_rect(
+    rect: egui::Rect,
+    dir: SplitDir,
+    ratio: f32,
+) -> (egui::Rect, egui::Rect, egui::Rect) {
+    const DIV: f32 = 4.0;
+    let half = DIV / 2.0;
+    match dir {
+        SplitDir::Horizontal => {
+            let x = rect.min.x + rect.width() * ratio;
+            let a = egui::Rect::from_min_max(rect.min, egui::pos2(x - half, rect.max.y));
+            let div = egui::Rect::from_min_max(
+                egui::pos2(x - half, rect.min.y),
+                egui::pos2(x + half, rect.max.y),
+            );
+            let b = egui::Rect::from_min_max(egui::pos2(x + half, rect.min.y), rect.max);
+            (a, div, b)
+        }
+        SplitDir::Vertical => {
+            let y = rect.min.y + rect.height() * ratio;
+            let a = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y - half));
+            let div = egui::Rect::from_min_max(
+                egui::pos2(rect.min.x, y - half),
+                egui::pos2(rect.max.x, y + half),
+            );
+            let b = egui::Rect::from_min_max(egui::pos2(rect.min.x, y + half), rect.max);
+            (a, div, b)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn leaf(id: u32) -> PaneNode {
-        PaneNode::Leaf { pane_id: id, last_size: (80, 24) }
+        PaneNode::Leaf {
+            pane_id: id,
+            last_size: (80, 24),
+        }
     }
 
     #[test]
@@ -265,38 +301,5 @@ mod tests {
         assert!(a.height() > 0.0);
         assert!(b.height() > 0.0);
         assert!(div.height() > 0.0);
-    }
-}
-
-/// Split a rect into two according to direction and ratio.
-/// Returns `(rect_a, divider_rect, rect_b)`.
-pub fn split_rect(
-    rect: egui::Rect,
-    dir: SplitDir,
-    ratio: f32,
-) -> (egui::Rect, egui::Rect, egui::Rect) {
-    const DIV: f32 = 4.0;
-    let half = DIV / 2.0;
-    match dir {
-        SplitDir::Horizontal => {
-            let x = rect.min.x + rect.width() * ratio;
-            let a = egui::Rect::from_min_max(rect.min, egui::pos2(x - half, rect.max.y));
-            let div = egui::Rect::from_min_max(
-                egui::pos2(x - half, rect.min.y),
-                egui::pos2(x + half, rect.max.y),
-            );
-            let b = egui::Rect::from_min_max(egui::pos2(x + half, rect.min.y), rect.max);
-            (a, div, b)
-        }
-        SplitDir::Vertical => {
-            let y = rect.min.y + rect.height() * ratio;
-            let a = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y - half));
-            let div = egui::Rect::from_min_max(
-                egui::pos2(rect.min.x, y - half),
-                egui::pos2(rect.max.x, y + half),
-            );
-            let b = egui::Rect::from_min_max(egui::pos2(rect.min.x, y + half), rect.max);
-            (a, div, b)
-        }
     }
 }

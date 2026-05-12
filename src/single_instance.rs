@@ -32,13 +32,13 @@ impl SingleInstanceGuard {
 
     #[cfg(target_os = "windows")]
     fn platform_acquire() -> Result<Self, ()> {
-        use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Foundation::{
+            GetLastError, ERROR_ALREADY_EXISTS, INVALID_HANDLE_VALUE,
+        };
         use windows_sys::Win32::System::Threading::CreateMutexW;
 
         // Encode the mutex name as a null-terminated wide string.
-        let name: Vec<u16> = "Local\\TerminalStudioSingleton\0"
-            .encode_utf16()
-            .collect();
+        let name: Vec<u16> = "Local\\TerminalStudioSingleton\0".encode_utf16().collect();
 
         // SAFETY: name is a valid null-terminated UTF-16 string; no attributes
         // are needed; initial owner = FALSE so we don't own it on creation.
@@ -48,7 +48,9 @@ impl SingleInstanceGuard {
             log::warn!("single_instance: CreateMutexW failed");
             // Treat failure to create the mutex as "allow startup" to avoid
             // blocking the app on permission errors.
-            return Ok(SingleInstanceGuard { _mutex_handle: handle });
+            return Ok(SingleInstanceGuard {
+                _mutex_handle: handle,
+            });
         }
 
         // GetLastError() == ERROR_ALREADY_EXISTS means a prior CreateMutexW
@@ -61,7 +63,9 @@ impl SingleInstanceGuard {
             return Err(());
         }
 
-        Ok(SingleInstanceGuard { _mutex_handle: handle })
+        Ok(SingleInstanceGuard {
+            _mutex_handle: handle,
+        })
     }
 
     #[cfg(target_os = "windows")]
@@ -86,10 +90,15 @@ impl SingleInstanceGuard {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .mode(0o600)
             .open(&lock_path)
             .map_err(|e| {
-                log::warn!("single_instance: cannot open lockfile {:?}: {}", lock_path, e);
+                log::warn!(
+                    "single_instance: cannot open lockfile {:?}: {}",
+                    lock_path,
+                    e
+                );
             })?;
 
         // Try a non-blocking exclusive lock.

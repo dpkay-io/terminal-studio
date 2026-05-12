@@ -17,10 +17,13 @@ use crate::terminal::Session;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShellKind {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     PowerShell, // powershell.exe — Windows
-    Pwsh,       // pwsh.exe — Windows (PowerShell Core)
-    Cmd,        // cmd.exe — Windows
-    Bash,       // bash
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Pwsh, // pwsh.exe — Windows (PowerShell Core)
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Cmd, // cmd.exe — Windows
+    Bash, // bash
     #[cfg_attr(target_os = "windows", allow(dead_code))]
     Zsh, // zsh — Unix
     #[cfg_attr(target_os = "windows", allow(dead_code))]

@@ -18,7 +18,7 @@ use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::terminal::Session;
 use crate::theme;
-use crate::workspace::{NoteStore, Workspace, WindowId, WorkspaceStore};
+use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 use alacritty_terminal::{grid::Scroll, term::TermMode};
 
 // ── Preset workspace colours ──────────────────────────────────────────────────
@@ -601,7 +601,6 @@ fn effective_title(title: &str, cwd: &std::path::Path) -> String {
     }
 }
 
-
 pub struct App {
     session_manager: SessionManager,
     sessions: Vec<SessionEntry>,
@@ -833,10 +832,13 @@ impl App {
                         manual_width: None,
                         last_size: (cols, rows),
                     });
-                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    self.pane_trees.insert(
                         pane_id,
-                        last_size: (cols, rows),
-                    });
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (cols, rows),
+                        },
+                    );
                     self.active_pane_id = Some(pane_id);
                 }
                 Some(id)
@@ -901,11 +903,7 @@ impl App {
     /// opening the same workspace in multiple extra windows).
     fn open_workspace_in_new_window(&mut self, _ctx: &egui::Context, ws_id: u64) {
         // Guard: don't open the same workspace twice.
-        if self
-            .extra_windows
-            .iter()
-            .any(|w| w.workspace_id == ws_id)
-        {
+        if self.extra_windows.iter().any(|w| w.workspace_id == ws_id) {
             return;
         }
 
@@ -1006,10 +1004,13 @@ impl App {
                     manual_width: None,
                     last_size: (cols, rows),
                 });
-                self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                self.pane_trees.insert(
                     pane_id,
-                    last_size: (cols, rows),
-                });
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (cols, rows),
+                    },
+                );
                 self.active_pane_id = Some(pane_id);
             }
             self.update_is_active_flags();
@@ -1273,10 +1274,13 @@ impl App {
                 manual_width: saved.manual_width,
                 last_size: (0, 0),
             });
-            self.pane_trees.insert(pane_id, PaneNode::Leaf {
+            self.pane_trees.insert(
                 pane_id,
-                last_size: (0, 0),
-            });
+                PaneNode::Leaf {
+                    pane_id,
+                    last_size: (0, 0),
+                },
+            );
         }
 
         if let Some(idx) = state.active_pane_index {
@@ -2229,7 +2233,9 @@ impl eframe::App for App {
                 // someone else's tree, remove the leaf and collapse the parent split.
                 if self.pane_trees.remove(&pid).is_none() {
                     // It was a non-root leaf — remove from whichever tree contains it
-                    let root_pid_opt = self.pane_trees.iter()
+                    let root_pid_opt = self
+                        .pane_trees
+                        .iter()
                         .find(|(_, tree)| tree.leaf_ids().contains(&pid))
                         .map(|(&rpid, _)| rpid);
                     if let Some(root_pid) = root_pid_opt {
@@ -2263,10 +2269,13 @@ impl eframe::App for App {
                         manual_width: None,
                         last_size: (0, 0),
                     });
-                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    self.pane_trees.insert(
                         pane_id,
-                        last_size: (0, 0),
-                    });
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (0, 0),
+                        },
+                    );
                     self.active_pane_id = Some(pane_id);
                 }
             }
@@ -2322,10 +2331,13 @@ impl eframe::App for App {
                         manual_width: None,
                         last_size: (cols, rows),
                     });
-                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    self.pane_trees.insert(
                         pane_id,
-                        last_size: (cols, rows),
-                    });
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (cols, rows),
+                        },
+                    );
                     self.activate_pane(pane_id);
                 }
             }
@@ -2393,10 +2405,13 @@ impl eframe::App for App {
                             last_size: (cols, rows),
                         },
                     );
-                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    self.pane_trees.insert(
                         pane_id,
-                        last_size: (cols, rows),
-                    });
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (cols, rows),
+                        },
+                    );
                     self.activate_pane(pane_id);
                 }
                 // Queue the command; it will be sent once the new shell emits OSC 7 (prompt ready).
@@ -3534,20 +3549,32 @@ impl eframe::App for App {
         if let Some(dir) = split_request {
             if let Some(active_pid) = self.active_pane_id {
                 // Find the root pane that contains the active pane
-                let root_pid_opt = self.pane_trees.iter()
+                let root_pid_opt = self
+                    .pane_trees
+                    .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
                 if let Some(root_pid) = root_pid_opt {
                     // Get current size for the new pane
-                    let (cols, rows) = self.panes.iter()
+                    let (cols, rows) = self
+                        .panes
+                        .iter()
                         .find(|p| p.id == active_pid)
                         .map(|p| p.last_size)
                         .unwrap_or((80, 24));
                     // Get cwd and shell from active session
                     let (cwd, shell) = {
-                        let active_session_entry = self.panes.iter()
+                        let active_session_entry = self
+                            .panes
+                            .iter()
                             .find(|p| p.id == active_pid)
-                            .and_then(|p| if let PaneContent::Terminal(sid) = &p.content { Some(*sid) } else { None })
+                            .and_then(|p| {
+                                if let PaneContent::Terminal(sid) = &p.content {
+                                    Some(*sid)
+                                } else {
+                                    None
+                                }
+                            })
                             .and_then(|sid| self.sessions.iter().find(|e| e.id == sid));
                         let cwd = active_session_entry
                             .map(|e| e.session.read().cwd.clone())
@@ -3588,13 +3615,17 @@ impl eframe::App for App {
         if close_split_pane {
             if let Some(active_pid) = self.active_pane_id {
                 // Find the root that contains the active pane
-                let root_pid_opt = self.pane_trees.iter()
+                let root_pid_opt = self
+                    .pane_trees
+                    .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
                 if let Some(root_pid) = root_pid_opt {
                     let is_root_itself = root_pid == active_pid;
                     // Check if tree has only one leaf (the root itself)
-                    let leaf_count = self.pane_trees.get(&root_pid)
+                    let leaf_count = self
+                        .pane_trees
+                        .get(&root_pid)
                         .map(|t| t.leaf_ids().len())
                         .unwrap_or(1);
                     if is_root_itself || leaf_count <= 1 {
@@ -3692,7 +3723,11 @@ impl eframe::App for App {
             editor_texts.retain(|(id, _)| !tree_ids.contains(id));
             // Remove the root's tree entry.
             self.pane_trees.remove(&pid);
-            if self.active_pane_id.map(|ap| tree_ids.contains(&ap)).unwrap_or(false) {
+            if self
+                .active_pane_id
+                .map(|ap| tree_ids.contains(&ap))
+                .unwrap_or(false)
+            {
                 self.active_pane_id = self.panes.last().map(|p| p.id);
             }
             self.save_session();
@@ -3888,10 +3923,13 @@ impl eframe::App for App {
                     manual_width: None,
                     last_size: (0, 0),
                 });
-                self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                self.pane_trees.insert(
                     pane_id,
-                    last_size: (0, 0),
-                });
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
                 self.activate_pane(pane_id);
             }
         }
@@ -4320,8 +4358,8 @@ impl eframe::App for App {
 
         for win in &self.extra_windows {
             let win_id = win.id.clone();
-            let ws_id  = win.workspace_id;
-            let title  = win.title.clone();
+            let ws_id = win.workspace_id;
+            let title = win.title.clone();
             ctx.show_viewport_deferred(
                 win.viewport_id,
                 egui::ViewportBuilder::default()
@@ -4361,7 +4399,8 @@ impl eframe::App for App {
             // Check if the viewport reported a close request this frame.
             // egui sets close_requested in the *main* context's viewport map too.
             let is_closed = ctx.input(|i| {
-                i.raw.viewports
+                i.raw
+                    .viewports
                     .get(&win.viewport_id)
                     .map(|v| v.close_requested())
                     .unwrap_or(false)
