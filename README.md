@@ -58,8 +58,7 @@ Download the binary for your platform from the [latest release](https://github.c
 |---|---|
 | Windows x86-64 | `terminal-studio-windows.exe` |
 | Linux x86-64 | `terminal-studio-linux` |
-| macOS Apple Silicon | `terminal-studio-macos-arm` |
-| macOS Intel | `terminal-studio-macos-intel` |
+| macOS (Apple Silicon + Intel via Rosetta 2) | `terminal-studio-macos-arm` |
 
 ---
 
