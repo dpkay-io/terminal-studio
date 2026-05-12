@@ -12,6 +12,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::pty::foreground::ForegroundProcess;
+use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::terminal::Session;
@@ -589,11 +590,6 @@ fn effective_title(title: &str, cwd: &std::path::Path) -> String {
     }
 }
 
-struct CachedForeground {
-    session_id: u32,
-    result: Option<ForegroundProcess>,
-    checked_at: Instant,
-}
 
 pub struct App {
     session_manager: SessionManager,
@@ -636,8 +632,8 @@ pub struct App {
     resize_debounce: HashMap<u32, (u16, u16, Instant)>,
     // Fractional scroll accumulator — carries sub-line scrolls across frames.
     scroll_accum: HashMap<u32, f32>,
-    // Cached foreground-process detection result (500 ms TTL)
-    foreground_cache: Option<CachedForeground>,
+    // Background thread for foreground-process detection; UI reads from cache only.
+    foreground_worker: ForegroundWorker,
     // Used to detect when the window gains focus so we can flush stale GPU frames.
     was_focused: bool,
     // Shells available on this system, computed once at startup.
@@ -738,7 +734,7 @@ impl App {
             active_term_ui_id: None,
             resize_debounce: HashMap::new(),
             scroll_accum: HashMap::new(),
-            foreground_cache: None,
+            foreground_worker: ForegroundWorker::spawn(),
             was_focused: true,
             available_shells: available_shells(),
             uninit_sessions: HashSet::new(),
@@ -998,7 +994,7 @@ impl App {
             .iter()
             .map(|e| {
                 let cwd = e.session.read().cwd.clone();
-                let command = crate::pty::foreground::detect_child(e.shell_pid).map(|fp| {
+                let command = self.foreground_worker.get(e.id).map(|fp| {
                     let parts: Vec<String> =
                         fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
                     let joined = parts.join(" ");
@@ -1666,29 +1662,21 @@ impl eframe::App for App {
                 }
             });
 
-        // ── Foreground process detection (500 ms cached) ──────────────────
-        // Refresh only when the active session changes or the TTL expires.
-        let active_fg: Option<ForegroundProcess> = {
-            let need_refresh = self.foreground_cache.as_ref().map_or(true, |c| {
-                c.session_id != self.active_id.unwrap_or(0)
-                    || c.checked_at.elapsed() > Duration::from_millis(500)
-            });
-            if need_refresh {
-                let result = self
-                    .active_id
-                    .and_then(|sid| self.sessions.iter().find(|e| e.id == sid))
-                    .filter(|e| e.alive.load(Ordering::Relaxed))
-                    .and_then(|e| crate::pty::foreground::detect_child(e.shell_pid));
-                self.foreground_cache = Some(CachedForeground {
-                    session_id: self.active_id.unwrap_or(0),
-                    result,
-                    checked_at: Instant::now(),
-                });
-            }
-            self.foreground_cache
-                .as_ref()
-                .and_then(|c| c.result.clone())
-        };
+        // ── Foreground process detection (background worker, 500 ms poll) ────
+        // Update the worker's session list so it polls the right PIDs, then
+        // read instantly from the shared cache — never blocks the UI thread.
+        {
+            let pids: Vec<(u32, u32)> = self
+                .sessions
+                .iter()
+                .filter(|e| e.alive.load(Ordering::Relaxed))
+                .map(|e| (e.id, e.shell_pid))
+                .collect();
+            self.foreground_worker.set_sessions(pids);
+        }
+        let active_fg: Option<ForegroundProcess> = self
+            .active_id
+            .and_then(|sid| self.foreground_worker.get(sid));
 
         // ── Left panel: sessions (top) + workspaces (bottom) ───────────────
         let mut spawn_new_session: Option<ShellKind> = None;

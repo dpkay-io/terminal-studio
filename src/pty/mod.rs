@@ -1,4 +1,5 @@
 pub mod foreground;
+pub mod foreground_worker;
 pub mod reader;
 
 use std::sync::atomic::AtomicBool;
