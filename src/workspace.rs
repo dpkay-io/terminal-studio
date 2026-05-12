@@ -2,12 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Opaque identifier for an extra OS window (viewport).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct WindowId(pub u64);
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Workspace {
     pub id: u64,
     pub name: String,
     pub path: PathBuf,
     pub color: [u8; 3],
+    /// If `Some`, this workspace is currently hosted in an extra OS window.
+    /// `None` means it lives in the main window.
+    #[serde(default)]
+    pub host_window_id: Option<WindowId>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -164,6 +172,7 @@ mod tests {
                 name: name.to_string(),
                 path: PathBuf::from(path),
                 color: [0, 0, 0],
+                host_window_id: None,
             })
             .collect();
         WorkspaceStore { workspaces }

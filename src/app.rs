@@ -17,7 +17,7 @@ use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::terminal::Session;
 use crate::theme;
-use crate::workspace::{NoteStore, Workspace, WorkspaceStore};
+use crate::workspace::{NoteStore, Workspace, WindowId, WorkspaceStore};
 use alacritty_terminal::{grid::Scroll, term::TermMode};
 
 // ── Preset workspace colours ──────────────────────────────────────────────────
@@ -514,6 +514,16 @@ impl WorkspaceEditDialog {
     }
 }
 
+// ── Extra window (viewport) state ────────────────────────────────────────────
+
+struct WindowState {
+    id: WindowId,
+    /// Which workspace this window is hosting (always Some for extra windows).
+    workspace_id: u64,
+    viewport_id: egui::ViewportId,
+    title: String,
+}
+
 // ── Session entry ─────────────────────────────────────────────────────────────
 
 struct SessionEntry {
@@ -644,6 +654,12 @@ pub struct App {
     // Cursor blink phase (toggles every 500 ms)
     cursor_blink_on: bool,
     cursor_blink_last: Instant,
+
+    // ── Multi-window support ──────────────────────────────────────────────
+    /// Extra OS windows opened via "Open in new window" on a workspace.
+    extra_windows: Vec<WindowState>,
+    /// Counter for generating unique WindowId values.
+    next_window_id: u64,
 }
 
 impl App {
@@ -740,6 +756,8 @@ impl App {
             uninit_sessions: HashSet::new(),
             cursor_blink_on: true,
             cursor_blink_last: Instant::now(),
+            extra_windows: Vec::new(),
+            next_window_id: 1,
         };
         // Estimate initial terminal size from window dimensions. Fonts aren't available
         // until after the first Context::run(), so use empirical cell dimensions for
@@ -859,6 +877,55 @@ impl App {
             .workspaces
             .iter()
             .find(|w| w.id == ws_id)
+    }
+
+    /// Open a workspace in a new OS window (egui deferred viewport).
+    ///
+    /// If the workspace already has a host window, this is a no-op (prevents
+    /// opening the same workspace in multiple extra windows).
+    fn open_workspace_in_new_window(&mut self, _ctx: &egui::Context, ws_id: u64) {
+        // Guard: don't open the same workspace twice.
+        if self
+            .extra_windows
+            .iter()
+            .any(|w| w.workspace_id == ws_id)
+        {
+            return;
+        }
+
+        let ws_name = match self
+            .workspace_store
+            .workspaces
+            .iter()
+            .find(|w| w.id == ws_id)
+        {
+            Some(ws) => ws.name.clone(),
+            None => return,
+        };
+
+        let win_id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+
+        let viewport_id = egui::ViewportId::from_hash_of(("extra_window", win_id.0));
+        let title = format!("{} — Terminal Studio", ws_name);
+
+        // Mark the workspace as hosted in this new window.
+        if let Some(ws) = self
+            .workspace_store
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == ws_id)
+        {
+            ws.host_window_id = Some(win_id.clone());
+        }
+        self.workspace_store.save();
+
+        self.extra_windows.push(WindowState {
+            id: win_id,
+            workspace_id: ws_id,
+            viewport_id,
+            title,
+        });
     }
 
     /// Focus a pane and sync active_id for terminal panes.
@@ -1684,6 +1751,7 @@ impl eframe::App for App {
         let shells = self.available_shells.clone();
         let mut open_workspace_id: Option<u64> = None;
         let mut edit_workspace_id: Option<u64> = None;
+        let mut new_window_workspace_id: Option<u64> = None;
         let mut quit_session_id: Option<u32> = None;
         let mut clicked_session_id: Option<u32> = None;
         let mut clicked_session_ws_group: Option<u64> = None;
@@ -1926,22 +1994,37 @@ impl eframe::App for App {
 
                     if !self.workspace_panel_collapsed {
                         let active_group_snap = self.active_group;
-                        let workspaces: Vec<(u64, String, [u8; 3], bool)> = self
+                        // Snapshot: (id, name, color, has_note, in_extra_window)
+                        let workspaces: Vec<(u64, String, [u8; 3], bool, bool)> = self
                             .workspace_store
                             .workspaces
                             .iter()
-                            .map(|w| (w.id, w.name.clone(), w.color, !self.note_store.get(Some(w.id)).is_empty()))
+                            .map(|w| {
+                                let in_extra = w.host_window_id.is_some()
+                                    && self.extra_windows.iter().any(|ew| ew.workspace_id == w.id);
+                                (w.id, w.name.clone(), w.color, !self.note_store.get(Some(w.id)).is_empty(), in_extra)
+                            })
                             .collect();
 
                         egui::ScrollArea::vertical()
                             .id_source("ws_panel_scroll")
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing.y = 3.0;
-                                for (id, name, color, has_note) in &workspaces {
+                                for (id, name, color, has_note, in_extra_window) in &workspaces {
                                     let active = active_group_snap == Some(*id);
-                                    let tint_factor = if active { 0.65 } else { 0.45 };
+                                    let tint_factor = if *in_extra_window {
+                                        0.20  // grayed-out for workspaces in extra windows
+                                    } else if active {
+                                        0.65
+                                    } else {
+                                        0.45
+                                    };
                                     let fill = theme::from_rgb(theme::tinted(*color, tint_factor));
-                                    let fg   = theme::text_on(theme::tinted(*color, tint_factor));
+                                    let fg   = if *in_extra_window {
+                                        theme::OVERLAY0
+                                    } else {
+                                        theme::text_on(theme::tinted(*color, tint_factor))
+                                    };
 
                                     {
                                         const GEAR_W: f32 = 26.0;
@@ -1963,7 +2046,7 @@ impl eframe::App for App {
                                             full_rect.min,
                                             egui::pos2(gear_rect.min.x, full_rect.max.y),
                                         );
-                                        let name_resp = ui.interact(name_rect, egui::Id::new(("ws_name", *id)), egui::Sense::click());
+                                        let name_resp = ui.interact(name_rect, egui::Id::new(("ws_name", *id)), egui::Sense::click_and_drag());
                                         let gear_resp = ui.interact(gear_rect, egui::Id::new(("ws_gear", *id)), egui::Sense::click());
 
                                         if ui.is_rect_visible(full_rect) {
@@ -1971,7 +2054,13 @@ impl eframe::App for App {
                                             ui.painter().rect_filled(full_rect, rounding, fill);
                                             ui.painter().rect_stroke(full_rect, rounding, stroke_val);
 
-                                            let name_str = if active { format!("▶ {}", name) } else { name.clone() };
+                                            let name_str = if *in_extra_window {
+                                                format!("→ {} (other window)", name)
+                                            } else if active {
+                                                format!("▶ {}", name)
+                                            } else {
+                                                name.clone()
+                                            };
                                             let name_galley = ui.fonts(|f| {
                                                 f.layout_no_wrap(name_str, egui::FontId::proportional(theme::SESSION_FONT_SZ), fg)
                                             });
@@ -2006,6 +2095,21 @@ impl eframe::App for App {
 
                                         if name_resp.clicked() { open_workspace_id = Some(*id); }
                                         if gear_resp.clicked() { edit_workspace_id = Some(*id); }
+                                        name_resp.context_menu(|ui| {
+                                            if ui.button("Open workspace").clicked() {
+                                                open_workspace_id = Some(*id);
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Open in new window").clicked() {
+                                                new_window_workspace_id = Some(*id);
+                                                ui.close_menu();
+                                            }
+                                            ui.separator();
+                                            if ui.button("Edit workspace…").clicked() {
+                                                edit_workspace_id = Some(*id);
+                                                ui.close_menu();
+                                            }
+                                        });
                                     }
                                 }
 
@@ -2078,6 +2182,10 @@ impl eframe::App for App {
                 self.workspace_edit_dialog =
                     Some(WorkspaceEditDialog::new(ws.id, ws.name.clone(), ws.color));
             }
+        }
+
+        if let Some(ws_id) = new_window_workspace_id {
+            self.open_workspace_in_new_window(ctx, ws_id);
         }
 
         if let Some(qid) = quit_session_id {
@@ -2837,7 +2945,7 @@ impl eframe::App for App {
                                     let tab_resp = ui.interact(
                                         tab_rect,
                                         egui::Id::new(("tab_click", pane_id)),
-                                        egui::Sense::click(),
+                                        egui::Sense::click_and_drag(),
                                     );
 
                                     // Close button (×)
@@ -2877,6 +2985,40 @@ impl eframe::App for App {
                                     } else if tab_resp.clicked() {
                                         clicked_pane_id = Some(pane_id);
                                     }
+
+                                    // Right-click context menu for tab operations.
+                                    let extra_window_names: Vec<(u64, String)> = self
+                                        .extra_windows
+                                        .iter()
+                                        .map(|w| (w.workspace_id, w.title.clone()))
+                                        .collect();
+                                    tab_resp.context_menu(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("Move tab to window…")
+                                                .size(12.0)
+                                                .color(egui::Color32::from_gray(180)),
+                                        );
+                                        ui.separator();
+                                        if extra_window_names.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new("No other windows")
+                                                    .italics()
+                                                    .color(egui::Color32::from_gray(140)),
+                                            );
+                                        } else {
+                                            for (_, win_title) in &extra_window_names {
+                                                ui.add_enabled_ui(false, |ui| {
+                                                    let _ = ui.button(win_title);
+                                                });
+                                            }
+                                            ui.label(
+                                                egui::RichText::new("(tab move coming in Phase D)")
+                                                    .italics()
+                                                    .size(11.0)
+                                                    .color(egui::Color32::from_gray(130)),
+                                            );
+                                        }
+                                    });
                                 }
                             });
                         });
@@ -3581,6 +3723,7 @@ impl eframe::App for App {
                         name: dlg.name.trim().to_string(),
                         path: dlg.path,
                         color: dlg.selected_color,
+                        host_window_id: None,
                     });
                     self.workspace_store.save();
                     let (cols, rows) = self.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
@@ -3769,6 +3912,88 @@ impl eframe::App for App {
                 }
             } else if cancel {
                 self.workspace_edit_dialog = None;
+            }
+        }
+
+        // ── Extra-window viewport loop ─────────────────────────────────────
+        // Register each extra window with egui's deferred multi-viewport system.
+        // Collect IDs of windows that requested close so we can clean them up.
+        let mut closed_window_ids: Vec<WindowId> = Vec::new();
+
+        for win in &self.extra_windows {
+            let win_id = win.id.clone();
+            let ws_id  = win.workspace_id;
+            let title  = win.title.clone();
+            ctx.show_viewport_deferred(
+                win.viewport_id,
+                egui::ViewportBuilder::default()
+                    .with_title(&title)
+                    .with_inner_size([1280.0, 800.0]),
+                move |vp_ctx, _class| {
+                    // Check for close request *inside* the callback so it runs
+                    // in the viewport's context.
+                    let wants_close = vp_ctx.input(|i| i.viewport().close_requested());
+
+                    egui::CentralPanel::default().show(vp_ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(40.0);
+                            ui.label(
+                                egui::RichText::new(format!("Workspace {} — Window", ws_id))
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new("Full workspace content coming in Phase D.")
+                                    .size(13.0)
+                                    .color(egui::Color32::from_gray(180)),
+                            );
+                        });
+                    });
+
+                    if wants_close {
+                        // Signal the main thread by requesting a repaint; the
+                        // close_requested flag will be picked up in the next frame
+                        // via `extra_windows[i].close_requested`.
+                        vp_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                },
+            );
+
+            // Check if the viewport reported a close request this frame.
+            // egui sets close_requested in the *main* context's viewport map too.
+            let is_closed = ctx.input(|i| {
+                i.raw.viewports
+                    .get(&win.viewport_id)
+                    .map(|v| v.close_requested())
+                    .unwrap_or(false)
+            });
+            if is_closed {
+                closed_window_ids.push(win_id);
+            }
+        }
+
+        // Remove closed windows and clear their host_window_id on workspaces.
+        for closed_id in closed_window_ids {
+            // Find the workspace_id for this window before removing it.
+            let ws_id_opt = self
+                .extra_windows
+                .iter()
+                .find(|w| w.id == closed_id)
+                .map(|w| w.workspace_id);
+
+            self.extra_windows.retain(|w| w.id != closed_id);
+
+            if let Some(ws_id) = ws_id_opt {
+                if let Some(ws) = self
+                    .workspace_store
+                    .workspaces
+                    .iter_mut()
+                    .find(|w| w.id == ws_id)
+                {
+                    ws.host_window_id = None;
+                }
+                self.workspace_store.save();
             }
         }
     }

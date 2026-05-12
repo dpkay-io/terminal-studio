@@ -1,6 +1,7 @@
 mod app;
 mod pty;
 mod renderer;
+mod single_instance;
 mod terminal;
 mod theme;
 mod workspace;
@@ -42,6 +43,17 @@ fn make_icon() -> egui::IconData {
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
+
+    // Single-instance enforcement: exit early if another instance is running.
+    // Pass --no-singleton to bypass (useful for development).
+    let _singleton_guard = match single_instance::SingleInstanceGuard::try_acquire() {
+        Ok(guard) => guard,
+        Err(()) => {
+            log::warn!("Another instance of Terminal Studio is already running. Exiting.");
+            eprintln!("Terminal Studio is already running. Pass --no-singleton to override.");
+            std::process::exit(1);
+        }
+    };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
