@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests
+cargo test               # all unit tests (52 tests as of Phase E)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -16,37 +16,61 @@ RUST_LOG=debug cargo run # enable debug logging
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false |
-| `src/app.rs` | `App` struct (~3387 lines); ALL UI logic, state management, persistence |
+| `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false; calls `SingleInstanceGuard::try_acquire()` |
+| `src/app.rs` | `App` struct; ALL UI logic, state management, persistence |
 | `src/theme.rs` | Catppuccin Mocha palette, semantic color aliases, layout constants, helper fns |
-| `src/terminal/mod.rs` | `Session` struct, `MouseMode` enum |
-| `src/terminal/grid.rs` | `Grid`, `Cell`, `Color`, `CellAttrs`; scrollback (10k lines max) |
-| `src/terminal/performer.rs` | VTE `Performer` impl — CSI/ESC/OSC dispatch |
-| `src/terminal/tests.rs` | ~971 lines of terminal emulator tests |
-| `src/pty/mod.rs` | `SessionManager`: spawn/write/resize PTY sessions |
-| `src/pty/reader.rs` | Dedicated reader thread per PTY (8KB buffer, 8ms batching) |
-| `src/pty/foreground.rs` | Platform-specific foreground process detection (cache TTL 500ms) |
+| `src/terminal/mod.rs` | `Session` struct wrapping `Term<EventProxy>`; `EventProxy` (`EventListener` impl); `TermSize` (`Dimensions` impl) |
+| `src/terminal/tests.rs` | 11 terminal emulator tests using `alacritty_terminal` APIs |
+| `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; each session gets a dedicated pty-writer-N thread |
+| `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks |
+| `src/pty/foreground.rs` | Platform-specific foreground process detection (Windows toolhelp / Linux /proc) |
+| `src/pty/foreground_worker.rs` | `ForegroundWorker`: background thread polling foreground detection every 500ms; UI reads from cache |
 | `src/renderer/mod.rs` | Re-export of `terminal_pass` |
-| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry` — cell rendering |
+| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry` — cell rendering using `alacritty_terminal` grid API |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore` — JSON persistence |
+| `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
+| `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
 
 ## Key Types & IDs
 
 - Pane IDs: `u32`
 - Session IDs: `u32`
 - Workspace IDs: `u64`
+- Split IDs: `u32` (unique within `App.next_split_id`)
 - `PaneContent` is either `Terminal(session_id: u32)` or `FileEditor(FileEditorState)`
 - `WorkspaceStore` is the source of truth for workspace data
-- Grid coordinates: 0-based row/col; terminal rows/cols are `u16`
+- Terminal grid coordinates: 0-based; columns/rows are `usize` inside alacritty, `u16` at the PTY layer
 
 ## Core Architecture
 
+**Terminal emulator:**
+- Backed by `alacritty_terminal 0.26` — `Term<EventProxy>` holds the grid, parser state, and mode flags
+- `EventProxy` implements `alacritty_terminal::event::EventListener`; handles `Title`, `PtyWrite`, `CursorBlinkingChange`
+- `TermSize` implements `alacritty_terminal::grid::Dimensions` — wraps `(cols: usize, lines: usize)`
+- OSC 7 (CWD) extracted by a tee `vte 0.13` parser (`CwdPerformer` in `reader.rs`) run on the raw byte stream before alacritty processes it
+- Scrollback: alacritty's built-in scrollback, max **10 000 lines** (set via `Config::default()` in `Session::new`)
+
 **Threading model:**
 - UI runs on the main thread
-- Each PTY has a dedicated reader thread feeding VTE → `Session` under `RwLock` write lock
-- `Session` state is `Arc<RwLock<Session>>` — shared between PTY reader thread and UI thread
+- Each PTY has a dedicated `pty-reader-N` thread: reads bytes → tee CWD → alacritty `Processor::advance` under write lock → `ctx.request_repaint_after(8ms)`
+- Each PTY has a dedicated `pty-writer-N` thread: drains `mpsc::Receiver<Vec<u8>>` → writes to PTY master
+- UI sends input via `SessionEntry.pty_tx: mpsc::Sender<Vec<u8>>`; alacritty's `PtyWrite` events go through the same channel
+- `Session` state is `Arc<RwLock<Session>>` — shared between reader thread and UI thread
 - `alive` flag is `Arc<AtomicBool>` — signals reader thread to stop
-- Reader calls `ctx.request_repaint_after(8ms)` to coalesce repaint requests
+- Foreground process detection runs in a single `foreground-detector` background thread (`ForegroundWorker`); UI reads cached results
+
+**Pane tree (in-tab splits):**
+- `App.pane_trees: HashMap<tab_id, PaneNode>` — one tree per tab
+- `PaneNode` is a recursive enum: `Leaf { pane_id, last_size }` or `Split { split_id, dir, ratio, a, b }`
+- `render_node()` in `app.rs` recurses the tree, calling `split_rect()` to divide screen space and rendering each leaf
+- 4px interactive dividers support drag-to-resize (ratio clamped to [0.1, 0.9])
+- Keyboard shortcuts: `Ctrl+Shift+\` (horizontal split), `Ctrl+Shift+-` (vertical split), `Ctrl+Shift+W` (close pane), `Alt+Arrow` (focus movement)
+- **Note:** `pane_trees` is not persisted to disk — splits reset on restart
+
+**Multi-window (multi-viewport):**
+- `App.extra_windows: Vec<WindowState>` — additional egui viewports
+- Each viewport renders a specific workspace via `ctx.show_viewport_deferred(...)`
+- Single-instance enforcement: `SingleInstanceGuard::try_acquire()` at startup (bypass with `--no-singleton`)
 
 **Persistence:**
 - JSON files in `%APPDATA%\terminal-studio\` (Windows) or `~/.config/terminal-studio/` (Unix)
@@ -59,26 +83,29 @@ RUST_LOG=debug cargo run # enable debug logging
 
 ## Terminal Emulator Details
 
-- VTE parser: `vte 0.13` (same as Alacritty)
-- Scrollback max: hardcoded 10,000 lines in `grid.rs`
-- OSC 7 → set `cwd`; OSC 0/2 → set title; `prompt_ready` is set on first OSC 7
-- Mouse events: SGR format (`?1006`) when `mouse_sgr=true`; coordinates are 1-based
-- PSReadLine (Windows) clears screen on resize — workaround: snapshot `cursor_y` before resize, restore if shell clears
+- Parser: `alacritty_terminal 0.26` internal parser (vte 0.15); OSC 7 tee-parsed by `vte 0.13` in reader thread
+- Scrollback: 10 000 lines max (alacritty default; to change: pass custom `Config` in `Session::new`)
+- OSC 7 → set `cwd` + `prompt_ready`; OSC 0/2 → set `title` (via `EventProxy::send_event(Event::Title(...))`)
+- Mouse events: SGR format (`?1006`) when `TermMode::SGR_MOUSE`; coordinates are 1-based
+- Scrolling: `term.scroll_display(Scroll::Delta(n))` / `Scroll::Bottom`; `display_offset()` drives the renderer
+- Mode flags read via `term.mode().contains(TermMode::XYZ)` — no separate bool fields on Session
+- `cursor.point`: `grid.cursor.point.column.0` (usize) and `grid.cursor.point.line.0` (i32)
 
 ## Dependencies
 
 ```toml
-eframe = "0.28"         # wgpu, default_fonts, persistence
+alacritty_terminal = "0.26"  # full terminal emulator (grid, parser, modes)
+eframe = "0.28"              # wgpu, default_fonts, persistence
 egui = "0.28"
-vte = "0.13"            # ANSI parser
-portable-pty = "0.8"    # ConPTY (Windows) / openpty (Unix)
+vte = "0.13"                 # tee parser for OSC 7 CWD extraction
+portable-pty = "0.8"         # ConPTY (Windows) / openpty (Unix)
 serde + serde_json = "1"
-parking_lot = "0.12"    # RwLock for session state
-notify = "6"            # file system watching
+parking_lot = "0.12"         # RwLock for session state
+notify = "6"                 # file system watching
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
-windows-sys = "0.52"    # Windows-only: toolhelp, DWM, window messages
+windows-sys = "0.52"         # Windows-only: toolhelp, DWM, CreateMutexW, window messages
 ```
 
 ## Conventions
@@ -105,9 +132,9 @@ Color32::from_rgb(30, 30, 46)
 ## Common Editing Tasks
 
 **Add a new escape sequence:**
-- CSI: edit `performer.rs` → `csi_dispatch()`
-- OSC: edit `performer.rs` → `osc_dispatch()`
-- ESC: edit `performer.rs` → `esc_dispatch()`
+- CSI/SGR/ESC: alacritty_terminal handles these internally. Most standard sequences work out of the box.
+- OSC: If you need to intercept a new OSC sequence before alacritty sees it, extend `CwdPerformer::osc_dispatch()` in `src/pty/reader.rs`.
+- To add a custom response (e.g. device attribute): send bytes back via `EventProxy::send_event(Event::PtyWrite(...))` which alacritty calls automatically, or route through `pty_tx` directly.
 
 **Add a new UI panel/section:**
 - Edit `app.rs` → `update()` method
@@ -125,20 +152,25 @@ Color32::from_rgb(30, 30, 46)
 
 ## Test Coverage
 
-| File | Tests |
-|------|-------|
-| `src/terminal/tests.rs` | ~43 tests: cursor/text, alt screen, device responses, erase, SGR, scroll regions, mouse modes, resize |
-| `src/terminal/grid.rs` | 20 grid unit tests |
-| `src/workspace.rs` | 14 workspace/notes tests |
-| `src/theme.rs` | 16 color/theme tests |
-| `src/app.rs` | 8 title formatting tests |
+| File | Tests | Coverage |
+|------|-------|---------|
+| `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC 0/2 title, cursor movement, bracketed paste, mouse click/SGR, cursor visibility, bold SGR |
+| `src/pane_tree.rs` | 13 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, update_size, split_rect geometry |
+| `src/workspace.rs` | 11 | store CRUD, find_for_cwd, find_for_path, note store |
+| `src/theme.rs` | 9 | color roundtrip, tinted, short_path, header_bg, text contrast |
+| `src/app.rs` | 8 | title formatting |
+| **Total** | **52** | |
 
 ## Known Quirks & Gotchas
 
-- In tests, `Session::new` requires 4 arguments: `Session::new(id, cols, rows, None)` — the `cwd` arg is `Option<PathBuf>`, always `None` in tests
+- In tests, use `Session::new_for_test(id, cols, rows)` (3 args, no Context/pty_tx) — available only under `#[cfg(test)]`
+- In production, `Session::new` takes 6 args: `(id, cols, rows, cwd, ctx, pty_tx)`
 - Mouse SGR coordinates are 1-based (not 0-based like grid internals)
-- Scrollback is hard-capped at 10,000 lines; changing this requires editing the constant in `grid.rs`
+- The `vte 0.13` tee parser in `reader.rs` runs on the raw byte stream — it sees the same bytes as alacritty but independently; keep `CwdPerformer` stateless across calls (it resets `new_cwd`/`new_prompt_ready` each read loop iteration)
 - The watcher skips dotfile directories; hidden files inside tracked dirs are still visible
-- Foreground process detection result is cached with a 500ms TTL to avoid hammering the OS
+- Foreground process detection is cached with a 500ms TTL in `ForegroundWorker`; UI thread never calls OS APIs directly
 - Git status refresh is debounced at 500ms
-- Windows DWM and toolhelp APIs are accessed directly via `windows-sys`; keep all such calls behind `#[cfg(target_os = "windows")]`
+- Windows DWM, toolhelp, and `CreateMutexW` APIs are accessed via `windows-sys`; keep all such calls behind `#[cfg(target_os = "windows")]`
+- `pane_trees` is not serialized — split layout resets on restart
+- `grid.cursor.point.line.0` is `i32`; negative values indicate scrollback rows
+- `display_offset` is the number of scrollback lines currently shown above the viewport (0 = live view)

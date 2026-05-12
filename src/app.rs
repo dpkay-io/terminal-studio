@@ -3155,15 +3155,15 @@ impl eframe::App for App {
                                                 }
                                             }
                                             if is_focused {
-                                                *rctx.active_term_ui_id = Some(ui.id());
                                                 let this_id = ui.id();
-                                                let other_focused = ui.ctx().memory(|m| {
-                                                    m.focused().map(|id| id != this_id).unwrap_or(false)
-                                                });
+                                                *rctx.active_term_ui_id = Some(this_id);
                                                 let dialog_open = rctx.workspace_dialog_open
                                                     || rctx.workspace_edit_dialog_open
                                                     || rctx.show_settings;
-                                                if !other_focused && !dialog_open {
+                                                // Always re-assert egui focus so that transient
+                                                // focus steals (scroll areas, autocomplete
+                                                // repaints, etc.) never permanently break input.
+                                                if !dialog_open {
                                                     ui.memory_mut(|m| m.request_focus(this_id));
                                                 }
                                             }
@@ -3269,6 +3269,28 @@ impl eframe::App for App {
             let modal_open = self.workspace_dialog.is_some()
                 || self.workspace_edit_dialog.is_some()
                 || self.show_settings;
+
+            // Tab must be consumed from egui *outside* the any_other_widget_focused guard.
+            // If Tab cycles egui focus away, the guard becomes true and the consume never
+            // runs — a permanent deadlock. Consuming unconditionally here prevents egui from
+            // ever using Tab for focus traversal while a terminal pane is active.
+            if !active_is_editor && !modal_open {
+                let (tab_fwd, tab_rev) = ctx.input_mut(|i| (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
+                    i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
+                ));
+                if tab_fwd || tab_rev {
+                    if let Some(sid) = active_session_id {
+                        self.scroll_accum.remove(&sid);
+                        if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                            self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                            let bytes = if tab_fwd { b"\t".to_vec() } else { b"\x1b[Z".to_vec() };
+                            let _ = self.sessions[idx].pty_tx.send(bytes);
+                        }
+                    }
+                }
+            }
+
             if !active_is_editor && !any_other_widget_focused && !modal_open {
 
                 // Focus-in / focus-out events (?1004h)

@@ -152,6 +152,122 @@ pub enum RemoveResult {
     NotFound,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf(id: u32) -> PaneNode {
+        PaneNode::Leaf { pane_id: id, last_size: (80, 24) }
+    }
+
+    #[test]
+    fn leaf_ids_single() {
+        assert_eq!(leaf(1).leaf_ids(), vec![1]);
+    }
+
+    #[test]
+    fn split_and_leaf_ids_order() {
+        let mut root = leaf(1);
+        assert!(root.split_pane(1, 2, 10, SplitDir::Horizontal));
+        assert_eq!(root.leaf_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn nested_split_leaf_ids() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        root.split_pane(2, 3, 11, SplitDir::Vertical);
+        assert_eq!(root.leaf_ids(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn split_unknown_pane_returns_false() {
+        let mut root = leaf(1);
+        assert!(!root.split_pane(99, 2, 10, SplitDir::Horizontal));
+        assert_eq!(root.leaf_ids(), vec![1]);
+    }
+
+    #[test]
+    fn remove_only_child_returns_is_target() {
+        let mut root = leaf(1);
+        assert!(matches!(root.remove_pane(1), RemoveResult::IsTarget));
+    }
+
+    #[test]
+    fn remove_left_collapses_to_sibling() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        let result = root.remove_pane(1);
+        assert!(matches!(result, RemoveResult::CollapseToSibling(_)));
+    }
+
+    #[test]
+    fn remove_right_and_tree_shrinks() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        // Apply the collapse result
+        if let RemoveResult::CollapseToSibling(replacement) = root.remove_pane(2) {
+            root = replacement;
+        }
+        assert_eq!(root.leaf_ids(), vec![1]);
+    }
+
+    #[test]
+    fn remove_unknown_returns_not_found() {
+        let mut root = leaf(1);
+        assert!(matches!(root.remove_pane(99), RemoveResult::NotFound));
+    }
+
+    #[test]
+    fn find_split_ratio_mut_updates_ratio() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 42, SplitDir::Horizontal);
+        let ratio = root.find_split_ratio_mut(42).unwrap();
+        *ratio = 0.3;
+        if let PaneNode::Split { ratio, .. } = &root {
+            assert!((*ratio - 0.3f32).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn find_split_ratio_unknown_id_returns_none() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 42, SplitDir::Horizontal);
+        assert!(root.find_split_ratio_mut(99).is_none());
+    }
+
+    #[test]
+    fn update_size_updates_leaf() {
+        let mut root = leaf(1);
+        root.update_size(1, (40, 12));
+        if let PaneNode::Leaf { last_size, .. } = &root {
+            assert_eq!(*last_size, (40, 12));
+        }
+    }
+
+    #[test]
+    fn split_rect_horizontal_widths() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 50.0));
+        let (a, div, b) = split_rect(rect, SplitDir::Horizontal, 0.5);
+        assert!(a.width() > 0.0);
+        assert!(b.width() > 0.0);
+        assert!(div.width() > 0.0);
+        // a, divider, b tile the full width without gaps
+        assert!((a.width() + div.width() + b.width() - 100.0).abs() < 1.0);
+        assert!(a.max.x <= div.min.x + 0.1);
+        assert!(div.max.x <= b.min.x + 0.1);
+    }
+
+    #[test]
+    fn split_rect_vertical_heights() {
+        let rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 50.0));
+        let (a, div, b) = split_rect(rect, SplitDir::Vertical, 0.5);
+        assert!(a.height() > 0.0);
+        assert!(b.height() > 0.0);
+        assert!(div.height() > 0.0);
+    }
+}
+
 /// Split a rect into two according to direction and ratio.
 /// Returns `(rect_a, divider_rect, rect_b)`.
 pub fn split_rect(
