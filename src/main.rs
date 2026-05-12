@@ -1,4 +1,5 @@
 mod app;
+mod pane_tree;
 mod pty;
 mod renderer;
 mod single_instance;

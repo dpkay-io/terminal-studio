@@ -11,6 +11,7 @@ use parking_lot::RwLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 use crate::pty::foreground::ForegroundProcess;
 use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
@@ -660,6 +661,15 @@ pub struct App {
     extra_windows: Vec<WindowState>,
     /// Counter for generating unique WindowId values.
     next_window_id: u64,
+
+    // ── Phase D: pane split trees ─────────────────────────────────────────
+    /// Maps root_pane_id → layout tree for that tab.
+    /// Each entry in `panes` that is a "root" (i.e. visible in the tab strip)
+    /// has an entry here.  Panes created by splitting are *not* in the tab
+    /// strip; they live only as leaves inside another pane's tree.
+    pane_trees: HashMap<u32, PaneNode>,
+    /// Monotonically-increasing counter for generating unique split node IDs.
+    next_split_id: u32,
 }
 
 impl App {
@@ -758,6 +768,8 @@ impl App {
             cursor_blink_last: Instant::now(),
             extra_windows: Vec::new(),
             next_window_id: 1,
+            pane_trees: HashMap::new(),
+            next_split_id: 1,
         };
         // Estimate initial terminal size from window dimensions. Fonts aren't available
         // until after the first Context::run(), so use empirical cell dimensions for
@@ -819,6 +831,10 @@ impl App {
                         id: pane_id,
                         content: PaneContent::Terminal(id),
                         manual_width: None,
+                        last_size: (cols, rows),
+                    });
+                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                        pane_id,
                         last_size: (cols, rows),
                     });
                     self.active_pane_id = Some(pane_id);
@@ -988,6 +1004,10 @@ impl App {
                     id: pane_id,
                     content: PaneContent::Terminal(sid),
                     manual_width: None,
+                    last_size: (cols, rows),
+                });
+                self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    pane_id,
                     last_size: (cols, rows),
                 });
                 self.active_pane_id = Some(pane_id);
@@ -1251,6 +1271,10 @@ impl App {
                 id: pane_id,
                 content,
                 manual_width: saved.manual_width,
+                last_size: (0, 0),
+            });
+            self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                pane_id,
                 last_size: (0, 0),
             });
         }
@@ -2201,6 +2225,26 @@ impl eframe::App for App {
                 if self.active_pane_id == Some(pid) {
                     self.active_pane_id = self.panes.last().map(|p| p.id);
                 }
+                // Clean up split tree: if this was a root, remove it; if a leaf in
+                // someone else's tree, remove the leaf and collapse the parent split.
+                if self.pane_trees.remove(&pid).is_none() {
+                    // It was a non-root leaf — remove from whichever tree contains it
+                    let root_pid_opt = self.pane_trees.iter()
+                        .find(|(_, tree)| tree.leaf_ids().contains(&pid))
+                        .map(|(&rpid, _)| rpid);
+                    if let Some(root_pid) = root_pid_opt {
+                        let result = if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                            tree.remove_pane(pid)
+                        } else {
+                            RemoveResult::NotFound
+                        };
+                        if let RemoveResult::CollapseToSibling(replacement) = result {
+                            if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                                *tree = replacement;
+                            }
+                        }
+                    }
+                }
             }
             self.uninit_sessions.remove(&qid);
             self.sessions.retain(|e| e.id != qid);
@@ -2217,6 +2261,10 @@ impl eframe::App for App {
                         id: pane_id,
                         content: PaneContent::Terminal(new_sid),
                         manual_width: None,
+                        last_size: (0, 0),
+                    });
+                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                        pane_id,
                         last_size: (0, 0),
                     });
                     self.active_pane_id = Some(pane_id);
@@ -2272,6 +2320,10 @@ impl eframe::App for App {
                         id: pane_id,
                         content: PaneContent::Terminal(new_id),
                         manual_width: None,
+                        last_size: (cols, rows),
+                    });
+                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                        pane_id,
                         last_size: (cols, rows),
                     });
                     self.activate_pane(pane_id);
@@ -2341,6 +2393,10 @@ impl eframe::App for App {
                             last_size: (cols, rows),
                         },
                     );
+                    self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                        pane_id,
+                        last_size: (cols, rows),
+                    });
                     self.activate_pane(pane_id);
                 }
                 // Queue the command; it will be sent once the new shell emits OSC 7 (prompt ready).
@@ -2793,6 +2849,11 @@ impl eframe::App for App {
         let mut resize_cell_h: f32 = 0.0;
         let equalize_widths: bool = false;
         let mut panel_w_snap: f32 = 0.0;
+        // Phase D: split / close-split requests collected from key handler
+        let mut split_request: Option<SplitDir> = None;
+        let mut close_split_pane: bool = false;
+        // Phase D: split divider ratio changes (split_id, new_ratio)
+        let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -3024,69 +3085,180 @@ impl eframe::App for App {
                         });
                 });
 
-                // ── Active tab content (full-size) ────────────────────────────
+                // ── Active tab content (full-size, split-aware) ──────────────
                 if let Some(&active_i) = visible_indices.iter()
                     .find(|&&i| Some(self.panes[i].id) == active_pane_id_snap)
                 {
-                    let pane_id = self.panes[active_i].id;
-                    pane_widths_snap.push((pane_id, content_rect.width()));
+                    let root_pane_id = self.panes[active_i].id;
 
-                    ui.allocate_ui_at_rect(content_rect, |ui| {
-                        match &self.panes[active_i].content {
-                            PaneContent::Terminal(sid) => {
-                                let sid = *sid;
-                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    let session = Arc::clone(&self.sessions[idx].session);
-                                    let geo = crate::renderer::terminal_pass::TerminalView::new(session).show(ui, true, self.cursor_blink_on);
-                                    self.active_term_geo = Some(geo);
+                    // Render the pane tree rooted at root_pane_id recursively.
+                    // We clone the tree to avoid borrowing self during the render pass.
+                    let tree = self.pane_trees.get(&root_pane_id).cloned()
+                        .unwrap_or_else(|| PaneNode::Leaf {
+                            pane_id: root_pane_id,
+                            last_size: self.panes[active_i].last_size,
+                        });
+
+                    // Recursive renderer (closure-based to avoid an out-of-closure fn
+                    // that would need to take all these args).
+                    struct RenderCtx<'a> {
+                        sessions: &'a [SessionEntry],
+                        panes: &'a [PaneEntry],
+                        editor_texts: &'a mut Vec<(u32, Option<String>)>,
+                        cursor_blink_on: bool,
+                        focused_pane_id: Option<u32>,
+                        active_term_geo: &'a mut Option<TerminalGeometry>,
+                        active_term_ui_id: &'a mut Option<egui::Id>,
+                        clicked_pane_id: &'a mut Option<u32>,
+                        editor_saves: &'a mut Vec<u32>,
+                        pane_widths_snap: &'a mut Vec<(u32, f32)>,
+                        split_ratio_changes: &'a mut Vec<(u32, f32)>,
+                        workspace_dialog_open: bool,
+                        workspace_edit_dialog_open: bool,
+                        show_settings: bool,
+                    }
+
+                    fn render_node(
+                        ui: &mut egui::Ui,
+                        node: &PaneNode,
+                        rect: egui::Rect,
+                        rctx: &mut RenderCtx<'_>,
+                    ) {
+                        use crate::pane_tree::{split_rect, SplitDir};
+                        match node {
+                            PaneNode::Leaf { pane_id, .. } => {
+                                let pane_id = *pane_id;
+                                let is_focused = rctx.focused_pane_id == Some(pane_id);
+                                let pane = rctx.panes.iter().find(|p| p.id == pane_id);
+                                let Some(pane) = pane else { return };
+
+                                // Track width for resize
+                                rctx.pane_widths_snap.push((pane_id, rect.width()));
+
+                                // Focused pane gets a highlighted border
+                                if is_focused && rctx.focused_pane_id.is_some() {
+                                    // Check if there's actually a split (more than one leaf in visible tree)
+                                    // We draw a subtle focus border only when there's a sibling
+                                    // (a simple single-pane view has no border)
                                 }
-                                self.active_term_ui_id = Some(ui.id());
-                                let this_id = ui.id();
-                                let other_widget_focused = ctx.memory(|m| {
-                                    m.focused().map(|id| id != this_id).unwrap_or(false)
+
+                                ui.allocate_ui_at_rect(rect, |ui| {
+                                    match &pane.content {
+                                        PaneContent::Terminal(sid) => {
+                                            let sid = *sid;
+                                            if let Some(idx) = rctx.sessions.iter().position(|e| e.id == sid) {
+                                                let session = Arc::clone(&rctx.sessions[idx].session);
+                                                let geo = crate::renderer::terminal_pass::TerminalView::new(session)
+                                                    .show(ui, is_focused, rctx.cursor_blink_on);
+                                                if is_focused {
+                                                    *rctx.active_term_geo = Some(geo);
+                                                }
+                                            }
+                                            if is_focused {
+                                                *rctx.active_term_ui_id = Some(ui.id());
+                                                let this_id = ui.id();
+                                                let other_focused = ui.ctx().memory(|m| {
+                                                    m.focused().map(|id| id != this_id).unwrap_or(false)
+                                                });
+                                                let dialog_open = rctx.workspace_dialog_open
+                                                    || rctx.workspace_edit_dialog_open
+                                                    || rctx.show_settings;
+                                                if !other_focused && !dialog_open {
+                                                    ui.memory_mut(|m| m.request_focus(this_id));
+                                                }
+                                            }
+                                        }
+                                        PaneContent::DeferredTerminal { .. } => {
+                                            ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::BG_TERM);
+                                        }
+                                        PaneContent::FileEditor(_) => {
+                                            ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::BG_TERM);
+                                            if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
+                                                if let Some(ref mut text) = et.1 {
+                                                    egui::ScrollArea::both()
+                                                        .id_source(("editor_scroll", pane_id))
+                                                        .auto_shrink([false; 2])
+                                                        .show(ui, |ui| {
+                                                            ui.add(
+                                                                egui::TextEdit::multiline(text)
+                                                                    .font(egui::TextStyle::Monospace)
+                                                                    .desired_width(f32::INFINITY)
+                                                                    .frame(false),
+                                                            );
+                                                        });
+                                                }
+                                                if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
+                                                    rctx.editor_saves.push(pane_id);
+                                                }
+                                            }
+                                        }
+                                    }
                                 });
-                                let dialog_open = self.workspace_dialog.is_some()
-                                    || self.workspace_edit_dialog.is_some()
-                                    || self.show_settings;
-                                if !other_widget_focused && !dialog_open {
-                                    ui.memory_mut(|m| m.request_focus(this_id));
-                                }
-                            }
-                            PaneContent::DeferredTerminal { .. } => {
-                                // Session will be spawned in the post-closure step;
-                                // show a blank terminal background until that frame.
-                                ui.painter().rect_filled(ui.max_rect(), 0.0, theme::BG_TERM);
-                            }
-                            PaneContent::FileEditor(_) => {
-                                ui.painter().rect_filled(ui.max_rect(), 0.0, theme::BG_TERM);
-                                if let Some(ref mut text) = editor_texts[active_i].1 {
-                                    egui::ScrollArea::both()
-                                        .id_source(("editor_scroll", pane_id))
-                                        .auto_shrink([false; 2])
-                                        .show(ui, |ui| {
-                                            ui.add(
-                                                egui::TextEdit::multiline(text)
-                                                    .font(egui::TextStyle::Monospace)
-                                                    .desired_width(f32::INFINITY)
-                                                    .frame(false),
-                                            );
-                                        });
-                                }
-                                if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
-                                    editor_saves.push(pane_id);
-                                }
-                            }
-                        }
-                    });
 
-                    // Click content area to focus active tab
-                    if ctx.input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary)) {
-                        if let Some(pos) = ctx.input(|inp| inp.pointer.interact_pos()) {
-                            if content_rect.contains(pos) {
-                                clicked_pane_id = Some(pane_id);
+                                // Click to focus pane
+                                if ui.ctx().input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary)) {
+                                    if let Some(pos) = ui.ctx().input(|inp| inp.pointer.interact_pos()) {
+                                        if rect.contains(pos) {
+                                            *rctx.clicked_pane_id = Some(pane_id);
+                                        }
+                                    }
+                                }
+                            }
+                            PaneNode::Split { split_id, dir, ratio, a, b } => {
+                                let (rect_a, div_rect, rect_b) = split_rect(rect, *dir, *ratio);
+                                render_node(ui, a, rect_a, rctx);
+                                render_node(ui, b, rect_b, rctx);
+
+                                // Draw divider
+                                let div_id = egui::Id::new(("split_div", *split_id));
+                                let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
+                                let div_color = if div_resp.dragged() || div_resp.hovered() {
+                                    crate::theme::DIVIDER_ACTIVE
+                                } else {
+                                    crate::theme::DIVIDER_IDLE
+                                };
+                                ui.painter().rect_filled(div_rect, 0.0, div_color);
+
+                                // Handle drag to resize
+                                if div_resp.dragged() {
+                                    let delta = div_resp.drag_delta();
+                                    let movement = match dir {
+                                        SplitDir::Horizontal => delta.x / rect.width(),
+                                        SplitDir::Vertical   => delta.y / rect.height(),
+                                    };
+                                    let new_ratio = (*ratio + movement).clamp(0.1, 0.9);
+                                    rctx.split_ratio_changes.push((*split_id, new_ratio));
+                                }
+
+                                // Cursor feedback
+                                let cursor = match dir {
+                                    SplitDir::Horizontal => egui::CursorIcon::ResizeHorizontal,
+                                    SplitDir::Vertical   => egui::CursorIcon::ResizeVertical,
+                                };
+                                if div_resp.hovered() || div_resp.dragged() {
+                                    ui.ctx().set_cursor_icon(cursor);
+                                }
                             }
                         }
                     }
+
+                    let mut rctx = RenderCtx {
+                        sessions: &self.sessions,
+                        panes: &self.panes,
+                        editor_texts: &mut editor_texts,
+                        cursor_blink_on: self.cursor_blink_on,
+                        focused_pane_id: active_pane_id_snap,
+                        active_term_geo: &mut self.active_term_geo,
+                        active_term_ui_id: &mut self.active_term_ui_id,
+                        clicked_pane_id: &mut clicked_pane_id,
+                        editor_saves: &mut editor_saves,
+                        pane_widths_snap: &mut pane_widths_snap,
+                        split_ratio_changes: &mut split_ratio_changes,
+                        workspace_dialog_open: self.workspace_dialog.is_some(),
+                        workspace_edit_dialog_open: self.workspace_edit_dialog.is_some(),
+                        show_settings: self.show_settings,
+                    };
+                    render_node(ui, &tree, content_rect, &mut rctx);
                 }
 
             // ── Terminal input routing ─────────────────────────────────────
@@ -3135,7 +3307,56 @@ impl eframe::App for App {
                             }
                         }
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                            if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
+                            // ── Phase D: pane split shortcuts ──────────────
+                            // Ctrl+Shift+\ → split horizontally (side by side)
+                            if modifiers.ctrl && modifiers.shift && *key == egui::Key::Backslash {
+                                split_request = Some(SplitDir::Horizontal);
+                            }
+                            // Ctrl+Shift+- → split vertically (stacked)
+                            else if modifiers.ctrl && modifiers.shift && *key == egui::Key::Minus {
+                                split_request = Some(SplitDir::Vertical);
+                            }
+                            // Ctrl+Shift+W → close focused split pane
+                            else if modifiers.ctrl && modifiers.shift && *key == egui::Key::W {
+                                close_split_pane = true;
+                            }
+                            // Alt+Arrow → move focus between split panes
+                            else if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
+                                let dir_opt = match key {
+                                    egui::Key::ArrowLeft  => Some(SplitDir::Horizontal),
+                                    egui::Key::ArrowRight => Some(SplitDir::Horizontal),
+                                    egui::Key::ArrowUp    => Some(SplitDir::Vertical),
+                                    egui::Key::ArrowDown  => Some(SplitDir::Vertical),
+                                    _ => None,
+                                };
+                                if let Some(_dir) = dir_opt {
+                                    // Focus movement: find the next leaf in traversal order
+                                    if let Some(active_pid) = active_pane_id_snap {
+                                        // Find the root pane's tree
+                                        let root_pid_opt = self.pane_trees.iter()
+                                            .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
+                                            .map(|(&rpid, _)| rpid);
+                                        if let Some(root_pid) = root_pid_opt {
+                                            if let Some(tree) = self.pane_trees.get(&root_pid) {
+                                                let leaves = tree.leaf_ids();
+                                                if leaves.len() > 1 {
+                                                    if let Some(pos) = leaves.iter().position(|&id| id == active_pid) {
+                                                        let next = match key {
+                                                            egui::Key::ArrowRight | egui::Key::ArrowDown => {
+                                                                leaves[(pos + 1) % leaves.len()]
+                                                            }
+                                                            _ => {
+                                                                leaves[(pos + leaves.len() - 1) % leaves.len()]
+                                                            }
+                                                        };
+                                                        clicked_pane_id = Some(next);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
                                 if let Some(sid) = active_session_id {
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
@@ -3277,29 +3498,180 @@ impl eframe::App for App {
 
         // ── Post-closure mutations ─────────────────────────────────────────
 
+        // Phase D-0: Apply split divider ratio changes from drag
+        for (split_id_changed, new_ratio) in split_ratio_changes {
+            for tree in self.pane_trees.values_mut() {
+                if let Some(ratio) = tree.find_split_ratio_mut(split_id_changed) {
+                    *ratio = new_ratio;
+                    break;
+                }
+            }
+        }
+
+        // Phase D-1: Handle split request (Ctrl+Shift+\ or Ctrl+Shift+-)
+        if let Some(dir) = split_request {
+            if let Some(active_pid) = self.active_pane_id {
+                // Find the root pane that contains the active pane
+                let root_pid_opt = self.pane_trees.iter()
+                    .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
+                    .map(|(&rpid, _)| rpid);
+                if let Some(root_pid) = root_pid_opt {
+                    // Get current size for the new pane
+                    let (cols, rows) = self.panes.iter()
+                        .find(|p| p.id == active_pid)
+                        .map(|p| p.last_size)
+                        .unwrap_or((80, 24));
+                    // Get cwd and shell from active session
+                    let (cwd, shell) = {
+                        let active_session_entry = self.panes.iter()
+                            .find(|p| p.id == active_pid)
+                            .and_then(|p| if let PaneContent::Terminal(sid) = &p.content { Some(*sid) } else { None })
+                            .and_then(|sid| self.sessions.iter().find(|e| e.id == sid));
+                        let cwd = active_session_entry
+                            .map(|e| e.session.read().cwd.clone())
+                            .filter(|p| !p.as_os_str().is_empty());
+                        let shell = active_session_entry
+                            .map(|e| e.shell.clone())
+                            .unwrap_or_else(default_shell);
+                        (cwd, shell)
+                    };
+                    // Spawn a new session (no pane entry yet — leaf only in tree)
+                    if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
+                        let new_pane_id = self.next_pane_id;
+                        self.next_pane_id += 1;
+                        let split_id = self.next_split_id;
+                        self.next_split_id += 1;
+                        // Add pane entry (NOT a root pane, so no pane_trees entry)
+                        self.panes.push(PaneEntry {
+                            id: new_pane_id,
+                            content: PaneContent::Terminal(new_sid),
+                            manual_width: None,
+                            last_size: (cols, rows),
+                        });
+                        // Modify the tree to split the active leaf
+                        if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                            tree.split_pane(active_pid, new_pane_id, split_id, dir);
+                        }
+                        // Focus the new pane
+                        self.active_pane_id = Some(new_pane_id);
+                        self.active_id = Some(new_sid);
+                        self.update_is_active_flags();
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        }
+
+        // Phase D-2: Handle Ctrl+Shift+W — close the focused split pane
+        if close_split_pane {
+            if let Some(active_pid) = self.active_pane_id {
+                // Find the root that contains the active pane
+                let root_pid_opt = self.pane_trees.iter()
+                    .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
+                    .map(|(&rpid, _)| rpid);
+                if let Some(root_pid) = root_pid_opt {
+                    let is_root_itself = root_pid == active_pid;
+                    // Check if tree has only one leaf (the root itself)
+                    let leaf_count = self.pane_trees.get(&root_pid)
+                        .map(|t| t.leaf_ids().len())
+                        .unwrap_or(1);
+                    if is_root_itself || leaf_count <= 1 {
+                        // Closing the only pane in a tab — close the whole tab via close_pane_id
+                        // (handled above already; if close_pane_id was not set, set it now)
+                        // We set close_pane_id to None earlier so we'll handle directly:
+                        if leaf_count <= 1 {
+                            // Kill session if terminal
+                            if let Some(pos) = self.panes.iter().position(|p| p.id == active_pid) {
+                                if let PaneContent::Terminal(sid) = self.panes[pos].content {
+                                    self.uninit_sessions.remove(&sid);
+                                    self.sessions.retain(|e| e.id != sid);
+                                    if self.active_id == Some(sid) {
+                                        self.active_id = self.sessions.first().map(|e| e.id);
+                                        self.update_is_active_flags();
+                                    }
+                                }
+                                self.panes.remove(pos);
+                            }
+                            self.pane_trees.remove(&root_pid);
+                            self.active_pane_id = self.panes.last().map(|p| p.id);
+                            self.save_session();
+                        }
+                    } else {
+                        // Remove the leaf from the tree, collapsing the parent split
+                        let remove_result = if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                            tree.remove_pane(active_pid)
+                        } else {
+                            RemoveResult::NotFound
+                        };
+                        if let RemoveResult::CollapseToSibling(replacement) = remove_result {
+                            if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                                *tree = replacement;
+                            }
+                        }
+                        // Kill the session of the removed pane
+                        if let Some(pos) = self.panes.iter().position(|p| p.id == active_pid) {
+                            if let PaneContent::Terminal(sid) = self.panes[pos].content {
+                                self.uninit_sessions.remove(&sid);
+                                self.sessions.retain(|e| e.id != sid);
+                                if self.active_id == Some(sid) {
+                                    self.active_id = self.sessions.first().map(|e| e.id);
+                                    self.update_is_active_flags();
+                                }
+                            }
+                            self.panes.remove(pos);
+                        }
+                        // Focus sibling — pick the first leaf of the root tree
+                        if let Some(tree) = self.pane_trees.get(&root_pid) {
+                            let leaves = tree.leaf_ids();
+                            self.active_pane_id = leaves.first().copied();
+                            if let Some(new_pid) = self.active_pane_id {
+                                if let Some(pane) = self.panes.iter().find(|p| p.id == new_pid) {
+                                    if let PaneContent::Terminal(sid) = pane.content {
+                                        self.active_id = Some(sid);
+                                        self.update_is_active_flags();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Divider drags → freeze manual widths on both adjacent panes
         for (left_idx, right_idx, delta_x, left_w, right_w) in divider_drags {
             self.panes[left_idx].manual_width = Some((left_w + delta_x).max(theme::MIN_PANE_W));
             self.panes[right_idx].manual_width = Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
-        // 2. Close pane
+        // 2. Close pane (tab-strip close — kills the entire split tree for that root)
         if let Some(pid) = close_pane_id {
-            if let Some(pos) = self.panes.iter().position(|p| p.id == pid) {
-                if let PaneContent::Terminal(sid) = self.panes[pos].content {
-                    self.uninit_sessions.remove(&sid);
-                    self.sessions.retain(|e| e.id != sid);
-                    if self.active_id == Some(sid) {
-                        self.active_id = self.sessions.first().map(|e| e.id);
-                        self.update_is_active_flags();
+            // Collect all pane IDs in this root's split tree so we can kill them all.
+            let tree_ids: Vec<u32> = self
+                .pane_trees
+                .get(&pid)
+                .map(|t| t.leaf_ids())
+                .unwrap_or_else(|| vec![pid]);
+            // Kill every session belonging to any leaf of this tree.
+            for leaf_pid in &tree_ids {
+                if let Some(pos) = self.panes.iter().position(|p| p.id == *leaf_pid) {
+                    if let PaneContent::Terminal(sid) = self.panes[pos].content {
+                        self.uninit_sessions.remove(&sid);
+                        self.sessions.retain(|e| e.id != sid);
+                        if self.active_id == Some(sid) {
+                            self.active_id = self.sessions.first().map(|e| e.id);
+                            self.update_is_active_flags();
+                        }
                     }
                 }
-                // DeferredTerminal: no live session to clean up
-                self.panes.remove(pos);
-                editor_texts.retain(|(id, _)| *id != pid);
-                if self.active_pane_id == Some(pid) {
-                    self.active_pane_id = self.panes.last().map(|p| p.id);
-                }
+            }
+            // Remove all leaf panes from the panes vec.
+            self.panes.retain(|p| !tree_ids.contains(&p.id));
+            editor_texts.retain(|(id, _)| !tree_ids.contains(id));
+            // Remove the root's tree entry.
+            self.pane_trees.remove(&pid);
+            if self.active_pane_id.map(|ap| tree_ids.contains(&ap)).unwrap_or(false) {
+                self.active_pane_id = self.panes.last().map(|p| p.id);
             }
             self.save_session();
         }
@@ -3492,6 +3864,10 @@ impl eframe::App for App {
                         workspace_id: self.active_group,
                     }),
                     manual_width: None,
+                    last_size: (0, 0),
+                });
+                self.pane_trees.insert(pane_id, PaneNode::Leaf {
+                    pane_id,
                     last_size: (0, 0),
                 });
                 self.activate_pane(pane_id);
