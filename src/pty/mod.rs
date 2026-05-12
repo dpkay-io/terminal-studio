@@ -1,8 +1,8 @@
 pub mod foreground;
 pub mod reader;
 
-use std::io::Write;
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
 
@@ -21,11 +21,11 @@ pub enum ShellKind {
     Cmd,        // cmd.exe — Windows
     Bash,       // bash
     #[cfg_attr(target_os = "windows", allow(dead_code))]
-    Zsh,        // zsh — Unix
+    Zsh, // zsh — Unix
     #[cfg_attr(target_os = "windows", allow(dead_code))]
-    Fish,       // fish — Unix
+    Fish, // fish — Unix
     #[cfg_attr(target_os = "windows", allow(dead_code))]
-    Sh,         // sh — Unix
+    Sh, // sh — Unix
 }
 
 impl ShellKind {
@@ -61,8 +61,12 @@ impl ShellKind {
 }
 
 fn find_in_path(name: &str) -> bool {
-    let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
-    std::env::var("PATH").map_or(false, |path_var| {
+    let sep = if cfg!(target_os = "windows") {
+        ';'
+    } else {
+        ':'
+    };
+    std::env::var("PATH").is_ok_and(|path_var| {
         path_var
             .split(sep)
             .any(|dir| std::path::Path::new(dir).join(name).exists())
@@ -131,7 +135,7 @@ type SpawnResult = (
     u32,
     Arc<RwLock<Session>>,
     Box<dyn portable_pty::MasterPty + Send>,
-    Box<dyn Write + Send>,
+    mpsc::Sender<Vec<u8>>, // was: Box<dyn Write + Send>
     u32,
     Arc<AtomicBool>,
     Arc<AtomicBool>, // is_active: true when this session is the focused pane
@@ -176,10 +180,33 @@ impl SessionManager {
         let shell_pid = child.process_id().unwrap_or(u32::MAX);
         drop(child);
 
-        let writer = pty_pair.master.take_writer()?;
         let reader = pty_pair.master.try_clone_reader()?;
 
-        let session = Arc::new(RwLock::new(Session::new(id, cols, rows, cwd)));
+        // Create PTY writer channel
+        let (pty_tx, pty_rx) = mpsc::channel::<Vec<u8>>();
+
+        // Spawn PTY writer thread
+        let mut pty_writer = pty_pair.master.take_writer()?;
+        thread::Builder::new()
+            .name(format!("pty-writer-{}", id))
+            .spawn(move || {
+                use std::io::Write;
+                while let Ok(data) = pty_rx.recv() {
+                    if pty_writer.write_all(&data).is_err() {
+                        break;
+                    }
+                }
+            })?;
+
+        // Create session with the context and pty_tx
+        let session = Arc::new(RwLock::new(Session::new(
+            id,
+            cols,
+            rows,
+            cwd,
+            self.ctx.clone(),
+            pty_tx.clone(),
+        )));
 
         let alive = Arc::new(AtomicBool::new(true));
         let alive_for_thread = Arc::clone(&alive);
@@ -202,12 +229,15 @@ impl SessionManager {
                 )
             })?;
 
-        Ok((id, session, pty_pair.master, writer, shell_pid, alive, is_active))
-    }
-
-    #[allow(clippy::borrowed_box)]
-    pub fn write(writer: &mut Box<dyn Write + Send>, data: &[u8]) {
-        let _ = writer.write_all(data);
+        Ok((
+            id,
+            session,
+            pty_pair.master,
+            pty_tx,
+            shell_pid,
+            alive,
+            is_active,
+        ))
     }
 
     #[allow(clippy::borrowed_box)]
@@ -226,7 +256,7 @@ impl SessionManager {
                 let mut cmd = CommandBuilder::new(shell.executable());
                 // -NoExit keeps the shell alive; the prompt function emits OSC 7 CWD
                 // notifications so the sidebar can track the working directory.
-                cmd.args(&[
+                cmd.args([
                     "-NoExit",
                     "-Command",
                     concat!(

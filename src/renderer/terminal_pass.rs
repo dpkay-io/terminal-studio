@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
+use alacritty_terminal::{
+    grid::Dimensions,
+    index::{Column, Line},
+    term::{cell::Flags, TermMode},
+    vte::ansi::{Color, NamedColor, Rgb},
+};
 use egui::{vec2, FontId, Pos2, Rect, Sense};
 use parking_lot::RwLock;
 
-use crate::terminal::grid::{ansi_color, Cell, Color};
 use crate::terminal::Session;
 use crate::theme;
 
@@ -14,8 +19,6 @@ pub struct TerminalGeometry {
 }
 
 impl TerminalGeometry {
-    /// Convert a screen position to zero-based (col, row) terminal cell coords.
-    /// Returns None if the position is outside the terminal rect.
     pub fn to_cell(&self, pos: Pos2) -> Option<(u16, u16)> {
         if !self.rect.contains(pos) {
             return None;
@@ -35,113 +38,103 @@ impl TerminalView {
         Self { session }
     }
 
-    /// Render the terminal into the available UI rect.
-    ///
-    /// `scroll_offset` is the number of scrollback lines to show above the
-    /// live grid (0 = live view, >0 = scrolled back). The cursor is hidden
-    /// and mouse-coordinate mapping still uses the full live rect.
+    /// Render the terminal. `cursor_visible` toggles the blink cycle.
+    /// Scroll position is read from the term's internal `display_offset`.
     pub fn show(
         &self,
         ui: &mut egui::Ui,
         is_focused: bool,
-        scroll_offset: usize,
         cursor_visible: bool,
     ) -> TerminalGeometry {
         let rect = ui.available_rect_before_wrap();
-
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::BASE);
 
         let session = self.session.read();
-
         let font_id = FontId::monospace(14.0);
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
-        // glyph_width reads directly from font metrics — no galley allocation
         let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
 
-        let visible_cols = (rect.width() / cell_width) as u16;
-        let visible_rows = (rect.height() / cell_height) as u16;
-        let grid_cols = session.grid.cols.min(visible_cols);
+        let visible_rows = (rect.height() / cell_height) as usize;
+        let visible_cols = (rect.width() / cell_width) as usize;
 
-        // ── Scrollback setup ─────────────────────────────────────────────────
-        let scrollback_len = session.grid.scrollback.len();
-        let show_sb = scroll_offset.min(scrollback_len).min(visible_rows as usize);
-        let sb_start = scrollback_len.saturating_sub(show_sb);
+        let term = &session.term;
+        let grid = term.grid();
+        let term_cols = term.columns();
+        let term_rows = term.screen_lines();
+        let cols = term_cols.min(visible_cols);
+        let display_offset = grid.display_offset();
+        let history = grid.history_size();
 
-        // ── Cell rendering ───────────────────────────────────────────────────
-        // Batch adjacent cells with the same background color into one rect_filled
-        // and adjacent cells with the same foreground style into one painter.text.
-        // This reduces draw calls from O(cols*rows) to O(style_changes*rows).
-        let mut text_buf = String::with_capacity(grid_cols as usize);
+        let mut text_buf = String::with_capacity(cols + 1);
 
-        for screen_row in 0..(visible_rows as usize) {
+        for screen_row in 0..visible_rows {
             let y = rect.min.y + screen_row as f32 * cell_height;
 
-            // Closure to fetch a cell from scrollback or live grid
-            let get_cell = |col: u16| -> Cell {
-                if screen_row < show_sb {
-                    let sb_idx = sb_start + screen_row;
-                    session
-                        .grid
-                        .scrollback
-                        .get(sb_idx)
-                        .and_then(|r| r.get(col as usize))
-                        .copied()
-                        .unwrap_or_default()
-                } else {
-                    let grid_row = (screen_row - show_sb) as u16;
-                    if grid_row < session.grid.rows {
-                        *session.grid.get(grid_row, col)
-                    } else {
-                        Cell::default()
-                    }
-                }
-            };
+            // Map screen row → alacritty grid line index (i32).
+            // display_offset lines of scrollback are shown above the viewport:
+            //   screen_row=0 → grid line (0 - display_offset) = -display_offset (scrollback)
+            //   screen_row=display_offset → grid line 0 (top of viewport)
+            let grid_line = screen_row as i32 - display_offset as i32;
 
-            // ── Single merged pass: BG and FG in one cell read per column ────
-            // BG run state
-            let mut bg_run_start = 0u16;
+            // Skip rows that are outside both scrollback and visible buffer
+            let min_line = -(history as i32);
+            let max_line = term_rows as i32 - 1;
+            if grid_line < min_line || grid_line > max_line {
+                continue;
+            }
+
+            let mut bg_run_start = 0usize;
             let mut bg_run_color = egui::Color32::TRANSPARENT;
 
-            // FG span state
-            let mut span_start = 0u16;
+            let mut span_start = 0usize;
             let mut span_fg = egui::Color32::TRANSPARENT;
             let mut span_underline = false;
             let mut span_strike = false;
             let mut span_bold = false;
             let mut span_italic = false;
 
-            for col in 0..=grid_cols {
-                let is_end = col == grid_cols;
+            for col in 0..=cols {
+                let is_end = col == cols;
 
-                // Read cell once; derive all render attributes from it.
-                let (new_bg, cell_fg, cell_underline, cell_strike, cell_bold, cell_italic, cell_char) = if !is_end {
-                    let cell = get_cell(col);
-                    let inv = cell.attrs.inverse();
-                    let eff_bg = if inv { cell.fg } else { cell.bg };
-                    let eff_fg = if inv { cell.bg } else { cell.fg };
-                    let mut fg = resolve_color(eff_fg, true);
-                    if cell.attrs.dim() {
-                        let [r, g, b, a] = fg.to_array();
-                        fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
-                    }
-                    let ch = if cell.attrs.invisible() { ' ' } else { cell.c };
-                    (
-                        resolve_color(eff_bg, false),
-                        fg,
-                        cell.attrs.underline(),
-                        cell.attrs.strikethrough(),
-                        cell.attrs.bold(),
-                        cell.attrs.italic(),
-                        ch,
-                    )
-                } else {
-                    (egui::Color32::TRANSPARENT, egui::Color32::TRANSPARENT, false, false, false, false, ' ')
-                };
+                let (new_bg, cell_fg, cell_ul, cell_st, cell_bold, cell_italic, cell_char) =
+                    if !is_end {
+                        let cell = &grid[Line(grid_line)][Column(col)];
+                        let inv = cell.flags.contains(Flags::INVERSE);
+                        let eff_fg = if inv { cell.bg } else { cell.fg };
+                        let eff_bg = if inv { cell.fg } else { cell.bg };
+                        let hidden = cell.flags.contains(Flags::HIDDEN);
+                        let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
+                        let ch = if hidden || spacer { ' ' } else { cell.c };
+                        let mut fg = resolve_color(eff_fg, true);
+                        if cell.flags.contains(Flags::DIM) {
+                            let [r, g, b, a] = fg.to_array();
+                            fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
+                        }
+                        (
+                            resolve_color(eff_bg, false),
+                            fg,
+                            cell.flags.contains(Flags::UNDERLINE),
+                            cell.flags.contains(Flags::STRIKEOUT),
+                            cell.flags.contains(Flags::BOLD),
+                            cell.flags.contains(Flags::ITALIC),
+                            ch,
+                        )
+                    } else {
+                        (
+                            egui::Color32::TRANSPARENT,
+                            egui::Color32::TRANSPARENT,
+                            false,
+                            false,
+                            false,
+                            false,
+                            ' ',
+                        )
+                    };
 
                 // ── BG flush ────────────────────────────────────────────────────
                 if new_bg != bg_run_color {
-                    if bg_run_color != egui::Color32::TRANSPARENT {
+                    if bg_run_color != egui::Color32::TRANSPARENT && bg_run_start < col {
                         painter.rect_filled(
                             egui::Rect::from_min_max(
                                 egui::pos2(rect.min.x + bg_run_start as f32 * cell_width, y),
@@ -158,8 +151,8 @@ impl TerminalView {
                 // ── FG flush ────────────────────────────────────────────────────
                 let fg_changed = is_end
                     || cell_fg != span_fg
-                    || cell_underline != span_underline
-                    || cell_strike != span_strike
+                    || cell_ul != span_underline
+                    || cell_st != span_strike
                     || cell_bold != span_bold
                     || cell_italic != span_italic;
 
@@ -167,9 +160,6 @@ impl TerminalView {
                     if !text_buf.is_empty() {
                         let visible = text_buf.trim_end_matches(' ');
                         if !visible.is_empty() {
-                            // Bold uses a slight font-size bump (0.5 pt) as a visual-weight
-                            // proxy until a real bold font face is loaded. Italic reuses the
-                            // regular monospace face (no italic variant is bundled).
                             let span_font = if span_bold {
                                 FontId::monospace(14.5)
                             } else {
@@ -207,8 +197,8 @@ impl TerminalView {
                     }
                     span_start = col;
                     span_fg = cell_fg;
-                    span_underline = cell_underline;
-                    span_strike = cell_strike;
+                    span_underline = cell_ul;
+                    span_strike = cell_st;
                     span_bold = cell_bold;
                     span_italic = cell_italic;
                 }
@@ -219,13 +209,17 @@ impl TerminalView {
             }
         }
 
-        // Draw cursor only when in live view (not scrolled back).
-        // When focused, hide cursor during the "off" phase of the blink cycle.
-        // When unfocused, always show the cursor (outline style).
-        if scroll_offset == 0 && session.cursor_visible && (cursor_visible || !is_focused) {
-            let cx = session.cursor_x;
-            let cy = session.cursor_y;
-            if cx < session.grid.cols && cy < session.grid.rows {
+        // ── Cursor ─────────────────────────────────────────────────────────────
+        // Only draw cursor in live view (display_offset == 0) and when cursor
+        // should be visible per hardware (SHOW_CURSOR mode) and blink phase.
+        if display_offset == 0
+            && term.mode().contains(TermMode::SHOW_CURSOR)
+            && (cursor_visible || !is_focused)
+        {
+            let cursor_pt = grid.cursor.point;
+            let cx = cursor_pt.column.0;
+            let cy = cursor_pt.line.0; // should be >= 0 for live cursor
+            if cy >= 0 && cx < cols && (cy as usize) < term_rows {
                 let cursor_rect = Rect::from_min_size(
                     rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height),
                     vec2(cell_width, cell_height),
@@ -249,17 +243,13 @@ impl TerminalView {
             }
         }
 
-        // Scrollback indicator: a proper thumb showing position within total content.
-        if scrollback_len > 0 {
+        // ── Scrollback indicator ───────────────────────────────────────────────
+        if history > 0 {
             let bar_w = 3.0_f32;
-            let total_lines = scrollback_len + visible_rows as usize;
-            // Thumb height = fraction of content that is visible
+            let total_lines = history + visible_rows;
             let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
             let thumb_h = (rect.height() * thumb_frac).max(4.0);
-            // Thumb top = fraction of content above the viewport
-            // When scroll_offset == 0 (live view) the content above is all of scrollback.
-            // When scroll_offset == scrollback_len the content above is 0.
-            let lines_above = scrollback_len.saturating_sub(scroll_offset);
+            let lines_above = history.saturating_sub(display_offset);
             let top_frac = lines_above as f32 / total_lines as f32;
             let thumb_y = rect.min.y + rect.height() * top_frac;
             let bar_rect = egui::Rect::from_min_size(
@@ -285,17 +275,73 @@ impl TerminalView {
 
 fn resolve_color(color: Color, is_fg: bool) -> egui::Color32 {
     match color {
-        Color::Default => {
+        Color::Named(named) => resolve_named(named, is_fg),
+        Color::Spec(Rgb { r, g, b }) => egui::Color32::from_rgb(r, g, b),
+        Color::Indexed(i) => {
+            let (r, g, b) = ansi_indexed(i);
+            egui::Color32::from_rgb(r, g, b)
+        }
+    }
+}
+
+fn resolve_named(named: NamedColor, is_fg: bool) -> egui::Color32 {
+    match named {
+        NamedColor::Foreground => theme::TEXT,
+        NamedColor::Background => egui::Color32::TRANSPARENT,
+        NamedColor::Black => egui::Color32::from_rgb(30, 30, 46),
+        NamedColor::Red => egui::Color32::from_rgb(243, 139, 168),
+        NamedColor::Green => egui::Color32::from_rgb(166, 227, 161),
+        NamedColor::Yellow => egui::Color32::from_rgb(249, 226, 175),
+        NamedColor::Blue => egui::Color32::from_rgb(137, 180, 250),
+        NamedColor::Magenta => egui::Color32::from_rgb(245, 194, 231),
+        NamedColor::Cyan => egui::Color32::from_rgb(148, 226, 213),
+        NamedColor::White => egui::Color32::from_rgb(205, 214, 244),
+        NamedColor::BrightBlack => egui::Color32::from_rgb(88, 91, 112),
+        NamedColor::BrightRed => egui::Color32::from_rgb(243, 139, 168),
+        NamedColor::BrightGreen => egui::Color32::from_rgb(166, 227, 161),
+        NamedColor::BrightYellow => egui::Color32::from_rgb(249, 226, 175),
+        NamedColor::BrightBlue => egui::Color32::from_rgb(137, 180, 250),
+        NamedColor::BrightMagenta => egui::Color32::from_rgb(245, 194, 231),
+        NamedColor::BrightCyan => egui::Color32::from_rgb(148, 226, 213),
+        NamedColor::BrightWhite => egui::Color32::from_rgb(255, 255, 255),
+        _ => {
             if is_fg {
                 theme::TEXT
             } else {
                 egui::Color32::TRANSPARENT
             }
         }
-        Color::Indexed(i) => {
-            let (r, g, b) = ansi_color(i);
-            egui::Color32::from_rgb(r, g, b)
+    }
+}
+
+fn ansi_indexed(index: u8) -> (u8, u8, u8) {
+    match index {
+        0 => (30, 30, 46),
+        1 => (243, 139, 168),
+        2 => (166, 227, 161),
+        3 => (249, 226, 175),
+        4 => (137, 180, 250),
+        5 => (245, 194, 231),
+        6 => (148, 226, 213),
+        7 => (205, 214, 244),
+        8 => (88, 91, 112),
+        9 => (243, 139, 168),
+        10 => (166, 227, 161),
+        11 => (249, 226, 175),
+        12 => (137, 180, 250),
+        13 => (245, 194, 231),
+        14 => (148, 226, 213),
+        15 => (255, 255, 255),
+        16..=231 => {
+            let n = index - 16;
+            let b = (n % 6) * 51;
+            let g = ((n / 6) % 6) * 51;
+            let r = (n / 36) * 51;
+            (r, g, b)
         }
-        Color::Rgb(r, g, b) => egui::Color32::from_rgb(r, g, b),
+        232..=255 => {
+            let v = 8 + (index - 232) * 10;
+            (v, v, v)
+        }
     }
 }

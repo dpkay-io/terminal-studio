@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,12 +12,12 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 use crate::pty::foreground::ForegroundProcess;
-use crate::pty::{available_shells, default_shell, ShellKind, SessionManager};
+use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
-use crate::terminal::grid::Cell;
-use crate::terminal::{MouseMode, Session};
+use crate::terminal::Session;
 use crate::theme;
 use crate::workspace::{NoteStore, Workspace, WorkspaceStore};
+use alacritty_terminal::{grid::Scroll, term::TermMode};
 
 // ── Preset workspace colours ──────────────────────────────────────────────────
 
@@ -518,7 +518,7 @@ impl WorkspaceEditDialog {
 struct SessionEntry {
     id: u32,
     session: Arc<RwLock<Session>>,
-    writer: Box<dyn Write + Send>,
+    pty_tx: mpsc::Sender<Vec<u8>>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     shell_pid: u32,
     alive: Arc<AtomicBool>,
@@ -589,12 +589,6 @@ fn effective_title(title: &str, cwd: &std::path::Path) -> String {
     }
 }
 
-struct ResizeSnapshot {
-    cursor_y: u16,
-    cells: Vec<Cell>,
-    expires: Instant,
-}
-
 struct CachedForeground {
     session_id: u32,
     result: Option<ForegroundProcess>,
@@ -636,16 +630,11 @@ pub struct App {
     // Last focused session, for sending focus-in/focus-out events
     last_focused_sid: Option<u32>,
     active_term_ui_id: Option<egui::Id>,
-    // Cursor-row snapshot taken before each PTY resize; restored each frame
-    // if the shell clears the prompt without immediately redrawing it.
-    resize_snapshots: HashMap<u32, ResizeSnapshot>,
     // Debounced PTY resize targets: (cols, rows, stable_since). PTY is only
     // notified after the size has been stable for 150 ms, preventing ConPTY
     // from clearing the screen on every drag frame.
     resize_debounce: HashMap<u32, (u16, u16, Instant)>,
-    // Per-session scrollback offset (lines above grid visible on screen).
-    // Only active when mouse_mode == None; reset to 0 on any key input.
-    term_scroll_offset: HashMap<u32, usize>,
+    // Fractional scroll accumulator — carries sub-line scrolls across frames.
     scroll_accum: HashMap<u32, f32>,
     // Cached foreground-process detection result (500 ms TTL)
     foreground_cache: Option<CachedForeground>,
@@ -747,9 +736,7 @@ impl App {
             active_term_geo: None,
             last_focused_sid: None,
             active_term_ui_id: None,
-            resize_snapshots: HashMap::new(),
             resize_debounce: HashMap::new(),
-            term_scroll_offset: HashMap::new(),
             scroll_accum: HashMap::new(),
             foreground_cache: None,
             was_focused: true,
@@ -794,11 +781,11 @@ impl App {
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
         match self.session_manager.spawn(cols, rows, cwd, shell) {
-            Ok((id, session, master, writer, shell_pid, alive, is_active)) => {
+            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 let entry = SessionEntry {
                     id,
                     session,
-                    writer,
+                    pty_tx,
                     master,
                     shell_pid,
                     alive,
@@ -862,9 +849,9 @@ impl App {
                 }
                 ws_store.find_for_cwd(&cwd).map(|w| w.id)
             }),
-            PaneContent::DeferredTerminal { cwd, .. } => {
-                cwd.as_ref().and_then(|c| ws_store.find_for_cwd(c).map(|w| w.id))
-            }
+            PaneContent::DeferredTerminal { cwd, .. } => cwd
+                .as_ref()
+                .and_then(|c| ws_store.find_for_cwd(c).map(|w| w.id)),
             PaneContent::FileEditor(ed) => ed.workspace_id,
         }
     }
@@ -954,12 +941,12 @@ impl App {
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
         match self.session_manager.spawn(cols, rows, cwd, shell) {
-            Ok((id, session, master, writer, shell_pid, alive, is_active)) => {
+            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 self.uninit_sessions.insert(id);
                 self.sessions.push(SessionEntry {
                     id,
                     session,
-                    writer,
+                    pty_tx,
                     master,
                     shell_pid,
                     alive,
@@ -982,7 +969,9 @@ impl App {
     fn update_is_active_flags(&self) {
         let active = self.active_id;
         for entry in &self.sessions {
-            entry.is_active.store(active == Some(entry.id), Ordering::Relaxed);
+            entry
+                .is_active
+                .store(active == Some(entry.id), Ordering::Relaxed);
         }
     }
 
@@ -1034,12 +1023,13 @@ impl App {
                     PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
                         session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
                     },
-                    PaneContent::DeferredTerminal { cwd, pending_command } => {
-                        SavedPaneContent::DeferredTerminal {
-                            cwd: cwd.clone().unwrap_or_default(),
-                            command: pending_command.clone(),
-                        }
-                    }
+                    PaneContent::DeferredTerminal {
+                        cwd,
+                        pending_command,
+                    } => SavedPaneContent::DeferredTerminal {
+                        cwd: cwd.clone().unwrap_or_default(),
+                        command: pending_command.clone(),
+                    },
                     PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
                         path: ed.path.clone(),
                         content: ed.content.clone(),
@@ -1156,9 +1146,14 @@ impl App {
                                 Some(s.cwd.clone())
                             }
                         });
-                        let pending_command =
-                            state.sessions.get(*session_index).and_then(|s| s.command.clone());
-                        PaneContent::DeferredTerminal { cwd, pending_command }
+                        let pending_command = state
+                            .sessions
+                            .get(*session_index)
+                            .and_then(|s| s.command.clone());
+                        PaneContent::DeferredTerminal {
+                            cwd,
+                            pending_command,
+                        }
                     }
                 }
                 SavedPaneContent::DeferredTerminal { cwd, command } => {
@@ -1279,23 +1274,6 @@ impl eframe::App for App {
         // ── Track last active pane per group ───────────────────────────────
         self.track_active_pane_group();
 
-        // ── Send pending terminal responses (DSR / DA1 / DA2) ──────────────
-        // Read lock first — avoids taking a write lock on every session every frame
-        // when most sessions have nothing to send (the common case).
-        for i in 0..self.sessions.len() {
-            if self.sessions[i].session.read().pending_dsr_response.is_empty() {
-                continue;
-            }
-            let responses = {
-                let mut session = self.sessions[i].session.write();
-                std::mem::take(&mut session.pending_dsr_response)
-            };
-            for resp in responses {
-                log::trace!("PTY[{}] OUT {:?}", self.sessions[i].id, resp);
-                SessionManager::write(&mut self.sessions[i].writer, resp.as_bytes());
-            }
-        }
-
         // Send deferred duplicate commands once the shell signals it is at a prompt (OSC 7).
         for entry in &mut self.sessions {
             if entry.pending_command.is_some() {
@@ -1305,9 +1283,9 @@ impl eframe::App for App {
                     log::debug!("PTY[{}] replaying command: {:?}", entry.id, cmd);
                     // Windows ConPTY/PSReadLine executes on \r, not \n.
                     #[cfg(target_os = "windows")]
-                    SessionManager::write(&mut entry.writer, format!("{}\r", cmd).as_bytes());
+                    let _ = entry.pty_tx.send(format!("{}\r", cmd).into_bytes());
                     #[cfg(not(target_os = "windows"))]
-                    SessionManager::write(&mut entry.writer, format!("{}\n", cmd).as_bytes());
+                    let _ = entry.pty_tx.send(format!("{}\n", cmd).into_bytes());
                 } else {
                     // Keep repainting until the prompt arrives.
                     ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -1328,35 +1306,6 @@ impl eframe::App for App {
             });
             if !self.uninit_sessions.is_empty() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
-            }
-        }
-
-        // Restore cursor row from pre-resize snapshot if the shell erased it
-        // without immediately redrawing (common PSReadLine/Windows behavior).
-        if !self.resize_snapshots.is_empty() {
-            let now = Instant::now();
-            let snaps: Vec<(u32, u16, Vec<Cell>)> = self
-                .resize_snapshots
-                .iter()
-                .filter(|(_, s)| now <= s.expires)
-                .map(|(&sid, s)| (sid, s.cursor_y, s.cells.clone()))
-                .collect();
-            self.resize_snapshots.retain(|_, s| now <= s.expires);
-            for (sid, snap_cy, snap_cells) in snaps {
-                if let Some(entry) = self.sessions.iter().find(|e| e.id == sid) {
-                    let mut sess = entry.session.write();
-                    let row_blank = (0..sess.grid.cols).all(|c| sess.grid.get(snap_cy, c).c == ' ');
-                    if row_blank {
-                        for (c, &cell) in snap_cells.iter().enumerate() {
-                            if (c as u16) < sess.grid.cols {
-                                sess.grid.set(snap_cy, c as u16, cell);
-                            }
-                        }
-                    }
-                }
-            }
-            if !self.resize_snapshots.is_empty() {
-                ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
 
@@ -1818,7 +1767,7 @@ impl eframe::App for App {
                             for entry in &self.sessions {
                                 let (title, cwd) = {
                                     let s = entry.session.read();
-                                    (s.title.clone(), s.cwd.clone())
+                                    (s.title(), s.cwd.clone())
                                 };
                                 let is_active = self.active_id == Some(entry.id);
 
@@ -2697,9 +2646,9 @@ impl eframe::App for App {
                         self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
                     })
                 }
-                PaneContent::DeferredTerminal { cwd, .. } => {
-                    cwd.as_ref().and_then(|c| self.workspace_store.find_for_cwd(c).map(|w| w.color))
-                }
+                PaneContent::DeferredTerminal { cwd, .. } => cwd
+                    .as_ref()
+                    .and_then(|c| self.workspace_store.find_for_cwd(c).map(|w| w.color)),
                 PaneContent::FileEditor(ed) => ed.workspace_id.and_then(|id| {
                     self.workspace_store
                         .workspaces
@@ -2826,7 +2775,7 @@ impl eframe::App for App {
                                                 .find(|e| e.id == sid)
                                                 .map(|e| {
                                                     let s = e.session.read();
-                                                    (s.title.clone(), s.cwd.clone())
+                                                    (s.title(), s.cwd.clone())
                                                 })
                                                 .unwrap_or_else(|| (format!("Terminal {sid}"), std::path::PathBuf::new()))
                                         }
@@ -2958,8 +2907,7 @@ impl eframe::App for App {
                                 let sid = *sid;
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
                                     let session = Arc::clone(&self.sessions[idx].session);
-                                    let scroll_off = self.term_scroll_offset.get(&sid).copied().unwrap_or(0);
-                                    let geo = crate::renderer::terminal_pass::TerminalView::new(session).show(ui, true, scroll_off, self.cursor_blink_on);
+                                    let geo = crate::renderer::terminal_pass::TerminalView::new(session).show(ui, true, self.cursor_blink_on);
                                     self.active_term_geo = Some(geo);
                                 }
                                 self.active_term_ui_id = Some(ui.id());
@@ -3026,18 +2974,18 @@ impl eframe::App for App {
                     // Send focus-out to the session we just left
                     if let Some(old_sid) = self.last_focused_sid {
                         if let Some(idx) = self.sessions.iter().position(|e| e.id == old_sid) {
-                            let tracking = self.sessions[idx].session.read().focus_tracking;
+                            let tracking = self.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
                             if tracking {
-                                SessionManager::write(&mut self.sessions[idx].writer, b"\x1b[O");
+                                let _ = self.sessions[idx].pty_tx.send(b"\x1b[O".to_vec());
                             }
                         }
                     }
                     // Send focus-in to the newly active session
                     if let Some(sid) = active_session_id {
                         if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                            let tracking = self.sessions[idx].session.read().focus_tracking;
+                            let tracking = self.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
                             if tracking {
-                                SessionManager::write(&mut self.sessions[idx].writer, b"\x1b[I");
+                                let _ = self.sessions[idx].pty_tx.send(b"\x1b[I".to_vec());
                             }
                         }
                     }
@@ -3049,20 +2997,20 @@ impl eframe::App for App {
                     match event {
                         egui::Event::Text(text) => {
                             if let Some(sid) = active_session_id {
-                                self.term_scroll_offset.remove(&sid);
                                 self.scroll_accum.remove(&sid);
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    SessionManager::write(&mut self.sessions[idx].writer, text.as_bytes());
+                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                    let _ = self.sessions[idx].pty_tx.send(text.as_bytes().to_vec());
                                 }
                             }
                         }
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
                             if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
                                 if let Some(sid) = active_session_id {
-                                    self.term_scroll_offset.remove(&sid);
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                        SessionManager::write(&mut self.sessions[idx].writer, &bytes);
+                                        self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                        let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
                                     }
                                 }
                             }
@@ -3071,10 +3019,10 @@ impl eframe::App for App {
                         // so we must handle Copy here to send the SIGINT byte to the PTY.
                         egui::Event::Copy => {
                             if let Some(sid) = active_session_id {
-                                self.term_scroll_offset.remove(&sid);
                                 self.scroll_accum.remove(&sid);
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    SessionManager::write(&mut self.sessions[idx].writer, &[3]);
+                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                    let _ = self.sessions[idx].pty_tx.send(vec![3u8]);
                                 }
                             }
                         }
@@ -3082,10 +3030,10 @@ impl eframe::App for App {
                         // Wrap in bracketed-paste sequences only if the app opted in (?2004h).
                         egui::Event::Paste(text) => {
                             if let Some(sid) = active_session_id {
-                                self.term_scroll_offset.remove(&sid);
                                 self.scroll_accum.remove(&sid);
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    let bp = self.sessions[idx].session.read().bracketed_paste;
+                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                    let bp = self.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
                                     let data = if bp {
                                         let mut v = b"\x1b[200~".to_vec();
                                         v.extend_from_slice(text.as_bytes());
@@ -3094,7 +3042,7 @@ impl eframe::App for App {
                                     } else {
                                         text.as_bytes().to_vec()
                                     };
-                                    SessionManager::write(&mut self.sessions[idx].writer, &data);
+                                    let _ = self.sessions[idx].pty_tx.send(data);
                                 }
                             }
                         }
@@ -3102,11 +3050,15 @@ impl eframe::App for App {
                         egui::Event::PointerButton { pos, button, pressed, .. } => {
                             if let Some(sid) = active_session_id {
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    let (mode, sgr) = {
+                                    let (has_mouse, sgr) = {
                                         let s = self.sessions[idx].session.read();
-                                        (s.mouse_mode, s.mouse_sgr)
+                                        let mode = s.term.mode();
+                                        let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
+                                            || mode.contains(TermMode::MOUSE_DRAG)
+                                            || mode.contains(TermMode::MOUSE_MOTION);
+                                        (has, mode.contains(TermMode::SGR_MOUSE))
                                     };
-                                    if mode != MouseMode::None {
+                                    if has_mouse {
                                         if let Some(geo) = &self.active_term_geo {
                                             if let Some((col, row)) = geo.to_cell(*pos) {
                                                 let btn = match button {
@@ -3116,7 +3068,7 @@ impl eframe::App for App {
                                                     _ => return,
                                                 };
                                                 let bytes = mouse_event_bytes(btn, col, row, *pressed, sgr);
-                                                SessionManager::write(&mut self.sessions[idx].writer, &bytes);
+                                                let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
                                             }
                                         }
                                     }
@@ -3132,11 +3084,15 @@ impl eframe::App for App {
                             if over_term {
                                 if let Some(sid) = active_session_id {
                                     if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                        let (mode, sgr) = {
+                                        let (has_mouse, sgr) = {
                                             let s = self.sessions[idx].session.read();
-                                            (s.mouse_mode, s.mouse_sgr)
+                                            let mode = s.term.mode();
+                                            let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
+                                                || mode.contains(TermMode::MOUSE_DRAG)
+                                                || mode.contains(TermMode::MOUSE_MOTION);
+                                            (has, mode.contains(TermMode::SGR_MOUSE))
                                         };
-                                        if mode != MouseMode::None {
+                                        if has_mouse {
                                             // App has mouse mode — forward scroll to PTY
                                             if let Some(pos) = mouse_pos {
                                                 if let Some(geo) = &self.active_term_geo {
@@ -3144,18 +3100,15 @@ impl eframe::App for App {
                                                         // Button 64 = scroll up, 65 = scroll down
                                                         let btn = if delta.y > 0.0 { 64u8 } else { 65 };
                                                         let bytes = mouse_event_bytes(btn, col, row, true, sgr);
-                                                        SessionManager::write(&mut self.sessions[idx].writer, &bytes);
+                                                        let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
                                                     }
                                                 }
                                             }
                                         } else {
-                                            // No mouse mode — scroll local scrollback instead.
+                                            // No mouse mode — scroll alacritty's internal scrollback.
                                             // Accumulate in fractional lines. Convert delta.y based on
                                             // its unit: Point=pixels (divide by cell height), Line=already
                                             // in lines, Page=multiply by visible rows.
-                                            let scrollback_len = {
-                                                self.sessions[idx].session.read().grid.scrollback.len()
-                                            };
                                             let geo = self.active_term_geo.as_ref();
                                             let cell_h = geo.map(|g| g.cell_h).unwrap_or(18.0);
                                             let visible_rows = geo
@@ -3172,12 +3125,13 @@ impl eframe::App for App {
                                             if lines > 0 {
                                                 let direction = if *accum > 0.0 { 1.0f32 } else { -1.0 };
                                                 *accum -= direction * lines as f32;
-                                                let offset = self.term_scroll_offset.entry(sid).or_insert(0);
-                                                if direction > 0.0 {
-                                                    *offset = (*offset + lines).min(scrollback_len);
+                                                // Positive direction = scroll up (positive Delta)
+                                                let scroll_delta = if direction > 0.0 {
+                                                    lines as i32
                                                 } else {
-                                                    *offset = offset.saturating_sub(lines);
-                                                }
+                                                    -(lines as i32)
+                                                };
+                                                self.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_delta));
                                             }
                                         }
                                     }
@@ -3266,15 +3220,19 @@ impl eframe::App for App {
         // update() call as the click, meaning the terminal is ready by the next frame.
         if let Some(pid) = self.active_pane_id {
             if let Some(pane_idx) = self.panes.iter().position(|p| p.id == pid) {
-                if matches!(&self.panes[pane_idx].content, PaneContent::DeferredTerminal { .. }) {
-                    let (cwd, pending_command) =
-                        if let PaneContent::DeferredTerminal { cwd, pending_command } =
-                            &self.panes[pane_idx].content
-                        {
-                            (cwd.clone(), pending_command.clone())
-                        } else {
-                            unreachable!()
-                        };
+                if matches!(
+                    &self.panes[pane_idx].content,
+                    PaneContent::DeferredTerminal { .. }
+                ) {
+                    let (cwd, pending_command) = if let PaneContent::DeferredTerminal {
+                        cwd,
+                        pending_command,
+                    } = &self.panes[pane_idx].content
+                    {
+                        (cwd.clone(), pending_command.clone())
+                    } else {
+                        unreachable!()
+                    };
                     if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
                         if let Some(cmd) = pending_command {
                             if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
@@ -3360,7 +3318,6 @@ impl eframe::App for App {
                 .collect();
             for (sid, cols, rows) in stable {
                 self.resize_debounce.remove(&sid);
-                self.term_scroll_offset.remove(&sid);
                 self.scroll_accum.remove(&sid);
                 // Update pane's recorded size
                 if let Some(pane) = self
@@ -3371,28 +3328,10 @@ impl eframe::App for App {
                     pane.last_size = (cols, rows);
                 }
                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                    // Snapshot the prompt row before PTY resize (PSReadLine workaround)
-                    let snap = {
-                        let sess = self.sessions[idx].session.read();
-                        let cy = sess.cursor_y;
-                        let ncols = sess.grid.cols;
-                        if (0..ncols).any(|c| sess.grid.get(cy, c).c != ' ') {
-                            let cells = (0..ncols).map(|c| *sess.grid.get(cy, c)).collect();
-                            Some(ResizeSnapshot {
-                                cursor_y: cy,
-                                cells,
-                                expires: Instant::now() + Duration::from_secs(2),
-                            })
-                        } else {
-                            None
-                        }
-                    };
-                    if let Some(snap) = snap {
-                        self.resize_snapshots.insert(sid, snap);
-                    }
                     let entry = &self.sessions[idx];
+                    let mut sess = entry.session.write();
                     SessionManager::resize(&entry.master, cols, rows);
-                    entry.session.write().resize(cols, rows);
+                    sess.resize(cols, rows);
                 }
             }
             // Keep repainting while a resize is pending so the debounce fires promptly.

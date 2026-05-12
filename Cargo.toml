@@ -20,6 +20,9 @@ egui = "0.28"
 # VT/ANSI byte-stream parser (same as Alacritty)
 vte = "0.13"
 
+# Alacritty terminal emulator library — replaces hand-rolled VT emulator
+alacritty_terminal = "0.26"
+
 # Cross-platform PTY: ConPTY on Windows, openpty on Unix
 portable-pty = "0.8"
 
