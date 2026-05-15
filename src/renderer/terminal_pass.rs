@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::Arc;
 
 use alacritty_terminal::{
@@ -29,6 +30,39 @@ impl TerminalGeometry {
     }
 }
 
+/// Pre-resolved per-cell render data. Filled while holding the session
+/// read-lock briefly, then read without the lock during paint so the PTY
+/// reader thread isn't blocked by the (much slower) text-shaping pass.
+#[derive(Clone, Copy)]
+struct CellInfo {
+    ch: char,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+}
+
+impl CellInfo {
+    const EMPTY: CellInfo = CellInfo {
+        ch: ' ',
+        fg: egui::Color32::TRANSPARENT,
+        bg: egui::Color32::TRANSPARENT,
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+    };
+}
+
+thread_local! {
+    /// Reusable per-frame cell buffer for terminal rendering. UI runs on a
+    /// single thread, so a thread-local is safe and avoids re-allocating a
+    /// ~150 KB Vec every paint.
+    static RENDER_BUF: RefCell<Vec<CellInfo>> = const { RefCell::new(Vec::new()) };
+}
+
 pub struct TerminalView {
     session: Arc<RwLock<Session>>,
 }
@@ -50,7 +84,6 @@ impl TerminalView {
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, theme::BASE);
 
-        let session = self.session.read();
         let font_id = FontId::monospace(14.0);
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
         let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
@@ -58,168 +91,211 @@ impl TerminalView {
         let visible_rows = (rect.height() / cell_height) as usize;
         let visible_cols = (rect.width() / cell_width) as usize;
 
-        let term = &session.term;
-        let grid = term.grid();
-        let term_cols = term.columns();
-        let term_rows = term.screen_lines();
-        let cols = term_cols.min(visible_cols);
-        let display_offset = grid.display_offset();
-        let history = grid.history_size();
+        // ── Snapshot phase: copy out everything we need from the Term under
+        //    the read lock, then drop the lock before painting. This keeps
+        //    the PTY reader thread (which takes the write lock) from being
+        //    blocked for the full paint duration.
+        let snapshot = RENDER_BUF.with(|buf| {
+            let mut buf = buf.borrow_mut();
+            buf.clear();
 
-        let mut text_buf = String::with_capacity(cols + 1);
+            let session = self.session.read();
+            let term = &session.term;
+            let grid = term.grid();
+            let term_cols = term.columns();
+            let term_rows = term.screen_lines();
+            let cols = term_cols.min(visible_cols);
+            let display_offset = grid.display_offset();
+            let history = grid.history_size();
+            let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
+            buf.reserve(visible_rows.saturating_mul(cols));
 
-        for screen_row in 0..visible_rows {
-            let y = rect.min.y + screen_row as f32 * cell_height;
-
-            // Map screen row → alacritty grid line index (i32).
-            // display_offset lines of scrollback are shown above the viewport:
-            //   screen_row=0 → grid line (0 - display_offset) = -display_offset (scrollback)
-            //   screen_row=display_offset → grid line 0 (top of viewport)
-            let grid_line = screen_row as i32 - display_offset as i32;
-
-            // Skip rows that are outside both scrollback and visible buffer
             let min_line = -(history as i32);
             let max_line = term_rows as i32 - 1;
-            if grid_line < min_line || grid_line > max_line {
-                continue;
+            for screen_row in 0..visible_rows {
+                let grid_line = screen_row as i32 - display_offset as i32;
+                if grid_line < min_line || grid_line > max_line {
+                    for _ in 0..cols {
+                        buf.push(CellInfo::EMPTY);
+                    }
+                    continue;
+                }
+                for col in 0..cols {
+                    let cell = &grid[Line(grid_line)][Column(col)];
+                    let inv = cell.flags.contains(Flags::INVERSE);
+                    let eff_fg = if inv { cell.bg } else { cell.fg };
+                    let eff_bg = if inv { cell.fg } else { cell.bg };
+                    let hidden = cell.flags.contains(Flags::HIDDEN);
+                    let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
+                    let ch = if hidden || spacer { ' ' } else { cell.c };
+                    let mut fg = resolve_color(eff_fg, true);
+                    if cell.flags.contains(Flags::DIM) {
+                        let [r, g, b, a] = fg.to_array();
+                        fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
+                    }
+                    buf.push(CellInfo {
+                        ch,
+                        fg,
+                        bg: resolve_color(eff_bg, false),
+                        bold: cell.flags.contains(Flags::BOLD),
+                        italic: cell.flags.contains(Flags::ITALIC),
+                        underline: cell.flags.contains(Flags::UNDERLINE),
+                        strike: cell.flags.contains(Flags::STRIKEOUT),
+                    });
+                }
             }
 
-            let mut bg_run_start = 0usize;
-            let mut bg_run_color = egui::Color32::TRANSPARENT;
+            let cursor = if show_cursor && display_offset == 0 {
+                let pt = grid.cursor.point;
+                let cx = pt.column.0;
+                let cy = pt.line.0;
+                if cy >= 0 && cx < cols && (cy as usize) < term_rows {
+                    Some((cx, cy as usize))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
 
-            let mut span_start = 0usize;
-            let mut span_fg = egui::Color32::TRANSPARENT;
-            let mut span_underline = false;
-            let mut span_strike = false;
-            let mut span_bold = false;
-            let mut span_italic = false;
+            // Drop the read lock by leaving the closure body.
+            drop(session);
 
-            for col in 0..=cols {
-                let is_end = col == cols;
+            (cols, display_offset, history, cursor)
+        });
 
-                let (new_bg, cell_fg, cell_ul, cell_st, cell_bold, cell_italic, cell_char) =
+        let (cols, display_offset, history, cursor) = snapshot;
+
+        // ── Paint phase: no lock held. Reads from the thread-local buffer. ─
+        let mut text_buf = String::with_capacity(cols + 1);
+
+        RENDER_BUF.with(|buf| {
+            let buf = buf.borrow();
+            for screen_row in 0..visible_rows {
+                let y = rect.min.y + screen_row as f32 * cell_height;
+
+                let row_off = screen_row * cols;
+                if row_off >= buf.len() {
+                    break;
+                }
+
+                let mut bg_run_start = 0usize;
+                let mut bg_run_color = egui::Color32::TRANSPARENT;
+
+                let mut span_start = 0usize;
+                let mut span_fg = egui::Color32::TRANSPARENT;
+                let mut span_underline = false;
+                let mut span_strike = false;
+                let mut span_bold = false;
+                let mut span_italic = false;
+
+                for col in 0..=cols {
+                    let is_end = col == cols;
+
+                    let (new_bg, cell_fg, cell_ul, cell_st, cell_bold, cell_italic, cell_char) =
+                        if !is_end {
+                            let c = buf[row_off + col];
+                            (c.bg, c.fg, c.underline, c.strike, c.bold, c.italic, c.ch)
+                        } else {
+                            (
+                                egui::Color32::TRANSPARENT,
+                                egui::Color32::TRANSPARENT,
+                                false,
+                                false,
+                                false,
+                                false,
+                                ' ',
+                            )
+                        };
+
+                    // ── BG flush ────────────────────────────────────────────────────
+                    if new_bg != bg_run_color {
+                        if bg_run_color != egui::Color32::TRANSPARENT && bg_run_start < col {
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(
+                                    egui::pos2(rect.min.x + bg_run_start as f32 * cell_width, y),
+                                    egui::pos2(
+                                        rect.min.x + col as f32 * cell_width,
+                                        y + cell_height,
+                                    ),
+                                ),
+                                0.0,
+                                bg_run_color,
+                            );
+                        }
+                        bg_run_start = col;
+                        bg_run_color = new_bg;
+                    }
+
+                    // ── FG flush ────────────────────────────────────────────────────
+                    let fg_changed = is_end
+                        || cell_fg != span_fg
+                        || cell_ul != span_underline
+                        || cell_st != span_strike
+                        || cell_bold != span_bold
+                        || cell_italic != span_italic;
+
+                    if fg_changed {
+                        if !text_buf.is_empty() {
+                            let visible = text_buf.trim_end_matches(' ');
+                            if !visible.is_empty() {
+                                let span_font = if span_bold {
+                                    FontId::monospace(14.5)
+                                } else {
+                                    FontId::monospace(14.0)
+                                };
+                                painter.text(
+                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, y),
+                                    egui::Align2::LEFT_TOP,
+                                    visible,
+                                    span_font,
+                                    span_fg,
+                                );
+                            }
+                            if span_underline && col > span_start {
+                                let uy = y + cell_height - 1.5;
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(rect.min.x + span_start as f32 * cell_width, uy),
+                                        egui::pos2(rect.min.x + col as f32 * cell_width, uy),
+                                    ],
+                                    egui::Stroke::new(1.0, span_fg),
+                                );
+                            }
+                            if span_strike && col > span_start {
+                                let sy = y + cell_height * 0.5;
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(rect.min.x + span_start as f32 * cell_width, sy),
+                                        egui::pos2(rect.min.x + col as f32 * cell_width, sy),
+                                    ],
+                                    egui::Stroke::new(1.0, span_fg),
+                                );
+                            }
+                            text_buf.clear();
+                        }
+                        span_start = col;
+                        span_fg = cell_fg;
+                        span_underline = cell_ul;
+                        span_strike = cell_st;
+                        span_bold = cell_bold;
+                        span_italic = cell_italic;
+                    }
+
                     if !is_end {
-                        let cell = &grid[Line(grid_line)][Column(col)];
-                        let inv = cell.flags.contains(Flags::INVERSE);
-                        let eff_fg = if inv { cell.bg } else { cell.fg };
-                        let eff_bg = if inv { cell.fg } else { cell.bg };
-                        let hidden = cell.flags.contains(Flags::HIDDEN);
-                        let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
-                        let ch = if hidden || spacer { ' ' } else { cell.c };
-                        let mut fg = resolve_color(eff_fg, true);
-                        if cell.flags.contains(Flags::DIM) {
-                            let [r, g, b, a] = fg.to_array();
-                            fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
-                        }
-                        (
-                            resolve_color(eff_bg, false),
-                            fg,
-                            cell.flags.contains(Flags::UNDERLINE),
-                            cell.flags.contains(Flags::STRIKEOUT),
-                            cell.flags.contains(Flags::BOLD),
-                            cell.flags.contains(Flags::ITALIC),
-                            ch,
-                        )
-                    } else {
-                        (
-                            egui::Color32::TRANSPARENT,
-                            egui::Color32::TRANSPARENT,
-                            false,
-                            false,
-                            false,
-                            false,
-                            ' ',
-                        )
-                    };
-
-                // ── BG flush ────────────────────────────────────────────────────
-                if new_bg != bg_run_color {
-                    if bg_run_color != egui::Color32::TRANSPARENT && bg_run_start < col {
-                        painter.rect_filled(
-                            egui::Rect::from_min_max(
-                                egui::pos2(rect.min.x + bg_run_start as f32 * cell_width, y),
-                                egui::pos2(rect.min.x + col as f32 * cell_width, y + cell_height),
-                            ),
-                            0.0,
-                            bg_run_color,
-                        );
+                        text_buf.push(cell_char);
                     }
-                    bg_run_start = col;
-                    bg_run_color = new_bg;
-                }
-
-                // ── FG flush ────────────────────────────────────────────────────
-                let fg_changed = is_end
-                    || cell_fg != span_fg
-                    || cell_ul != span_underline
-                    || cell_st != span_strike
-                    || cell_bold != span_bold
-                    || cell_italic != span_italic;
-
-                if fg_changed {
-                    if !text_buf.is_empty() {
-                        let visible = text_buf.trim_end_matches(' ');
-                        if !visible.is_empty() {
-                            let span_font = if span_bold {
-                                FontId::monospace(14.5)
-                            } else {
-                                FontId::monospace(14.0)
-                            };
-                            painter.text(
-                                egui::pos2(rect.min.x + span_start as f32 * cell_width, y),
-                                egui::Align2::LEFT_TOP,
-                                visible,
-                                span_font,
-                                span_fg,
-                            );
-                        }
-                        if span_underline && col > span_start {
-                            let uy = y + cell_height - 1.5;
-                            painter.line_segment(
-                                [
-                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, uy),
-                                    egui::pos2(rect.min.x + col as f32 * cell_width, uy),
-                                ],
-                                egui::Stroke::new(1.0, span_fg),
-                            );
-                        }
-                        if span_strike && col > span_start {
-                            let sy = y + cell_height * 0.5;
-                            painter.line_segment(
-                                [
-                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, sy),
-                                    egui::pos2(rect.min.x + col as f32 * cell_width, sy),
-                                ],
-                                egui::Stroke::new(1.0, span_fg),
-                            );
-                        }
-                        text_buf.clear();
-                    }
-                    span_start = col;
-                    span_fg = cell_fg;
-                    span_underline = cell_ul;
-                    span_strike = cell_st;
-                    span_bold = cell_bold;
-                    span_italic = cell_italic;
-                }
-
-                if !is_end {
-                    text_buf.push(cell_char);
                 }
             }
-        }
+        });
 
         // ── Cursor ─────────────────────────────────────────────────────────────
         // Only draw cursor in live view (display_offset == 0) and when cursor
         // should be visible per hardware (SHOW_CURSOR mode) and blink phase.
-        if display_offset == 0
-            && term.mode().contains(TermMode::SHOW_CURSOR)
-            && (cursor_visible || !is_focused)
-        {
-            let cursor_pt = grid.cursor.point;
-            let cx = cursor_pt.column.0;
-            let cy = cursor_pt.line.0; // should be >= 0 for live cursor
-            if cy >= 0 && cx < cols && (cy as usize) < term_rows {
+        // The snapshot phase already filtered for SHOW_CURSOR + live-view +
+        // bounds, so `cursor` is Some only when we should consider drawing.
+        if let Some((cx, cy)) = cursor {
+            if cursor_visible || !is_focused {
                 let cursor_rect = Rect::from_min_size(
                     rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height),
                     vec2(cell_width, cell_height),

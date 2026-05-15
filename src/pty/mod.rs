@@ -166,6 +166,14 @@ impl SessionManager {
         let id = self.next_id;
         self.next_id += 1;
 
+        // ConPTY rejects zero dimensions with E_INVALIDARG. Pane `last_size`
+        // is initialized to (0, 0) as a "needs layout" sentinel, and several
+        // call sites can forward that here before the first frame resizes
+        // the pane. Fall back to standard 80x24 — the resize debounce will
+        // bring it to the real geometry on the next layout pass.
+        let cols = if cols == 0 { 80 } else { cols };
+        let rows = if rows == 0 { 24 } else { rows };
+
         let pty_system = native_pty_system();
         let pty_pair = pty_system.openpty(PtySize {
             rows,
