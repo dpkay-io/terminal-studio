@@ -189,6 +189,7 @@ pub(super) fn render_dir_tree(
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn collect_all_files(root: &Path, out: &mut Vec<FileEntry>, max_depth: usize) {
     if max_depth == 0 {
         return;

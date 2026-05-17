@@ -5,9 +5,6 @@ use std::time::{Duration, Instant};
 
 use egui::FontId;
 
-use fuzzy_matcher::skim::SkimMatcherV2;
-use fuzzy_matcher::FuzzyMatcher;
-
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{default_shell, SessionManager, ShellKind};
@@ -43,7 +40,7 @@ mod workspace_ui;
 // ── Re-imports from submodules ───────────────────────────────────────────────
 
 use file_browser::{
-    collect_all_files, render_dir_tree, render_flat_file_list, FileEntry, SubdirCache,
+    render_dir_tree, render_flat_file_list, FileEntry, SubdirCache,
 };
 use git_diff::{render_git_diff, render_inline_diff, GitStageAction};
 use git_worker::GitWorker;
@@ -170,6 +167,16 @@ pub struct App {
     // Terminal content search (Ctrl+F)
     term_search: crate::search::SearchState,
 
+    // Global search across all sessions (Ctrl+Shift+N)
+    show_global_search: bool,
+    global_search_query: String,
+    global_search_debounce_at: Option<Instant>,
+    search_worker: crate::search_worker::SearchWorker,
+    global_search_selected: usize,
+
+    // Background file search worker for directory panel
+    file_search_worker: crate::file_search_worker::FileSearchWorker,
+
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
 
@@ -180,6 +187,11 @@ pub struct App {
     deferred_spawn: Option<ShellKind>,
     deferred_duplicate: bool,
     deferred_open_workspace: Option<u64>,
+
+    show_close_all_confirm: bool,
+
+    // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
+    session_workspace_filter: Option<Option<u64>>,
 }
 
 impl eframe::App for App {
@@ -285,6 +297,29 @@ impl eframe::App for App {
                 for (dir, (diff, status)) in completed {
                     ws.apply_git_result(&dir, diff, status);
                 }
+            }
+        }
+
+        // ── Global search debounce: fire after 200ms of stable input ─────
+        if let Some(t) = self.global_search_debounce_at {
+            if t.elapsed() >= Duration::from_millis(200) {
+                self.global_search_debounce_at = None;
+                let query = self.global_search_query.clone();
+                if !query.is_empty() {
+                    let sessions: Vec<_> = self
+                        .sessions
+                        .iter()
+                        .map(|e| {
+                            let title = e.session.read().title();
+                            (e.id, title, e.session.clone())
+                        })
+                        .collect();
+                    self.search_worker.search(query, sessions);
+                } else {
+                    self.search_worker.cancel();
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
 
@@ -582,7 +617,22 @@ impl App {
                                 match &active_tab {
                                     RightTab::Directory => {
                                         if let Some(cwd) = active_cwd.as_ref() {
+                                            // ── Workspace name + path ────────────────
                                             ui.horizontal(|ui| {
+                                                if let Some(ws) = self.workspace_store.find_for_cwd(cwd) {
+                                                    let c = ws.color;
+                                                    ui.label(
+                                                        egui::RichText::new(&ws.name)
+                                                            .strong()
+                                                            .size(theme::CWD_FONT_SZ)
+                                                            .color(egui::Color32::from_rgb(c[0], c[1], c[2])),
+                                                    );
+                                                    ui.label(
+                                                        egui::RichText::new("›")
+                                                            .size(theme::CWD_FONT_SZ)
+                                                            .color(theme::active().overlay0),
+                                                    );
+                                                }
                                                 ui.label(
                                                     egui::RichText::new(theme::short_path(cwd))
                                                         .monospace()
@@ -622,7 +672,7 @@ impl App {
                                                     .desired_width(
                                                         ui.available_width() - theme::BTN_W,
                                                     )
-                                                    .hint_text("Filter files…")
+                                                    .hint_text("Search files…")
                                                     .font(egui::FontId::proportional(
                                                         theme::SESSION_FONT_SZ,
                                                     ))
@@ -637,6 +687,7 @@ impl App {
                                                         self.dir_search_query.clear();
                                                         self.dir_search_debounce_query.clear();
                                                         self.dir_search_debounce_at = None;
+                                                        self.file_search_worker.cancel();
                                                     }
                                                     r.request_focus();
                                                 });
@@ -653,42 +704,56 @@ impl App {
 
                                             ui.add_space(theme::SP_SM);
 
-                                            let debounced_dir_query = if self.dir_search_active
+                                            // ── Dispatch to file search worker ─────────
+                                            let show_search_results = if self.dir_search_active
                                                 && !self.dir_search_query.is_empty()
-                                                && self.dir_search_debounce_at.map_or(true, |t| {
+                                            {
+                                                let debounce_ready = self.dir_search_debounce_at.map_or(true, |t| {
                                                     t.elapsed() >= Duration::from_millis(150)
-                                                }) {
-                                                Some(self.dir_search_query.clone())
-                                            } else {
-                                                if self.dir_search_debounce_at.is_some_and(|t| {
-                                                    t.elapsed() < Duration::from_millis(150)
-                                                }) {
+                                                });
+                                                if debounce_ready {
+                                                    let results = self.file_search_worker.results();
+                                                    if results.query != self.dir_search_query || results.root != *cwd {
+                                                        drop(results);
+                                                        self.file_search_worker.search(
+                                                            self.dir_search_query.clone(),
+                                                            cwd.clone(),
+                                                        );
+                                                    }
+                                                } else {
                                                     ctx.request_repaint_after(
                                                         std::time::Duration::from_millis(160),
                                                     );
                                                 }
-                                                None
+                                                true
+                                            } else {
+                                                false
                                             };
 
-                                            if let Some(ref q) = debounced_dir_query {
-                                                let matcher = SkimMatcherV2::default();
-                                                let mut flat = Vec::new();
-                                                collect_all_files(cwd, &mut flat, 5);
-                                                flat.sort_by(|a, b| a.name.cmp(&b.name));
-                                                let filtered: Vec<FileEntry> = flat
-                                                    .into_iter()
-                                                    .filter(|e| {
-                                                        matcher.fuzzy_match(&e.name, q).is_some()
-                                                    })
-                                                    .take(100)
-                                                    .collect();
-                                                render_flat_file_list(
-                                                    ui,
-                                                    &filtered,
-                                                    cwd,
-                                                    &mut open_editor,
-                                                    &mut open_terminal_at,
-                                                );
+                                            if show_search_results {
+                                                let results = self.file_search_worker.results();
+                                                if !results.completed {
+                                                    ui.label(
+                                                        egui::RichText::new("Searching…")
+                                                            .italics()
+                                                            .color(theme::active().overlay0)
+                                                            .size(12.0),
+                                                    );
+                                                } else {
+                                                    let entries: Vec<FileEntry> = results.matches.iter().map(|m| FileEntry {
+                                                        name: m.name.clone(),
+                                                        path: m.path.clone(),
+                                                        is_dir: m.is_dir,
+                                                    }).collect();
+                                                    drop(results);
+                                                    render_flat_file_list(
+                                                        ui,
+                                                        &entries,
+                                                        cwd,
+                                                        &mut open_editor,
+                                                        &mut open_terminal_at,
+                                                    );
+                                                }
                                             } else {
                                                 let mut cache = SubdirCache {
                                                     map: &mut self.subdir_cache,
@@ -831,6 +896,7 @@ impl App {
                                                 ))
                                                 .frame(false),
                                             )
+                                            .on_hover_text("Toggle notes (Ctrl+Shift+J)")
                                             .clicked()
                                         {
                                             self.notes_panel_collapsed =
@@ -899,6 +965,18 @@ impl App {
                         .unwrap_or(false),
                     GitStageAction::Unstage(path) => Command::new("git")
                         .args(["reset", "HEAD", "--", path])
+                        .current_dir(cwd)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false),
+                    GitStageAction::StageAll => Command::new("git")
+                        .args(["add", "-A"])
+                        .current_dir(cwd)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false),
+                    GitStageAction::UnstageAll => Command::new("git")
+                        .args(["reset", "HEAD"])
                         .current_dir(cwd)
                         .status()
                         .map(|s| s.success())
@@ -1064,9 +1142,15 @@ impl App {
                 let tab_h   = theme::HEADER_H;
                 let panel_h = panel_rect.height();
 
+                let tab_actions_w = theme::TAB_ACTIONS_W;
+                let tab_scroll_w = (panel_rect.width() - tab_actions_w).max(0.0);
                 let tab_bar_rect = egui::Rect::from_min_size(
                     panel_rect.min,
-                    egui::vec2(panel_rect.width(), tab_h),
+                    egui::vec2(tab_scroll_w, tab_h),
+                );
+                let tab_actions_rect = egui::Rect::from_min_size(
+                    egui::pos2(panel_rect.min.x + tab_scroll_w, panel_rect.min.y),
+                    egui::vec2(tab_actions_w, tab_h),
                 );
                 let content_rect = egui::Rect::from_min_size(
                     egui::pos2(panel_rect.min.x, panel_rect.min.y + tab_h),
@@ -1267,6 +1351,78 @@ impl App {
                                 }
                             });
                         });
+                });
+
+                // ── Tab-bar action buttons (split / close-all) ──────────
+                ui.allocate_ui_at_rect(tab_actions_rect, |ui| {
+                    ui.painter().rect_filled(tab_actions_rect, 0.0, theme::active().surface0);
+                    // Left separator
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            tab_actions_rect.left_top(),
+                            egui::vec2(theme::STROKE_THIN, tab_h),
+                        ),
+                        0.0,
+                        theme::active().surface2,
+                    );
+                    let icon_sz = egui::vec2(theme::BTN_W, tab_h);
+                    let t = theme::active();
+                    let mut x = tab_actions_rect.min.x + 2.0;
+
+                    let icon_stroke = egui::Stroke::new(1.2, t.subtext1);
+                    let icon_hover_stroke = egui::Stroke::new(1.2, t.text);
+                    let icon_inset = 6.0_f32;
+
+                    // Split horizontal (side-by-side)
+                    let split_h_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
+                    let split_h_resp = ui.interact(split_h_rect, egui::Id::new("tab_split_h"), egui::Sense::click());
+                    let sh_stroke = if split_h_resp.hovered() {
+                        ui.painter().rect_filled(split_h_rect, 2.0, t.surface2);
+                        icon_hover_stroke
+                    } else { icon_stroke };
+                    {
+                        let r = split_h_rect.shrink(icon_inset);
+                        let p = ui.painter();
+                        p.rect_stroke(r, 1.0, sh_stroke);
+                        p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
+                    }
+                    if split_h_resp.on_hover_text("Split horizontal (Ctrl+Shift+\\)").clicked() {
+                        split_request = Some(SplitDir::Horizontal);
+                    }
+                    x += icon_sz.x;
+
+                    // Split vertical (top-bottom)
+                    let split_v_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
+                    let split_v_resp = ui.interact(split_v_rect, egui::Id::new("tab_split_v"), egui::Sense::click());
+                    let sv_stroke = if split_v_resp.hovered() {
+                        ui.painter().rect_filled(split_v_rect, 2.0, t.surface2);
+                        icon_hover_stroke
+                    } else { icon_stroke };
+                    {
+                        let r = split_v_rect.shrink(icon_inset);
+                        let p = ui.painter();
+                        p.rect_stroke(r, 1.0, sv_stroke);
+                        p.line_segment([r.left_center(), r.right_center()], sv_stroke);
+                    }
+                    if split_v_resp.on_hover_text("Split vertical (Ctrl+Shift+-)").clicked() {
+                        split_request = Some(SplitDir::Vertical);
+                    }
+                    x += icon_sz.x;
+
+                    // Close all tabs in workspace
+                    let close_all_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
+                    let close_all_resp = ui.interact(close_all_rect, egui::Id::new("tab_close_all"), egui::Sense::click());
+                    if close_all_resp.hovered() {
+                        ui.painter().rect_filled(close_all_rect, 2.0, t.danger_bg);
+                    }
+                    ui.painter().text(
+                        close_all_rect.center(), egui::Align2::CENTER_CENTER,
+                        "\u{2716}", egui::FontId::proportional(12.0),
+                        t.danger_fg,
+                    );
+                    if close_all_resp.on_hover_text("Close all sessions").clicked() {
+                        self.show_close_all_confirm = true;
+                    }
                 });
 
                 // Tab drag-to-reorder: finalize on pointer release
@@ -1828,12 +1984,18 @@ impl App {
                         Some(AppAction::FocusSessionSearch)
                     } else if i.consume_key(cs, egui::Key::P) {
                         Some(AppAction::FocusFileSearch)
+                    } else if i.consume_key(cs, egui::Key::D) {
+                        Some(AppAction::RightTabDirectory)
                     } else if i.consume_key(cs, egui::Key::Space) {
                         Some(AppAction::OpenQuickSwitcher)
+                    } else if i.consume_key(cs, egui::Key::N) {
+                        Some(AppAction::SearchAllSessions)
                     } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
-                    } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) && (self.show_shortcut_help || self.term_search.active) {
-                        if self.term_search.active {
+                    } else if (self.show_shortcut_help || self.term_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                        if self.show_global_search {
+                            Some(AppAction::SearchAllSessions)
+                        } else if self.term_search.active {
                             Some(AppAction::SearchTerminal)
                         } else {
                             Some(AppAction::ToggleShortcutHelp)
@@ -1861,7 +2023,7 @@ impl App {
                             self.session_search_query.clear();
                         }
                     }
-                    Some(AppAction::FocusFileSearch) => {
+                    Some(AppAction::FocusFileSearch) | Some(AppAction::RightTabDirectory) => {
                         self.show_right_panel = true;
                         self.right_tab = RightTab::Directory;
                         self.dir_search_active = !self.dir_search_active;
@@ -1869,6 +2031,7 @@ impl App {
                             self.dir_search_query.clear();
                             self.dir_search_debounce_query.clear();
                             self.dir_search_debounce_at = None;
+                            self.file_search_worker.cancel();
                         }
                     }
                     Some(AppAction::SearchTerminal) => {
@@ -1877,6 +2040,19 @@ impl App {
                             self.term_search.query.clear();
                             self.term_search.matches.clear();
                             self.term_search.current_index = None;
+                        }
+                    }
+                    Some(AppAction::SearchAllSessions) => {
+                        self.show_global_search = !self.show_global_search;
+                        if self.show_global_search {
+                            self.show_left_panel = true;
+                            self.session_search_active = false;
+                            self.session_search_query.clear();
+                        } else {
+                            self.global_search_query.clear();
+                            self.global_search_debounce_at = None;
+                            self.global_search_selected = 0;
+                            self.search_worker.cancel();
                         }
                     }
                     _ => {}
@@ -1990,6 +2166,7 @@ impl App {
                                             self.dir_search_query.clear();
                                             self.dir_search_debounce_query.clear();
                                             self.dir_search_debounce_at = None;
+                                            self.file_search_worker.cancel();
                                         }
                                     }
                                     AppAction::PreviousTab => {
@@ -2025,6 +2202,13 @@ impl App {
                                     AppAction::RightTabDirectory => {
                                         self.show_right_panel = true;
                                         self.right_tab = RightTab::Directory;
+                                        self.dir_search_active = !self.dir_search_active;
+                                        if !self.dir_search_active {
+                                            self.dir_search_query.clear();
+                                            self.dir_search_debounce_query.clear();
+                                            self.dir_search_debounce_at = None;
+                                            self.file_search_worker.cancel();
+                                        }
                                     }
                                     AppAction::RightTabGitDiff => {
                                         self.show_right_panel = true;
@@ -2799,5 +2983,7 @@ impl App {
         self.render_workspace_save_dialog(ctx);
 
         self.render_workspace_edit_dialog(ctx);
+
+        self.render_close_all_confirm(ctx);
     }
 }

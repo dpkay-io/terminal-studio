@@ -57,6 +57,9 @@ pub enum AppAction {
 
     // Terminal search
     SearchTerminal,
+
+    // Global search across all sessions
+    SearchAllSessions,
 }
 
 impl AppAction {
@@ -93,6 +96,7 @@ impl AppAction {
             Self::ToggleShortcutHelp => "toggle_shortcut_help",
             Self::OpenQuickSwitcher => "open_quick_switcher",
             Self::SearchTerminal => "search_terminal",
+            Self::SearchAllSessions => "search_all_sessions",
         }
     }
 
@@ -129,6 +133,7 @@ impl AppAction {
             "toggle_shortcut_help" => Some(Self::ToggleShortcutHelp),
             "open_quick_switcher" => Some(Self::OpenQuickSwitcher),
             "search_terminal" => Some(Self::SearchTerminal),
+            "search_all_sessions" => Some(Self::SearchAllSessions),
             _ => None,
         }
     }
@@ -156,7 +161,7 @@ impl AppAction {
             Self::OpenSettings => "Open settings",
             Self::NextWorkspace => "Next workspace",
             Self::PrevWorkspace => "Previous workspace",
-            Self::RightTabDirectory => "Directory panel",
+            Self::RightTabDirectory => "Search in directory",
             Self::RightTabGitDiff => "Git diff panel",
             Self::ToggleNotes => "Toggle notes",
             Self::DuplicateSession => "Duplicate session",
@@ -166,6 +171,7 @@ impl AppAction {
             Self::ToggleShortcutHelp => "Keyboard shortcuts",
             Self::OpenQuickSwitcher => "Quick switcher",
             Self::SearchTerminal => "Search terminal",
+            Self::SearchAllSessions => "Search all sessions",
         }
     }
 
@@ -386,6 +392,8 @@ impl ShortcutRegistry {
                 },
                 AppAction::SearchTerminal,
             ),
+            // Global search across all sessions
+            (Shortcut::cs(egui::Key::N), AppAction::SearchAllSessions),
         ]
     }
 
@@ -443,7 +451,6 @@ impl ShortcutRegistry {
             ShortcutGroup {
                 name: "Right Panel",
                 entries: vec![
-                    (AppAction::RightTabDirectory, Shortcut::cs(egui::Key::D)),
                     (AppAction::RightTabGitDiff, Shortcut::cs(egui::Key::G)),
                     (AppAction::ToggleNotes, Shortcut::cs(egui::Key::J)),
                 ],
@@ -457,6 +464,7 @@ impl ShortcutRegistry {
                 entries: vec![
                     (AppAction::FocusSessionSearch, Shortcut::cs(egui::Key::F)),
                     (AppAction::FocusFileSearch, Shortcut::cs(egui::Key::P)),
+                    (AppAction::RightTabDirectory, Shortcut::cs(egui::Key::D)),
                     (
                         AppAction::SearchTerminal,
                         Shortcut {
@@ -466,6 +474,7 @@ impl ShortcutRegistry {
                             key: egui::Key::F,
                         },
                     ),
+                    (AppAction::SearchAllSessions, Shortcut::cs(egui::Key::N)),
                 ],
             },
             ShortcutGroup {
@@ -555,6 +564,7 @@ mod tests {
             AppAction::ToggleShortcutHelp,
             AppAction::OpenQuickSwitcher,
             AppAction::SearchTerminal,
+            AppAction::SearchAllSessions,
         ];
         for a in actions {
             assert!(reg.label_for(a).is_some(), "Missing label for {:?}", a);

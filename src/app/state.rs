@@ -145,11 +145,19 @@ impl App {
             git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
             md_prefer_preview: false,
             term_search: crate::search::SearchState::new(),
+            show_global_search: false,
+            global_search_query: String::new(),
+            global_search_debounce_at: None,
+            search_worker: crate::search_worker::SearchWorker::spawn(ctx.clone()),
+            global_search_selected: 0,
+            file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
             detected_urls: Vec::new(),
             tab_drag_source: None,
             deferred_spawn: None,
             deferred_duplicate: false,
             deferred_open_workspace: None,
+            show_close_all_confirm: false,
+            session_workspace_filter: None,
         };
 
         let (init_cols, init_rows) = {

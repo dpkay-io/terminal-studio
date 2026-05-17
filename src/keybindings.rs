@@ -331,6 +331,15 @@ impl KeybindingsConfig {
                 },
                 AppAction::SearchTerminal,
             ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::N,
+                },
+                AppAction::SearchAllSessions,
+            ),
         ];
 
         defaults

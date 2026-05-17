@@ -1,6 +1,7 @@
-use super::super::pane::PaneContent;
+use super::super::pane::{PaneContent, PaneEntry};
 use super::super::workspace_ui::PRESET_COLORS;
 use super::super::App;
+use crate::pane_tree::PaneNode;
 use crate::theme;
 use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -36,8 +37,8 @@ impl App {
                     }
                 });
 
-            let dialog_w = (screen_rect.width() * 0.85).clamp(600.0, 1400.0);
-            let dialog_h = (screen_rect.height() * 0.80).clamp(400.0, 900.0);
+            let dialog_w = (screen_rect.width() * 0.90).clamp(600.0, 1800.0);
+            let dialog_h = (screen_rect.height() * 0.90).clamp(400.0, 1200.0);
 
             egui::Area::new(egui::Id::new("quick_switcher_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
@@ -104,7 +105,32 @@ impl App {
                             if !search_resp.has_focus() {
                                 search_resp.request_focus();
                             }
-                            ui.add_space(theme::SP_LG);
+                            ui.add_space(theme::SP_SM);
+
+                            // Hotkey hints
+                            ui.horizontal(|ui| {
+                                let hint = |ui: &mut egui::Ui, key: &str, desc: &str| {
+                                    ui.label(
+                                        egui::RichText::new(key)
+                                            .size(11.0)
+                                            .strong()
+                                            .color(t.base)
+                                            .background_color(t.overlay0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(desc)
+                                            .size(11.0)
+                                            .color(t.subtext0),
+                                    );
+                                    ui.add_space(theme::SP_LG);
+                                };
+                                hint(ui, " 1-9 ", "workspace");
+                                hint(ui, " a-z ", "session");
+                                hint(ui, " Enter ", "first match");
+                                hint(ui, " Esc ", "close");
+                            });
+
+                            ui.add_space(theme::SP_SM);
                             ui.separator();
                             ui.add_space(theme::SP_MD);
 
@@ -835,6 +861,176 @@ impl App {
             } else if cancel {
                 self.workspace_edit_dialog = None;
             }
+        }
+    }
+
+    pub(in crate::app) fn render_close_all_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_close_all_confirm {
+            return;
+        }
+
+        let mut do_close = false;
+        let mut cancel = false;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = 340.0_f32;
+
+        egui::Area::new(egui::Id::new("close_all_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    egui::Id::new("close_all_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        egui::Area::new(egui::Id::new("close_all_dialog"))
+            .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 60.0))
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::same(theme::SP_XL))
+                    .show(ui, |ui| {
+                        ui.set_min_width(dialog_w);
+
+                        let (title, count) = if let Some(ws_filter) = self.session_workspace_filter {
+                            let filter_name = match ws_filter {
+                                None => "Other".to_string(),
+                                Some(id) => self
+                                    .workspace_store
+                                    .workspaces
+                                    .iter()
+                                    .find(|w| w.id == id)
+                                    .map(|w| w.name.clone())
+                                    .unwrap_or_else(|| "Unknown".to_string()),
+                            };
+                            let cnt = self.panes.iter().filter(|p| {
+                                Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter
+                            }).count();
+                            (format!("Close \"{}\" Sessions", filter_name), cnt)
+                        } else {
+                            ("Close All Sessions".to_string(), self.panes.len())
+                        };
+                        ui.label(
+                            egui::RichText::new(&title)
+                                .strong()
+                                .size(theme::DIALOG_TITLE_SZ),
+                        );
+                        ui.add_space(theme::SP_MD);
+
+                        ui.label(format!(
+                            "This will close {} session{}. Are you sure?",
+                            count,
+                            if count == 1 { "" } else { "s" }
+                        ));
+                        ui.add_space(theme::SP_LG);
+
+                        if ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                        }) {
+                            cancel = true;
+                        }
+
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Close All")
+                                            .color(egui::Color32::WHITE),
+                                    )
+                                    .fill(egui::Color32::from_rgb(180, 40, 40)),
+                                )
+                                .clicked()
+                            {
+                                do_close = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+            });
+
+        if do_close {
+            self.show_close_all_confirm = false;
+
+            let pane_ids_to_close: Vec<u32> = if let Some(ws_filter) = self.session_workspace_filter {
+                self.panes
+                    .iter()
+                    .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter)
+                    .map(|p| p.id)
+                    .collect()
+            } else {
+                self.panes.iter().map(|p| p.id).collect()
+            };
+
+            let session_ids: Vec<u32> = self
+                .panes
+                .iter()
+                .filter(|p| pane_ids_to_close.contains(&p.id))
+                .filter_map(|p| match &p.content {
+                    PaneContent::Terminal(sid) => Some(*sid),
+                    _ => None,
+                })
+                .collect();
+
+            self.panes.retain(|p| !pane_ids_to_close.contains(&p.id));
+            for pid in &pane_ids_to_close {
+                self.pane_trees.remove(pid);
+            }
+            if self.active_pane_id.map_or(false, |id| pane_ids_to_close.contains(&id)) {
+                self.active_pane_id = self.panes.last().map(|p| p.id);
+            }
+
+            for sid in &session_ids {
+                self.uninit_sessions.remove(sid);
+            }
+            self.sessions.retain(|e| !session_ids.contains(&e.id));
+
+            self.active_id = if let Some(apid) = self.active_pane_id {
+                self.panes.iter().find(|p| p.id == apid).and_then(|p| match &p.content {
+                    PaneContent::Terminal(sid) => Some(*sid),
+                    _ => None,
+                }).or_else(|| self.sessions.first().map(|e| e.id))
+            } else {
+                self.sessions.first().map(|e| e.id)
+            };
+            self.update_is_active_flags();
+
+            if self.panes.is_empty() {
+                if let Some(sid) = self.active_id {
+                    let pane_id = self.next_pane_id;
+                    self.next_pane_id += 1;
+                    self.panes.push(PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::Terminal(sid),
+                        manual_width: None,
+                        last_size: (0, 0),
+                    });
+                    self.pane_trees.insert(
+                        pane_id,
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (0, 0),
+                        },
+                    );
+                    self.active_pane_id = Some(pane_id);
+                }
+            }
+
+            self.session_workspace_filter = None;
+            self.save_session();
+        } else if cancel {
+            self.show_close_all_confirm = false;
         }
     }
 }

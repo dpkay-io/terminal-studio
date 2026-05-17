@@ -3,6 +3,8 @@ use crate::theme;
 pub(super) enum GitStageAction {
     Stage(String),
     Unstage(String),
+    StageAll,
+    UnstageAll,
 }
 
 pub(super) struct GitDiffResult {
@@ -80,12 +82,33 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
             }
         }
 
-        ui.label(
-            egui::RichText::new("Staged")
-                .strong()
-                .size(theme::STATUS_FONT_SZ)
-                .color(theme::active().git_added),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Staged")
+                    .strong()
+                    .size(theme::STATUS_FONT_SZ)
+                    .color(theme::active().git_added),
+            );
+            if !staged.is_empty() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{2212}")
+                                    .monospace()
+                                    .size(14.0)
+                                    .color(theme::active().git_removed),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Unstage All")
+                        .clicked()
+                    {
+                        action = Some(GitStageAction::UnstageAll);
+                    }
+                });
+            }
+        });
         ui.add_space(theme::SP_SM);
         if staged.is_empty() {
             ui.label(
@@ -155,11 +178,30 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
         ui.add_space(theme::SP_SM);
 
         if !unstaged.is_empty() {
-            ui.label(
-                egui::RichText::new("Changes")
-                    .strong()
-                    .size(theme::STATUS_FONT_SZ),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("Changes")
+                        .strong()
+                        .size(theme::STATUS_FONT_SZ),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("+")
+                                    .monospace()
+                                    .size(14.0)
+                                    .color(theme::active().git_added),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Stage All")
+                        .clicked()
+                    {
+                        action = Some(GitStageAction::StageAll);
+                    }
+                });
+            });
             ui.add_space(theme::SP_SM);
             for entry in &unstaged {
                 let resp = ui.horizontal(|ui| {

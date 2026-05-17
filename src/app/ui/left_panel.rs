@@ -10,6 +10,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 impl App {
     pub(in crate::app) fn render_left_panel(&mut self, ctx: &egui::Context) {
@@ -127,6 +128,32 @@ impl App {
                                         )
                                         .response
                                         .on_hover_text("New terminal (Ctrl+Shift+T)");
+                                        {
+                                            let visible_count = if let Some(ws_filter) = self.session_workspace_filter {
+                                                self.panes.iter().filter(|p| {
+                                                    Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter
+                                                }).count()
+                                            } else {
+                                                self.panes.len()
+                                            };
+                                            if visible_count > 1 {
+                                                let btn_label = if self.session_workspace_filter.is_some() {
+                                                    "Close Shown"
+                                                } else {
+                                                    "Close All"
+                                                };
+                                                if ui
+                                                    .button(
+                                                        egui::RichText::new(btn_label)
+                                                            .size(theme::HEADER_FONT_SZ),
+                                                    )
+                                                    .on_hover_text("Close all visible sessions")
+                                                    .clicked()
+                                                {
+                                                    self.show_close_all_confirm = true;
+                                                }
+                                            }
+                                        }
                                         if let Some(ref fp) = active_fg {
                                             if ui
                                                 .button(
@@ -149,7 +176,7 @@ impl App {
                         ui.separator();
 
                         // ── Session search bar ────────────────────────────
-                        if self.session_search_active {
+                        if self.session_search_active && !self.show_global_search {
                             let search_id = egui::Id::new("session_search_input");
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new("🔍").size(12.0));
@@ -169,7 +196,209 @@ impl App {
                             ui.add_space(theme::SP_XS);
                         }
 
+                        // ── Global search bar (search across all sessions) ──
+                        if self.show_global_search {
+                            let search_id = egui::Id::new("global_search_input");
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("🔎").size(12.0));
+                                let te = egui::TextEdit::singleline(&mut self.global_search_query)
+                                    .desired_width(ui.available_width() - theme::BTN_W)
+                                    .hint_text("Search in all sessions…")
+                                    .font(egui::FontId::proportional(theme::SESSION_FONT_SZ))
+                                    .id(search_id);
+                                let r = ui.add(te);
+                                if r.changed() {
+                                    self.global_search_debounce_at = Some(Instant::now());
+                                    self.global_search_selected = 0;
+                                }
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))
+                                {
+                                    self.show_global_search = false;
+                                    self.global_search_query.clear();
+                                    self.global_search_debounce_at = None;
+                                    self.global_search_selected = 0;
+                                    self.search_worker.cancel();
+                                }
+                                r.request_focus();
+                            });
+
+                            // Status line
+                            {
+                                let results = self.search_worker.results();
+                                let status = if results.query.is_empty() {
+                                    String::new()
+                                } else if !results.completed {
+                                    "Searching\u{2026}".to_string()
+                                } else {
+                                    let n = results.matches.len();
+                                    if n == 0 {
+                                        "No matches".to_string()
+                                    } else {
+                                        format!("{} match{}", n, if n == 1 { "" } else { "es" })
+                                    }
+                                };
+                                if !status.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(&status)
+                                            .size(10.0)
+                                            .color(theme::active().subtext0),
+                                    );
+                                }
+                            }
+                            ui.add_space(theme::SP_XS);
+                        }
+
                         let session_filter = self.session_search_query.clone();
+
+                        // ── Workspace filter dropdown ────────────────────────
+                        {
+                            let ws_names: Vec<(Option<Option<u64>>, String)> = {
+                                let mut items: Vec<(Option<Option<u64>>, String)> = vec![(None, "All Workspaces".to_string())];
+                                for w in &self.workspace_store.workspaces {
+                                    items.push((Some(Some(w.id)), w.name.clone()));
+                                }
+                                items.push((Some(None), "Other".to_string()));
+                                items
+                            };
+                            let selected_label = match self.session_workspace_filter {
+                                None => "All Workspaces".to_string(),
+                                Some(None) => "Other".to_string(),
+                                Some(Some(id)) => self
+                                    .workspace_store
+                                    .workspaces
+                                    .iter()
+                                    .find(|w| w.id == id)
+                                    .map(|w| w.name.clone())
+                                    .unwrap_or_else(|| { self.session_workspace_filter = None; "All Workspaces".to_string() }),
+                            };
+                            egui::ComboBox::from_id_source("ws_session_filter")
+                                .width(ui.available_width() - 12.0)
+                                .selected_text(
+                                    egui::RichText::new(&selected_label)
+                                        .size(theme::SESSION_FONT_SZ),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for (val, name) in &ws_names {
+                                        let is_selected = self.session_workspace_filter == *val;
+                                        if ui.selectable_label(is_selected, name).clicked() {
+                                            self.session_workspace_filter = *val;
+                                        }
+                                    }
+                                });
+                            ui.add_space(theme::SP_XS);
+                        }
+
+                        // ── Global search results list ────────────────────────
+                        if self.show_global_search {
+                            let results = self.search_worker.results();
+                            let matches = results.matches.clone();
+                            drop(results);
+
+                            // Arrow key nav + Enter
+                            if !matches.is_empty() {
+                                let (up, down, enter) = ctx.input_mut(|i| {
+                                    (
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                                        i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                                    )
+                                });
+                                if up && self.global_search_selected > 0 {
+                                    self.global_search_selected -= 1;
+                                }
+                                if down && self.global_search_selected + 1 < matches.len() {
+                                    self.global_search_selected += 1;
+                                }
+                                if enter {
+                                    let sel = self.global_search_selected.min(matches.len() - 1);
+                                    let m = &matches[sel];
+                                    clicked_sidebar_pane_id = self
+                                        .panes
+                                        .iter()
+                                        .find(|p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == m.session_id))
+                                        .map(|p| p.id);
+                                    self.show_global_search = false;
+                                    self.global_search_query.clear();
+                                    self.global_search_debounce_at = None;
+                                    self.global_search_selected = 0;
+                                    self.search_worker.cancel();
+                                }
+                            }
+
+                            egui::ScrollArea::vertical()
+                                .id_source("global_search_scroll")
+                                .show(ui, |ui| {
+                                    let t = theme::active();
+                                    let mut current_session: Option<u32> = None;
+                                    for (i, m) in matches.iter().enumerate() {
+                                        if current_session != Some(m.session_id) {
+                                            current_session = Some(m.session_id);
+                                            if i > 0 {
+                                                ui.add_space(theme::SP_SM);
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(&m.session_title)
+                                                    .size(11.0)
+                                                    .strong()
+                                                    .color(t.blue),
+                                            );
+                                            ui.add_space(theme::SP_XS);
+                                        }
+
+                                        let selected = i == self.global_search_selected;
+                                        let bg = if selected {
+                                            t.bg_row_active
+                                        } else {
+                                            egui::Color32::TRANSPARENT
+                                        };
+
+                                        let (resp, painter) = ui.allocate_painter(
+                                            egui::vec2(ui.available_width(), 20.0),
+                                            egui::Sense::click(),
+                                        );
+                                        let row_rect = resp.rect;
+
+                                        if selected || resp.hovered() {
+                                            let hover_bg = if selected { bg } else { t.bg_row_hover };
+                                            painter.rect_filled(row_rect, 2.0, hover_bg);
+                                        }
+
+                                        let text = &m.line_text;
+                                        let max_chars = ((row_rect.width() / 7.0) as usize).max(20);
+                                        let display = if text.len() > max_chars {
+                                            format!("{}\u{2026}", &text[..max_chars])
+                                        } else {
+                                            text.clone()
+                                        };
+                                        painter
+                                            .with_clip_rect(row_rect)
+                                            .text(
+                                                egui::pos2(
+                                                    row_rect.min.x + 4.0,
+                                                    row_rect.center().y,
+                                                ),
+                                                egui::Align2::LEFT_CENTER,
+                                                &display,
+                                                egui::FontId::monospace(11.0),
+                                                if selected { t.text } else { t.subtext0 },
+                                            );
+
+                                        if resp.clicked() {
+                                            clicked_sidebar_pane_id = self
+                                                .panes
+                                                .iter()
+                                                .find(|p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == m.session_id))
+                                                .map(|p| p.id);
+                                            self.show_global_search = false;
+                                            self.global_search_query.clear();
+                                            self.global_search_debounce_at = None;
+                                            self.global_search_selected = 0;
+                                            self.search_worker.cancel();
+                                        }
+                                    }
+                                });
+                        } else {
+                        // ── Normal session list ───────────────────────────────
 
                         egui::ScrollArea::vertical()
                             .id_source("sessions_scroll")
@@ -262,6 +491,13 @@ impl App {
                                         && matcher.fuzzy_match(&label, &session_filter).is_none()
                                     {
                                         continue;
+                                    }
+
+                                    if let Some(ws_filter) = self.session_workspace_filter {
+                                        let pane_ws = Self::pane_group(&self.sessions, &self.workspace_store, pane);
+                                        if pane_ws != ws_filter {
+                                            continue;
+                                        }
                                     }
 
                                     let is_active = self.active_pane_id == Some(pane.id);
@@ -367,6 +603,7 @@ impl App {
                                     }
                                 }
                             });
+                        } // end else (normal session list vs global search)
                     });
 
                     // ── Draggable divider ──────────────────────────────────────
@@ -439,6 +676,7 @@ impl App {
                                                 ))
                                                 .frame(false),
                                             )
+                                            .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
                                             .clicked()
                                         {
                                             self.workspace_panel_collapsed =

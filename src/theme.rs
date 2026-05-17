@@ -395,6 +395,7 @@ pub const TAB_W: f32 = 160.0;
 pub const TAB_COLOR_STRIP_W: f32 = 3.0;
 pub const TAB_ACTIVE_HIGHLIGHT_H: f32 = 2.0;
 pub const TAB_PAD_X: f32 = 6.0;
+pub const TAB_ACTIONS_W: f32 = 76.0;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 

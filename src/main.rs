@@ -1,9 +1,11 @@
 mod app;
+mod file_search_worker;
 mod keybindings;
 mod pane_tree;
 mod pty;
 mod renderer;
 mod search;
+mod search_worker;
 mod shortcuts;
 mod single_instance;
 mod sys_monitor;
