@@ -39,9 +39,7 @@ mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
 
-use file_browser::{
-    render_dir_tree, render_flat_file_list, FileEntry, SubdirCache,
-};
+use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, SubdirCache};
 use git_diff::{render_git_diff, render_inline_diff, GitStageAction};
 use git_worker::GitWorker;
 use input::{key_to_pty_bytes, mouse_event_bytes};
@@ -619,13 +617,17 @@ impl App {
                                         if let Some(cwd) = active_cwd.as_ref() {
                                             // ── Workspace name + path ────────────────
                                             ui.horizontal(|ui| {
-                                                if let Some(ws) = self.workspace_store.find_for_cwd(cwd) {
+                                                if let Some(ws) =
+                                                    self.workspace_store.find_for_cwd(cwd)
+                                                {
                                                     let c = ws.color;
                                                     ui.label(
                                                         egui::RichText::new(&ws.name)
                                                             .strong()
                                                             .size(theme::CWD_FONT_SZ)
-                                                            .color(egui::Color32::from_rgb(c[0], c[1], c[2])),
+                                                            .color(egui::Color32::from_rgb(
+                                                                c[0], c[1], c[2],
+                                                            )),
                                                     );
                                                     ui.label(
                                                         egui::RichText::new("›")
@@ -708,12 +710,15 @@ impl App {
                                             let show_search_results = if self.dir_search_active
                                                 && !self.dir_search_query.is_empty()
                                             {
-                                                let debounce_ready = self.dir_search_debounce_at.map_or(true, |t| {
-                                                    t.elapsed() >= Duration::from_millis(150)
-                                                });
+                                                let debounce_ready =
+                                                    self.dir_search_debounce_at.map_or(true, |t| {
+                                                        t.elapsed() >= Duration::from_millis(150)
+                                                    });
                                                 if debounce_ready {
                                                     let results = self.file_search_worker.results();
-                                                    if results.query != self.dir_search_query || results.root != *cwd {
+                                                    if results.query != self.dir_search_query
+                                                        || results.root != *cwd
+                                                    {
                                                         drop(results);
                                                         self.file_search_worker.search(
                                                             self.dir_search_query.clone(),
@@ -740,11 +745,15 @@ impl App {
                                                             .size(12.0),
                                                     );
                                                 } else {
-                                                    let entries: Vec<FileEntry> = results.matches.iter().map(|m| FileEntry {
-                                                        name: m.name.clone(),
-                                                        path: m.path.clone(),
-                                                        is_dir: m.is_dir,
-                                                    }).collect();
+                                                    let entries: Vec<FileEntry> = results
+                                                        .matches
+                                                        .iter()
+                                                        .map(|m| FileEntry {
+                                                            name: m.name.clone(),
+                                                            path: m.path.clone(),
+                                                            is_dir: m.is_dir,
+                                                        })
+                                                        .collect();
                                                     drop(results);
                                                     render_flat_file_list(
                                                         ui,

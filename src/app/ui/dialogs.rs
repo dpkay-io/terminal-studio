@@ -118,9 +118,7 @@ impl App {
                                             .background_color(t.overlay0),
                                     );
                                     ui.label(
-                                        egui::RichText::new(desc)
-                                            .size(11.0)
-                                            .color(t.subtext0),
+                                        egui::RichText::new(desc).size(11.0).color(t.subtext0),
                                     );
                                     ui.add_space(theme::SP_LG);
                                 };
@@ -902,7 +900,8 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w);
 
-                        let (title, count) = if let Some(ws_filter) = self.session_workspace_filter {
+                        let (title, count) = if let Some(ws_filter) = self.session_workspace_filter
+                        {
                             let filter_name = match ws_filter {
                                 None => "Other".to_string(),
                                 Some(id) => self
@@ -913,9 +912,14 @@ impl App {
                                     .map(|w| w.name.clone())
                                     .unwrap_or_else(|| "Unknown".to_string()),
                             };
-                            let cnt = self.panes.iter().filter(|p| {
-                                Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter
-                            }).count();
+                            let cnt = self
+                                .panes
+                                .iter()
+                                .filter(|p| {
+                                    Self::pane_group(&self.sessions, &self.workspace_store, p)
+                                        == ws_filter
+                                })
+                                .count();
                             (format!("Close \"{}\" Sessions", filter_name), cnt)
                         } else {
                             ("Close All Sessions".to_string(), self.panes.len())
@@ -934,9 +938,9 @@ impl App {
                         ));
                         ui.add_space(theme::SP_LG);
 
-                        if ctx.input_mut(|i| {
-                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
-                        }) {
+                        if ctx
+                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                        {
                             cancel = true;
                         }
 
@@ -963,10 +967,13 @@ impl App {
         if do_close {
             self.show_close_all_confirm = false;
 
-            let pane_ids_to_close: Vec<u32> = if let Some(ws_filter) = self.session_workspace_filter {
+            let pane_ids_to_close: Vec<u32> = if let Some(ws_filter) = self.session_workspace_filter
+            {
                 self.panes
                     .iter()
-                    .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter)
+                    .filter(|p| {
+                        Self::pane_group(&self.sessions, &self.workspace_store, p) == ws_filter
+                    })
                     .map(|p| p.id)
                     .collect()
             } else {
@@ -987,7 +994,10 @@ impl App {
             for pid in &pane_ids_to_close {
                 self.pane_trees.remove(pid);
             }
-            if self.active_pane_id.map_or(false, |id| pane_ids_to_close.contains(&id)) {
+            if self
+                .active_pane_id
+                .map_or(false, |id| pane_ids_to_close.contains(&id))
+            {
                 self.active_pane_id = self.panes.last().map(|p| p.id);
             }
 
@@ -997,10 +1007,14 @@ impl App {
             self.sessions.retain(|e| !session_ids.contains(&e.id));
 
             self.active_id = if let Some(apid) = self.active_pane_id {
-                self.panes.iter().find(|p| p.id == apid).and_then(|p| match &p.content {
-                    PaneContent::Terminal(sid) => Some(*sid),
-                    _ => None,
-                }).or_else(|| self.sessions.first().map(|e| e.id))
+                self.panes
+                    .iter()
+                    .find(|p| p.id == apid)
+                    .and_then(|p| match &p.content {
+                        PaneContent::Terminal(sid) => Some(*sid),
+                        _ => None,
+                    })
+                    .or_else(|| self.sessions.first().map(|e| e.id))
             } else {
                 self.sessions.first().map(|e| e.id)
             };
