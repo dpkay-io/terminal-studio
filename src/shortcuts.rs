@@ -195,7 +195,12 @@ pub struct Shortcut {
 
 impl Shortcut {
     const fn cs(key: egui::Key) -> Self {
-        Shortcut { ctrl: true, shift: true, alt: false, key }
+        Shortcut {
+            ctrl: true,
+            shift: true,
+            alt: false,
+            key,
+        }
     }
 
     pub fn matches(&self, key: &egui::Key, mods: &egui::Modifiers) -> bool {
@@ -317,10 +322,8 @@ impl ShortcutRegistry {
             bindings
         };
 
-        let labels: HashMap<AppAction, String> = bindings
-            .iter()
-            .map(|(s, a)| (*a, s.label()))
-            .collect();
+        let labels: HashMap<AppAction, String> =
+            bindings.iter().map(|(s, a)| (*a, s.label())).collect();
 
         ShortcutRegistry { bindings, labels }
     }
@@ -331,7 +334,6 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::B), AppAction::ToggleLeftSidebar),
             (Shortcut::cs(egui::Key::E), AppAction::ToggleRightSidebar),
             (Shortcut::cs(egui::Key::Backtick), AppAction::FocusTerminal),
-
             // Tab management
             (Shortcut::cs(egui::Key::T), AppAction::NewTerminalTab),
             (Shortcut::cs(egui::Key::W), AppAction::CloseCurrentPane),
@@ -346,39 +348,44 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::Num9), AppAction::SwitchToTab9),
             (Shortcut::cs(egui::Key::OpenBracket), AppAction::PreviousTab),
             (Shortcut::cs(egui::Key::CloseBracket), AppAction::NextTab),
-
             // Pane splits
-            (Shortcut::cs(egui::Key::Backslash), AppAction::SplitHorizontal),
+            (
+                Shortcut::cs(egui::Key::Backslash),
+                AppAction::SplitHorizontal,
+            ),
             (Shortcut::cs(egui::Key::Minus), AppAction::SplitVertical),
-
             // Workspace
             (Shortcut::cs(egui::Key::Comma), AppAction::OpenSettings),
             (Shortcut::cs(egui::Key::PageDown), AppAction::NextWorkspace),
             (Shortcut::cs(egui::Key::PageUp), AppAction::PrevWorkspace),
-
             // Right panel tabs
             (Shortcut::cs(egui::Key::D), AppAction::RightTabDirectory),
             (Shortcut::cs(egui::Key::G), AppAction::RightTabGitDiff),
             (Shortcut::cs(egui::Key::J), AppAction::ToggleNotes),
-
             // Session
             (Shortcut::cs(egui::Key::K), AppAction::DuplicateSession),
-
             // Terminal
             (Shortcut::cs(egui::Key::C), AppAction::CopySelection),
-
             // Search
             (Shortcut::cs(egui::Key::F), AppAction::FocusSessionSearch),
             (Shortcut::cs(egui::Key::P), AppAction::FocusFileSearch),
-
             // Help
-            (Shortcut::cs(egui::Key::Slash), AppAction::ToggleShortcutHelp),
-
+            (
+                Shortcut::cs(egui::Key::Slash),
+                AppAction::ToggleShortcutHelp,
+            ),
             // Quick Switcher
             (Shortcut::cs(egui::Key::Space), AppAction::OpenQuickSwitcher),
-
             // Terminal search
-            (Shortcut { ctrl: true, shift: false, alt: false, key: egui::Key::F }, AppAction::SearchTerminal),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                    key: egui::Key::F,
+                },
+                AppAction::SearchTerminal,
+            ),
         ]
     }
 
@@ -417,7 +424,10 @@ impl ShortcutRegistry {
             ShortcutGroup {
                 name: "Pane Splits",
                 entries: vec![
-                    (AppAction::SplitHorizontal, Shortcut::cs(egui::Key::Backslash)),
+                    (
+                        AppAction::SplitHorizontal,
+                        Shortcut::cs(egui::Key::Backslash),
+                    ),
                     (AppAction::SplitVertical, Shortcut::cs(egui::Key::Minus)),
                 ],
             },
@@ -440,23 +450,30 @@ impl ShortcutRegistry {
             },
             ShortcutGroup {
                 name: "Session",
-                entries: vec![
-                    (AppAction::DuplicateSession, Shortcut::cs(egui::Key::K)),
-                ],
+                entries: vec![(AppAction::DuplicateSession, Shortcut::cs(egui::Key::K))],
             },
             ShortcutGroup {
                 name: "Search",
                 entries: vec![
                     (AppAction::FocusSessionSearch, Shortcut::cs(egui::Key::F)),
                     (AppAction::FocusFileSearch, Shortcut::cs(egui::Key::P)),
-                    (AppAction::SearchTerminal, Shortcut { ctrl: true, shift: false, alt: false, key: egui::Key::F }),
+                    (
+                        AppAction::SearchTerminal,
+                        Shortcut {
+                            ctrl: true,
+                            shift: false,
+                            alt: false,
+                            key: egui::Key::F,
+                        },
+                    ),
                 ],
             },
             ShortcutGroup {
                 name: "Help",
-                entries: vec![
-                    (AppAction::ToggleShortcutHelp, Shortcut::cs(egui::Key::Slash)),
-                ],
+                entries: vec![(
+                    AppAction::ToggleShortcutHelp,
+                    Shortcut::cs(egui::Key::Slash),
+                )],
             },
         ]
     }
@@ -469,22 +486,43 @@ mod tests {
     #[test]
     fn match_ctrl_shift_b() {
         let reg = ShortcutRegistry::new();
-        let mods = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false };
-        assert_eq!(reg.match_event(&egui::Key::B, &mods), Some(AppAction::ToggleLeftSidebar));
+        let mods = egui::Modifiers {
+            alt: false,
+            ctrl: true,
+            shift: true,
+            mac_cmd: false,
+            command: false,
+        };
+        assert_eq!(
+            reg.match_event(&egui::Key::B, &mods),
+            Some(AppAction::ToggleLeftSidebar)
+        );
     }
 
     #[test]
     fn no_match_without_shift() {
         let reg = ShortcutRegistry::new();
-        let mods = egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false };
+        let mods = egui::Modifiers {
+            alt: false,
+            ctrl: true,
+            shift: false,
+            mac_cmd: false,
+            command: false,
+        };
         assert_eq!(reg.match_event(&egui::Key::B, &mods), None);
     }
 
     #[test]
     fn label_generation() {
         let reg = ShortcutRegistry::new();
-        assert_eq!(reg.label_for(AppAction::ToggleLeftSidebar), Some("Ctrl+Shift+B"));
-        assert_eq!(reg.label_for(AppAction::SplitHorizontal), Some("Ctrl+Shift+\\"));
+        assert_eq!(
+            reg.label_for(AppAction::ToggleLeftSidebar),
+            Some("Ctrl+Shift+B")
+        );
+        assert_eq!(
+            reg.label_for(AppAction::SplitHorizontal),
+            Some("Ctrl+Shift+\\")
+        );
     }
 
     #[test]
@@ -498,15 +536,24 @@ mod tests {
     fn all_actions_have_labels() {
         let reg = ShortcutRegistry::new();
         let actions = [
-            AppAction::ToggleLeftSidebar, AppAction::ToggleRightSidebar,
-            AppAction::FocusTerminal, AppAction::NewTerminalTab,
-            AppAction::CloseCurrentPane, AppAction::SplitHorizontal,
-            AppAction::SplitVertical, AppAction::OpenSettings,
-            AppAction::NextWorkspace, AppAction::PrevWorkspace,
-            AppAction::RightTabDirectory, AppAction::RightTabGitDiff,
-            AppAction::ToggleNotes, AppAction::DuplicateSession,
-            AppAction::FocusSessionSearch, AppAction::FocusFileSearch,
-            AppAction::ToggleShortcutHelp, AppAction::OpenQuickSwitcher,
+            AppAction::ToggleLeftSidebar,
+            AppAction::ToggleRightSidebar,
+            AppAction::FocusTerminal,
+            AppAction::NewTerminalTab,
+            AppAction::CloseCurrentPane,
+            AppAction::SplitHorizontal,
+            AppAction::SplitVertical,
+            AppAction::OpenSettings,
+            AppAction::NextWorkspace,
+            AppAction::PrevWorkspace,
+            AppAction::RightTabDirectory,
+            AppAction::RightTabGitDiff,
+            AppAction::ToggleNotes,
+            AppAction::DuplicateSession,
+            AppAction::FocusSessionSearch,
+            AppAction::FocusFileSearch,
+            AppAction::ToggleShortcutHelp,
+            AppAction::OpenQuickSwitcher,
             AppAction::SearchTerminal,
         ];
         for a in actions {
@@ -519,6 +566,9 @@ mod tests {
         let reg = ShortcutRegistry::new();
         let groups = reg.groups();
         let total_entries: usize = groups.iter().map(|g| g.entries.len()).sum();
-        assert!(total_entries >= 15, "Expected at least 15 entries in help groups");
+        assert!(
+            total_entries >= 15,
+            "Expected at least 15 entries in help groups"
+        );
     }
 }

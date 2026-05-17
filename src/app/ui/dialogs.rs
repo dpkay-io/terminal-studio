@@ -1,10 +1,10 @@
+use super::super::pane::PaneContent;
+use super::super::workspace_ui::PRESET_COLORS;
+use super::super::App;
 use crate::theme;
 use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use super::super::App;
-use super::super::pane::PaneContent;
-use super::super::workspace_ui::PRESET_COLORS;
 
 impl App {
     pub(in crate::app) fn render_quick_switcher(&mut self, ctx: &egui::Context) {
@@ -51,7 +51,12 @@ impl App {
 
                             // Header with search
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("Quick Switcher").strong().size(theme::DIALOG_TITLE_SZ).color(t.text));
+                                ui.label(
+                                    egui::RichText::new("Quick Switcher")
+                                        .strong()
+                                        .size(theme::DIALOG_TITLE_SZ)
+                                        .color(t.text),
+                                );
                                 ui.add_space(theme::SP_XL);
                                 ui.label(
                                     egui::RichText::new("Ctrl+Shift+Space")
@@ -59,19 +64,30 @@ impl App {
                                         .color(t.subtext0)
                                         .background_color(t.surface1),
                                 );
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add(
-                                        egui::Button::new(egui::RichText::new("×").size(theme::DIALOG_CLOSE_SZ))
-                                            .min_size(egui::vec2(theme::BTN_W, theme::BTN_W))
-                                    ).clicked() {
-                                        close_switcher = true;
-                                    }
-                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("×")
+                                                        .size(theme::DIALOG_CLOSE_SZ),
+                                                )
+                                                .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
+                                            )
+                                            .clicked()
+                                        {
+                                            close_switcher = true;
+                                        }
+                                    },
+                                );
                             });
                             ui.add_space(theme::SP_MD);
 
                             // Escape must be consumed before TextEdit (which eats Escape to unfocus)
-                            let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                            let esc = ctx.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                            });
                             if esc {
                                 close_switcher = true;
                             }
@@ -113,12 +129,18 @@ impl App {
 
                             // Collect workspaces
                             for ws in &self.workspace_store.workspaces {
-                                let panes_in_ws: Vec<SwitcherEntry> = self.panes.iter()
-                                    .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == Some(ws.id))
+                                let panes_in_ws: Vec<SwitcherEntry> = self
+                                    .panes
+                                    .iter()
+                                    .filter(|p| {
+                                        Self::pane_group(&self.sessions, &self.workspace_store, p)
+                                            == Some(ws.id)
+                                    })
                                     .filter_map(|p| {
                                         let (label, cwd) = match &p.content {
                                             PaneContent::Terminal(sid) => {
-                                                let sess_entry = self.sessions.iter().find(|e| e.id == *sid)?;
+                                                let sess_entry =
+                                                    self.sessions.iter().find(|e| e.id == *sid)?;
                                                 let session = sess_entry.session.read();
                                                 let t_str = session.title();
                                                 let title = if t_str.is_empty() {
@@ -130,32 +152,38 @@ impl App {
                                                 (title, cwd_str)
                                             }
                                             PaneContent::DeferredTerminal { cwd, .. } => {
-                                                let cwd_str = cwd.as_ref()
+                                                let cwd_str = cwd
+                                                    .as_ref()
                                                     .map(|c| theme::short_path(c))
                                                     .unwrap_or_default();
                                                 ("(deferred)".to_string(), cwd_str)
                                             }
                                             PaneContent::FileEditor(ed) => {
-                                                let name = ed.path.file_name()
+                                                let name = ed
+                                                    .path
+                                                    .file_name()
                                                     .and_then(|n| n.to_str())
                                                     .unwrap_or("editor")
                                                     .to_string();
                                                 (name, theme::short_path(&ed.path))
                                             }
                                             PaneContent::FileDiff(d) => {
-                                                let name = d.path.file_name()
+                                                let name = d
+                                                    .path
+                                                    .file_name()
                                                     .and_then(|n| n.to_str())
                                                     .unwrap_or("diff")
                                                     .to_string();
-                                                (format!("diff: {}", name), theme::short_path(&d.path))
+                                                (
+                                                    format!("diff: {}", name),
+                                                    theme::short_path(&d.path),
+                                                )
                                             }
                                         };
                                         // Apply fuzzy filter
                                         if !query.is_empty() {
                                             let haystack = format!("{} {} {}", ws.name, label, cwd);
-                                            if matcher.fuzzy_match(&haystack, &query).is_none() {
-                                                return None;
-                                            }
+                                            matcher.fuzzy_match(&haystack, &query)?;
                                         }
                                         Some(SwitcherEntry {
                                             pane_id: p.id,
@@ -177,12 +205,18 @@ impl App {
                             }
 
                             // "Other" group (unaffiliated panes)
-                            let other_panes: Vec<SwitcherEntry> = self.panes.iter()
-                                .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p).is_none())
+                            let other_panes: Vec<SwitcherEntry> = self
+                                .panes
+                                .iter()
+                                .filter(|p| {
+                                    Self::pane_group(&self.sessions, &self.workspace_store, p)
+                                        .is_none()
+                                })
                                 .filter_map(|p| {
                                     let (label, cwd) = match &p.content {
                                         PaneContent::Terminal(sid) => {
-                                            let sess_entry = self.sessions.iter().find(|e| e.id == *sid)?;
+                                            let sess_entry =
+                                                self.sessions.iter().find(|e| e.id == *sid)?;
                                             let session = sess_entry.session.read();
                                             let t_str = session.title();
                                             let title = if t_str.is_empty() {
@@ -194,20 +228,25 @@ impl App {
                                             (title, cwd_str)
                                         }
                                         PaneContent::DeferredTerminal { cwd, .. } => {
-                                            let cwd_str = cwd.as_ref()
+                                            let cwd_str = cwd
+                                                .as_ref()
                                                 .map(|c| theme::short_path(c))
                                                 .unwrap_or_default();
                                             ("(deferred)".to_string(), cwd_str)
                                         }
                                         PaneContent::FileEditor(ed) => {
-                                            let name = ed.path.file_name()
+                                            let name = ed
+                                                .path
+                                                .file_name()
                                                 .and_then(|n| n.to_str())
                                                 .unwrap_or("editor")
                                                 .to_string();
                                             (name, theme::short_path(&ed.path))
                                         }
                                         PaneContent::FileDiff(d) => {
-                                            let name = d.path.file_name()
+                                            let name = d
+                                                .path
+                                                .file_name()
                                                 .and_then(|n| n.to_str())
                                                 .unwrap_or("diff")
                                                 .to_string();
@@ -216,9 +255,7 @@ impl App {
                                     };
                                     if !query.is_empty() {
                                         let haystack = format!("Other {} {}", label, cwd);
-                                        if matcher.fuzzy_match(&haystack, &query).is_none() {
-                                            return None;
-                                        }
+                                        matcher.fuzzy_match(&haystack, &query)?;
                                     }
                                     Some(SwitcherEntry {
                                         pane_id: p.id,
@@ -229,7 +266,13 @@ impl App {
                                 })
                                 .collect();
 
-                            if !other_panes.is_empty() || (query.is_empty() && self.panes.iter().any(|p| Self::pane_group(&self.sessions, &self.workspace_store, p).is_none())) {
+                            if !other_panes.is_empty()
+                                || (query.is_empty()
+                                    && self.panes.iter().any(|p| {
+                                        Self::pane_group(&self.sessions, &self.workspace_store, p)
+                                            .is_none()
+                                    }))
+                            {
                                 groups.push(SwitcherGroup {
                                     ws_id: None,
                                     name: "Other".to_string(),
@@ -259,7 +302,8 @@ impl App {
                                     }
 
                                     let num_cols = groups.len();
-                                    let col_width = ((dialog_w - 40.0) / num_cols as f32).clamp(180.0, 400.0);
+                                    let col_width =
+                                        ((dialog_w - 40.0) / num_cols as f32).clamp(180.0, 400.0);
 
                                     ui.horizontal_top(|ui| {
                                         for (ws_number, group) in (1u8..).zip(groups.iter()) {
@@ -268,7 +312,11 @@ impl App {
                                                 ui.set_max_width(col_width);
 
                                                 // Workspace header with color
-                                                let ws_color = egui::Color32::from_rgb(group.color[0], group.color[1], group.color[2]);
+                                                let ws_color = egui::Color32::from_rgb(
+                                                    group.color[0],
+                                                    group.color[1],
+                                                    group.color[2],
+                                                );
                                                 ui.horizontal(|ui| {
                                                     // Number badge for workspace
                                                     let badge_text = format!("{}", ws_number);
@@ -297,7 +345,10 @@ impl App {
                                                         .strong()
                                                         .size(14.0)
                                                         .color(ws_color);
-                                                    let ws_resp = ui.add(egui::Label::new(ws_label).sense(egui::Sense::click()));
+                                                    let ws_resp = ui.add(
+                                                        egui::Label::new(ws_label)
+                                                            .sense(egui::Sense::click()),
+                                                    );
                                                     if ws_resp.clicked() {
                                                         if let Some(wid) = group.ws_id {
                                                             switch_to_workspace = Some(wid);
@@ -313,7 +364,9 @@ impl App {
                                                 for entry in &group.entries {
                                                     let letter = (b'a' + letter_idx) as char;
                                                     letter_idx += 1;
-                                                    if letter_idx > 25 { break; }
+                                                    if letter_idx > 25 {
+                                                        break;
+                                                    }
 
                                                     let frame_fill = if entry.is_active {
                                                         t.surface1
@@ -322,38 +375,51 @@ impl App {
                                                     };
                                                     let frame = egui::Frame::none()
                                                         .fill(frame_fill)
-                                                        .inner_margin(egui::Margin::same(theme::SP_MD))
+                                                        .inner_margin(egui::Margin::same(
+                                                            theme::SP_MD,
+                                                        ))
                                                         .rounding(theme::ROUNDING);
 
-                                                    let resp = frame.show(ui, |ui| {
-                                                        ui.set_min_width(col_width - 20.0);
-                                                        ui.horizontal(|ui| {
-                                                            // Letter badge
-                                                            let key_badge = egui::RichText::new(format!("{}", letter))
-                                                                .size(11.0)
-                                                                .strong()
-                                                                .color(t.base)
-                                                                .background_color(t.blue);
-                                                            ui.label(key_badge);
-                                                            ui.add_space(theme::BAR_PAD_X);
-                                                            ui.vertical(|ui| {
-                                                                ui.label(
-                                                                    egui::RichText::new(&entry.label)
+                                                    let resp = frame
+                                                        .show(ui, |ui| {
+                                                            ui.set_min_width(col_width - 20.0);
+                                                            ui.horizontal(|ui| {
+                                                                // Letter badge
+                                                                let key_badge =
+                                                                    egui::RichText::new(format!(
+                                                                        "{}",
+                                                                        letter
+                                                                    ))
+                                                                    .size(11.0)
+                                                                    .strong()
+                                                                    .color(t.base)
+                                                                    .background_color(t.blue);
+                                                                ui.label(key_badge);
+                                                                ui.add_space(theme::BAR_PAD_X);
+                                                                ui.vertical(|ui| {
+                                                                    ui.label(
+                                                                        egui::RichText::new(
+                                                                            &entry.label,
+                                                                        )
                                                                         .size(13.0)
                                                                         .color(t.text),
-                                                                );
-                                                                if !entry.cwd.is_empty() {
-                                                                    ui.label(
-                                                                        egui::RichText::new(&entry.cwd)
+                                                                    );
+                                                                    if !entry.cwd.is_empty() {
+                                                                        ui.label(
+                                                                            egui::RichText::new(
+                                                                                &entry.cwd,
+                                                                            )
                                                                             .size(11.0)
                                                                             .color(t.overlay0),
-                                                                    );
-                                                                }
+                                                                        );
+                                                                    }
+                                                                });
                                                             });
-                                                        });
-                                                    }).response;
+                                                        })
+                                                        .response;
 
-                                                    if resp.interact(egui::Sense::click()).clicked() {
+                                                    if resp.interact(egui::Sense::click()).clicked()
+                                                    {
                                                         switch_to_pane = Some(entry.pane_id);
                                                     }
                                                     ui.add_space(theme::SP_SM);
@@ -377,12 +443,20 @@ impl App {
                             if query.is_empty() {
                                 // Number keys 1-9 to jump to workspace
                                 let num_keys = [
-                                    egui::Key::Num1, egui::Key::Num2, egui::Key::Num3,
-                                    egui::Key::Num4, egui::Key::Num5, egui::Key::Num6,
-                                    egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
+                                    egui::Key::Num1,
+                                    egui::Key::Num2,
+                                    egui::Key::Num3,
+                                    egui::Key::Num4,
+                                    egui::Key::Num5,
+                                    egui::Key::Num6,
+                                    egui::Key::Num7,
+                                    egui::Key::Num8,
+                                    egui::Key::Num9,
                                 ];
                                 for (i, nk) in num_keys.iter().enumerate() {
-                                    let pressed = ctx.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, *nk));
+                                    let pressed = ctx.input_mut(|inp| {
+                                        inp.consume_key(egui::Modifiers::NONE, *nk)
+                                    });
                                     if pressed && i < groups.len() {
                                         if let Some(wid) = groups[i].ws_id {
                                             switch_to_workspace = Some(wid);
@@ -394,11 +468,12 @@ impl App {
                             }
 
                             // Enter key: select first visible entry
-                            let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                            let enter = ctx.input_mut(|i| {
+                                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                            });
                             if enter {
-                                if let Some(first_entry) = groups.iter()
-                                    .flat_map(|g| g.entries.iter())
-                                    .next()
+                                if let Some(first_entry) =
+                                    groups.iter().flat_map(|g| g.entries.iter()).next()
                                 {
                                     switch_to_pane = Some(first_entry.pane_id);
                                 }
@@ -418,7 +493,8 @@ impl App {
                 if let Some(pane) = self.panes.iter().find(|p| p.id == pane_id) {
                     let group = Self::pane_group(&self.sessions, &self.workspace_store, pane);
                     if group != self.active_group {
-                        let (cols, rows) = self.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
+                        let (cols, rows) =
+                            self.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
                         self.switch_group(group, cols, rows);
                     }
                 }
@@ -430,7 +506,6 @@ impl App {
                 self.quick_switcher_query.clear();
             }
         }
-
     }
 
     pub(in crate::app) fn render_workspace_save_dialog(&mut self, ctx: &egui::Context) {
@@ -459,7 +534,11 @@ impl App {
                     egui::Frame::window(&ctx.style()).show(ui, |ui| {
                         ui.set_min_width(dialog_w);
 
-                        ui.label(egui::RichText::new("Save Workspace").strong().size(theme::DIALOG_TITLE_SZ));
+                        ui.label(
+                            egui::RichText::new("Save Workspace")
+                                .strong()
+                                .size(theme::DIALOG_TITLE_SZ),
+                        );
                         ui.add_space(theme::SP_MD);
 
                         if let Some(dlg) = &mut self.workspace_dialog {
@@ -486,16 +565,23 @@ impl App {
 
                             ui.label("Color");
                             ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
+                                ui.spacing_mut().item_spacing =
+                                    egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
                                 for &preset in PRESET_COLORS {
                                     let selected =
                                         dlg.selected_color == preset && !dlg.show_custom_picker;
                                     let swatch = egui::Button::new("")
                                         .fill(theme::from_rgb(preset))
                                         .stroke(if selected {
-                                            egui::Stroke::new(theme::STROKE_BOLD, egui::Color32::WHITE)
+                                            egui::Stroke::new(
+                                                theme::STROKE_BOLD,
+                                                egui::Color32::WHITE,
+                                            )
                                         } else {
-                                            egui::Stroke::new(theme::STROKE_THIN, egui::Color32::from_gray(60))
+                                            egui::Stroke::new(
+                                                theme::STROKE_THIN,
+                                                egui::Color32::from_gray(60),
+                                            )
                                         })
                                         .min_size(egui::vec2(24.0, 24.0))
                                         .rounding(theme::ROUNDING);
@@ -560,7 +646,6 @@ impl App {
                 self.workspace_dialog = None;
             }
         }
-
     }
 
     pub(in crate::app) fn render_workspace_edit_dialog(&mut self, ctx: &egui::Context) {
@@ -612,16 +697,23 @@ impl App {
 
                             ui.label("Color");
                             ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
+                                ui.spacing_mut().item_spacing =
+                                    egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
                                 for &preset in PRESET_COLORS {
                                     let selected =
                                         dlg.selected_color == preset && !dlg.show_custom_picker;
                                     let swatch = egui::Button::new("")
                                         .fill(theme::from_rgb(preset))
                                         .stroke(if selected {
-                                            egui::Stroke::new(theme::STROKE_BOLD, egui::Color32::WHITE)
+                                            egui::Stroke::new(
+                                                theme::STROKE_BOLD,
+                                                egui::Color32::WHITE,
+                                            )
                                         } else {
-                                            egui::Stroke::new(theme::STROKE_THIN, egui::Color32::from_gray(60))
+                                            egui::Stroke::new(
+                                                theme::STROKE_THIN,
+                                                egui::Color32::from_gray(60),
+                                            )
                                         })
                                         .min_size(egui::vec2(24.0, 24.0))
                                         .rounding(theme::ROUNDING);

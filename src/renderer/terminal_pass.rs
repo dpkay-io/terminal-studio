@@ -319,14 +319,13 @@ impl TerminalView {
         // bounds, so `cursor` is Some only when we should consider drawing.
         if let Some((cx, cy)) = cursor {
             if cursor_visible || !is_focused {
-                let cursor_origin = rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
+                let cursor_origin =
+                    rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
                 if is_focused {
                     match cursor_style {
                         CursorStyle::Block => {
-                            let cursor_rect = Rect::from_min_size(
-                                cursor_origin,
-                                vec2(cell_width, cell_height),
-                            );
+                            let cursor_rect =
+                                Rect::from_min_size(cursor_origin, vec2(cell_width, cell_height));
                             painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
                         }
                         CursorStyle::Underline => {
@@ -337,18 +336,14 @@ impl TerminalView {
                             painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
                         }
                         CursorStyle::Beam => {
-                            let cursor_rect = Rect::from_min_size(
-                                cursor_origin,
-                                vec2(2.0, cell_height),
-                            );
+                            let cursor_rect =
+                                Rect::from_min_size(cursor_origin, vec2(2.0, cell_height));
                             painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
                         }
                     }
                 } else {
-                    let cursor_rect = Rect::from_min_size(
-                        cursor_origin,
-                        vec2(cell_width, cell_height),
-                    );
+                    let cursor_rect =
+                        Rect::from_min_size(cursor_origin, vec2(cell_width, cell_height));
                     painter.rect_stroke(
                         cursor_rect,
                         0.0,
@@ -365,7 +360,11 @@ impl TerminalView {
             for screen_row in sr..=er.min(visible_rows as u16 - 1) {
                 let y = rect.min.y + screen_row as f32 * cell_height;
                 let start_col = if screen_row == sr { sc } else { 0 };
-                let end_col = if screen_row == er { ec + 1 } else { cols as u16 };
+                let end_col = if screen_row == er {
+                    ec + 1
+                } else {
+                    cols as u16
+                };
                 let x0 = rect.min.x + start_col as f32 * cell_width;
                 let x1 = rect.min.x + end_col as f32 * cell_width;
                 painter.rect_filled(

@@ -186,7 +186,10 @@ impl App {
         rows: u16,
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
-        match self.session_manager.spawn(cols, rows, cwd, shell, self.settings.scrollback_lines) {
+        match self
+            .session_manager
+            .spawn(cols, rows, cwd, shell, self.settings.scrollback_lines)
+        {
             Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 let entry = SessionEntry {
                     id,
@@ -379,7 +382,10 @@ impl App {
         swap(&mut self.show_settings, &mut view.show_settings);
         swap(&mut self.show_shortcut_help, &mut view.show_shortcut_help);
         swap(&mut self.show_quick_switcher, &mut view.show_quick_switcher);
-        swap(&mut self.quick_switcher_query, &mut view.quick_switcher_query);
+        swap(
+            &mut self.quick_switcher_query,
+            &mut view.quick_switcher_query,
+        );
         swap(&mut self.workspace_dialog, &mut view.workspace_dialog);
         swap(
             &mut self.workspace_edit_dialog,
@@ -555,7 +561,10 @@ impl App {
         rows: u16,
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
-        match self.session_manager.spawn(cols, rows, cwd, shell, self.settings.scrollback_lines) {
+        match self
+            .session_manager
+            .spawn(cols, rows, cwd, shell, self.settings.scrollback_lines)
+        {
             Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 self.uninit_sessions.insert(id);
                 self.sessions.push(SessionEntry {
@@ -921,7 +930,10 @@ impl App {
             for col in row_start..row_end {
                 let cell = &grid[alacritty_terminal::index::Line(grid_line)]
                     [alacritty_terminal::index::Column(col)];
-                if cell.flags.contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER) {
+                if cell
+                    .flags
+                    .contains(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
+                {
                     continue;
                 }
                 line.push(cell.c);

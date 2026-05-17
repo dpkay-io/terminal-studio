@@ -34,19 +34,47 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
             let path = line[3..].trim().to_string();
 
             match x {
-                b'M' => staged.push(StatusEntry { tag: "M", path: path.clone(), color: theme::active().git_modified }),
-                b'A' => staged.push(StatusEntry { tag: "A", path: path.clone(), color: theme::active().git_added }),
-                b'D' => staged.push(StatusEntry { tag: "D", path: path.clone(), color: theme::active().git_removed }),
-                b'R' => staged.push(StatusEntry { tag: "R", path: path.clone(), color: theme::active().git_renamed }),
+                b'M' => staged.push(StatusEntry {
+                    tag: "M",
+                    path: path.clone(),
+                    color: theme::active().git_modified,
+                }),
+                b'A' => staged.push(StatusEntry {
+                    tag: "A",
+                    path: path.clone(),
+                    color: theme::active().git_added,
+                }),
+                b'D' => staged.push(StatusEntry {
+                    tag: "D",
+                    path: path.clone(),
+                    color: theme::active().git_removed,
+                }),
+                b'R' => staged.push(StatusEntry {
+                    tag: "R",
+                    path: path.clone(),
+                    color: theme::active().git_renamed,
+                }),
                 _ => {}
             }
 
             if x == b'?' && y == b'?' {
-                unstaged.push(StatusEntry { tag: "?", path, color: theme::active().git_untracked });
+                unstaged.push(StatusEntry {
+                    tag: "?",
+                    path,
+                    color: theme::active().git_untracked,
+                });
             } else {
                 match y {
-                    b'M' => unstaged.push(StatusEntry { tag: "M", path, color: theme::active().git_modified }),
-                    b'D' => unstaged.push(StatusEntry { tag: "D", path, color: theme::active().git_removed }),
+                    b'M' => unstaged.push(StatusEntry {
+                        tag: "M",
+                        path,
+                        color: theme::active().git_modified,
+                    }),
+                    b'D' => unstaged.push(StatusEntry {
+                        tag: "D",
+                        path,
+                        color: theme::active().git_removed,
+                    }),
                     _ => {}
                 }
             }
@@ -79,16 +107,17 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         .frame(false),
                     );
                     let unstage_clicked = btn.on_hover_text("Unstage").clicked();
-                    let label_resp = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&entry.path)
-                                .monospace()
-                                .size(theme::STATUS_FONT_SZ),
+                    let label_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(&entry.path)
+                                    .monospace()
+                                    .size(theme::STATUS_FONT_SZ),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
                         )
-                        .truncate()
-                        .sense(egui::Sense::click()),
-                    )
-                    .on_hover_text("Click: diff · Double-click: open file");
+                        .on_hover_text("Click: diff · Double-click: open file");
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -144,16 +173,17 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         .frame(false),
                     );
                     let stage_clicked = btn.on_hover_text("Stage").clicked();
-                    let label_resp = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&entry.path)
-                                .monospace()
-                                .size(theme::STATUS_FONT_SZ),
+                    let label_resp = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(&entry.path)
+                                    .monospace()
+                                    .size(theme::STATUS_FONT_SZ),
+                            )
+                            .truncate()
+                            .sense(egui::Sense::click()),
                         )
-                        .truncate()
-                        .sense(egui::Sense::click()),
-                    )
-                    .on_hover_text("Click: diff · Double-click: open file");
+                        .on_hover_text("Click: diff · Double-click: open file");
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -211,10 +241,18 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                     .color(theme::active().overlay0),
             );
         });
-        return GitDiffResult { stage_action: action, open_diff_file, open_file };
+        return GitDiffResult {
+            stage_action: action,
+            open_diff_file,
+            open_file,
+        };
     }
 
-    GitDiffResult { stage_action: action, open_diff_file, open_file }
+    GitDiffResult {
+        stage_action: action,
+        open_diff_file,
+        open_file,
+    }
 }
 
 pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
@@ -252,7 +290,8 @@ pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
                     .color(theme::active().git_filename)
                     .size(13.0),
             );
-        } else if line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ") {
+        } else if line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ")
+        {
             // skip meta
         } else {
             ui.label(

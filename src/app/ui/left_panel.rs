@@ -1,15 +1,15 @@
-use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use super::super::pane::{PaneContent, PaneEntry};
+use super::super::title::{effective_title, shell_escape_arg};
+use super::super::workspace_ui::WorkspaceEditDialog;
+use super::super::App;
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground::ForegroundProcess;
 use crate::pty::{default_shell, ShellKind};
 use crate::theme;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use super::super::App;
-use super::super::pane::{PaneContent, PaneEntry};
-use super::super::title::{effective_title, shell_escape_arg};
-use super::super::workspace_ui::WorkspaceEditDialog;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 impl App {
     pub(in crate::app) fn render_left_panel(&mut self, ctx: &egui::Context) {
@@ -96,17 +96,27 @@ impl App {
                                                 ui.separator();
                                                 if shells.len() == 1 {
                                                     if ui.button("Open Folder…").clicked() {
-                                                        if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                                            spawn_new_session_cwd = Some((shells[0].clone(), path));
+                                                        if let Some(path) =
+                                                            rfd::FileDialog::new().pick_folder()
+                                                        {
+                                                            spawn_new_session_cwd =
+                                                                Some((shells[0].clone(), path));
                                                         }
                                                         ui.close_menu();
                                                     }
                                                 } else {
                                                     ui.menu_button("Open Folder…", |ui| {
                                                         for shell in &shells {
-                                                            if ui.button(shell.display_name()).clicked() {
-                                                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                                                    spawn_new_session_cwd = Some((shell.clone(), path));
+                                                            if ui
+                                                                .button(shell.display_name())
+                                                                .clicked()
+                                                            {
+                                                                if let Some(path) =
+                                                                    rfd::FileDialog::new()
+                                                                        .pick_folder()
+                                                                {
+                                                                    spawn_new_session_cwd =
+                                                                        Some((shell.clone(), path));
                                                                 }
                                                                 ui.close_menu();
                                                             }
@@ -114,14 +124,19 @@ impl App {
                                                     });
                                                 }
                                             },
-                                        ).response.on_hover_text("New terminal (Ctrl+Shift+T)");
+                                        )
+                                        .response
+                                        .on_hover_text("New terminal (Ctrl+Shift+T)");
                                         if let Some(ref fp) = active_fg {
                                             if ui
                                                 .button(
                                                     egui::RichText::new("Duplicate")
                                                         .size(theme::HEADER_FONT_SZ),
                                                 )
-                                                .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
+                                                .on_hover_text(format!(
+                                                    "Duplicate: {} (Ctrl+Shift+K)",
+                                                    fp.name
+                                                ))
                                                 .clicked()
                                             {
                                                 duplicate_session = true;
@@ -144,7 +159,8 @@ impl App {
                                     .font(egui::FontId::proportional(theme::SESSION_FONT_SZ))
                                     .id(search_id);
                                 let r = ui.add(te);
-                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape))
+                                {
                                     self.session_search_active = false;
                                     self.session_search_query.clear();
                                 }
@@ -180,14 +196,24 @@ impl App {
                                                             .map(|w| w.color)
                                                     };
                                                     let fg = self.foreground_worker.get(e.id);
-                                                    (effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell)), color, false)
+                                                    (
+                                                        effective_title(
+                                                            &title,
+                                                            &cwd,
+                                                            fg.as_ref(),
+                                                            Some(&e.shell),
+                                                        ),
+                                                        color,
+                                                        false,
+                                                    )
                                                 } else {
                                                     ("(missing)".to_string(), None, true)
                                                 }
                                             }
                                             PaneContent::DeferredTerminal { cwd, .. } => {
                                                 let cwd_path = cwd.clone().unwrap_or_default();
-                                                let mut text = effective_title("", &cwd_path, None, None);
+                                                let mut text =
+                                                    effective_title("", &cwd_path, None, None);
                                                 if text.is_empty() {
                                                     text = "(restored)".to_string();
                                                 }
@@ -225,12 +251,16 @@ impl App {
                                                     .file_name()
                                                     .and_then(|n| n.to_str())
                                                     .map(|s| format!("⇄ {}", s))
-                                                    .unwrap_or_else(|| format!("⇄ {}", d.path.display()));
+                                                    .unwrap_or_else(|| {
+                                                        format!("⇄ {}", d.path.display())
+                                                    });
                                                 (name, None, false)
                                             }
                                         };
 
-                                    if !session_filter.is_empty() && matcher.fuzzy_match(&label, &session_filter).is_none() {
+                                    if !session_filter.is_empty()
+                                        && matcher.fuzzy_match(&label, &session_filter).is_none()
+                                    {
                                         continue;
                                     }
 
@@ -272,7 +302,11 @@ impl App {
 
                                     // Draw quit button
                                     if quit_resp.hovered() {
-                                        painter.rect_filled(quit_rect, 0.0, theme::active().danger_bg);
+                                        painter.rect_filled(
+                                            quit_rect,
+                                            0.0,
+                                            theme::active().danger_bg,
+                                        );
                                     }
                                     painter.text(
                                         quit_rect.center(),
@@ -354,7 +388,8 @@ impl App {
                     } else {
                         theme::active().ws_div_idle
                     };
-                    ui.painter().rect_filled(div_rect, theme::STROKE_THIN, div_color);
+                    ui.painter()
+                        .rect_filled(div_rect, theme::STROKE_THIN, div_color);
                     if !self.workspace_panel_collapsed && div_resp.dragged() {
                         let delta = div_resp.drag_delta().y;
                         // Drag down → workspace grows; drag up → workspace shrinks.
@@ -479,7 +514,10 @@ impl App {
                                             const GEAR_W: f32 = 26.0;
                                             let full_w = ui.available_width();
                                             let stroke_val = if active {
-                                                egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
+                                                egui::Stroke::new(
+                                                    theme::STROKE_BOLD,
+                                                    theme::active().text,
+                                                )
                                             } else {
                                                 egui::Stroke::new(
                                                     1.0,
@@ -513,7 +551,8 @@ impl App {
                                             );
 
                                             if ui.is_rect_visible(full_rect) {
-                                                let rounding = egui::Rounding::same(theme::ROUNDING);
+                                                let rounding =
+                                                    egui::Rounding::same(theme::ROUNDING);
                                                 ui.painter().rect_filled(full_rect, rounding, fill);
                                                 ui.painter()
                                                     .rect_stroke(full_rect, rounding, stroke_val);
@@ -536,16 +575,14 @@ impl App {
                                                 });
                                                 let text_y = full_rect.center().y
                                                     - name_galley.size().y / 2.0;
-                                                ui.painter()
-                                                    .with_clip_rect(name_rect)
-                                                    .galley(
-                                                        egui::pos2(
-                                                            full_rect.left() + theme::BAR_PAD_X,
-                                                            text_y,
-                                                        ),
-                                                        name_galley,
-                                                        fg,
-                                                    );
+                                                ui.painter().with_clip_rect(name_rect).galley(
+                                                    egui::pos2(
+                                                        full_rect.left() + theme::BAR_PAD_X,
+                                                        text_y,
+                                                    ),
+                                                    name_galley,
+                                                    fg,
+                                                );
 
                                                 if *has_note {
                                                     let note_galley = ui.fonts(|f| {
@@ -637,7 +674,10 @@ impl App {
                                     let other_stroke = if other_active {
                                         egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
                                     } else {
-                                        egui::Stroke::new(theme::STROKE_THIN, theme::active().overlay0)
+                                        egui::Stroke::new(
+                                            theme::STROKE_THIN,
+                                            theme::active().overlay0,
+                                        )
                                     };
                                     let other_w = ui.available_width();
                                     let (other_rect, other_resp) = if show_other {
@@ -943,6 +983,5 @@ impl App {
                 }
             }
         }
-
     }
 }

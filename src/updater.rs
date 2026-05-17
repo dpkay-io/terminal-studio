@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GITHUB_RELEASES_URL: &str =
@@ -140,11 +140,7 @@ fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     }
 }
 
-fn parse_release(
-    shared: &Arc<Mutex<UpdateState>>,
-    ctx: &egui::Context,
-    json: &serde_json::Value,
-) {
+fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &serde_json::Value) {
     let tag = json["tag_name"].as_str().unwrap_or("");
     let version_str = tag.strip_prefix('v').unwrap_or(tag);
 
@@ -254,7 +250,9 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         // Report completion
         {
             let mut s = shared.lock().unwrap();
-            s.status = UpdateStatus::Downloading { progress_pct: 100.0 };
+            s.status = UpdateStatus::Downloading {
+                progress_pct: 100.0,
+            };
         }
         ctx.request_repaint();
 

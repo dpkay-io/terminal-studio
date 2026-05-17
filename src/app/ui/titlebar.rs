@@ -1,8 +1,8 @@
-use std::time::Duration;
+use super::super::pane::RightTab;
+use super::super::App;
 use crate::theme;
 use crate::updater::UpdateStatus;
-use super::super::App;
-use super::super::pane::RightTab;
+use std::time::Duration;
 
 impl App {
     pub(in crate::app) fn render_titlebar(&mut self, ctx: &egui::Context) {
@@ -184,8 +184,13 @@ impl App {
                     {
                         let hint_text = "Ctrl+Shift+/";
                         let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
-                        let hint_galley = painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
-                        let hint_w = if self.show_shortcut_help { 0.0 } else { hint_galley.size().x + 6.0 };
+                        let hint_galley =
+                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
+                        let hint_w = if self.show_shortcut_help {
+                            0.0
+                        } else {
+                            hint_galley.size().x + 6.0
+                        };
                         let total_w = mac_btn_w + hint_w;
                         let kb_x = r.max.x - mac_btn_w - total_w;
                         mac_kb_btn_x = kb_x;
@@ -204,7 +209,8 @@ impl App {
                             egui::Color32::TRANSPARENT
                         };
                         painter.rect_filled(kb_tbr, 4.0, bg);
-                        let icon_center = egui::pos2(kb_tbr.max.x - mac_btn_w * 0.5, kb_tbr.center().y);
+                        let icon_center =
+                            egui::pos2(kb_tbr.max.x - mac_btn_w * 0.5, kb_tbr.center().y);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
@@ -283,7 +289,8 @@ impl App {
                                 UpdateStatus::RestartRequired => "Restart to update".to_string(),
                                 _ => String::new(),
                             };
-                            let update_x = sysmon_mac_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
+                            let update_x =
+                                sysmon_mac_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
                             let br = egui::Rect::from_min_size(
                                 egui::pos2(update_x, r.min.y + theme::SP_SM),
                                 egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
@@ -332,11 +339,7 @@ impl App {
                             )
                         });
                         let name_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                ws_name,
-                                egui::FontId::proportional(13.0),
-                                tb_fg,
-                            )
+                            f.layout_no_wrap(ws_name, egui::FontId::proportional(13.0), tb_fg)
                         });
                         let total_w = prefix_galley.size().x + name_galley.size().x;
                         let start_x = r.center().x - total_w / 2.0;
@@ -433,8 +436,13 @@ impl App {
                     {
                         let hint_text = "Ctrl+Shift+/";
                         let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
-                        let hint_galley = painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
-                        let hint_w = if self.show_shortcut_help { 0.0 } else { hint_galley.size().x + 6.0 };
+                        let hint_galley =
+                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
+                        let hint_w = if self.show_shortcut_help {
+                            0.0
+                        } else {
+                            hint_galley.size().x + 6.0
+                        };
                         let total_w = btn_w + hint_w;
                         let kb_x = r.max.x - btn_w * (btns.len() as f32 + 1.0) - total_w;
                         kb_btn_x = kb_x;
@@ -530,7 +538,8 @@ impl App {
                                 UpdateStatus::RestartRequired => "Restart to update".to_string(),
                                 _ => String::new(),
                             };
-                            let update_x = sysmon_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
+                            let update_x =
+                                sysmon_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
                             let br = egui::Rect::from_min_size(
                                 egui::pos2(update_x, r.min.y + theme::SP_SM),
                                 egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
@@ -633,11 +642,7 @@ impl App {
                             )
                         });
                         let name_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                ws_name,
-                                egui::FontId::proportional(13.0),
-                                tb_fg,
-                            )
+                            f.layout_no_wrap(ws_name, egui::FontId::proportional(13.0), tb_fg)
                         });
                         let total_w = prefix_galley.size().x + name_galley.size().x;
                         let start_x = r.center().x - total_w / 2.0;
@@ -660,6 +665,5 @@ impl App {
                     }
                 }
             });
-
     }
 }

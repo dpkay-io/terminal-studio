@@ -139,16 +139,17 @@ pub(super) fn render_dir_tree(
                 false,
             );
             let chevron = if state.is_open() { "▼" } else { "▶" };
-            let resp = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} {}", chevron, &entry.name))
-                        .color(theme::active().fg_dir_entry)
-                        .size(theme::BROWSER_ROW_H),
+            let resp = ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{} {}", chevron, &entry.name))
+                            .color(theme::active().fg_dir_entry)
+                            .size(theme::BROWSER_ROW_H),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
                 )
-                .truncate()
-                .sense(egui::Sense::click()),
-            )
-            .on_hover_text("Double-click to open terminal here");
+                .on_hover_text("Double-click to open terminal here");
             if resp.double_clicked() {
                 *open_terminal_at = Some(entry.path.clone());
             } else if resp.clicked() {
@@ -170,16 +171,17 @@ pub(super) fn render_dir_tree(
             } else {
                 theme::active().fg_other_file
             };
-            let resp = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
-                        .color(color)
-                        .size(theme::BROWSER_ROW_H),
+            let resp = ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
+                            .color(color)
+                            .size(theme::BROWSER_ROW_H),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click()),
                 )
-                .truncate()
-                .sense(egui::Sense::click()),
-            )
-            .on_hover_text(&entry.name);
+                .on_hover_text(&entry.name);
             if resp.double_clicked() || (resp.clicked() && is_md) {
                 *open_editor = Some(entry.path.clone());
             }
@@ -188,17 +190,28 @@ pub(super) fn render_dir_tree(
 }
 
 pub(super) fn collect_all_files(root: &Path, out: &mut Vec<FileEntry>, max_depth: usize) {
-    if max_depth == 0 { return; }
+    if max_depth == 0 {
+        return;
+    }
     if let Ok(rd) = std::fs::read_dir(root) {
         for e in rd.flatten() {
             let p = e.path();
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            if name.starts_with('.') { continue; }
+            let name = p
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if name.starts_with('.') {
+                continue;
+            }
             let is_dir = p.is_dir();
             if is_dir {
                 collect_all_files(&p, out, max_depth - 1);
             } else {
-                out.push(FileEntry { name, path: p, is_dir: false });
+                out.push(FileEntry {
+                    name,
+                    path: p,
+                    is_dir: false,
+                });
             }
         }
     }
@@ -225,21 +238,30 @@ pub(super) fn render_flat_file_list(
 
     ui.spacing_mut().item_spacing.y = 2.0;
     for entry in entries {
-        let ext = entry.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let ext = entry
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
         let is_md = ext == "md";
-        let color = if is_md { theme::active().fg_md_file } else { theme::active().fg_other_file };
+        let color = if is_md {
+            theme::active().fg_md_file
+        } else {
+            theme::active().fg_other_file
+        };
         let rel = entry.path.strip_prefix(root).unwrap_or(&entry.path);
         let display = rel.display().to_string();
-        let resp = ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!("{} {}", file_icon(ext), &display))
-                    .color(color)
-                    .size(theme::BROWSER_ROW_H),
+        let resp = ui
+            .add(
+                egui::Label::new(
+                    egui::RichText::new(format!("{} {}", file_icon(ext), &display))
+                        .color(color)
+                        .size(theme::BROWSER_ROW_H),
+                )
+                .truncate()
+                .sense(egui::Sense::click()),
             )
-            .truncate()
-            .sense(egui::Sense::click()),
-        )
-        .on_hover_text(entry.path.display().to_string());
+            .on_hover_text(entry.path.display().to_string());
         if resp.double_clicked() || (resp.clicked() && is_md) {
             *open_editor = Some(entry.path.clone());
         }
@@ -249,10 +271,44 @@ pub(super) fn render_flat_file_list(
 pub(super) fn is_supported_text_file(path: &Path, content: &str) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let text_exts = [
-        "rs", "toml", "yaml", "yml", "json", "txt", "md", "sh", "bat", "ps1",
-        "cmd", "py", "js", "ts", "jsx", "tsx", "html", "css", "scss", "xml",
-        "csv", "ini", "cfg", "conf", "log", "env", "gitignore", "dockerfile",
-        "makefile", "c", "cpp", "h", "hpp", "go", "rb", "lua", "sql", "vim",
+        "rs",
+        "toml",
+        "yaml",
+        "yml",
+        "json",
+        "txt",
+        "md",
+        "sh",
+        "bat",
+        "ps1",
+        "cmd",
+        "py",
+        "js",
+        "ts",
+        "jsx",
+        "tsx",
+        "html",
+        "css",
+        "scss",
+        "xml",
+        "csv",
+        "ini",
+        "cfg",
+        "conf",
+        "log",
+        "env",
+        "gitignore",
+        "dockerfile",
+        "makefile",
+        "c",
+        "cpp",
+        "h",
+        "hpp",
+        "go",
+        "rb",
+        "lua",
+        "sql",
+        "vim",
     ];
     if text_exts.contains(&ext.to_ascii_lowercase().as_str()) {
         return true;

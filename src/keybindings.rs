@@ -52,37 +52,285 @@ impl KeybindingsConfig {
 
     pub fn default_bindings() -> Vec<KeyBinding> {
         let defaults: Vec<(Shortcut, AppAction)> = vec![
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::B }, AppAction::ToggleLeftSidebar),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::E }, AppAction::ToggleRightSidebar),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Backtick }, AppAction::FocusTerminal),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::T }, AppAction::NewTerminalTab),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::W }, AppAction::CloseCurrentPane),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num1 }, AppAction::SwitchToTab1),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num2 }, AppAction::SwitchToTab2),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num3 }, AppAction::SwitchToTab3),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num4 }, AppAction::SwitchToTab4),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num5 }, AppAction::SwitchToTab5),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num6 }, AppAction::SwitchToTab6),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num7 }, AppAction::SwitchToTab7),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num8 }, AppAction::SwitchToTab8),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Num9 }, AppAction::SwitchToTab9),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::OpenBracket }, AppAction::PreviousTab),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::CloseBracket }, AppAction::NextTab),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Backslash }, AppAction::SplitHorizontal),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Minus }, AppAction::SplitVertical),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Comma }, AppAction::OpenSettings),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::PageDown }, AppAction::NextWorkspace),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::PageUp }, AppAction::PrevWorkspace),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::D }, AppAction::RightTabDirectory),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::G }, AppAction::RightTabGitDiff),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::J }, AppAction::ToggleNotes),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::K }, AppAction::DuplicateSession),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::C }, AppAction::CopySelection),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::F }, AppAction::FocusSessionSearch),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::P }, AppAction::FocusFileSearch),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Slash }, AppAction::ToggleShortcutHelp),
-            (Shortcut { ctrl: true, shift: true, alt: false, key: egui::Key::Space }, AppAction::OpenQuickSwitcher),
-            (Shortcut { ctrl: true, shift: false, alt: false, key: egui::Key::F }, AppAction::SearchTerminal),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::B,
+                },
+                AppAction::ToggleLeftSidebar,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::E,
+                },
+                AppAction::ToggleRightSidebar,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Backtick,
+                },
+                AppAction::FocusTerminal,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::T,
+                },
+                AppAction::NewTerminalTab,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::W,
+                },
+                AppAction::CloseCurrentPane,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num1,
+                },
+                AppAction::SwitchToTab1,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num2,
+                },
+                AppAction::SwitchToTab2,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num3,
+                },
+                AppAction::SwitchToTab3,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num4,
+                },
+                AppAction::SwitchToTab4,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num5,
+                },
+                AppAction::SwitchToTab5,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num6,
+                },
+                AppAction::SwitchToTab6,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num7,
+                },
+                AppAction::SwitchToTab7,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num8,
+                },
+                AppAction::SwitchToTab8,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Num9,
+                },
+                AppAction::SwitchToTab9,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::OpenBracket,
+                },
+                AppAction::PreviousTab,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::CloseBracket,
+                },
+                AppAction::NextTab,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Backslash,
+                },
+                AppAction::SplitHorizontal,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Minus,
+                },
+                AppAction::SplitVertical,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Comma,
+                },
+                AppAction::OpenSettings,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::PageDown,
+                },
+                AppAction::NextWorkspace,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::PageUp,
+                },
+                AppAction::PrevWorkspace,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::D,
+                },
+                AppAction::RightTabDirectory,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::G,
+                },
+                AppAction::RightTabGitDiff,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::J,
+                },
+                AppAction::ToggleNotes,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::K,
+                },
+                AppAction::DuplicateSession,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::C,
+                },
+                AppAction::CopySelection,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::F,
+                },
+                AppAction::FocusSessionSearch,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::P,
+                },
+                AppAction::FocusFileSearch,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Slash,
+                },
+                AppAction::ToggleShortcutHelp,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Space,
+                },
+                AppAction::OpenQuickSwitcher,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                    key: egui::Key::F,
+                },
+                AppAction::SearchTerminal,
+            ),
         ];
 
         defaults

@@ -1,7 +1,7 @@
+use super::super::settings::CursorStyle;
+use super::super::App;
 use crate::theme;
 use crate::updater::UpdateStatus;
-use super::super::App;
-use super::super::settings::CursorStyle;
 
 impl App {
     pub(in crate::app) fn render_settings_overlay(&mut self, ctx: &egui::Context) {
@@ -40,29 +40,48 @@ impl App {
 
                         // Header
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Settings").strong().size(theme::DIALOG_TITLE_SZ));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(
-                                    egui::Button::new(egui::RichText::new("×").size(theme::DIALOG_CLOSE_SZ))
-                                        .min_size(egui::vec2(theme::BTN_W, theme::BTN_W))
-                                ).clicked() {
-                                    close_settings = true;
-                                }
-                            });
+                            ui.label(
+                                egui::RichText::new("Settings")
+                                    .strong()
+                                    .size(theme::DIALOG_TITLE_SZ),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("×")
+                                                    .size(theme::DIALOG_CLOSE_SZ),
+                                            )
+                                            .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
+                                        )
+                                        .clicked()
+                                    {
+                                        close_settings = true;
+                                    }
+                                },
+                            );
                         });
                         ui.separator();
                         ui.add_space(theme::SP_MD);
 
                         // Restore last session
                         let mut restore = self.settings.restore_last_session;
-                        if ui.checkbox(&mut restore, "Restore last session on launch").changed() {
+                        if ui
+                            .checkbox(&mut restore, "Restore last session on launch")
+                            .changed()
+                        {
                             self.settings.restore_last_session = restore;
                             settings_changed = true;
                         }
                         ui.add_space(theme::SP_SM);
                         ui.label(
-                            egui::RichText::new("When disabled, always opens a fresh session on launch.")
-                                .size(11.0).color(theme::active().overlay0)
+                            egui::RichText::new(
+                                "When disabled, always opens a fresh session on launch.",
+                            )
+                            .size(11.0)
+                            .color(theme::active().overlay0),
                         );
 
                         ui.add_space(theme::SP_XL);
@@ -81,11 +100,17 @@ impl App {
                                     let is_selected = id == current;
                                     ui.horizontal(|ui| {
                                         let swatch_size = egui::vec2(48.0, 18.0);
-                                        let (swatch_rect, _) = ui.allocate_exact_size(swatch_size, egui::Sense::hover());
+                                        let (swatch_rect, _) = ui
+                                            .allocate_exact_size(swatch_size, egui::Sense::hover());
                                         let sw = swatch_rect.width() / 4.0;
-                                        for (i, &color) in [t.base, t.surface0, t.blue, t.green].iter().enumerate() {
+                                        for (i, &color) in
+                                            [t.base, t.surface0, t.blue, t.green].iter().enumerate()
+                                        {
                                             let r = egui::Rect::from_min_size(
-                                                egui::pos2(swatch_rect.min.x + i as f32 * sw, swatch_rect.min.y),
+                                                egui::pos2(
+                                                    swatch_rect.min.x + i as f32 * sw,
+                                                    swatch_rect.min.y,
+                                                ),
                                                 egui::vec2(sw, swatch_size.y),
                                             );
                                             ui.painter().rect_filled(r, 2.0, color);
@@ -95,7 +120,9 @@ impl App {
                                         } else {
                                             egui::RichText::new(id.name())
                                         };
-                                        if ui.selectable_label(is_selected, label).clicked() && !is_selected {
+                                        if ui.selectable_label(is_selected, label).clicked()
+                                            && !is_selected
+                                        {
                                             self.settings.theme_id = id;
                                             theme::set_theme(id);
                                             settings_changed = true;
@@ -115,7 +142,10 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("Font size:");
                             let mut fs = self.settings.font_size;
-                            if ui.add(egui::DragValue::new(&mut fs).range(8.0..=28.0).speed(0.1)).changed() {
+                            if ui
+                                .add(egui::DragValue::new(&mut fs).range(8.0..=28.0).speed(0.1))
+                                .changed()
+                            {
                                 self.settings.font_size = fs;
                                 settings_changed = true;
                             }
@@ -126,7 +156,14 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label("Scrollback lines:");
                             let mut sl = self.settings.scrollback_lines;
-                            if ui.add(egui::DragValue::new(&mut sl).range(1000..=100000).speed(100.0)).changed() {
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut sl)
+                                        .range(1000..=100000)
+                                        .speed(100.0),
+                                )
+                                .changed()
+                            {
                                 self.settings.scrollback_lines = sl;
                                 settings_changed = true;
                             }
@@ -136,10 +173,17 @@ impl App {
                         // Cursor style
                         ui.horizontal(|ui| {
                             ui.label("Cursor:");
-                            let styles = [CursorStyle::Block, CursorStyle::Underline, CursorStyle::Beam];
+                            let styles = [
+                                CursorStyle::Block,
+                                CursorStyle::Underline,
+                                CursorStyle::Beam,
+                            ];
                             let names = ["Block", "Underline", "Beam"];
                             for (style, name) in styles.iter().zip(names.iter()) {
-                                if ui.selectable_label(self.settings.cursor_style == *style, *name).clicked() {
+                                if ui
+                                    .selectable_label(self.settings.cursor_style == *style, *name)
+                                    .clicked()
+                                {
                                     self.settings.cursor_style = *style;
                                     settings_changed = true;
                                 }
@@ -160,7 +204,10 @@ impl App {
                         // Scroll on output
                         {
                             let mut soo = self.settings.scroll_on_output;
-                            if ui.checkbox(&mut soo, "Scroll to bottom on new output").changed() {
+                            if ui
+                                .checkbox(&mut soo, "Scroll to bottom on new output")
+                                .changed()
+                            {
                                 self.settings.scroll_on_output = soo;
                                 settings_changed = true;
                             }
@@ -169,8 +216,14 @@ impl App {
 
                         // Default shell
                         {
-                            let shell_display = self.settings.default_shell.clone().unwrap_or_else(|| "Auto-detect".to_string());
-                            let shells: Vec<String> = self.available_shells.iter()
+                            let shell_display = self
+                                .settings
+                                .default_shell
+                                .clone()
+                                .unwrap_or_else(|| "Auto-detect".to_string());
+                            let shells: Vec<String> = self
+                                .available_shells
+                                .iter()
                                 .map(|s| s.display_name().to_string())
                                 .collect();
                             ui.horizontal(|ui| {
@@ -178,12 +231,19 @@ impl App {
                                 egui::ComboBox::from_id_source("settings_shell")
                                     .selected_text(&shell_display)
                                     .show_ui(ui, |ui| {
-                                        if ui.selectable_label(self.settings.default_shell.is_none(), "Auto-detect").clicked() {
+                                        if ui
+                                            .selectable_label(
+                                                self.settings.default_shell.is_none(),
+                                                "Auto-detect",
+                                            )
+                                            .clicked()
+                                        {
                                             self.settings.default_shell = None;
                                             settings_changed = true;
                                         }
                                         for name in &shells {
-                                            let is_sel = self.settings.default_shell.as_deref() == Some(name.as_str());
+                                            let is_sel = self.settings.default_shell.as_deref()
+                                                == Some(name.as_str());
                                             if ui.selectable_label(is_sel, name).clicked() {
                                                 self.settings.default_shell = Some(name.clone());
                                                 settings_changed = true;
@@ -201,53 +261,57 @@ impl App {
                         ui.add_space(theme::SP_SM);
                         ui.horizontal(|ui| {
                             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let update_state = self.update_checker.state();
-                                match &update_state.status {
-                                    UpdateStatus::Checking => {
-                                        ui.spinner();
-                                        ui.label("Checking\u{2026}");
-                                    }
-                                    UpdateStatus::UpToDate => {
-                                        ui.label(
-                                            egui::RichText::new("Up to date")
-                                                .size(12.0)
-                                                .color(theme::active().green),
-                                        );
-                                    }
-                                    UpdateStatus::UpdateAvailable { version, .. } => {
-                                        if ui.button(format!("Update to v{version}")).clicked() {
-                                            self.update_checker.start_update();
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let update_state = self.update_checker.state();
+                                    match &update_state.status {
+                                        UpdateStatus::Checking => {
+                                            ui.spinner();
+                                            ui.label("Checking\u{2026}");
+                                        }
+                                        UpdateStatus::UpToDate => {
+                                            ui.label(
+                                                egui::RichText::new("Up to date")
+                                                    .size(12.0)
+                                                    .color(theme::active().green),
+                                            );
+                                        }
+                                        UpdateStatus::UpdateAvailable { version, .. } => {
+                                            if ui.button(format!("Update to v{version}")).clicked()
+                                            {
+                                                self.update_checker.start_update();
+                                            }
+                                        }
+                                        UpdateStatus::Downloading { progress_pct } => {
+                                            ui.add(
+                                                egui::ProgressBar::new(progress_pct / 100.0)
+                                                    .text("Downloading\u{2026}"),
+                                            );
+                                        }
+                                        UpdateStatus::RestartRequired => {
+                                            if ui.button("Restart to finish update").clicked() {
+                                                crate::updater::restart_app();
+                                            }
+                                        }
+                                        UpdateStatus::Error(msg) => {
+                                            ui.label(
+                                                egui::RichText::new(msg)
+                                                    .size(11.0)
+                                                    .color(theme::active().red),
+                                            );
+                                            if ui.small_button("Retry").clicked() {
+                                                self.update_checker.trigger_check();
+                                            }
+                                        }
+                                        _ => {
+                                            if ui.button("Check for updates").clicked() {
+                                                self.update_checker.trigger_check();
+                                            }
                                         }
                                     }
-                                    UpdateStatus::Downloading { progress_pct } => {
-                                        ui.add(
-                                            egui::ProgressBar::new(progress_pct / 100.0)
-                                                .text("Downloading\u{2026}"),
-                                        );
-                                    }
-                                    UpdateStatus::RestartRequired => {
-                                        if ui.button("Restart to finish update").clicked() {
-                                            crate::updater::restart_app();
-                                        }
-                                    }
-                                    UpdateStatus::Error(msg) => {
-                                        ui.label(
-                                            egui::RichText::new(msg)
-                                                .size(11.0)
-                                                .color(theme::active().red),
-                                        );
-                                        if ui.small_button("Retry").clicked() {
-                                            self.update_checker.trigger_check();
-                                        }
-                                    }
-                                    _ => {
-                                        if ui.button("Check for updates").clicked() {
-                                            self.update_checker.trigger_check();
-                                        }
-                                    }
-                                }
-                            });
+                                },
+                            );
                         });
                     });
                 });
@@ -305,15 +369,28 @@ impl App {
                         ui.set_max_height(dialog_h);
 
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Keyboard Shortcuts").strong().size(theme::DIALOG_TITLE_SZ));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(
-                                    egui::Button::new(egui::RichText::new("×").size(theme::DIALOG_CLOSE_SZ))
-                                        .min_size(egui::vec2(theme::BTN_W, theme::BTN_W))
-                                ).clicked() {
-                                    close_help = true;
-                                }
-                            });
+                            ui.label(
+                                egui::RichText::new("Keyboard Shortcuts")
+                                    .strong()
+                                    .size(theme::DIALOG_TITLE_SZ),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("×")
+                                                    .size(theme::DIALOG_CLOSE_SZ),
+                                            )
+                                            .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
+                                        )
+                                        .clicked()
+                                    {
+                                        close_help = true;
+                                    }
+                                },
+                            );
                         });
                         ui.separator();
                         ui.add_space(theme::SP_SM);
@@ -323,7 +400,7 @@ impl App {
                             .show(ui, |ui| {
                                 let t = theme::active();
                                 let groups = self.shortcut_registry.groups();
-                                let half = (groups.len() + 1) / 2;
+                                let half = groups.len().div_ceil(2);
 
                                 ui.columns(2, |cols| {
                                     for (col_idx, col) in cols.iter_mut().enumerate() {
@@ -350,7 +427,9 @@ impl App {
                                                             .color(t.text),
                                                     );
                                                     ui.with_layout(
-                                                        egui::Layout::right_to_left(egui::Align::Center),
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
                                                         |ui| {
                                                             let label = shortcut.label();
                                                             let badge = egui::RichText::new(&label)
@@ -391,6 +470,5 @@ impl App {
                 self.show_shortcut_help = false;
             }
         }
-
     }
 }

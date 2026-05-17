@@ -13,11 +13,14 @@ use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::shortcuts::{AppAction, ShortcutRegistry};
-use crate::theme;
 use crate::sys_monitor::SysMonitor;
+use crate::theme;
 use crate::updater::UpdateChecker;
 use crate::workspace::{NoteStore, WindowId, WorkspaceStore};
-use alacritty_terminal::{grid::{Dimensions, Scroll}, term::TermMode};
+use alacritty_terminal::{
+    grid::{Dimensions, Scroll},
+    term::TermMode,
+};
 
 // ── Submodules ───────────────────────────────────────────────────────────────
 
@@ -48,7 +51,7 @@ use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, WindowView};
 use pane::{
-    FileEditorState, FileDiffState, PaneContent, PaneEntry, RightTab, SessionEntry, TermSelection,
+    FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry, TermSelection,
 };
 use settings::{AppSettings, CursorStyle};
 use title::effective_title;
@@ -609,16 +612,27 @@ impl App {
                                             });
                                             // ── Directory search bar ───────────────────
                                             if self.dir_search_active {
-                                                let dir_search_id = egui::Id::new("dir_search_input");
+                                                let dir_search_id =
+                                                    egui::Id::new("dir_search_input");
                                                 ui.horizontal(|ui| {
                                                     ui.label(egui::RichText::new("🔍").size(12.0));
-                                                    let te = egui::TextEdit::singleline(&mut self.dir_search_query)
-                                                        .desired_width(ui.available_width() - theme::BTN_W)
-                                                        .hint_text("Filter files…")
-                                                        .font(egui::FontId::proportional(theme::SESSION_FONT_SZ))
-                                                        .id(dir_search_id);
+                                                    let te = egui::TextEdit::singleline(
+                                                        &mut self.dir_search_query,
+                                                    )
+                                                    .desired_width(
+                                                        ui.available_width() - theme::BTN_W,
+                                                    )
+                                                    .hint_text("Filter files…")
+                                                    .font(egui::FontId::proportional(
+                                                        theme::SESSION_FONT_SZ,
+                                                    ))
+                                                    .id(dir_search_id);
                                                     let r = ui.add(te);
-                                                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                                    if r.lost_focus()
+                                                        && ui.input(|i| {
+                                                            i.key_pressed(egui::Key::Escape)
+                                                        })
+                                                    {
                                                         self.dir_search_active = false;
                                                         self.dir_search_query.clear();
                                                         self.dir_search_debounce_query.clear();
@@ -627,9 +641,13 @@ impl App {
                                                     r.request_focus();
                                                 });
 
-                                                if self.dir_search_query != self.dir_search_debounce_query {
-                                                    self.dir_search_debounce_at = Some(Instant::now());
-                                                    self.dir_search_debounce_query = self.dir_search_query.clone();
+                                                if self.dir_search_query
+                                                    != self.dir_search_debounce_query
+                                                {
+                                                    self.dir_search_debounce_at =
+                                                        Some(Instant::now());
+                                                    self.dir_search_debounce_query =
+                                                        self.dir_search_query.clone();
                                                 }
                                             }
 
@@ -637,12 +655,17 @@ impl App {
 
                                             let debounced_dir_query = if self.dir_search_active
                                                 && !self.dir_search_query.is_empty()
-                                                && self.dir_search_debounce_at.map_or(true, |t| t.elapsed() >= Duration::from_millis(150))
-                                            {
+                                                && self.dir_search_debounce_at.map_or(true, |t| {
+                                                    t.elapsed() >= Duration::from_millis(150)
+                                                }) {
                                                 Some(self.dir_search_query.clone())
                                             } else {
-                                                if self.dir_search_debounce_at.map_or(false, |t| t.elapsed() < Duration::from_millis(150)) {
-                                                    ctx.request_repaint_after(std::time::Duration::from_millis(160));
+                                                if self.dir_search_debounce_at.is_some_and(|t| {
+                                                    t.elapsed() < Duration::from_millis(150)
+                                                }) {
+                                                    ctx.request_repaint_after(
+                                                        std::time::Duration::from_millis(160),
+                                                    );
                                                 }
                                                 None
                                             };
@@ -654,7 +677,9 @@ impl App {
                                                 flat.sort_by(|a, b| a.name.cmp(&b.name));
                                                 let filtered: Vec<FileEntry> = flat
                                                     .into_iter()
-                                                    .filter(|e| matcher.fuzzy_match(&e.name, q).is_some())
+                                                    .filter(|e| {
+                                                        matcher.fuzzy_match(&e.name, q).is_some()
+                                                    })
                                                     .take(100)
                                                     .collect();
                                                 render_flat_file_list(
@@ -687,8 +712,7 @@ impl App {
                                         }
                                     }
                                     RightTab::GitDiff => {
-                                        let result =
-                                            render_git_diff(ui, &git_diff, &git_status);
+                                        let result = render_git_diff(ui, &git_diff, &git_status);
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
                                             git_open_diff_file = result.open_diff_file;
@@ -763,8 +787,11 @@ impl App {
                             notes_rect.min,
                             egui::vec2(notes_rect.width(), theme::HEADER_H),
                         );
-                        ui.painter()
-                            .rect_filled(header_rect, 0.0, theme::active().bg_workspace_fill);
+                        ui.painter().rect_filled(
+                            header_rect,
+                            0.0,
+                            theme::active().bg_workspace_fill,
+                        );
 
                         if !self.notes_panel_collapsed {
                             let content_rect = egui::Rect::from_min_max(
@@ -2162,18 +2189,16 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::PointerMoved(pos) => {
-                            if self.term_selecting {
-                                if let Some(geo) = &self.active_term_geo {
-                                    let clamped = egui::pos2(
-                                        pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
-                                        pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
-                                    );
-                                    if let Some((col, row)) = geo.to_cell(clamped) {
-                                        if let Some(sel) = &mut self.term_selection {
-                                            sel.end_col = col;
-                                            sel.end_row = row;
-                                        }
+                        egui::Event::PointerMoved(pos) if self.term_selecting => {
+                            if let Some(geo) = &self.active_term_geo {
+                                let clamped = egui::pos2(
+                                    pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
+                                    pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
+                                );
+                                if let Some((col, row)) = geo.to_cell(clamped) {
+                                    if let Some(sel) = &mut self.term_selection {
+                                        sel.end_col = col;
+                                        sel.end_row = row;
                                     }
                                 }
                             }

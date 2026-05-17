@@ -196,9 +196,12 @@ impl ThemeDef {
 
         let blend = |base: [u8; 3], target: [u8; 3], factor: f32| -> [u8; 3] {
             [
-                (base[0] as f32 + (target[0] as f32 - base[0] as f32) * factor).clamp(0.0, 255.0) as u8,
-                (base[1] as f32 + (target[1] as f32 - base[1] as f32) * factor).clamp(0.0, 255.0) as u8,
-                (base[2] as f32 + (target[2] as f32 - base[2] as f32) * factor).clamp(0.0, 255.0) as u8,
+                (base[0] as f32 + (target[0] as f32 - base[0] as f32) * factor).clamp(0.0, 255.0)
+                    as u8,
+                (base[1] as f32 + (target[1] as f32 - base[1] as f32) * factor).clamp(0.0, 255.0)
+                    as u8,
+                (base[2] as f32 + (target[2] as f32 - base[2] as f32) * factor).clamp(0.0, 255.0)
+                    as u8,
             ]
         };
 
@@ -323,7 +326,12 @@ impl ThemeDef {
             ansi: ansi_c32,
             cursor_color,
             cursor_dim_color,
-            selection_bg: Color32::from_rgba_unmultiplied(selection_bg_rgb[0], selection_bg_rgb[1], selection_bg_rgb[2], 160),
+            selection_bg: Color32::from_rgba_unmultiplied(
+                selection_bg_rgb[0],
+                selection_bg_rgb[1],
+                selection_bg_rgb[2],
+                160,
+            ),
             scrollbar_color,
         }
     }
@@ -467,7 +475,11 @@ pub fn short_path(p: &std::path::Path) -> String {
     if parts.len() <= 2 {
         p.display().to_string()
     } else {
-        format!("\u{2026}/{}/{}", parts[parts.len() - 2], parts[parts.len() - 1])
+        format!(
+            "\u{2026}/{}/{}",
+            parts[parts.len() - 2],
+            parts[parts.len() - 1]
+        )
     }
 }
 
@@ -518,22 +530,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [203, 166, 247],
             teal: [148, 226, 213],
             ansi: [
-                [30, 30, 46],     // black
-                [243, 139, 168],  // red
-                [166, 227, 161],  // green
-                [249, 226, 175],  // yellow
-                [137, 180, 250],  // blue
-                [245, 194, 231],  // magenta
-                [148, 226, 213],  // cyan
-                [205, 214, 244],  // white
-                [88, 91, 112],    // bright black
-                [243, 139, 168],  // bright red
-                [166, 227, 161],  // bright green
-                [249, 226, 175],  // bright yellow
-                [137, 180, 250],  // bright blue
-                [245, 194, 231],  // bright magenta
-                [148, 226, 213],  // bright cyan
-                [255, 255, 255],  // bright white
+                [30, 30, 46],    // black
+                [243, 139, 168], // red
+                [166, 227, 161], // green
+                [249, 226, 175], // yellow
+                [137, 180, 250], // blue
+                [245, 194, 231], // magenta
+                [148, 226, 213], // cyan
+                [205, 214, 244], // white
+                [88, 91, 112],   // bright black
+                [243, 139, 168], // bright red
+                [166, 227, 161], // bright green
+                [249, 226, 175], // bright yellow
+                [137, 180, 250], // bright blue
+                [245, 194, 231], // bright magenta
+                [148, 226, 213], // bright cyan
+                [255, 255, 255], // bright white
             ],
         },
         // 1: Dracula
@@ -558,22 +570,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [189, 147, 249],
             teal: [139, 233, 253],
             ansi: [
-                [33, 34, 44],     // black
-                [255, 85, 85],    // red
-                [80, 250, 123],   // green
-                [241, 250, 140],  // yellow
-                [189, 147, 249],  // blue
-                [255, 121, 198],  // magenta
-                [139, 233, 253],  // cyan
-                [248, 248, 242],  // white
-                [98, 114, 164],   // bright black
-                [255, 110, 110],  // bright red
-                [105, 255, 148],  // bright green
-                [255, 255, 165],  // bright yellow
-                [210, 172, 255],  // bright blue
-                [255, 146, 218],  // bright magenta
-                [164, 255, 255],  // bright cyan
-                [255, 255, 255],  // bright white
+                [33, 34, 44],    // black
+                [255, 85, 85],   // red
+                [80, 250, 123],  // green
+                [241, 250, 140], // yellow
+                [189, 147, 249], // blue
+                [255, 121, 198], // magenta
+                [139, 233, 253], // cyan
+                [248, 248, 242], // white
+                [98, 114, 164],  // bright black
+                [255, 110, 110], // bright red
+                [105, 255, 148], // bright green
+                [255, 255, 165], // bright yellow
+                [210, 172, 255], // bright blue
+                [255, 146, 218], // bright magenta
+                [164, 255, 255], // bright cyan
+                [255, 255, 255], // bright white
             ],
         },
         // 2: Nord
@@ -598,22 +610,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [180, 142, 173],
             teal: [143, 188, 187],
             ansi: [
-                [59, 66, 82],     // black
-                [191, 97, 106],   // red
-                [163, 190, 140],  // green
-                [235, 203, 139],  // yellow
-                [129, 161, 193],  // blue
-                [180, 142, 173],  // magenta
-                [136, 192, 208],  // cyan
-                [229, 233, 240],  // white
-                [76, 86, 106],    // bright black
-                [208, 135, 112],  // bright red
-                [163, 190, 140],  // bright green
-                [235, 203, 139],  // bright yellow
-                [136, 192, 208],  // bright blue
-                [180, 142, 173],  // bright magenta
-                [143, 188, 187],  // bright cyan
-                [236, 239, 244],  // bright white
+                [59, 66, 82],    // black
+                [191, 97, 106],  // red
+                [163, 190, 140], // green
+                [235, 203, 139], // yellow
+                [129, 161, 193], // blue
+                [180, 142, 173], // magenta
+                [136, 192, 208], // cyan
+                [229, 233, 240], // white
+                [76, 86, 106],   // bright black
+                [208, 135, 112], // bright red
+                [163, 190, 140], // bright green
+                [235, 203, 139], // bright yellow
+                [136, 192, 208], // bright blue
+                [180, 142, 173], // bright magenta
+                [143, 188, 187], // bright cyan
+                [236, 239, 244], // bright white
             ],
         },
         // 3: Solarized Dark
@@ -638,22 +650,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [108, 113, 196],
             teal: [42, 161, 152],
             ansi: [
-                [7, 54, 66],      // black
-                [220, 50, 47],    // red
-                [133, 153, 0],    // green
-                [181, 137, 0],    // yellow
-                [38, 139, 210],   // blue
-                [211, 54, 130],   // magenta
-                [42, 161, 152],   // cyan
-                [238, 232, 213],  // white
-                [0, 43, 54],      // bright black
-                [203, 75, 22],    // bright red
-                [88, 110, 117],   // bright green
-                [101, 123, 131],  // bright yellow
-                [131, 148, 150],  // bright blue
-                [108, 113, 196],  // bright magenta
-                [147, 161, 161],  // bright cyan
-                [253, 246, 227],  // bright white
+                [7, 54, 66],     // black
+                [220, 50, 47],   // red
+                [133, 153, 0],   // green
+                [181, 137, 0],   // yellow
+                [38, 139, 210],  // blue
+                [211, 54, 130],  // magenta
+                [42, 161, 152],  // cyan
+                [238, 232, 213], // white
+                [0, 43, 54],     // bright black
+                [203, 75, 22],   // bright red
+                [88, 110, 117],  // bright green
+                [101, 123, 131], // bright yellow
+                [131, 148, 150], // bright blue
+                [108, 113, 196], // bright magenta
+                [147, 161, 161], // bright cyan
+                [253, 246, 227], // bright white
             ],
         },
         // 4: Gruvbox Dark
@@ -678,22 +690,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [211, 134, 155],
             teal: [142, 192, 124],
             ansi: [
-                [40, 40, 40],     // black
-                [204, 36, 29],    // red
-                [152, 151, 26],   // green
-                [215, 153, 33],   // yellow
-                [69, 133, 136],   // blue
-                [177, 98, 134],   // magenta
-                [104, 157, 106],  // cyan
-                [168, 153, 132],  // white
-                [146, 131, 116],  // bright black
-                [251, 73, 52],    // bright red
-                [184, 187, 38],   // bright green
-                [250, 189, 47],   // bright yellow
-                [131, 165, 152],  // bright blue
-                [211, 134, 155],  // bright magenta
-                [142, 192, 124],  // bright cyan
-                [235, 219, 178],  // bright white
+                [40, 40, 40],    // black
+                [204, 36, 29],   // red
+                [152, 151, 26],  // green
+                [215, 153, 33],  // yellow
+                [69, 133, 136],  // blue
+                [177, 98, 134],  // magenta
+                [104, 157, 106], // cyan
+                [168, 153, 132], // white
+                [146, 131, 116], // bright black
+                [251, 73, 52],   // bright red
+                [184, 187, 38],  // bright green
+                [250, 189, 47],  // bright yellow
+                [131, 165, 152], // bright blue
+                [211, 134, 155], // bright magenta
+                [142, 192, 124], // bright cyan
+                [235, 219, 178], // bright white
             ],
         },
         // 5: Tokyo Night
@@ -718,22 +730,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [187, 154, 247],
             teal: [115, 218, 202],
             ansi: [
-                [65, 72, 104],    // black
-                [247, 118, 142],  // red
-                [158, 206, 106],  // green
-                [224, 175, 104],  // yellow
-                [122, 162, 247],  // blue
-                [187, 154, 247],  // magenta
-                [115, 218, 202],  // cyan
-                [192, 202, 245],  // white
-                [86, 95, 137],    // bright black
-                [255, 148, 168],  // bright red
-                [178, 226, 126],  // bright green
-                [244, 195, 124],  // bright yellow
-                [142, 182, 255],  // bright blue
-                [207, 174, 255],  // bright magenta
-                [135, 238, 222],  // bright cyan
-                [222, 232, 255],  // bright white
+                [65, 72, 104],   // black
+                [247, 118, 142], // red
+                [158, 206, 106], // green
+                [224, 175, 104], // yellow
+                [122, 162, 247], // blue
+                [187, 154, 247], // magenta
+                [115, 218, 202], // cyan
+                [192, 202, 245], // white
+                [86, 95, 137],   // bright black
+                [255, 148, 168], // bright red
+                [178, 226, 126], // bright green
+                [244, 195, 124], // bright yellow
+                [142, 182, 255], // bright blue
+                [207, 174, 255], // bright magenta
+                [135, 238, 222], // bright cyan
+                [222, 232, 255], // bright white
             ],
         },
         // 6: Rosé Pine
@@ -758,22 +770,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [196, 167, 231],
             teal: [156, 207, 216],
             ansi: [
-                [38, 35, 58],     // black
-                [235, 111, 146],  // red
-                [49, 116, 143],   // green
-                [246, 193, 119],  // yellow
-                [156, 207, 216],  // blue
-                [196, 167, 231],  // magenta
-                [156, 207, 216],  // cyan
-                [224, 222, 244],  // white
-                [110, 106, 134],  // bright black
-                [255, 131, 166],  // bright red
-                [69, 136, 163],   // bright green
-                [255, 213, 139],  // bright yellow
-                [176, 227, 236],  // bright blue
-                [216, 187, 251],  // bright magenta
-                [176, 227, 236],  // bright cyan
-                [244, 242, 255],  // bright white
+                [38, 35, 58],    // black
+                [235, 111, 146], // red
+                [49, 116, 143],  // green
+                [246, 193, 119], // yellow
+                [156, 207, 216], // blue
+                [196, 167, 231], // magenta
+                [156, 207, 216], // cyan
+                [224, 222, 244], // white
+                [110, 106, 134], // bright black
+                [255, 131, 166], // bright red
+                [69, 136, 163],  // bright green
+                [255, 213, 139], // bright yellow
+                [176, 227, 236], // bright blue
+                [216, 187, 251], // bright magenta
+                [176, 227, 236], // bright cyan
+                [244, 242, 255], // bright white
             ],
         },
         // 7: One Dark
@@ -798,22 +810,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [198, 120, 221],
             teal: [86, 182, 194],
             ansi: [
-                [40, 44, 52],     // black
-                [224, 108, 117],  // red
-                [152, 195, 121],  // green
-                [229, 192, 123],  // yellow
-                [97, 175, 239],   // blue
-                [198, 120, 221],  // magenta
-                [86, 182, 194],   // cyan
-                [171, 178, 191],  // white
-                [92, 99, 112],    // bright black
-                [239, 128, 137],  // bright red
-                [172, 215, 141],  // bright green
-                [249, 212, 143],  // bright yellow
-                [117, 195, 255],  // bright blue
-                [218, 140, 241],  // bright magenta
-                [106, 202, 214],  // bright cyan
-                [211, 218, 231],  // bright white
+                [40, 44, 52],    // black
+                [224, 108, 117], // red
+                [152, 195, 121], // green
+                [229, 192, 123], // yellow
+                [97, 175, 239],  // blue
+                [198, 120, 221], // magenta
+                [86, 182, 194],  // cyan
+                [171, 178, 191], // white
+                [92, 99, 112],   // bright black
+                [239, 128, 137], // bright red
+                [172, 215, 141], // bright green
+                [249, 212, 143], // bright yellow
+                [117, 195, 255], // bright blue
+                [218, 140, 241], // bright magenta
+                [106, 202, 214], // bright cyan
+                [211, 218, 231], // bright white
             ],
         },
         // 8: Everforest Dark
@@ -838,22 +850,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [214, 153, 182],
             teal: [131, 192, 159],
             ansi: [
-                [78, 84, 78],     // black
-                [230, 126, 128],  // red
-                [167, 192, 128],  // green
-                [219, 188, 127],  // yellow
-                [127, 187, 179],  // blue
-                [214, 153, 182],  // magenta
-                [131, 192, 159],  // cyan
-                [211, 198, 170],  // white
-                [113, 119, 113],  // bright black
-                [250, 146, 148],  // bright red
-                [187, 212, 148],  // bright green
-                [239, 208, 147],  // bright yellow
-                [147, 207, 199],  // bright blue
-                [234, 173, 202],  // bright magenta
-                [151, 212, 179],  // bright cyan
-                [231, 218, 190],  // bright white
+                [78, 84, 78],    // black
+                [230, 126, 128], // red
+                [167, 192, 128], // green
+                [219, 188, 127], // yellow
+                [127, 187, 179], // blue
+                [214, 153, 182], // magenta
+                [131, 192, 159], // cyan
+                [211, 198, 170], // white
+                [113, 119, 113], // bright black
+                [250, 146, 148], // bright red
+                [187, 212, 148], // bright green
+                [239, 208, 147], // bright yellow
+                [147, 207, 199], // bright blue
+                [234, 173, 202], // bright magenta
+                [151, 212, 179], // bright cyan
+                [231, 218, 190], // bright white
             ],
         },
         // 9: Monokai
@@ -878,22 +890,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [174, 129, 255],
             teal: [102, 217, 239],
             ansi: [
-                [39, 40, 34],     // black
-                [249, 38, 114],   // red
-                [166, 226, 46],   // green
-                [230, 219, 116],  // yellow
-                [102, 217, 239],  // blue
-                [174, 129, 255],  // magenta
-                [102, 217, 239],  // cyan
-                [248, 248, 242],  // white
-                [117, 113, 94],   // bright black
-                [255, 68, 134],   // bright red
-                [186, 246, 66],   // bright green
-                [250, 239, 136],  // bright yellow
-                [122, 237, 255],  // bright blue
-                [194, 149, 255],  // bright magenta
-                [122, 237, 255],  // bright cyan
-                [255, 255, 255],  // bright white
+                [39, 40, 34],    // black
+                [249, 38, 114],  // red
+                [166, 226, 46],  // green
+                [230, 219, 116], // yellow
+                [102, 217, 239], // blue
+                [174, 129, 255], // magenta
+                [102, 217, 239], // cyan
+                [248, 248, 242], // white
+                [117, 113, 94],  // bright black
+                [255, 68, 134],  // bright red
+                [186, 246, 66],  // bright green
+                [250, 239, 136], // bright yellow
+                [122, 237, 255], // bright blue
+                [194, 149, 255], // bright magenta
+                [122, 237, 255], // bright cyan
+                [255, 255, 255], // bright white
             ],
         },
         // 10: GitHub Dark
@@ -918,22 +930,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [188, 140, 255],
             teal: [63, 185, 80],
             ansi: [
-                [72, 79, 88],     // black
-                [255, 123, 114],  // red
-                [63, 185, 80],    // green
-                [210, 153, 34],   // yellow
-                [88, 166, 255],   // blue
-                [188, 140, 255],  // magenta
-                [86, 211, 219],   // cyan
-                [230, 237, 243],  // white
-                [110, 118, 129],  // bright black
-                [255, 148, 139],  // bright red
-                [86, 211, 100],   // bright green
-                [230, 173, 54],   // bright yellow
-                [108, 186, 255],  // bright blue
-                [208, 160, 255],  // bright magenta
-                [106, 231, 239],  // bright cyan
-                [255, 255, 255],  // bright white
+                [72, 79, 88],    // black
+                [255, 123, 114], // red
+                [63, 185, 80],   // green
+                [210, 153, 34],  // yellow
+                [88, 166, 255],  // blue
+                [188, 140, 255], // magenta
+                [86, 211, 219],  // cyan
+                [230, 237, 243], // white
+                [110, 118, 129], // bright black
+                [255, 148, 139], // bright red
+                [86, 211, 100],  // bright green
+                [230, 173, 54],  // bright yellow
+                [108, 186, 255], // bright blue
+                [208, 160, 255], // bright magenta
+                [106, 231, 239], // bright cyan
+                [255, 255, 255], // bright white
             ],
         },
         // 11: Ayu Dark
@@ -958,22 +970,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [210, 166, 255],
             teal: [149, 230, 203],
             ansi: [
-                [15, 20, 30],     // black
-                [240, 113, 120],  // red
-                [170, 217, 76],   // green
-                [255, 180, 84],   // yellow
-                [57, 186, 230],   // blue
-                [210, 166, 255],  // magenta
-                [149, 230, 203],  // cyan
-                [203, 204, 198],  // white
-                [90, 100, 118],   // bright black
-                [255, 133, 140],  // bright red
-                [190, 237, 96],   // bright green
-                [255, 200, 104],  // bright yellow
-                [77, 206, 250],   // bright blue
-                [230, 186, 255],  // bright magenta
-                [169, 250, 223],  // bright cyan
-                [233, 234, 228],  // bright white
+                [15, 20, 30],    // black
+                [240, 113, 120], // red
+                [170, 217, 76],  // green
+                [255, 180, 84],  // yellow
+                [57, 186, 230],  // blue
+                [210, 166, 255], // magenta
+                [149, 230, 203], // cyan
+                [203, 204, 198], // white
+                [90, 100, 118],  // bright black
+                [255, 133, 140], // bright red
+                [190, 237, 96],  // bright green
+                [255, 200, 104], // bright yellow
+                [77, 206, 250],  // bright blue
+                [230, 186, 255], // bright magenta
+                [169, 250, 223], // bright cyan
+                [233, 234, 228], // bright white
             ],
         },
         // 12: Material Darker
@@ -998,22 +1010,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [199, 146, 234],
             teal: [137, 221, 255],
             ansi: [
-                [48, 48, 48],     // black
-                [240, 113, 120],  // red
-                [195, 232, 141],  // green
-                [255, 203, 107],  // yellow
-                [130, 170, 255],  // blue
-                [199, 146, 234],  // magenta
-                [137, 221, 255],  // cyan
-                [238, 255, 255],  // white
-                [100, 100, 100],  // bright black
-                [255, 133, 140],  // bright red
-                [215, 252, 161],  // bright green
-                [255, 223, 127],  // bright yellow
-                [150, 190, 255],  // bright blue
-                [219, 166, 254],  // bright magenta
-                [157, 241, 255],  // bright cyan
-                [255, 255, 255],  // bright white
+                [48, 48, 48],    // black
+                [240, 113, 120], // red
+                [195, 232, 141], // green
+                [255, 203, 107], // yellow
+                [130, 170, 255], // blue
+                [199, 146, 234], // magenta
+                [137, 221, 255], // cyan
+                [238, 255, 255], // white
+                [100, 100, 100], // bright black
+                [255, 133, 140], // bright red
+                [215, 252, 161], // bright green
+                [255, 223, 127], // bright yellow
+                [150, 190, 255], // bright blue
+                [219, 166, 254], // bright magenta
+                [157, 241, 255], // bright cyan
+                [255, 255, 255], // bright white
             ],
         },
         // 13: Solarized Light
@@ -1038,22 +1050,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [108, 113, 196],
             teal: [42, 161, 152],
             ansi: [
-                [7, 54, 66],      // black
-                [220, 50, 47],    // red
-                [133, 153, 0],    // green
-                [181, 137, 0],    // yellow
-                [38, 139, 210],   // blue
-                [211, 54, 130],   // magenta
-                [42, 161, 152],   // cyan
-                [238, 232, 213],  // white
-                [0, 43, 54],      // bright black
-                [203, 75, 22],    // bright red
-                [88, 110, 117],   // bright green
-                [101, 123, 131],  // bright yellow
-                [131, 148, 150],  // bright blue
-                [108, 113, 196],  // bright magenta
-                [147, 161, 161],  // bright cyan
-                [253, 246, 227],  // bright white
+                [7, 54, 66],     // black
+                [220, 50, 47],   // red
+                [133, 153, 0],   // green
+                [181, 137, 0],   // yellow
+                [38, 139, 210],  // blue
+                [211, 54, 130],  // magenta
+                [42, 161, 152],  // cyan
+                [238, 232, 213], // white
+                [0, 43, 54],     // bright black
+                [203, 75, 22],   // bright red
+                [88, 110, 117],  // bright green
+                [101, 123, 131], // bright yellow
+                [131, 148, 150], // bright blue
+                [108, 113, 196], // bright magenta
+                [147, 161, 161], // bright cyan
+                [253, 246, 227], // bright white
             ],
         },
         // 14: Catppuccin Latte
@@ -1078,22 +1090,22 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [136, 57, 239],
             teal: [23, 146, 153],
             ansi: [
-                [172, 176, 190],  // black
-                [210, 15, 57],    // red
-                [64, 160, 43],    // green
-                [223, 142, 29],   // yellow
-                [30, 102, 245],   // blue
-                [136, 57, 239],   // magenta
-                [23, 146, 153],   // cyan
-                [76, 79, 105],    // white
-                [140, 143, 161],  // bright black
-                [210, 15, 57],    // bright red
-                [64, 160, 43],    // bright green
-                [223, 142, 29],   // bright yellow
-                [30, 102, 245],   // bright blue
-                [136, 57, 239],   // bright magenta
-                [23, 146, 153],   // bright cyan
-                [44, 47, 71],     // bright white
+                [172, 176, 190], // black
+                [210, 15, 57],   // red
+                [64, 160, 43],   // green
+                [223, 142, 29],  // yellow
+                [30, 102, 245],  // blue
+                [136, 57, 239],  // magenta
+                [23, 146, 153],  // cyan
+                [76, 79, 105],   // white
+                [140, 143, 161], // bright black
+                [210, 15, 57],   // bright red
+                [64, 160, 43],   // bright green
+                [223, 142, 29],  // bright yellow
+                [30, 102, 245],  // bright blue
+                [136, 57, 239],  // bright magenta
+                [23, 146, 153],  // bright cyan
+                [44, 47, 71],    // bright white
             ],
         },
     ]

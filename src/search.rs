@@ -87,8 +87,11 @@ impl SearchState {
     pub fn prev_match(&mut self) {
         if let Some(idx) = self.current_index {
             if !self.matches.is_empty() {
-                self.current_index =
-                    Some(if idx == 0 { self.matches.len() - 1 } else { idx - 1 });
+                self.current_index = Some(if idx == 0 {
+                    self.matches.len() - 1
+                } else {
+                    idx - 1
+                });
             }
         }
     }

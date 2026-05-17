@@ -47,13 +47,13 @@ fn poll_loop(shared: Arc<Mutex<SystemStats>>, ctx: egui::Context, interval: Dura
         sys.refresh_cpu_usage();
         sys.refresh_memory();
 
-        let prev_rx: u64 = nets.iter().map(|(_, n)| n.total_received()).sum();
-        let prev_tx: u64 = nets.iter().map(|(_, n)| n.total_transmitted()).sum();
+        let prev_rx: u64 = nets.values().map(|n| n.total_received()).sum();
+        let prev_tx: u64 = nets.values().map(|n| n.total_transmitted()).sum();
 
         nets.refresh(false);
 
-        let cur_rx: u64 = nets.iter().map(|(_, n)| n.total_received()).sum();
-        let cur_tx: u64 = nets.iter().map(|(_, n)| n.total_transmitted()).sum();
+        let cur_rx: u64 = nets.values().map(|n| n.total_received()).sum();
+        let cur_tx: u64 = nets.values().map(|n| n.total_transmitted()).sum();
 
         let secs = interval.as_secs_f64();
         let rx_per_sec = ((cur_rx.saturating_sub(prev_rx)) as f64 / secs) as u64;

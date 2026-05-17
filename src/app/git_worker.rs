@@ -34,10 +34,8 @@ impl GitWorker {
             git: HashMap::new(),
             dirs: HashMap::new(),
         }));
-        let git_inflight: Arc<Mutex<HashSet<PathBuf>>> =
-            Arc::new(Mutex::new(HashSet::new()));
-        let dir_inflight: Arc<Mutex<HashSet<PathBuf>>> =
-            Arc::new(Mutex::new(HashSet::new()));
+        let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+        let dir_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let alive = Arc::new(AtomicBool::new(true));
 
         let results_bg = Arc::clone(&results);

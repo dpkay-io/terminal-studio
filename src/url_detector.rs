@@ -5,9 +5,7 @@ use regex::Regex;
 static URL_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn url_regex() -> &'static Regex {
-    URL_REGEX.get_or_init(|| {
-        Regex::new(r"https?://[^\s<>\[\]\{\}|\\^`\x00-\x1f\x7f]+").unwrap()
-    })
+    URL_REGEX.get_or_init(|| Regex::new(r"https?://[^\s<>\[\]\{\}|\\^`\x00-\x1f\x7f]+").unwrap())
 }
 
 pub struct DetectedUrl {

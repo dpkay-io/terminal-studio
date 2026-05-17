@@ -75,7 +75,11 @@ pub(super) fn effective_title(
         return display_title(title);
     }
 
-    if let Some(dir) = cwd.file_name().and_then(|n| n.to_str()).filter(|s| !s.is_empty()) {
+    if let Some(dir) = cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|s| !s.is_empty())
+    {
         return dir.to_string();
     }
 
@@ -116,20 +120,29 @@ mod tests {
         let cwd = Path::new("/home/user/myproject");
         assert_eq!(effective_title("bash", cwd, None, None), "myproject");
         assert_eq!(effective_title("Session 1", cwd, None, None), "myproject");
-        assert_eq!(effective_title("PowerShell.exe", cwd, None, None), "myproject");
+        assert_eq!(
+            effective_title("PowerShell.exe", cwd, None, None),
+            "myproject"
+        );
         assert_eq!(effective_title("", cwd, None, None), "myproject");
     }
 
     #[test]
     fn effective_title_real_title_uses_display_title() {
         let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("vim README.md", cwd, None, None), "vim README.md");
+        assert_eq!(
+            effective_title("vim README.md", cwd, None, None),
+            "vim README.md"
+        );
     }
 
     #[test]
     fn effective_title_real_title_strips_path() {
         let cwd = Path::new("/home/user");
-        assert_eq!(effective_title("/home/user/projects/src", cwd, None, None), "src");
+        assert_eq!(
+            effective_title("/home/user/projects/src", cwd, None, None),
+            "src"
+        );
     }
 
     #[test]
@@ -153,7 +166,10 @@ mod tests {
             name: "vim".to_string(),
             cmdline: vec!["vim".to_string(), "README.md".to_string()],
         };
-        assert_eq!(effective_title("bash", cwd, Some(&fg), None), "vim README.md");
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None),
+            "vim README.md"
+        );
     }
 
     #[test]
@@ -173,7 +189,10 @@ mod tests {
             name: "node.exe".to_string(),
             cmdline: vec!["node.exe".to_string(), "server.js".to_string()],
         };
-        assert_eq!(effective_title("bash", cwd, Some(&fg), None), "node server.js");
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None),
+            "node server.js"
+        );
     }
 
     #[test]
@@ -181,8 +200,14 @@ mod tests {
         let cwd = Path::new("/home/user");
         let fg = ForegroundProcess {
             name: "vim".to_string(),
-            cmdline: vec!["vim".to_string(), "/home/user/projects/README.md".to_string()],
+            cmdline: vec![
+                "vim".to_string(),
+                "/home/user/projects/README.md".to_string(),
+            ],
         };
-        assert_eq!(effective_title("bash", cwd, Some(&fg), None), "vim README.md");
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None),
+            "vim README.md"
+        );
     }
 }

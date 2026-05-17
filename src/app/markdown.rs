@@ -9,7 +9,10 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 in_code = false;
                 egui::Frame::none()
                     .fill(theme::active().md_code_bg)
-                    .stroke(egui::Stroke::new(theme::STROKE_THIN, theme::active().md_code_border))
+                    .stroke(egui::Stroke::new(
+                        theme::STROKE_THIN,
+                        theme::active().md_code_border,
+                    ))
                     .inner_margin(egui::Margin::symmetric(theme::SP_MD, theme::BAR_PAD_X))
                     .rounding(egui::Rounding::same(theme::ROUNDING))
                     .show(ui, |ui| {
@@ -55,11 +58,18 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         } else if let Some(t) = line.strip_prefix("> ") {
             ui.horizontal(|ui| {
                 let bar_h = ui.text_style_height(&egui::TextStyle::Body);
-                let (bar_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(theme::TAB_COLOR_STRIP_W, bar_h), egui::Sense::hover());
-                ui.painter().rect_filled(bar_rect, 0.0, theme::active().overlay0);
+                let (bar_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(theme::TAB_COLOR_STRIP_W, bar_h),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .rect_filled(bar_rect, 0.0, theme::active().overlay0);
                 ui.add_space(theme::BAR_PAD_X);
-                ui.label(egui::RichText::new(t).italics().color(theme::active().md_blockquote));
+                ui.label(
+                    egui::RichText::new(t)
+                        .italics()
+                        .color(theme::active().md_blockquote),
+                );
             });
         } else if line.starts_with("---") && line.chars().all(|c| c == '-') {
             ui.separator();
