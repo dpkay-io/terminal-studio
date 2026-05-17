@@ -92,7 +92,7 @@ impl FileSearchWorker {
                         })
                         .collect();
 
-                    scored.sort_by(|a, b| b.score.cmp(&a.score));
+                    scored.sort_by_key(|b| std::cmp::Reverse(b.score));
                     scored.truncate(200);
 
                     if *generation_bg.lock() != job.generation {

@@ -127,7 +127,7 @@ impl SearchWorker {
                         continue;
                     }
 
-                    all_matches.sort_by(|a, b| b.score.cmp(&a.score));
+                    all_matches.sort_by_key(|b| std::cmp::Reverse(b.score));
                     all_matches.truncate(200);
 
                     let mut res = results_bg.lock();

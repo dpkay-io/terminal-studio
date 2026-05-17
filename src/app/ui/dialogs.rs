@@ -996,7 +996,7 @@ impl App {
             }
             if self
                 .active_pane_id
-                .map_or(false, |id| pane_ids_to_close.contains(&id))
+                .is_some_and(|id| pane_ids_to_close.contains(&id))
             {
                 self.active_pane_id = self.panes.last().map(|p| p.id);
             }
