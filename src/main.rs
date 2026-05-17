@@ -1,6 +1,7 @@
 mod app;
 mod file_search_worker;
 mod keybindings;
+mod md_detector;
 mod pane_tree;
 mod pty;
 mod renderer;
@@ -12,7 +13,6 @@ mod sys_monitor;
 mod terminal;
 mod theme;
 mod updater;
-mod md_detector;
 mod url_detector;
 mod workspace;
 

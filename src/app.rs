@@ -407,10 +407,7 @@ impl eframe::App for App {
                 ew.view
                     .last_pane_per_group
                     .insert(action.group, action.pane_id);
-                ctx.send_viewport_cmd_to(
-                    action.target_viewport_id,
-                    egui::ViewportCommand::Focus,
-                );
+                ctx.send_viewport_cmd_to(action.target_viewport_id, egui::ViewportCommand::Focus);
             }
         }
 
@@ -477,9 +474,10 @@ impl App {
                         }
                     }
                     let md_active_content = if let RightTab::Markdown(p) = &self.right_tab {
-                        d.md_files.get(p).cloned().or_else(|| {
-                            self.terminal_md_content.get(p).map(|(c, _)| Arc::clone(c))
-                        })
+                        d.md_files
+                            .get(p)
+                            .cloned()
+                            .or_else(|| self.terminal_md_content.get(p).map(|(c, _)| Arc::clone(c)))
                     } else {
                         None
                     };
@@ -493,7 +491,9 @@ impl App {
                     }
                 }
                 None => {
-                    let md_paths: Vec<PathBuf> = self.terminal_md_content.iter()
+                    let md_paths: Vec<PathBuf> = self
+                        .terminal_md_content
+                        .iter()
                         .filter(|(_, (_, ws_id))| *ws_id == self.active_group)
                         .map(|(p, _)| p.clone())
                         .collect();
@@ -510,10 +510,12 @@ impl App {
                         md_paths,
                         md_active_content,
                     }
-                },
+                }
             },
             _ => {
-                let md_paths: Vec<PathBuf> = self.terminal_md_content.iter()
+                let md_paths: Vec<PathBuf> = self
+                    .terminal_md_content
+                    .iter()
                     .filter(|(_, (_, ws_id))| *ws_id == self.active_group)
                     .map(|(p, _)| p.clone())
                     .collect();
@@ -530,7 +532,7 @@ impl App {
                     md_paths,
                     md_active_content,
                 }
-            },
+            }
         };
         let PanelSnap {
             is_git,
