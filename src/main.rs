@@ -12,6 +12,7 @@ mod sys_monitor;
 mod terminal;
 mod theme;
 mod updater;
+mod md_detector;
 mod url_detector;
 mod workspace;
 

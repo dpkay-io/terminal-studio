@@ -37,6 +37,7 @@ pub(super) struct WindowView {
     pub(super) active_term_geo: Option<TerminalGeometry>,
     pub(super) active_term_ui_id: Option<egui::Id>,
     pub(super) was_focused: bool,
+    pub(super) session_workspace_filter: Option<Option<u64>>,
 }
 
 impl WindowView {
@@ -64,8 +65,16 @@ impl WindowView {
             active_term_geo: None,
             active_term_ui_id: None,
             was_focused: true,
+            session_workspace_filter: None,
         }
     }
+}
+
+pub(super) struct PendingWindowFocus {
+    pub(super) target_viewport_id: egui::ViewportId,
+    pub(super) target_window_idx: usize,
+    pub(super) pane_id: u32,
+    pub(super) group: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]

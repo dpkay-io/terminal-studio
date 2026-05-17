@@ -152,12 +152,16 @@ impl App {
             global_search_selected: 0,
             file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
             detected_urls: Vec::new(),
+            detected_md_paths: Vec::new(),
+            auto_opened_md: HashSet::new(),
+            terminal_md_content: HashMap::new(),
             tab_drag_source: None,
             deferred_spawn: None,
             deferred_duplicate: false,
             deferred_open_workspace: None,
             show_close_all_confirm: false,
             session_workspace_filter: None,
+            pending_window_focus: None,
         };
 
         let (init_cols, init_rows) = {
@@ -330,6 +334,7 @@ impl App {
         self.workspace_store.save();
 
         let mut view = WindowView::new_for_workspace(ws_id);
+        view.session_workspace_filter = Some(Some(ws_id));
         let initial_pane = self
             .panes
             .iter()
@@ -402,6 +407,10 @@ impl App {
         swap(&mut self.active_term_geo, &mut view.active_term_geo);
         swap(&mut self.active_term_ui_id, &mut view.active_term_ui_id);
         swap(&mut self.was_focused, &mut view.was_focused);
+        swap(
+            &mut self.session_workspace_filter,
+            &mut view.session_workspace_filter,
+        );
     }
 
     pub(super) fn save_windows(&self) {
@@ -468,6 +477,7 @@ impl App {
                 .unwrap_or_default();
             let title = format!("{} — Terminal Studio", ws_name);
             let mut view = WindowView::new_for_workspace(s.workspace_id);
+            view.session_workspace_filter = Some(Some(s.workspace_id));
             if let Some(v) = s.workspace_panel_ratio {
                 view.workspace_panel_ratio = v;
             }

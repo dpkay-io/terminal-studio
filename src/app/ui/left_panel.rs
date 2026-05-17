@@ -493,12 +493,20 @@ impl App {
                                         continue;
                                     }
 
+                                    let pane_ws = Self::pane_group(&self.sessions, &self.workspace_store, pane);
+
                                     if let Some(ws_filter) = self.session_workspace_filter {
-                                        let pane_ws = Self::pane_group(&self.sessions, &self.workspace_store, pane);
                                         if pane_ws != ws_filter {
                                             continue;
                                         }
                                     }
+
+                                    let in_other_window = pane_ws.is_some_and(|ws_id| {
+                                        self.extra_windows.iter().any(|ew| {
+                                            ew.workspace_id == ws_id
+                                                && self.current_window_id.as_ref() != Some(&ew.id)
+                                        })
+                                    });
 
                                     let is_active = self.active_pane_id == Some(pane.id);
 
@@ -555,9 +563,10 @@ impl App {
                                     // Pane indicator badge (P1, P2...) between title and quit btn
                                     let pane_badge = format!("P{}", pane_idx + 1);
                                     let badge_w = theme::BADGE_W;
+                                    let win_icon_w: f32 = if in_other_window { 14.0 } else { 0.0 };
                                     painter.text(
                                         egui::pos2(
-                                            quit_rect.min.x - badge_w / 2.0 - 2.0,
+                                            quit_rect.min.x - badge_w / 2.0 - 2.0 - win_icon_w,
                                             row_rect.center().y,
                                         ),
                                         egui::Align2::CENTER_CENTER,
@@ -566,14 +575,27 @@ impl App {
                                         theme::active().overlay0,
                                     );
 
-                                    // Title text clipped to leave room for quit button + badge
+                                    if in_other_window {
+                                        painter.text(
+                                            egui::pos2(
+                                                quit_rect.min.x - win_icon_w / 2.0 - 1.0,
+                                                row_rect.center().y,
+                                            ),
+                                            egui::Align2::CENTER_CENTER,
+                                            "\u{2197}",
+                                            egui::FontId::proportional(11.0),
+                                            theme::active().blue,
+                                        );
+                                    }
+
+                                    // Title text clipped to leave room for quit button + badge + icon
                                     let text_x = row_rect.min.x
                                         + if ws_color.is_some() {
                                             theme::WS_BORDER_W + theme::BAR_PAD_X
                                         } else {
                                             theme::BAR_PAD_X
                                         };
-                                    let clip_max = quit_rect.min.x - badge_w - 3.0;
+                                    let clip_max = quit_rect.min.x - badge_w - win_icon_w - 3.0;
                                     let text_color = if dimmed {
                                         theme::active().overlay0
                                     } else if is_active {
@@ -594,7 +616,11 @@ impl App {
                                             text_color,
                                         );
 
-                                    let resp = resp.on_hover_text(&label);
+                                    let resp = if in_other_window {
+                                        resp.on_hover_text(format!("{} (switch window)", label))
+                                    } else {
+                                        resp.on_hover_text(&label)
+                                    };
 
                                     if quit_resp.clicked() {
                                         quit_pane_id = Some(pane.id);
@@ -1087,9 +1113,29 @@ impl App {
                 .find(|p| p.id == qpid)
                 .map(|p| Self::pane_group(&self.sessions, &self.workspace_store, p));
             if let Some(group) = group_opt {
-                self.active_group = group;
-                self.activate_pane(qpid);
-                self.last_pane_per_group.insert(group, qpid);
+                let target_ew = group.and_then(|ws_id| {
+                    self.extra_windows
+                        .iter()
+                        .enumerate()
+                        .find(|(_, ew)| {
+                            ew.workspace_id == ws_id
+                                && self.current_window_id.as_ref() != Some(&ew.id)
+                        })
+                        .map(|(idx, ew)| (idx, ew.viewport_id))
+                });
+                if let Some((idx, viewport_id)) = target_ew {
+                    self.pending_window_focus =
+                        Some(super::super::multi_window::PendingWindowFocus {
+                            target_viewport_id: viewport_id,
+                            target_window_idx: idx,
+                            pane_id: qpid,
+                            group,
+                        });
+                } else {
+                    self.active_group = group;
+                    self.activate_pane(qpid);
+                    self.last_pane_per_group.insert(group, qpid);
+                }
             }
         }
 

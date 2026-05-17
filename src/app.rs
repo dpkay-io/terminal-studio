@@ -44,7 +44,7 @@ use git_diff::{render_git_diff, render_inline_diff, GitStageAction};
 use git_worker::GitWorker;
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
-use multi_window::{ExtraWindow, WindowView};
+use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
 use pane::{
     FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry, TermSelection,
 };
@@ -178,6 +178,13 @@ pub struct App {
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
 
+    // Detected markdown file paths in the currently visible terminal content
+    detected_md_paths: Vec<crate::md_detector::DetectedMdPath>,
+    // Tracks which md paths were already auto-opened in the right panel to avoid re-triggering
+    auto_opened_md: HashSet<PathBuf>,
+    // Content cache for terminal-detected MD files, with associated workspace ID
+    terminal_md_content: HashMap<PathBuf, (Arc<String>, Option<u64>)>,
+
     // Tab drag-to-reorder state
     tab_drag_source: Option<usize>,
 
@@ -190,6 +197,9 @@ pub struct App {
 
     // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
     session_workspace_filter: Option<Option<u64>>,
+
+    // Pending cross-window focus request set by sidebar click, processed after viewports render.
+    pending_window_focus: Option<PendingWindowFocus>,
 }
 
 impl eframe::App for App {
@@ -383,6 +393,27 @@ impl eframe::App for App {
             });
         }
 
+        // Process pending cross-window focus actions (set by sidebar click routing).
+        if let Some(action) = self.pending_window_focus.take() {
+            if action.target_window_idx < self.extra_windows.len() {
+                let ew = &mut self.extra_windows[action.target_window_idx];
+                ew.view.active_group = action.group;
+                ew.view.active_pane_id = Some(action.pane_id);
+                if let Some(pane) = self.panes.iter().find(|p| p.id == action.pane_id) {
+                    if let PaneContent::Terminal(sid) = pane.content {
+                        ew.view.active_id = Some(sid);
+                    }
+                }
+                ew.view
+                    .last_pane_per_group
+                    .insert(action.group, action.pane_id);
+                ctx.send_viewport_cmd_to(
+                    action.target_viewport_id,
+                    egui::ViewportCommand::Focus,
+                );
+            }
+        }
+
         // Process pending close requests collected from the viewport callbacks.
         let closing_indices: Vec<usize> = self
             .extra_windows
@@ -439,9 +470,16 @@ impl App {
         let snap: PanelSnap = match (active_cwd.as_ref(), self.watch_state.as_ref()) {
             (Some(cwd), Some(ws)) => match ws.dir_data.get(cwd) {
                 Some(d) => {
-                    let md_paths: Vec<PathBuf> = d.md_files.keys().cloned().collect();
+                    let mut md_paths: Vec<PathBuf> = d.md_files.keys().cloned().collect();
+                    for (p, (_, ws_id)) in &self.terminal_md_content {
+                        if *ws_id == self.active_group && !md_paths.contains(p) {
+                            md_paths.push(p.clone());
+                        }
+                    }
                     let md_active_content = if let RightTab::Markdown(p) = &self.right_tab {
-                        d.md_files.get(p).cloned()
+                        d.md_files.get(p).cloned().or_else(|| {
+                            self.terminal_md_content.get(p).map(|(c, _)| Arc::clone(c))
+                        })
                     } else {
                         None
                     };
@@ -454,22 +492,44 @@ impl App {
                         md_active_content,
                     }
                 }
-                None => PanelSnap {
+                None => {
+                    let md_paths: Vec<PathBuf> = self.terminal_md_content.iter()
+                        .filter(|(_, (_, ws_id))| *ws_id == self.active_group)
+                        .map(|(p, _)| p.clone())
+                        .collect();
+                    let md_active_content = if let RightTab::Markdown(p) = &self.right_tab {
+                        self.terminal_md_content.get(p).map(|(c, _)| Arc::clone(c))
+                    } else {
+                        None
+                    };
+                    PanelSnap {
+                        is_git: false,
+                        git_diff: String::new(),
+                        git_status: String::new(),
+                        dir_entries: Arc::new(Vec::new()),
+                        md_paths,
+                        md_active_content,
+                    }
+                },
+            },
+            _ => {
+                let md_paths: Vec<PathBuf> = self.terminal_md_content.iter()
+                    .filter(|(_, (_, ws_id))| *ws_id == self.active_group)
+                    .map(|(p, _)| p.clone())
+                    .collect();
+                let md_active_content = if let RightTab::Markdown(p) = &self.right_tab {
+                    self.terminal_md_content.get(p).map(|(c, _)| Arc::clone(c))
+                } else {
+                    None
+                };
+                PanelSnap {
                     is_git: false,
                     git_diff: String::new(),
                     git_status: String::new(),
                     dir_entries: Arc::new(Vec::new()),
-                    md_paths: Vec::new(),
-                    md_active_content: None,
-                },
-            },
-            _ => PanelSnap {
-                is_git: false,
-                git_diff: String::new(),
-                git_status: String::new(),
-                dir_entries: Arc::new(Vec::new()),
-                md_paths: Vec::new(),
-                md_active_content: None,
+                    md_paths,
+                    md_active_content,
+                }
             },
         };
         let PanelSnap {
@@ -495,6 +555,7 @@ impl App {
         let mut git_stage_action: Option<GitStageAction> = None;
         let mut git_open_diff_file: Option<String> = None;
         let mut git_open_file: Option<String> = None;
+        let mut open_md_in_editor: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
@@ -795,7 +856,22 @@ impl App {
                                             git_open_file = result.open_file;
                                         }
                                     }
-                                    RightTab::Markdown(_path) => {
+                                    RightTab::Markdown(md_path) => {
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new("Open in Editor")
+                                                            .size(11.0),
+                                                    )
+                                                    .rounding(3.0),
+                                                )
+                                                .clicked()
+                                            {
+                                                open_md_in_editor = Some(md_path.clone());
+                                            }
+                                        });
+                                        ui.add_space(4.0);
                                         let content = md_active_content
                                             .as_deref()
                                             .map(|s| s.as_str())
@@ -949,6 +1025,7 @@ impl App {
         }
         if let Some(path) = close_tab {
             self.shown_md_tabs.remove(&path);
+            self.terminal_md_content.remove(&path);
             if self.right_tab == RightTab::Markdown(path) {
                 self.right_tab = RightTab::Directory;
             }
@@ -1796,6 +1873,7 @@ impl App {
                         let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
                         let history = grid.history_size() as i32;
                         let term_rows = term.screen_lines() as i32;
+                        let cwd = session.cwd.clone();
                         let mut lines = Vec::with_capacity(visible_rows);
                         for screen_row in 0..visible_rows {
                             let grid_line = screen_row as i32 - display_offset as i32;
@@ -1813,6 +1891,21 @@ impl App {
                         }
                         drop(session);
                         self.detected_urls = crate::url_detector::detect_urls(&lines);
+                        if !cwd.as_os_str().is_empty() {
+                            self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
+                            for md in &self.detected_md_paths {
+                                if !self.auto_opened_md.contains(&md.path) {
+                                    self.auto_opened_md.insert(md.path.clone());
+                                    let content = std::fs::read_to_string(&md.path).unwrap_or_default();
+                                    self.terminal_md_content.insert(md.path.clone(), (Arc::new(content), self.active_group));
+                                    self.shown_md_tabs.insert(md.path.clone());
+                                    self.show_right_panel = true;
+                                    self.right_tab = RightTab::Markdown(md.path.clone());
+                                }
+                            }
+                        } else {
+                            self.detected_md_paths.clear();
+                        }
                     }
 
                     if !self.detected_urls.is_empty() {
@@ -1869,6 +1962,67 @@ impl App {
                                     let grid_line = row as i32 - d_off as i32;
                                     if let Some(url) = crate::url_detector::url_at_position(&self.detected_urls, grid_line, col as usize) {
                                         let _ = open::that(url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ── MD path underlines + click-to-open ───────────────────
+                    if !self.detected_md_paths.is_empty() {
+                        let t = theme::active();
+                        let painter = ui.painter();
+                        let session = entry.session.read();
+                        let display_offset = session.term.grid().display_offset();
+                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
+                        drop(session);
+                        for detected in &self.detected_md_paths {
+                            let screen_row = detected.line + display_offset as i32;
+                            if screen_row < 0 || screen_row >= visible_rows as i32 {
+                                continue;
+                            }
+                            let y = geo.rect.min.y + screen_row as f32 * geo.cell_h + geo.cell_h - 1.5;
+                            let x0 = geo.rect.min.x + detected.start_col as f32 * geo.cell_w;
+                            let x1 = geo.rect.min.x + detected.end_col as f32 * geo.cell_w;
+                            painter.line_segment(
+                                [egui::pos2(x0, y), egui::pos2(x1, y)],
+                                egui::Stroke::new(0.5, t.green),
+                            );
+                        }
+
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+                        let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
+                        if ctrl_held {
+                            if let Some(pos) = pointer_pos {
+                                if let Some((col, row)) = geo.to_cell(pos) {
+                                    let session = entry.session.read();
+                                    let d_off = session.term.grid().display_offset();
+                                    drop(session);
+                                    let grid_line = row as i32 - d_off as i32;
+                                    if let Some(det) = self.detected_md_paths.iter().find(|m| m.line == grid_line && (col as usize) >= m.start_col && (col as usize) < m.end_col) {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        let sy = geo.rect.min.y + row as f32 * geo.cell_h + geo.cell_h - 1.5;
+                                        let sx0 = geo.rect.min.x + det.start_col as f32 * geo.cell_w;
+                                        let sx1 = geo.rect.min.x + det.end_col as f32 * geo.cell_w;
+                                        ui.painter().line_segment(
+                                            [egui::pos2(sx0, sy), egui::pos2(sx1, sy)],
+                                            egui::Stroke::new(1.5, t.green),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        let clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
+                        if ctrl_held && clicked {
+                            if let Some(pos) = pointer_pos {
+                                if let Some((col, row)) = geo.to_cell(pos) {
+                                    let session = entry.session.read();
+                                    let d_off = session.term.grid().display_offset();
+                                    drop(session);
+                                    let grid_line = row as i32 - d_off as i32;
+                                    if let Some(path) = crate::md_detector::md_at_position(&self.detected_md_paths, grid_line, col as usize) {
+                                        open_md_in_editor = Some(path.to_path_buf());
                                     }
                                 }
                             }
@@ -2864,6 +3018,43 @@ impl App {
                         save_error: false,
                         workspace_id: self.active_group,
                         show_preview: is_md && self.md_prefer_preview,
+                    }),
+                    manual_width: None,
+                    last_size: (0, 0),
+                });
+                self.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                self.activate_pane(pane_id);
+            }
+        }
+
+        // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
+        if let Some(path) = open_md_in_editor {
+            let existing_id = self
+                .panes
+                .iter()
+                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
+                .map(|p| p.id);
+            if let Some(pid) = existing_id {
+                self.activate_pane(pid);
+            } else {
+                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                let pane_id = self.next_pane_id;
+                self.next_pane_id += 1;
+                self.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::FileEditor(FileEditorState {
+                        path,
+                        content,
+                        dirty: false,
+                        save_error: false,
+                        workspace_id: self.active_group,
+                        show_preview: true,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
