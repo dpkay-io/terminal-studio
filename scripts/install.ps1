@@ -20,3 +20,6 @@ if ($userPath -notlike "*$installDir*") {
     Write-Host "Add Terminal Studio to your PATH permanently:"
     Write-Host "  [Environment]::SetEnvironmentVariable('Path', `$env:Path + ';$installDir', 'User')"
 }
+
+Write-Host ""
+Write-Host "Terminal Studio will notify you of future updates automatically."

@@ -1,738 +1,59 @@
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use egui::FontId;
-use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use parking_lot::RwLock;
 
-use serde::{Deserialize, Serialize};
+use fuzzy_matcher::skim::SkimMatcherV2;
+use fuzzy_matcher::FuzzyMatcher;
 
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
-use crate::pty::foreground::ForegroundProcess;
 use crate::pty::foreground_worker::ForegroundWorker;
-use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
+use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
-use crate::terminal::Session;
+use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
-use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
-use alacritty_terminal::{grid::Scroll, term::TermMode};
-
-// ── Preset workspace colours ──────────────────────────────────────────────────
-
-const PRESET_COLORS: &[[u8; 3]] = &[
-    [100, 140, 230], // blue
-    [80, 200, 100],  // green
-    [220, 120, 80],  // orange
-    [200, 80, 160],  // pink
-    [140, 100, 220], // purple
-    [80, 200, 200],  // teal
-    [220, 200, 60],  // yellow
-    [200, 80, 80],   // red
-];
-
-// ── Right-panel tab ───────────────────────────────────────────────────────────
-
-#[derive(PartialEq, Clone, Debug)]
-enum RightTab {
-    Directory,
-    GitDiff,
-    Markdown(PathBuf),
-}
-
-// ── Center panel (multi-pane) ─────────────────────────────────────────────────
-
-#[derive(Clone, Debug)]
-struct FileEditorState {
-    path: PathBuf,
-    content: String,
-    dirty: bool,
-    save_error: bool,
-    workspace_id: Option<u64>,
-}
-
-#[derive(Debug)]
-enum PaneContent {
-    Terminal(u32),
-    /// PTY not yet spawned — deferred until the pane is first focused.
-    /// Keeps cwd/command so the session can be materialized on demand.
-    DeferredTerminal {
-        cwd: Option<PathBuf>,
-        pending_command: Option<String>,
-    },
-    FileEditor(FileEditorState),
-}
-
-struct PaneEntry {
-    id: u32,
-    content: PaneContent,
-    manual_width: Option<f32>,
-    last_size: (u16, u16),
-}
-
-// ── Session persistence ───────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize)]
-struct SavedSession {
-    cwd: PathBuf,
-    #[serde(default)]
-    command: Option<String>,
-}
-
-#[derive(Serialize, Deserialize)]
-enum SavedPaneContent {
-    Terminal {
-        session_index: usize,
-    },
-    DeferredTerminal {
-        cwd: PathBuf,
-        #[serde(default)]
-        command: Option<String>,
-    },
-    FileEditor {
-        path: PathBuf,
-        content: String,
-        dirty: bool,
-        workspace_id: Option<u64>,
-    },
-}
-
-#[derive(Serialize, Deserialize)]
-struct SavedPane {
-    content: SavedPaneContent,
-    manual_width: Option<f32>,
-}
-
-#[derive(Serialize, Deserialize)]
-enum SavedRightTab {
-    Directory,
-    GitDiff,
-    Markdown(PathBuf),
-}
-
-#[derive(Serialize, Deserialize)]
-struct AppSession {
-    sessions: Vec<SavedSession>,
-    panes: Vec<SavedPane>,
-    active_pane_index: Option<usize>,
-    active_session_index: Option<usize>,
-    active_group: Option<u64>,
-    last_pane_per_group: Vec<(Option<u64>, usize)>,
-    workspace_panel_ratio: f32,
-    workspace_panel_collapsed: bool,
-    notes_panel_ratio: f32,
-    notes_panel_collapsed: bool,
-    right_tab: SavedRightTab,
-    shown_md_tabs: Vec<PathBuf>,
-}
-
-fn session_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("session.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("session.json")
-        })
-    }
-}
-
-// ── App settings ──────────────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize, Clone)]
-struct AppSettings {
-    default_workspace_id: Option<u64>,
-    restore_last_session: bool,
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        AppSettings {
-            default_workspace_id: None,
-            restore_last_session: true,
-        }
-    }
-}
-
-fn windows_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("windows.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("windows.json")
-        })
-    }
-}
-
-fn settings_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("settings.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("settings.json")
-        })
-    }
-}
-
-impl AppSettings {
-    fn load() -> Self {
-        let Some(path) = settings_data_path() else {
-            return Self::default();
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&text).unwrap_or_default()
-    }
-
-    fn save(&self) {
-        let Some(path) = settings_data_path() else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, text);
-        }
-    }
-}
-
-// ── Directory file entry ──────────────────────────────────────────────────────
-
-#[derive(Clone)]
-struct FileEntry {
-    name: String,
-    path: PathBuf,
-    is_dir: bool,
-}
-
-/// TTL-cached subdirectory listings used by the file browser. Without this
-/// the tree re-reads every expanded directory from disk on every frame.
-/// Top-level listings (the active session's CWD) come from the file watcher
-/// and update synchronously; subdirectories are not watched (the watcher is
-/// non-recursive), so we refresh them on a short TTL.
-pub(crate) struct SubdirCache<'a> {
-    map: &'a mut HashMap<PathBuf, (Arc<Vec<FileEntry>>, Instant)>,
-    ttl: Duration,
-}
-
-impl<'a> SubdirCache<'a> {
-    fn get_or_read(&mut self, path: &Path) -> Arc<Vec<FileEntry>> {
-        if let Some((entries, t)) = self.map.get(path) {
-            if t.elapsed() < self.ttl {
-                return Arc::clone(entries);
-            }
-        }
-        let entries = Arc::new(list_dir_entries(path));
-        self.map
-            .insert(path.to_path_buf(), (Arc::clone(&entries), Instant::now()));
-        entries
-    }
-}
-
-fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
-    let mut entries = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(path) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let name = p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if name.starts_with('.') {
-                continue;
-            }
-            entries.push(FileEntry {
-                is_dir: p.is_dir(),
-                name,
-                path: p,
-            });
-        }
-    }
-    entries.sort_by(|a, b| match (a.is_dir, b.is_dir) {
-        (true, false) => std::cmp::Ordering::Less,
-        (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.cmp(&b.name),
-    });
-    entries
-}
-
-// ── Per-directory data ────────────────────────────────────────────────────────
-
-struct DirData {
-    is_git: bool,
-    git_diff: String,
-    git_status: String,
-    git_refresh_at: Option<Instant>,
-    // Markdown contents are stored behind Arc so per-frame snapshots
-    // are O(1) pointer-clones instead of copying file bytes.
-    md_files: HashMap<PathBuf, Arc<String>>,
-    // Same rationale for the top-level directory listing.
-    dir_entries: Arc<Vec<FileEntry>>,
-}
-
-impl DirData {
-    fn new(path: &Path) -> Self {
-        let is_git = path.join(".git").exists();
-        let (git_diff, git_status) = if is_git {
-            run_git_info(path)
-        } else {
-            (String::new(), String::new())
-        };
-        DirData {
-            is_git,
-            git_diff,
-            git_status,
-            git_refresh_at: None,
-            md_files: HashMap::new(),
-            dir_entries: Arc::new(list_dir_entries(path)),
-        }
-    }
-}
-
-fn run_git_info(dir: &Path) -> (String, String) {
-    use std::process::Command;
-    let git = |args: &[&str]| -> String {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .unwrap_or_default()
-    };
-    let staged = git(&["diff", "--cached", "--no-color"]);
-    let unstaged = git(&["diff", "--no-color"]);
-    let status = git(&["status", "--porcelain"]);
-    let diff = match (staged.is_empty(), unstaged.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => format!("=== Staged ===\n{staged}"),
-        (true, false) => format!("=== Unstaged ===\n{unstaged}"),
-        (false, false) => format!("=== Staged ===\n{staged}\n=== Unstaged ===\n{unstaged}"),
-    };
-    (diff, status)
-}
-
-// ── File-watcher ──────────────────────────────────────────────────────────────
-
-struct WatchState {
-    watcher: RecommendedWatcher,
-    watched: HashSet<PathBuf>,
-    git_dirs: HashMap<PathBuf, PathBuf>,
-    events: Arc<std::sync::Mutex<Vec<Event>>>,
-    dir_data: HashMap<PathBuf, DirData>,
-    last_sync: Instant,
-    last_session_count: usize,
-}
-
-impl WatchState {
-    fn new(ctx: egui::Context) -> Option<Self> {
-        let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let ev = Arc::clone(&events);
-        let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
-            if let Ok(event) = res {
-                if let Ok(mut g) = ev.lock() {
-                    g.push(event);
-                }
-                // Coalesce: bursts of file events (e.g. `cargo build`) can
-                // produce hundreds of notifications per second. Schedule a
-                // single repaint at ~60 Hz instead of firing one each time.
-                ctx.request_repaint_after(Duration::from_millis(16));
-            }
-        })
-        .ok()?;
-        Some(WatchState {
-            watcher,
-            watched: HashSet::new(),
-            git_dirs: HashMap::new(),
-            events,
-            dir_data: HashMap::new(),
-            last_sync: Instant::now(),
-            last_session_count: 0,
-        })
-    }
-
-    fn sync(&mut self, sessions: &[SessionEntry]) {
-        let current: HashSet<PathBuf> = sessions
-            .iter()
-            .map(|e| e.session.read().cwd.clone())
-            .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
-            .collect();
-
-        let to_remove: Vec<PathBuf> = self
-            .watched
-            .iter()
-            .filter(|d| !current.contains(*d))
-            .cloned()
-            .collect();
-        for dir in to_remove {
-            let _ = self.watcher.unwatch(&dir);
-            if let Some(gd) = self
-                .git_dirs
-                .iter()
-                .find(|(_, v)| **v == dir)
-                .map(|(k, _)| k.clone())
-            {
-                let _ = self.watcher.unwatch(&gd);
-                self.git_dirs.remove(&gd);
-            }
-            self.watched.remove(&dir);
-            self.dir_data.remove(&dir);
-        }
-
-        let to_add: Vec<PathBuf> = current
-            .into_iter()
-            .filter(|d| !self.watched.contains(d))
-            .collect();
-        for dir in to_add {
-            if self
-                .watcher
-                .watch(&dir, RecursiveMode::NonRecursive)
-                .is_ok()
-            {
-                let gd = dir.join(".git");
-                if gd.is_dir() && self.watcher.watch(&gd, RecursiveMode::NonRecursive).is_ok() {
-                    self.git_dirs.insert(gd, dir.clone());
-                }
-                self.dir_data.insert(dir.clone(), DirData::new(&dir));
-                self.watched.insert(dir);
-            }
-        }
-    }
-
-    fn process_events(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
-        let events: Vec<Event> = {
-            let Ok(mut g) = self.events.lock() else {
-                return (vec![], vec![]);
-            };
-            std::mem::take(&mut *g)
-        };
-
-        let now = Instant::now();
-        let debounce = Duration::from_millis(500);
-        let mut created_md: Vec<PathBuf> = Vec::new();
-        let mut removed_md: Vec<PathBuf> = Vec::new();
-
-        for event in events {
-            for path in &event.paths {
-                let dir: PathBuf = match path.parent().map(PathBuf::from) {
-                    Some(p) if self.watched.contains(&p) => p,
-                    Some(p) if self.git_dirs.contains_key(&p) => self.git_dirs[&p].clone(),
-                    _ => continue,
-                };
-                let Some(data) = self.dir_data.get_mut(&dir) else {
-                    continue;
-                };
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-
-                match &event.kind {
-                    EventKind::Create(_) => {
-                        if is_md && path.is_file() {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            data.md_files.insert(path.clone(), Arc::new(content));
-                            created_md.push(path.clone());
-                        }
-                        data.dir_entries = Arc::new(list_dir_entries(&dir));
-                        if data.is_git {
-                            data.git_refresh_at.get_or_insert(now + debounce);
-                        }
-                    }
-                    EventKind::Modify(_) => {
-                        if is_md && path.is_file() && data.md_files.contains_key(path) {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            data.md_files.insert(path.clone(), Arc::new(content));
-                        }
-                        if data.is_git {
-                            data.git_refresh_at.get_or_insert(now + debounce);
-                        }
-                    }
-                    EventKind::Remove(_) => {
-                        if data.md_files.remove(path).is_some() {
-                            removed_md.push(path.clone());
-                        }
-                        data.dir_entries = Arc::new(list_dir_entries(&dir));
-                        if data.is_git {
-                            data.git_refresh_at.get_or_insert(now + debounce);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        for (dir, data) in &mut self.dir_data {
-            if data.git_refresh_at.map(|t| now >= t).unwrap_or(false) {
-                let (diff, status) = run_git_info(dir);
-                data.git_diff = diff;
-                data.git_status = status;
-                data.git_refresh_at = None;
-            }
-        }
-
-        (created_md, removed_md)
-    }
-}
-
-// ── Workspace dialog state ────────────────────────────────────────────────────
-
-struct WorkspaceDialog {
-    name: String,
-    path: PathBuf,
-    selected_color: [u8; 3],
-    custom_color: [f32; 3],
-    show_custom_picker: bool,
-    focus_requested: bool,
-}
-
-impl WorkspaceDialog {
-    fn new(path: PathBuf) -> Self {
-        WorkspaceDialog {
-            name: path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-            path,
-            selected_color: PRESET_COLORS[0],
-            custom_color: [0.4, 0.55, 0.9],
-            show_custom_picker: false,
-            focus_requested: false,
-        }
-    }
-}
-
-// ── Workspace edit dialog state ───────────────────────────────────────────────
-
-struct WorkspaceEditDialog {
-    workspace_id: u64,
-    name: String,
-    selected_color: [u8; 3],
-    custom_color: [f32; 3],
-    show_custom_picker: bool,
-    confirm_delete: bool,
-    focus_requested: bool,
-}
-
-impl WorkspaceEditDialog {
-    fn new(id: u64, name: String, color: [u8; 3]) -> Self {
-        let is_preset = PRESET_COLORS.contains(&color);
-        WorkspaceEditDialog {
-            workspace_id: id,
-            name,
-            selected_color: color,
-            custom_color: [
-                color[0] as f32 / 255.0,
-                color[1] as f32 / 255.0,
-                color[2] as f32 / 255.0,
-            ],
-            show_custom_picker: !is_preset,
-            confirm_delete: false,
-            focus_requested: false,
-        }
-    }
-}
-
-// ── Extra window (viewport) state ────────────────────────────────────────────
-
-/// Per-window UI state. Each open OS window (the main window + each extra
-/// window) has its own copy of these fields. When rendering an extra window
-/// we mem::swap them onto `App` so the existing rendering code can keep
-/// reading from `self.*` unchanged; we swap them back after the render.
-struct WindowView {
-    active_group: Option<u64>,
-    active_pane_id: Option<u32>,
-    active_id: Option<u32>,
-    last_pane_per_group: HashMap<Option<u64>, u32>,
-    last_focused_sid: Option<u32>,
-
-    right_tab: RightTab,
-    shown_md_tabs: HashSet<PathBuf>,
-
-    workspace_panel_ratio: f32,
-    workspace_panel_collapsed: bool,
-    notes_panel_ratio: f32,
-    notes_panel_collapsed: bool,
-
-    show_left_panel: bool,
-    show_right_panel: bool,
-    show_settings: bool,
-
-    workspace_dialog: Option<WorkspaceDialog>,
-    workspace_edit_dialog: Option<WorkspaceEditDialog>,
-
-    active_term_geo: Option<TerminalGeometry>,
-    active_term_ui_id: Option<egui::Id>,
-    was_focused: bool,
-}
-
-impl WindowView {
-    /// Defaults for a freshly-opened extra window hosting `ws_id`.
-    fn new_for_workspace(ws_id: u64) -> Self {
-        WindowView {
-            active_group: Some(ws_id),
-            active_pane_id: None,
-            active_id: None,
-            last_pane_per_group: HashMap::new(),
-            last_focused_sid: None,
-            right_tab: RightTab::Directory,
-            shown_md_tabs: HashSet::new(),
-            workspace_panel_ratio: 0.35,
-            workspace_panel_collapsed: false,
-            notes_panel_ratio: 0.30,
-            notes_panel_collapsed: false,
-            show_left_panel: true,
-            show_right_panel: true,
-            show_settings: false,
-            workspace_dialog: None,
-            workspace_edit_dialog: None,
-            active_term_geo: None,
-            active_term_ui_id: None,
-            was_focused: true,
-        }
-    }
-}
-
-/// Persistent record of an extra window — saved to windows.json and rehydrated on launch.
-#[derive(Serialize, Deserialize)]
-struct SavedExtraWindow {
-    id: WindowId,
-    workspace_id: u64,
-    #[serde(default = "default_inner_size")]
-    inner_size: [f32; 2],
-    #[serde(default)]
-    workspace_panel_ratio: Option<f32>,
-    #[serde(default)]
-    workspace_panel_collapsed: Option<bool>,
-    #[serde(default)]
-    notes_panel_ratio: Option<f32>,
-    #[serde(default)]
-    notes_panel_collapsed: Option<bool>,
-}
-
-fn default_inner_size() -> [f32; 2] {
-    [1280.0, 800.0]
-}
-
-struct ExtraWindow {
-    id: WindowId,
-    /// Which workspace this window is currently hosting. Kept in sync with the
-    /// workspace's `host_window_id`.
-    workspace_id: u64,
-    viewport_id: egui::ViewportId,
-    title: String,
-    inner_size: [f32; 2],
-    view: WindowView,
-    close_requested: bool,
-}
-
-// ── Session entry ─────────────────────────────────────────────────────────────
-
-struct SessionEntry {
-    id: u32,
-    session: Arc<RwLock<Session>>,
-    pty_tx: mpsc::Sender<Vec<u8>>,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    shell_pid: u32,
-    alive: Arc<AtomicBool>,
-    is_active: Arc<AtomicBool>,
-    pending_command: Option<String>,
-    shell: ShellKind,
-}
-
-fn display_title(title: &str) -> String {
-    let t = title.trim();
-    let looks_like_path = t.starts_with('/')
-        || t.starts_with('~')
-        || (t.len() >= 3
-            && t.chars()
-                .next()
-                .map(|c| c.is_ascii_alphabetic())
-                .unwrap_or(false)
-            && &t[1..3] == ":\\");
-    if looks_like_path {
-        t.split(['/', '\\'])
-            .rfind(|s| !s.is_empty())
-            .unwrap_or(t)
-            .to_string()
-    } else {
-        t.to_string()
-    }
-}
-
-/// Wraps an argument in shell-appropriate quoting when it contains special characters.
-fn shell_escape_arg(s: &str) -> String {
-    let safe = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '='));
-    if safe {
-        return s.to_string();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
-}
-
-// When the shell hasn't set a meaningful title, show the cwd's last path fragment.
-fn effective_title(title: &str, cwd: &std::path::Path) -> String {
-    let t = title.trim();
-    let tl = t.to_lowercase();
-    let is_shell_default = t.is_empty()
-        || tl.starts_with("session ")
-        || tl == "powershell.exe"
-        || tl == "windows powershell"
-        || tl == "cmd.exe"
-        || tl == "bash"
-        || tl == "zsh"
-        || tl == "sh"
-        || tl == "fish";
-    if is_shell_default {
-        cwd.file_name()
-            .and_then(|n| n.to_str())
-            .filter(|s| !s.is_empty())
-            .unwrap_or(t)
-            .to_string()
-    } else {
-        display_title(title)
-    }
-}
+use crate::sys_monitor::SysMonitor;
+use crate::updater::UpdateChecker;
+use crate::workspace::{NoteStore, WindowId, WorkspaceStore};
+use alacritty_terminal::{grid::{Dimensions, Scroll}, term::TermMode};
+
+// ── Submodules ───────────────────────────────────────────────────────────────
+
+mod file_browser;
+mod git_diff;
+#[allow(dead_code)]
+mod git_worker;
+mod input;
+mod markdown;
+mod multi_window;
+mod pane;
+mod persistence;
+pub(crate) mod settings;
+mod state;
+mod title;
+mod ui;
+mod watcher;
+mod workspace_ui;
+
+// ── Re-imports from submodules ───────────────────────────────────────────────
+
+use file_browser::{
+    collect_all_files, render_dir_tree, render_flat_file_list, FileEntry, SubdirCache,
+};
+use git_diff::{render_git_diff, render_inline_diff, GitStageAction};
+use git_worker::GitWorker;
+use input::{key_to_pty_bytes, mouse_event_bytes};
+use markdown::render_markdown;
+use multi_window::{ExtraWindow, WindowView};
+use pane::{
+    FileEditorState, FileDiffState, PaneContent, PaneEntry, RightTab, SessionEntry, TermSelection,
+};
+use settings::{AppSettings, CursorStyle};
+use title::effective_title;
+use watcher::WatchState;
+use workspace_ui::{WorkspaceDialog, WorkspaceEditDialog};
 
 pub struct App {
     session_manager: SessionManager,
@@ -744,6 +65,7 @@ pub struct App {
     next_pane_id: u32,
     right_tab: RightTab,
     shown_md_tabs: HashSet<PathBuf>,
+    md_prefer_preview: bool,
     watch_state: Option<WatchState>,
 
     workspace_store: WorkspaceStore,
@@ -762,6 +84,10 @@ pub struct App {
     show_left_panel: bool,
     show_right_panel: bool,
     show_settings: bool,
+    show_shortcut_help: bool,
+    show_quick_switcher: bool,
+    quick_switcher_query: String,
+    shortcut_registry: ShortcutRegistry,
     settings: AppSettings,
 
     // Per-frame terminal geometry for mouse coordinate conversion
@@ -787,6 +113,11 @@ pub struct App {
     // Cursor blink phase (toggles every 500 ms)
     cursor_blink_on: bool,
     cursor_blink_last: Instant,
+
+    // Terminal text selection state (per-session)
+    term_selection: Option<TermSelection>,
+    term_selecting: bool,
+    term_selection_sid: Option<u32>,
 
     // ── Multi-window support ──────────────────────────────────────────────
     /// Extra OS windows opened via "Open in new window" on a workspace.
@@ -815,851 +146,37 @@ pub struct App {
     /// Last value sent to `ViewportCommand::Title` for this window. Sending
     /// the title every frame causes a syscall (SetWindowTextW on Windows).
     last_title_sent: Option<String>,
-}
 
-impl App {
-    pub fn new(cc: &eframe::CreationContext) -> Self {
-        let ctx = cc.egui_ctx.clone();
+    // ── Search state ────────────────────────────────────────────────────
+    session_search_query: String,
+    session_search_active: bool,
+    dir_search_query: String,
+    dir_search_active: bool,
+    dir_search_debounce_query: String,
+    dir_search_debounce_at: Option<Instant>,
 
-        // Apply global dark theme visuals
-        {
-            use egui::{Rounding, Shadow, Stroke, Visuals};
-            let mut vis = Visuals::dark();
-            vis.panel_fill = theme::BG_PANEL_FILL;
-            vis.window_fill = theme::BG_TERM;
-            vis.window_rounding = Rounding::same(6.0);
-            vis.window_shadow = Shadow::NONE;
-            vis.popup_shadow = Shadow::NONE;
-            vis.widgets.noninteractive.bg_fill = theme::SURFACE0;
-            vis.widgets.inactive.bg_fill = theme::SURFACE0;
-            vis.widgets.hovered.bg_fill = theme::SURFACE1;
-            vis.widgets.active.bg_fill = theme::SURFACE2;
-            vis.widgets.inactive.fg_stroke = Stroke::new(1.0, theme::SUBTEXT0);
-            vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, theme::OVERLAY0);
-            vis.selection.bg_fill = egui::Color32::from_rgb(75, 85, 130);
-            for state in [
-                &mut vis.widgets.noninteractive,
-                &mut vis.widgets.inactive,
-                &mut vis.widgets.hovered,
-                &mut vis.widgets.active,
-                &mut vis.widgets.open,
-            ] {
-                state.rounding = Rounding::same(4.0);
-            }
-            vis.override_text_color = Some(theme::TEXT);
-            cc.egui_ctx.set_visuals(vis);
-        }
+    // System resource monitor (CPU / RAM / Network), polled every 2 s.
+    sys_monitor: SysMonitor,
 
-        // Add Segoe UI Symbol as a fallback font so that Geometric Shapes (▶ ▼ □),
-        // Mathematical Operators (⊞), and Dingbats (✓) render correctly instead of
-        // falling back to empty rectangles when egui's default Ubuntu font lacks them.
-        #[cfg(target_os = "windows")]
-        {
-            use egui::{FontData, FontDefinitions, FontFamily};
-            let mut fonts = FontDefinitions::default();
-            let win_root =
-                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-            let font_path = format!("{}\\Fonts\\seguisym.ttf", win_root);
-            if let Ok(data) = std::fs::read(&font_path) {
-                fonts
-                    .font_data
-                    .insert("segoe_ui_symbol".to_owned(), FontData::from_owned(data));
-                for family in [&FontFamily::Proportional, &FontFamily::Monospace] {
-                    fonts
-                        .families
-                        .entry(family.clone())
-                        .or_default()
-                        .push("segoe_ui_symbol".to_owned());
-                }
-                cc.egui_ctx.set_fonts(fonts);
-            }
-        }
+    // Self-update: background checker for new releases.
+    update_checker: UpdateChecker,
 
-        let mgr = SessionManager::new(ctx.clone());
-        let mut app = App {
-            session_manager: mgr,
-            sessions: vec![],
-            active_id: None,
-            panes: vec![],
-            active_pane_id: None,
-            next_pane_id: 0,
-            right_tab: RightTab::Directory,
-            shown_md_tabs: HashSet::new(),
-            watch_state: WatchState::new(ctx),
-            workspace_store: WorkspaceStore::load(),
-            active_group: None,
-            last_pane_per_group: HashMap::new(),
-            workspace_dialog: None,
-            workspace_edit_dialog: None,
-            workspace_panel_ratio: 0.35,
-            workspace_panel_collapsed: false,
-            note_store: NoteStore::load(),
-            notes_panel_ratio: 0.30,
-            notes_panel_collapsed: false,
-            show_left_panel: true,
-            show_right_panel: true,
-            show_settings: false,
-            settings: AppSettings::load(),
-            active_term_geo: None,
-            last_focused_sid: None,
-            active_term_ui_id: None,
-            resize_debounce: HashMap::new(),
-            scroll_accum: HashMap::new(),
-            foreground_worker: ForegroundWorker::spawn(),
-            was_focused: true,
-            available_shells: available_shells(),
-            uninit_sessions: HashSet::new(),
-            cursor_blink_on: true,
-            cursor_blink_last: Instant::now(),
-            extra_windows: Vec::new(),
-            next_window_id: 1,
-            current_window_id: None,
-            pane_trees: HashMap::new(),
-            next_split_id: 1,
-            subdir_cache: HashMap::new(),
-            last_title_sent: None,
-        };
-        // Estimate initial terminal size from window dimensions. Fonts aren't available
-        // until after the first Context::run(), so use empirical cell dimensions for
-        // Ubuntu Mono 14pt (the egui default) to avoid starting at 80x24.
-        let (init_cols, init_rows) = {
-            const CELL_W: f32 = 8.4;
-            const CELL_H: f32 = 18.0;
-            let est_w = (1280.0 - theme::LEFT_SIDEBAR_W - 300.0 - 4.0).max(100.0);
-            let est_h = (800.0 - theme::TITLEBAR_H - theme::HEADER_H - 4.0).max(50.0);
-            let cols = ((est_w / CELL_W) as u16).max(80);
-            let rows = ((est_h / CELL_H) as u16).max(24);
-            (cols, rows)
-        };
+    // Background worker for git status/diff and directory listing.
+    git_worker: GitWorker,
 
-        // Re-open extra windows persisted from the previous session. Done
-        // before session restore so that `restore_session` and any other
-        // setup observe the correct `host_window_id` values.
-        app.load_windows();
+    // Terminal content search (Ctrl+F)
+    term_search: crate::search::SearchState,
 
-        let did_restore = app.settings.restore_last_session && app.restore_session();
-        if !did_restore {
-            let cwd = app
-                .settings
-                .default_workspace_id
-                .and_then(|id| app.workspace_store.workspaces.iter().find(|w| w.id == id))
-                .map(|w| w.path.clone());
-            app.spawn_session(&default_shell(), init_cols, init_rows, cwd);
-            if let Some(ws_id) = app.settings.default_workspace_id {
-                app.active_group = Some(ws_id);
-            }
-        }
-        app
-    }
+    // Detected URLs in the currently visible terminal content
+    detected_urls: Vec<crate::url_detector::DetectedUrl>,
 
-    fn spawn_session(
-        &mut self,
-        shell: &ShellKind,
-        cols: u16,
-        rows: u16,
-        cwd: Option<PathBuf>,
-    ) -> Option<u32> {
-        match self.session_manager.spawn(cols, rows, cwd, shell) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
-                let entry = SessionEntry {
-                    id,
-                    session,
-                    pty_tx,
-                    master,
-                    shell_pid,
-                    alive,
-                    is_active,
-                    pending_command: None,
-                    shell: shell.clone(),
-                };
-                if self.active_id.is_none() {
-                    self.active_id = Some(id);
-                }
-                self.uninit_sessions.insert(id);
-                self.sessions.push(entry);
-                if self.panes.is_empty() {
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
-                    self.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::Terminal(id),
-                        manual_width: None,
-                        last_size: (cols, rows),
-                    });
-                    self.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (cols, rows),
-                        },
-                    );
-                    self.active_pane_id = Some(pane_id);
-                }
-                Some(id)
-            }
-            Err(e) => {
-                log::error!("Failed to spawn session: {e}");
-                None
-            }
-        }
-    }
+    // Tab drag-to-reorder state
+    tab_drag_source: Option<usize>,
 
-    fn active_session_index(&self) -> Option<usize> {
-        let id = self.active_id?;
-        self.sessions.iter().position(|e| e.id == id)
-    }
-
-    fn active_cwd(&self) -> Option<PathBuf> {
-        let idx = self.active_session_index()?;
-        let p = self.sessions[idx].session.read().cwd.clone();
-        if p.as_os_str().is_empty() {
-            None
-        } else {
-            Some(p)
-        }
-    }
-
-    /// Computes which workspace group a pane belongs to.
-    /// Terminal panes: group = workspace whose path is a prefix of the session's CWD.
-    /// File editor panes: group = the workspace_id stored at open time.
-    fn pane_group(
-        sessions: &[SessionEntry],
-        ws_store: &WorkspaceStore,
-        pane: &PaneEntry,
-    ) -> Option<u64> {
-        match &pane.content {
-            PaneContent::Terminal(sid) => sessions.iter().find(|e| e.id == *sid).and_then(|e| {
-                let cwd = e.session.read().cwd.clone();
-                if cwd.as_os_str().is_empty() {
-                    return None;
-                }
-                ws_store.find_for_cwd(&cwd).map(|w| w.id)
-            }),
-            PaneContent::DeferredTerminal { cwd, .. } => cwd
-                .as_ref()
-                .and_then(|c| ws_store.find_for_cwd(c).map(|w| w.id)),
-            PaneContent::FileEditor(ed) => ed.workspace_id,
-        }
-    }
-
-    /// Active workspace: whichever group is currently selected.
-    fn active_workspace(&self) -> Option<&Workspace> {
-        let ws_id = self.active_group?;
-        self.workspace_store
-            .workspaces
-            .iter()
-            .find(|w| w.id == ws_id)
-    }
-
-    /// Open a workspace in a new OS window (egui deferred viewport).
-    ///
-    /// If the workspace already has a host window, this is a no-op (prevents
-    /// opening the same workspace in multiple extra windows).
-    fn open_workspace_in_new_window(&mut self, _ctx: &egui::Context, ws_id: u64) {
-        // Guard: don't open the same workspace twice.
-        if self.extra_windows.iter().any(|w| w.workspace_id == ws_id) {
-            return;
-        }
-
-        let ws_name = match self
-            .workspace_store
-            .workspaces
-            .iter()
-            .find(|w| w.id == ws_id)
-        {
-            Some(ws) => ws.name.clone(),
-            None => return,
-        };
-
-        let win_id = WindowId(self.next_window_id);
-        self.next_window_id += 1;
-
-        let viewport_id = egui::ViewportId::from_hash_of(("extra_window", win_id.0));
-        let title = format!("{} — Terminal Studio", ws_name);
-
-        // Mark the workspace as hosted in this new window.
-        if let Some(ws) = self
-            .workspace_store
-            .workspaces
-            .iter_mut()
-            .find(|w| w.id == ws_id)
-        {
-            ws.host_window_id = Some(win_id.clone());
-        }
-        self.workspace_store.save();
-
-        // Seed the new window's view: it should open already focused on the
-        // workspace being detached, and pick up the active pane that lives in
-        // that workspace (if any).
-        let mut view = WindowView::new_for_workspace(ws_id);
-        let initial_pane = self
-            .panes
-            .iter()
-            .find(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == Some(ws_id))
-            .map(|p| p.id);
-        view.active_pane_id = initial_pane;
-        if let Some(pid) = initial_pane {
-            view.last_pane_per_group.insert(Some(ws_id), pid);
-            if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
-                if let PaneContent::Terminal(sid) = pane.content {
-                    view.active_id = Some(sid);
-                }
-            }
-        }
-
-        self.extra_windows.push(ExtraWindow {
-            id: win_id,
-            workspace_id: ws_id,
-            viewport_id,
-            title,
-            inner_size: [1280.0, 800.0],
-            view,
-            close_requested: false,
-        });
-        self.save_windows();
-
-        // If the main window was showing this workspace, drop it back to the
-        // "Other" group. Also clear `active_pane_id`/`active_id` so the per-frame
-        // redirect takes the fallback path (pick first pane in the new group)
-        // instead of following the still-focused pane back to its workspace.
-        if self.current_window_id.is_none() && self.active_group == Some(ws_id) {
-            self.active_group = None;
-            self.active_pane_id = None;
-            self.active_id = None;
-        }
-    }
-
-    /// Swap every per-window field between `self` and `view`. After calling
-    /// this, `self.*` holds `view`'s state; the previous `self.*` is now in
-    /// `view`. Call again to swap back. This is how each extra viewport gets
-    /// its own UI state without forking the entire render code path.
-    fn swap_view(&mut self, view: &mut WindowView) {
-        use std::mem::swap;
-        swap(&mut self.active_group, &mut view.active_group);
-        swap(&mut self.active_pane_id, &mut view.active_pane_id);
-        swap(&mut self.active_id, &mut view.active_id);
-        swap(&mut self.last_pane_per_group, &mut view.last_pane_per_group);
-        swap(&mut self.last_focused_sid, &mut view.last_focused_sid);
-        swap(&mut self.right_tab, &mut view.right_tab);
-        swap(&mut self.shown_md_tabs, &mut view.shown_md_tabs);
-        swap(
-            &mut self.workspace_panel_ratio,
-            &mut view.workspace_panel_ratio,
-        );
-        swap(
-            &mut self.workspace_panel_collapsed,
-            &mut view.workspace_panel_collapsed,
-        );
-        swap(&mut self.notes_panel_ratio, &mut view.notes_panel_ratio);
-        swap(
-            &mut self.notes_panel_collapsed,
-            &mut view.notes_panel_collapsed,
-        );
-        swap(&mut self.show_left_panel, &mut view.show_left_panel);
-        swap(&mut self.show_right_panel, &mut view.show_right_panel);
-        swap(&mut self.show_settings, &mut view.show_settings);
-        swap(&mut self.workspace_dialog, &mut view.workspace_dialog);
-        swap(
-            &mut self.workspace_edit_dialog,
-            &mut view.workspace_edit_dialog,
-        );
-        swap(&mut self.active_term_geo, &mut view.active_term_geo);
-        swap(&mut self.active_term_ui_id, &mut view.active_term_ui_id);
-        swap(&mut self.was_focused, &mut view.was_focused);
-    }
-
-    /// Save the list of currently-open extra windows to `windows.json`. Called
-    /// whenever the set of extra windows or their workspace assignment changes,
-    /// and once at exit.
-    fn save_windows(&self) {
-        let Some(path) = windows_data_path() else {
-            return;
-        };
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let saved: Vec<SavedExtraWindow> = self
-            .extra_windows
-            .iter()
-            .map(|w| SavedExtraWindow {
-                id: w.id.clone(),
-                workspace_id: w.workspace_id,
-                inner_size: w.inner_size,
-                workspace_panel_ratio: Some(w.view.workspace_panel_ratio),
-                workspace_panel_collapsed: Some(w.view.workspace_panel_collapsed),
-                notes_panel_ratio: Some(w.view.notes_panel_ratio),
-                notes_panel_collapsed: Some(w.view.notes_panel_collapsed),
-            })
-            .collect();
-        if let Ok(text) = serde_json::to_string_pretty(&saved) {
-            let _ = std::fs::write(path, text);
-        }
-    }
-
-    /// Reconstruct `extra_windows` from `windows.json`, dropping entries whose
-    /// workspace no longer exists. Called once during `App::new`.
-    fn load_windows(&mut self) {
-        let Some(path) = windows_data_path() else {
-            return;
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let saved: Vec<SavedExtraWindow> = match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(_) => return,
-        };
-        let mut max_id: u64 = self.next_window_id.saturating_sub(1);
-        for s in saved {
-            // Drop entries whose workspace was deleted.
-            let ws_exists = self
-                .workspace_store
-                .workspaces
-                .iter()
-                .any(|w| w.id == s.workspace_id);
-            if !ws_exists {
-                continue;
-            }
-            max_id = max_id.max(s.id.0);
-            // Mark the workspace as hosted here (defensive — host_window_id
-            // is also persisted in workspaces.json, but this keeps both in sync
-            // even if one file diverged).
-            if let Some(ws) = self
-                .workspace_store
-                .workspaces
-                .iter_mut()
-                .find(|w| w.id == s.workspace_id)
-            {
-                ws.host_window_id = Some(s.id.clone());
-            }
-            let ws_name = self
-                .workspace_store
-                .workspaces
-                .iter()
-                .find(|w| w.id == s.workspace_id)
-                .map(|w| w.name.clone())
-                .unwrap_or_default();
-            let title = format!("{} — Terminal Studio", ws_name);
-            let mut view = WindowView::new_for_workspace(s.workspace_id);
-            if let Some(v) = s.workspace_panel_ratio {
-                view.workspace_panel_ratio = v;
-            }
-            if let Some(v) = s.workspace_panel_collapsed {
-                view.workspace_panel_collapsed = v;
-            }
-            if let Some(v) = s.notes_panel_ratio {
-                view.notes_panel_ratio = v;
-            }
-            if let Some(v) = s.notes_panel_collapsed {
-                view.notes_panel_collapsed = v;
-            }
-            let viewport_id = egui::ViewportId::from_hash_of(("extra_window", s.id.0));
-            self.extra_windows.push(ExtraWindow {
-                id: s.id,
-                workspace_id: s.workspace_id,
-                viewport_id,
-                title,
-                inner_size: s.inner_size,
-                view,
-                close_requested: false,
-            });
-        }
-        self.next_window_id = max_id + 1;
-        // Persist host_window_id fixups (if any).
-        self.workspace_store.save();
-    }
-
-    /// Focus a pane and sync active_id for terminal panes.
-    fn activate_pane(&mut self, pid: u32) {
-        self.active_pane_id = Some(pid);
-        if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
-            if let PaneContent::Terminal(sid) = pane.content {
-                self.active_id = Some(sid);
-                self.update_is_active_flags();
-            }
-            // DeferredTerminal: active_id unchanged until the session materializes
-        }
-    }
-
-    /// Switch to a workspace group (or "Other" when group = None).
-    /// Restores the last active pane in the group, or spawns a new session if the group is empty.
-    fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
-        self.active_group = group;
-
-        let panes_in_group: Vec<u32> = self
-            .panes
-            .iter()
-            .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == group)
-            .map(|p| p.id)
-            .collect();
-
-        // Restore last-visited pane
-        if let Some(&last_pid) = self.last_pane_per_group.get(&group) {
-            if panes_in_group.contains(&last_pid) {
-                self.activate_pane(last_pid);
-                return;
-            }
-        }
-
-        // Fall back to first pane in group
-        if let Some(&first_pid) = panes_in_group.first() {
-            self.activate_pane(first_pid);
-            return;
-        }
-
-        // No panes in this group — spawn a new session
-        let cwd = group.and_then(|ws_id| {
-            self.workspace_store
-                .workspaces
-                .iter()
-                .find(|w| w.id == ws_id)
-                .map(|w| w.path.clone())
-        });
-        if let Some(sid) = self.spawn_session(&default_shell(), cols, rows, cwd) {
-            self.active_id = Some(sid);
-            // spawn_session only auto-creates a pane when panes is empty; add one explicitly here
-            if !self
-                .panes
-                .iter()
-                .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid))
-            {
-                let pane_id = self.next_pane_id;
-                self.next_pane_id += 1;
-                self.panes.push(PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::Terminal(sid),
-                    manual_width: None,
-                    last_size: (cols, rows),
-                });
-                self.pane_trees.insert(
-                    pane_id,
-                    PaneNode::Leaf {
-                        pane_id,
-                        last_size: (cols, rows),
-                    },
-                );
-                self.active_pane_id = Some(pane_id);
-            }
-            self.update_is_active_flags();
-        }
-    }
-
-    fn spawn_session_no_pane(
-        &mut self,
-        shell: &ShellKind,
-        cols: u16,
-        rows: u16,
-        cwd: Option<PathBuf>,
-    ) -> Option<u32> {
-        match self.session_manager.spawn(cols, rows, cwd, shell) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
-                self.uninit_sessions.insert(id);
-                self.sessions.push(SessionEntry {
-                    id,
-                    session,
-                    pty_tx,
-                    master,
-                    shell_pid,
-                    alive,
-                    is_active,
-                    pending_command: None,
-                    shell: shell.clone(),
-                });
-                Some(id)
-            }
-            Err(e) => {
-                log::error!("Failed to restore session: {e}");
-                None
-            }
-        }
-    }
-
-    /// Sync the `is_active` flag on every session entry with `self.active_id`.
-    /// Called whenever `active_id` changes so background reader threads throttle
-    /// their repaint cadence.
-    fn update_is_active_flags(&self) {
-        let active = self.active_id;
-        for entry in &self.sessions {
-            entry
-                .is_active
-                .store(active == Some(entry.id), Ordering::Relaxed);
-        }
-    }
-
-    fn save_session(&self) {
-        let Some(path) = session_data_path() else {
-            return;
-        };
-
-        let session_id_to_index: HashMap<u32, usize> = self
-            .sessions
-            .iter()
-            .enumerate()
-            .map(|(i, e)| (e.id, i))
-            .collect();
-        let pane_id_to_index: HashMap<u32, usize> = self
-            .panes
-            .iter()
-            .enumerate()
-            .map(|(i, p)| (p.id, i))
-            .collect();
-
-        let sessions = self
-            .sessions
-            .iter()
-            .map(|e| {
-                let cwd = e.session.read().cwd.clone();
-                let command = self.foreground_worker.get(e.id).map(|fp| {
-                    let parts: Vec<String> =
-                        fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
-                    let joined = parts.join(" ");
-                    #[cfg(target_os = "windows")]
-                    {
-                        format!("& {}", joined)
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        joined
-                    }
-                });
-                SavedSession { cwd, command }
-            })
-            .collect();
-
-        let panes = self
-            .panes
-            .iter()
-            .map(|p| SavedPane {
-                content: match &p.content {
-                    PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
-                        session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
-                    },
-                    PaneContent::DeferredTerminal {
-                        cwd,
-                        pending_command,
-                    } => SavedPaneContent::DeferredTerminal {
-                        cwd: cwd.clone().unwrap_or_default(),
-                        command: pending_command.clone(),
-                    },
-                    PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
-                        path: ed.path.clone(),
-                        content: ed.content.clone(),
-                        dirty: ed.dirty,
-                        workspace_id: ed.workspace_id,
-                    },
-                },
-                manual_width: p.manual_width,
-            })
-            .collect();
-
-        let active_pane_index = self
-            .active_pane_id
-            .and_then(|pid| pane_id_to_index.get(&pid).copied());
-        let active_session_index = self
-            .active_id
-            .and_then(|sid| session_id_to_index.get(&sid).copied());
-        let last_pane_per_group = self
-            .last_pane_per_group
-            .iter()
-            .filter_map(|(&g, &pid)| pane_id_to_index.get(&pid).map(|&i| (g, i)))
-            .collect();
-
-        let right_tab = match &self.right_tab {
-            RightTab::Directory => SavedRightTab::Directory,
-            RightTab::GitDiff => SavedRightTab::GitDiff,
-            RightTab::Markdown(p) => SavedRightTab::Markdown(p.clone()),
-        };
-
-        let state = AppSession {
-            sessions,
-            panes,
-            active_pane_index,
-            active_session_index,
-            active_group: self.active_group,
-            last_pane_per_group,
-            workspace_panel_ratio: self.workspace_panel_ratio,
-            workspace_panel_collapsed: self.workspace_panel_collapsed,
-            notes_panel_ratio: self.notes_panel_ratio,
-            notes_panel_collapsed: self.notes_panel_collapsed,
-            right_tab,
-            shown_md_tabs: self.shown_md_tabs.iter().cloned().collect(),
-        };
-
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(text) = serde_json::to_string_pretty(&state) {
-            let _ = std::fs::write(path, text);
-        }
-    }
-
-    fn restore_session(&mut self) -> bool {
-        let Some(path) = session_data_path() else {
-            return false;
-        };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return false;
-        };
-        let Ok(state) = serde_json::from_str::<AppSession>(&text) else {
-            return false;
-        };
-        if state.sessions.is_empty() && state.panes.is_empty() {
-            return false;
-        }
-
-        // Determine which saved session index the active pane needs so we can
-        // spawn it eagerly; all other terminal panes are deferred until focused.
-        let active_session_idx: Option<usize> = state
-            .active_pane_index
-            .and_then(|pi| state.panes.get(pi))
-            .and_then(|p| {
-                if let SavedPaneContent::Terminal { session_index } = &p.content {
-                    Some(*session_index)
-                } else {
-                    None
-                }
-            });
-
-        // Spawn only the active pane's session immediately.
-        let mut eagerly_spawned: HashMap<usize, u32> = HashMap::new();
-        if let Some(active_idx) = active_session_idx {
-            if let Some(s) = state.sessions.get(active_idx) {
-                let cwd = if s.cwd.as_os_str().is_empty() {
-                    None
-                } else {
-                    Some(s.cwd.clone())
-                };
-                if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
-                    if let Some(cmd) = s.command.clone() {
-                        if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
-                            entry.pending_command = Some(cmd);
-                        }
-                    }
-                    eagerly_spawned.insert(active_idx, sid);
-                }
-            }
-        }
-
-        let mut pane_ids: Vec<u32> = Vec::new();
-        for saved in &state.panes {
-            let content = match &saved.content {
-                SavedPaneContent::Terminal { session_index } => {
-                    if let Some(&sid) = eagerly_spawned.get(session_index) {
-                        PaneContent::Terminal(sid)
-                    } else {
-                        // Not the active session — defer until first focus.
-                        // Recover cwd/command from the saved sessions list so the
-                        // terminal starts in the right directory when materialized.
-                        let cwd = state.sessions.get(*session_index).and_then(|s| {
-                            if s.cwd.as_os_str().is_empty() {
-                                None
-                            } else {
-                                Some(s.cwd.clone())
-                            }
-                        });
-                        let pending_command = state
-                            .sessions
-                            .get(*session_index)
-                            .and_then(|s| s.command.clone());
-                        PaneContent::DeferredTerminal {
-                            cwd,
-                            pending_command,
-                        }
-                    }
-                }
-                SavedPaneContent::DeferredTerminal { cwd, command } => {
-                    PaneContent::DeferredTerminal {
-                        cwd: if cwd.as_os_str().is_empty() {
-                            None
-                        } else {
-                            Some(cwd.clone())
-                        },
-                        pending_command: command.clone(),
-                    }
-                }
-                SavedPaneContent::FileEditor {
-                    path,
-                    content,
-                    dirty,
-                    workspace_id,
-                } => PaneContent::FileEditor(FileEditorState {
-                    path: path.clone(),
-                    content: content.clone(),
-                    dirty: *dirty,
-                    save_error: false,
-                    workspace_id: *workspace_id,
-                }),
-            };
-            let pane_id = self.next_pane_id;
-            self.next_pane_id += 1;
-            pane_ids.push(pane_id);
-            // last_size (0, 0) forces a resize on the first rendered frame so the PTY
-            // gets the actual terminal dimensions rather than the 80x24 spawn size.
-            self.panes.push(PaneEntry {
-                id: pane_id,
-                content,
-                manual_width: saved.manual_width,
-                last_size: (0, 0),
-            });
-            self.pane_trees.insert(
-                pane_id,
-                PaneNode::Leaf {
-                    pane_id,
-                    last_size: (0, 0),
-                },
-            );
-        }
-
-        if let Some(idx) = state.active_pane_index {
-            if let Some(&pid) = pane_ids.get(idx) {
-                self.activate_pane(pid);
-            }
-        }
-        if self.active_pane_id.is_none() {
-            if let Some(&pid) = pane_ids.first() {
-                self.activate_pane(pid);
-            }
-        }
-        if self.active_id.is_none() {
-            if let Some(&sid) = eagerly_spawned.values().next() {
-                self.active_id = Some(sid);
-                self.update_is_active_flags();
-            }
-        }
-
-        self.active_group = state.active_group;
-        for (group, pane_index) in &state.last_pane_per_group {
-            if let Some(&pid) = pane_ids.get(*pane_index) {
-                self.last_pane_per_group.insert(*group, pid);
-            }
-        }
-
-        self.workspace_panel_ratio = state.workspace_panel_ratio;
-        self.workspace_panel_collapsed = state.workspace_panel_collapsed;
-        self.notes_panel_ratio = state.notes_panel_ratio;
-        self.notes_panel_collapsed = state.notes_panel_collapsed;
-
-        self.right_tab = match &state.right_tab {
-            SavedRightTab::Directory => RightTab::Directory,
-            SavedRightTab::GitDiff => RightTab::GitDiff,
-            SavedRightTab::Markdown(p) => RightTab::Markdown(p.clone()),
-        };
-        self.shown_md_tabs = state.shown_md_tabs.into_iter().collect();
-
-        true
-    }
-
-    /// Record last active pane for the current group.
-    fn track_active_pane_group(&mut self) {
-        if let Some(pid) = self.active_pane_id {
-            if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
-                let group = Self::pane_group(&self.sessions, &self.workspace_store, pane);
-                if group == self.active_group {
-                    self.last_pane_per_group.insert(self.active_group, pid);
-                }
-            }
-        }
-    }
+    // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
+    deferred_spawn: Option<ShellKind>,
+    deferred_duplicate: bool,
+    deferred_open_workspace: Option<u64>,
 }
 
 impl eframe::App for App {
@@ -1671,11 +188,15 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Cursor blink is shared across all windows — toggle once per frame.
         {
-            if self.cursor_blink_last.elapsed() >= Duration::from_millis(500) {
-                self.cursor_blink_on = !self.cursor_blink_on;
-                self.cursor_blink_last = Instant::now();
+            if self.settings.cursor_blink {
+                if self.cursor_blink_last.elapsed() >= Duration::from_millis(500) {
+                    self.cursor_blink_on = !self.cursor_blink_on;
+                    self.cursor_blink_last = Instant::now();
+                }
+                ctx.request_repaint_after(Duration::from_millis(500));
+            } else {
+                self.cursor_blink_on = true;
             }
-            ctx.request_repaint_after(Duration::from_millis(500));
         }
 
         // Send deferred duplicate commands once the shell signals it is at a prompt (OSC 7).
@@ -1737,6 +258,33 @@ impl eframe::App for App {
             }
         }
 
+        // ── Git worker: enqueue pending refreshes, drain completed results ─
+        {
+            let pending: Vec<PathBuf> = self
+                .watch_state
+                .as_mut()
+                .map(|ws| ws.take_pending_git_refreshes())
+                .unwrap_or_default();
+            for dir in &pending {
+                self.git_worker.enqueue_git(dir);
+            }
+
+            let watched_dirs: Vec<PathBuf> = self
+                .watch_state
+                .as_ref()
+                .map(|ws| ws.dir_data.keys().cloned().collect())
+                .unwrap_or_default();
+            let completed: Vec<(PathBuf, (String, String))> = watched_dirs
+                .iter()
+                .filter_map(|d| self.git_worker.take_git(d).map(|r| (d.clone(), r)))
+                .collect();
+            if let Some(ws) = &mut self.watch_state {
+                for (dir, (diff, status)) in completed {
+                    ws.apply_git_result(&dir, diff, status);
+                }
+            }
+        }
+
         // ── Render the main window ────────────────────────────────────────
         // The body below operates on the current per-window state held in
         // App's per-window fields. For the main window that's already correct;
@@ -1766,7 +314,8 @@ impl eframe::App for App {
         for (idx, viewport_id, title, inner_size, win_id) in extras_info {
             let builder = egui::ViewportBuilder::default()
                 .with_title(&title)
-                .with_inner_size(inner_size);
+                .with_inner_size(inner_size)
+                .with_decorations(false);
             ctx.show_viewport_immediate(viewport_id, builder, |vp_ctx, _class| {
                 // Swap this extra window's view into App's per-window fields,
                 // render, then swap back. The placeholder used during swap is
@@ -1824,1224 +373,15 @@ impl eframe::App for App {
         }
     }
 }
-
 impl App {
-    /// Render the per-window UI (titlebar, side panels, tab strip, panes,
-    /// dialogs). For the main window this is called once from `update()`. For
-    /// each extra window it is invoked again after `swap_view` has placed that
-    /// window's per-window state into `self.*`, so the body can keep referring
-    /// to `self.right_tab`, `self.active_pane_id`, etc. without modification.
     fn render_window_body(&mut self, ctx: &egui::Context) {
-        // Request an extra repaint the frame after the window gains focus so that
-        // any stale wgpu surface frames (visible as a distorted first frame after
-        // restoring from the taskbar) are immediately replaced with a correct one.
-        // Per-window: each viewport tracks its own focus state.
-        {
-            let focused = ctx.input(|i| i.focused);
-            if focused && !self.was_focused {
-                ctx.request_repaint();
-                ctx.request_repaint_after(Duration::from_millis(16));
-            }
-            self.was_focused = focused;
+        if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+            return;
         }
 
-        // ── Track last active pane per group ───────────────────────────────
-        self.track_active_pane_group();
+        self.render_titlebar(ctx);
 
-        // Validate current right_tab; fall back to Directory if stale
-        {
-            let keep = match &self.right_tab {
-                RightTab::Directory => true,
-                RightTab::GitDiff => self
-                    .active_cwd()
-                    .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
-                    .map(|d| d.is_git)
-                    .unwrap_or(false),
-                RightTab::Markdown(p) => self.shown_md_tabs.contains(p),
-            };
-            if !keep {
-                self.right_tab = RightTab::Directory;
-            }
-        }
-
-        // ── Update window title with active workspace ───────────────────────
-        let ws_title: String = self
-            .active_workspace()
-            .map(|w| format!("Terminal Studio — {}", w.name))
-            .unwrap_or_else(|| "Terminal Studio".to_string());
-        let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
-        // Only send the title command when it changes. Sending every frame
-        // produces a SetWindowTextW syscall on Windows for no reason.
-        if self.last_title_sent.as_deref() != Some(ws_title.as_str()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(ws_title.clone()));
-            self.last_title_sent = Some(ws_title.clone());
-        }
-
-        // ── Custom titlebar ─────────────────────────────────────────────────
-        let tb_bg = match active_ws_color {
-            Some(c) => theme::from_rgb(c),
-            None => theme::BG_PANEL_FILL,
-        };
-        let tb_fg = active_ws_color
-            .map(theme::text_on)
-            .unwrap_or(theme::SUBTEXT1);
-
-        egui::TopBottomPanel::top("titlebar")
-            .exact_height(theme::TITLEBAR_H)
-            .frame(egui::Frame::none().fill(tb_bg))
-            .show(ctx, |ui| {
-                let r = ui.max_rect();
-                let painter = ui.painter().clone();
-
-                // Drag the whole bar to move the window
-                if ui
-                    .interact(r, egui::Id::new("tb_drag"), egui::Sense::drag())
-                    .dragged()
-                {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
-
-                // ── macOS: traffic lights on the left ──────────────────────
-                #[cfg(target_os = "macos")]
-                {
-                    let btn_y = r.center().y;
-                    // hover_any: show colour only when any circle is hovered
-                    let hover_pos = ctx.input(|i| i.pointer.hover_pos());
-                    let hover_any = hover_pos
-                        .map(|p| {
-                            [18.0_f32, 38.0, 58.0].iter().any(|&ox| {
-                                (p.x - (r.min.x + ox)).abs() < 8.0 && (p.y - btn_y).abs() < 8.0
-                            })
-                        })
-                        .unwrap_or(false);
-
-                    let circles: &[(f32, egui::Color32, usize)] = &[
-                        (r.min.x + 18.0, egui::Color32::from_rgb(255, 96, 89), 0), // close
-                        (r.min.x + 38.0, egui::Color32::from_rgb(255, 189, 68), 1), // minimize
-                        (r.min.x + 58.0, egui::Color32::from_rgb(39, 201, 63), 2), // maximize
-                    ];
-                    for &(cx, color, idx) in circles {
-                        let pos = egui::pos2(cx, btn_y);
-                        let brect = egui::Rect::from_center_size(pos, egui::vec2(14.0, 14.0));
-                        let resp = ui.interact(
-                            brect,
-                            egui::Id::new(("tb_mac", idx)),
-                            egui::Sense::click(),
-                        );
-                        let fill = if hover_any {
-                            color
-                        } else {
-                            egui::Color32::from_gray(80)
-                        };
-                        painter.circle_filled(pos, 6.0, fill);
-                        if resp.clicked() {
-                            match idx {
-                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                                1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                                _ => {
-                                    let is_max =
-                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                        !is_max,
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    // Left panel toggle (after traffic lights)
-                    let mac_btn_w = 28.0_f32;
-                    let left_tbr = egui::Rect::from_min_size(
-                        egui::pos2(r.min.x + 72.0, r.min.y),
-                        egui::vec2(mac_btn_w, r.height()),
-                    );
-                    let left_resp = ui.interact(
-                        left_tbr,
-                        egui::Id::new("tb_left_toggle"),
-                        egui::Sense::click(),
-                    );
-                    if left_resp.hovered() {
-                        painter.rect_filled(left_tbr, 0.0, theme::SURFACE1);
-                    }
-                    let left_icon = if self.show_left_panel { "◀" } else { "▶" };
-                    painter.text(
-                        left_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        left_icon,
-                        egui::FontId::proportional(12.0),
-                        tb_fg,
-                    );
-                    if left_resp.clicked() {
-                        self.show_left_panel = !self.show_left_panel;
-                    }
-
-                    // Gear / Settings (rightmost on macOS)
-                    let gear_mac_tbr = egui::Rect::from_min_size(
-                        egui::pos2(r.max.x - mac_btn_w, r.min.y),
-                        egui::vec2(mac_btn_w, r.height()),
-                    );
-                    let gear_mac_resp = ui.interact(
-                        gear_mac_tbr,
-                        egui::Id::new("tb_settings"),
-                        egui::Sense::click(),
-                    );
-                    if gear_mac_resp.hovered() || self.show_settings {
-                        painter.rect_filled(gear_mac_tbr, 0.0, theme::SURFACE1);
-                    }
-                    painter.text(
-                        gear_mac_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "⚙",
-                        egui::FontId::proportional(14.0),
-                        tb_fg,
-                    );
-                    if gear_mac_resp.clicked() {
-                        self.show_settings = !self.show_settings;
-                    }
-
-                    // Right panel toggle (before gear on macOS)
-                    let right_tbr = egui::Rect::from_min_size(
-                        egui::pos2(r.max.x - mac_btn_w * 2.0, r.min.y),
-                        egui::vec2(mac_btn_w, r.height()),
-                    );
-                    let right_resp = ui.interact(
-                        right_tbr,
-                        egui::Id::new("tb_right_toggle"),
-                        egui::Sense::click(),
-                    );
-                    if right_resp.hovered() {
-                        painter.rect_filled(right_tbr, 0.0, theme::SURFACE1);
-                    }
-                    let right_icon = if self.show_right_panel { "▶" } else { "◀" };
-                    painter.text(
-                        right_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        right_icon,
-                        egui::FontId::proportional(12.0),
-                        tb_fg,
-                    );
-                    if right_resp.clicked() {
-                        self.show_right_panel = !self.show_right_panel;
-                    }
-
-                    // Title centered between the two toggles
-                    painter.text(
-                        r.center(),
-                        egui::Align2::CENTER_CENTER,
-                        &ws_title,
-                        egui::FontId::proportional(13.0),
-                        tb_fg,
-                    );
-                }
-
-                // ── Windows / Linux: controls on the right ─────────────────
-                #[cfg(not(target_os = "macos"))]
-                {
-                    let btn_w = theme::TITLEBAR_BTN_W;
-                    // right-to-left: close(0), maximize(1), minimize(2)
-                    let btns: &[(&str, usize, bool)] = &[
-                        ("×", 0, true),  // close   — danger colour on hover
-                        ("□", 1, false), // maximize
-                        ("–", 2, false), // minimize
-                    ];
-
-                    // Left panel toggle — leftmost button
-                    {
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(r.min.x, r.min.y),
-                            egui::vec2(btn_w, r.height()),
-                        );
-                        let resp =
-                            ui.interact(br, egui::Id::new("tb_left_toggle"), egui::Sense::click());
-                        let bg = if resp.hovered() {
-                            theme::SURFACE1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        let icon = if self.show_left_panel { "◀" } else { "▶" };
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            icon,
-                            egui::FontId::proportional(12.0),
-                            tb_fg,
-                        );
-                        if resp.clicked() {
-                            self.show_left_panel = !self.show_left_panel;
-                        }
-                    }
-
-                    // Gear / Settings button — just before window controls
-                    {
-                        let gear_x = r.max.x - btn_w * (btns.len() as f32 + 1.0);
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(gear_x, r.min.y),
-                            egui::vec2(btn_w, r.height()),
-                        );
-                        let resp =
-                            ui.interact(br, egui::Id::new("tb_settings"), egui::Sense::click());
-                        let bg = if resp.hovered() || self.show_settings {
-                            theme::SURFACE1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "⚙",
-                            egui::FontId::proportional(14.0),
-                            tb_fg,
-                        );
-                        if resp.clicked() {
-                            self.show_settings = !self.show_settings;
-                        }
-                    }
-
-                    // Right panel toggle — just before gear button
-                    let right_toggle_x = r.max.x - btn_w * (btns.len() as f32 + 2.0);
-                    {
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(right_toggle_x, r.min.y),
-                            egui::vec2(btn_w, r.height()),
-                        );
-                        let resp =
-                            ui.interact(br, egui::Id::new("tb_right_toggle"), egui::Sense::click());
-                        let bg = if resp.hovered() {
-                            theme::SURFACE1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        let icon = if self.show_right_panel { "▶" } else { "◀" };
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            icon,
-                            egui::FontId::proportional(12.0),
-                            tb_fg,
-                        );
-                        if resp.clicked() {
-                            self.show_right_panel = !self.show_right_panel;
-                        }
-                    }
-
-                    for &(symbol, idx, is_danger) in btns {
-                        let x = r.max.x - btn_w * (idx as f32 + 1.0);
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(x, r.min.y),
-                            egui::vec2(btn_w, r.height()),
-                        );
-                        let resp =
-                            ui.interact(br, egui::Id::new(("tb_btn", idx)), egui::Sense::click());
-                        let bg = if resp.hovered() {
-                            if is_danger {
-                                theme::DANGER_BG
-                            } else {
-                                theme::SURFACE1
-                            }
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        let fg = if resp.hovered() && is_danger {
-                            egui::Color32::WHITE
-                        } else {
-                            tb_fg
-                        };
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            symbol,
-                            egui::FontId::proportional(12.0),
-                            fg,
-                        );
-                        if resp.clicked() {
-                            match idx {
-                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                                1 => {
-                                    let is_max =
-                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                        !is_max,
-                                    ));
-                                }
-                                2 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                                _ => {}
-                            }
-                        }
-                    }
-                    // Title between left toggle and right toggle
-                    let clip_min_x = r.min.x + btn_w + 4.0;
-                    let clip_max_x = right_toggle_x - 4.0;
-                    painter
-                        .with_clip_rect(egui::Rect::from_min_max(
-                            egui::pos2(clip_min_x, r.min.y),
-                            egui::pos2(clip_max_x, r.max.y),
-                        ))
-                        .text(
-                            r.center(),
-                            egui::Align2::CENTER_CENTER,
-                            &ws_title,
-                            egui::FontId::proportional(13.0),
-                            tb_fg,
-                        );
-                }
-            });
-
-        // ── Foreground process detection (background worker, 500 ms poll) ────
-        // Update the worker's session list so it polls the right PIDs, then
-        // read instantly from the shared cache — never blocks the UI thread.
-        {
-            let pids: Vec<(u32, u32)> = self
-                .sessions
-                .iter()
-                .filter(|e| e.alive.load(Ordering::Relaxed))
-                .map(|e| (e.id, e.shell_pid))
-                .collect();
-            self.foreground_worker.set_sessions(pids);
-        }
-        let active_fg: Option<ForegroundProcess> = self
-            .active_id
-            .and_then(|sid| self.foreground_worker.get(sid));
-
-        // ── Left panel: sessions (top) + workspaces (bottom) ───────────────
-        let mut spawn_new_session: Option<ShellKind> = None;
-        let mut duplicate_session = false;
-        let shells = self.available_shells.clone();
-        let mut open_workspace_id: Option<u64> = None;
-        let mut edit_workspace_id: Option<u64> = None;
-        let mut new_window_workspace_id: Option<u64> = None;
-        let mut quit_pane_id: Option<u32> = None;
-        let mut clicked_sidebar_pane_id: Option<u32> = None;
-
-        if self.show_left_panel {
-            egui::SidePanel::left("sessions")
-                .default_width(theme::LEFT_SIDEBAR_W)
-                .width_range(80.0..=400.0)
-                .resizable(true)
-                .show(ctx, |ui| {
-                    let panel_rect = ui.max_rect();
-                    let panel_w = panel_rect.width();
-                    let total_h = panel_rect.height();
-
-                    const DIV_H: f32 = 4.0;
-                    const COLLAPSED_H: f32 = theme::HEADER_H;
-
-                    // ── Height allocation ──────────────────────────────────────
-                    let (sess_h, ws_h) = if self.workspace_panel_collapsed {
-                        (total_h - COLLAPSED_H - DIV_H, COLLAPSED_H)
-                    } else {
-                        let wh = (total_h * self.workspace_panel_ratio).max(60.0);
-                        let sh = (total_h - wh - DIV_H).max(60.0);
-                        (sh, wh)
-                    };
-
-                    // Claim the full panel rect so egui's layout system doesn't
-                    // re-use this space for anything else.
-                    ui.allocate_rect(panel_rect, egui::Sense::hover());
-
-                    // ── Sessions section ───────────────────────────────────────
-                    let sess_rect =
-                        egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, sess_h));
-                    ui.allocate_ui_at_rect(sess_rect, |ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), theme::HEADER_H),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("Sessions")
-                                        .strong()
-                                        .size(theme::HEADER_FONT_SZ),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.menu_button(
-                                            egui::RichText::new("+ New ▾")
-                                                .size(theme::HEADER_FONT_SZ),
-                                            |ui| {
-                                                for shell in &shells {
-                                                    if ui.button(shell.display_name()).clicked() {
-                                                        spawn_new_session = Some(shell.clone());
-                                                        ui.close_menu();
-                                                    }
-                                                }
-                                            },
-                                        );
-                                        if let Some(ref fp) = active_fg {
-                                            if ui
-                                                .button(
-                                                    egui::RichText::new("Duplicate")
-                                                        .size(theme::HEADER_FONT_SZ),
-                                                )
-                                                .on_hover_text(format!("Duplicate: {}", fp.name))
-                                                .clicked()
-                                            {
-                                                duplicate_session = true;
-                                            }
-                                        }
-                                    },
-                                );
-                            },
-                        );
-                        ui.separator();
-                        egui::ScrollArea::vertical()
-                            .id_source("sessions_scroll")
-                            .show(ui, |ui| {
-                                // Iterate panes (not sessions) so restored DeferredTerminal panes
-                                // appear immediately at launch — without forcing eager PTY spawn.
-                                for (pane_idx, pane) in self.panes.iter().enumerate() {
-                                    let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) =
-                                        match &pane.content {
-                                            PaneContent::Terminal(sid) => {
-                                                if let Some(e) =
-                                                    self.sessions.iter().find(|e| e.id == *sid)
-                                                {
-                                                    let (title, cwd) = {
-                                                        let s = e.session.read();
-                                                        (s.title(), s.cwd.clone())
-                                                    };
-                                                    let color = if cwd.as_os_str().is_empty() {
-                                                        None
-                                                    } else {
-                                                        self.workspace_store
-                                                            .find_for_cwd(&cwd)
-                                                            .map(|w| w.color)
-                                                    };
-                                                    (effective_title(&title, &cwd), color, false)
-                                                } else {
-                                                    ("(missing)".to_string(), None, true)
-                                                }
-                                            }
-                                            PaneContent::DeferredTerminal { cwd, .. } => {
-                                                let cwd_path = cwd.clone().unwrap_or_default();
-                                                let mut text = effective_title("", &cwd_path);
-                                                if text.is_empty() {
-                                                    text = "(restored)".to_string();
-                                                }
-                                                let color = cwd
-                                                    .as_ref()
-                                                    .filter(|c| !c.as_os_str().is_empty())
-                                                    .and_then(|c| {
-                                                        self.workspace_store
-                                                            .find_for_cwd(c)
-                                                            .map(|w| w.color)
-                                                    });
-                                                (text, color, true)
-                                            }
-                                            PaneContent::FileEditor(ed) => {
-                                                let text = ed
-                                                    .path
-                                                    .file_name()
-                                                    .and_then(|n| n.to_str())
-                                                    .map(|s| s.to_string())
-                                                    .unwrap_or_else(|| {
-                                                        ed.path.display().to_string()
-                                                    });
-                                                let color = ed.workspace_id.and_then(|id| {
-                                                    self.workspace_store
-                                                        .workspaces
-                                                        .iter()
-                                                        .find(|w| w.id == id)
-                                                        .map(|w| w.color)
-                                                });
-                                                (text, color, false)
-                                            }
-                                        };
-
-                                    let is_active = self.active_pane_id == Some(pane.id);
-
-                                    let (resp, painter) = ui.allocate_painter(
-                                        egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
-                                        egui::Sense::click(),
-                                    );
-                                    let row_rect = resp.rect;
-
-                                    // Quit button — always reserved at right edge
-                                    let quit_rect = egui::Rect::from_min_size(
-                                        egui::pos2(row_rect.max.x - theme::QUIT_W, row_rect.min.y),
-                                        egui::vec2(theme::QUIT_W, row_rect.height()),
-                                    );
-                                    let quit_resp = ui.interact(
-                                        quit_rect,
-                                        egui::Id::new(("pane_quit", pane.id)),
-                                        egui::Sense::click(),
-                                    );
-
-                                    let bg = if is_active {
-                                        theme::BG_ROW_ACTIVE
-                                    } else if resp.hovered() || quit_resp.hovered() {
-                                        theme::BG_ROW_HOVER
-                                    } else {
-                                        egui::Color32::TRANSPARENT
-                                    };
-                                    painter.rect_filled(row_rect, 0.0, bg);
-
-                                    if let Some(c) = ws_color {
-                                        let border = egui::Rect::from_min_size(
-                                            row_rect.min,
-                                            egui::vec2(theme::WS_BORDER_W, row_rect.height()),
-                                        );
-                                        painter.rect_filled(border, 0.0, theme::from_rgb(c));
-                                    }
-
-                                    // Draw quit button
-                                    if quit_resp.hovered() {
-                                        painter.rect_filled(quit_rect, 0.0, theme::DANGER_BG);
-                                    }
-                                    painter.text(
-                                        quit_rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        "×",
-                                        egui::FontId::proportional(14.0),
-                                        theme::DANGER_FG,
-                                    );
-
-                                    // Pane indicator badge (P1, P2...) between title and quit btn
-                                    let pane_badge = format!("P{}", pane_idx + 1);
-                                    let badge_w = 22.0;
-                                    painter.text(
-                                        egui::pos2(
-                                            quit_rect.min.x - badge_w / 2.0 - 2.0,
-                                            row_rect.center().y,
-                                        ),
-                                        egui::Align2::CENTER_CENTER,
-                                        &pane_badge,
-                                        egui::FontId::proportional(10.0),
-                                        theme::OVERLAY0,
-                                    );
-
-                                    // Title text clipped to leave room for quit button + badge
-                                    let text_x = row_rect.min.x
-                                        + if ws_color.is_some() {
-                                            theme::WS_BORDER_W + theme::BAR_PAD_X
-                                        } else {
-                                            theme::BAR_PAD_X
-                                        };
-                                    let clip_max = quit_rect.min.x - badge_w - 3.0;
-                                    let text_color = if dimmed {
-                                        theme::OVERLAY0
-                                    } else if is_active {
-                                        theme::TEXT
-                                    } else {
-                                        theme::SUBTEXT0
-                                    };
-                                    painter
-                                        .with_clip_rect(egui::Rect::from_min_max(
-                                            egui::pos2(text_x, row_rect.min.y),
-                                            egui::pos2(clip_max, row_rect.max.y),
-                                        ))
-                                        .text(
-                                            egui::pos2(text_x, row_rect.center().y),
-                                            egui::Align2::LEFT_CENTER,
-                                            label,
-                                            egui::FontId::proportional(theme::SESSION_FONT_SZ),
-                                            text_color,
-                                        );
-
-                                    if quit_resp.clicked() {
-                                        quit_pane_id = Some(pane.id);
-                                    } else if resp.clicked() {
-                                        clicked_sidebar_pane_id = Some(pane.id);
-                                    }
-                                }
-                            });
-                    });
-
-                    // ── Draggable divider ──────────────────────────────────────
-                    let div_top = panel_rect.min.y + sess_h;
-                    let div_rect = egui::Rect::from_min_size(
-                        egui::pos2(panel_rect.left(), div_top),
-                        egui::vec2(panel_w, DIV_H),
-                    );
-                    let div_resp = ui.interact(
-                        div_rect,
-                        egui::Id::new("ws_panel_divider"),
-                        egui::Sense::drag(),
-                    );
-                    if div_resp.hovered() || div_resp.dragged() {
-                        ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                    }
-                    let div_color = if div_resp.hovered() || div_resp.dragged() {
-                        theme::WS_DIV_ACTIVE
-                    } else {
-                        theme::WS_DIV_IDLE
-                    };
-                    ui.painter().rect_filled(div_rect, 0.0, div_color);
-                    if !self.workspace_panel_collapsed && div_resp.dragged() {
-                        let delta = div_resp.drag_delta().y;
-                        // Drag down → workspace grows; drag up → workspace shrinks.
-                        // ws_h and sess_h come from the ratio calculation above so we
-                        // invert: moving the divider up means less workspace height.
-                        let new_ws_h = (ws_h - delta).clamp(60.0, total_h - 60.0 - DIV_H);
-                        self.workspace_panel_ratio = new_ws_h / total_h;
-                    }
-
-                    // ── Workspaces section ─────────────────────────────────────
-                    let ws_top = div_top + DIV_H;
-                    let ws_rect = egui::Rect::from_min_size(
-                        egui::pos2(panel_rect.left(), ws_top),
-                        egui::vec2(panel_w, ws_h),
-                    );
-                    ui.allocate_ui_at_rect(ws_rect, |ui| {
-                        ui.painter()
-                            .rect_filled(ws_rect, 0.0, theme::BG_WORKSPACE_FILL);
-
-                        let ws_count = self.workspace_store.workspaces.len();
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), theme::HEADER_H),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                let arrow = if self.workspace_panel_collapsed {
-                                    "▶"
-                                } else {
-                                    "▼"
-                                };
-                                if ui
-                                    .add(
-                                        egui::Button::new(egui::RichText::new(arrow).size(11.0))
-                                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                                            .frame(true),
-                                    )
-                                    .clicked()
-                                {
-                                    self.workspace_panel_collapsed =
-                                        !self.workspace_panel_collapsed;
-                                }
-                                ui.label(
-                                    egui::RichText::new(format!("Workspaces ({})", ws_count))
-                                        .strong()
-                                        .size(theme::HEADER_FONT_SZ),
-                                );
-                            },
-                        );
-
-                        if !self.workspace_panel_collapsed {
-                            let active_group_snap = self.active_group;
-                            // Filter workspaces by the current window's ownership:
-                            //   * Main window: show workspaces with `host_window_id == None`
-                            //     and dim those currently detached into an extra window
-                            //     so the user knows where they live.
-                            //   * Extra window: show only workspaces hosted in *this* window.
-                            let cur_win = self.current_window_id.clone();
-                            // Snapshot: (id, name, color, has_note, in_extra_window)
-                            let workspaces: Vec<(u64, String, [u8; 3], bool, bool)> = self
-                                .workspace_store
-                                .workspaces
-                                .iter()
-                                .filter(|w| match (&cur_win, &w.host_window_id) {
-                                    // Main window: include workspaces that live here
-                                    // (host=None) and ones hosted elsewhere (so they
-                                    // appear grayed out).
-                                    (None, _) => true,
-                                    // Extra window: include only workspaces hosted here.
-                                    (Some(this), Some(host)) => this == host,
-                                    (Some(_), None) => false,
-                                })
-                                .map(|w| {
-                                    let in_extra = w.host_window_id.is_some()
-                                        && self
-                                            .extra_windows
-                                            .iter()
-                                            .any(|ew| ew.workspace_id == w.id)
-                                        && cur_win.is_none();
-                                    (
-                                        w.id,
-                                        w.name.clone(),
-                                        w.color,
-                                        !self.note_store.get(Some(w.id)).is_empty(),
-                                        in_extra,
-                                    )
-                                })
-                                .collect();
-
-                            egui::ScrollArea::vertical()
-                                .id_source("ws_panel_scroll")
-                                .show(ui, |ui| {
-                                    ui.spacing_mut().item_spacing.y = 3.0;
-                                    for (id, name, color, has_note, in_extra_window) in &workspaces
-                                    {
-                                        let active = active_group_snap == Some(*id);
-                                        let tint_factor = if *in_extra_window {
-                                            0.20 // grayed-out for workspaces in extra windows
-                                        } else if active {
-                                            0.65
-                                        } else {
-                                            0.45
-                                        };
-                                        let fill =
-                                            theme::from_rgb(theme::tinted(*color, tint_factor));
-                                        let fg = if *in_extra_window {
-                                            theme::OVERLAY0
-                                        } else {
-                                            theme::text_on(theme::tinted(*color, tint_factor))
-                                        };
-
-                                        {
-                                            const GEAR_W: f32 = 26.0;
-                                            let full_w = ui.available_width();
-                                            let stroke_val = if active {
-                                                egui::Stroke::new(2.0, theme::TEXT)
-                                            } else {
-                                                egui::Stroke::new(
-                                                    1.0,
-                                                    theme::from_rgb(theme::tinted(*color, 0.30)),
-                                                )
-                                            };
-                                            let (full_rect, _) = ui.allocate_exact_size(
-                                                egui::vec2(full_w, theme::HEADER_H),
-                                                egui::Sense::hover(),
-                                            );
-                                            let gear_rect = egui::Rect::from_min_size(
-                                                egui::pos2(
-                                                    full_rect.max.x - GEAR_W,
-                                                    full_rect.min.y,
-                                                ),
-                                                egui::vec2(GEAR_W, full_rect.height()),
-                                            );
-                                            let name_rect = egui::Rect::from_min_max(
-                                                full_rect.min,
-                                                egui::pos2(gear_rect.min.x, full_rect.max.y),
-                                            );
-                                            let name_resp = ui.interact(
-                                                name_rect,
-                                                egui::Id::new(("ws_name", *id)),
-                                                egui::Sense::click_and_drag(),
-                                            );
-                                            let gear_resp = ui.interact(
-                                                gear_rect,
-                                                egui::Id::new(("ws_gear", *id)),
-                                                egui::Sense::click(),
-                                            );
-
-                                            if ui.is_rect_visible(full_rect) {
-                                                let rounding = egui::Rounding::same(4.0);
-                                                ui.painter().rect_filled(full_rect, rounding, fill);
-                                                ui.painter()
-                                                    .rect_stroke(full_rect, rounding, stroke_val);
-
-                                                let name_str = if *in_extra_window {
-                                                    format!("→ {} (other window)", name)
-                                                } else if active {
-                                                    format!("▶ {}", name)
-                                                } else {
-                                                    name.clone()
-                                                };
-                                                let name_galley = ui.fonts(|f| {
-                                                    f.layout_no_wrap(
-                                                        name_str,
-                                                        egui::FontId::proportional(
-                                                            theme::SESSION_FONT_SZ,
-                                                        ),
-                                                        fg,
-                                                    )
-                                                });
-                                                let text_y = full_rect.center().y
-                                                    - name_galley.size().y / 2.0;
-                                                ui.painter().galley(
-                                                    egui::pos2(
-                                                        full_rect.left() + theme::BAR_PAD_X,
-                                                        text_y,
-                                                    ),
-                                                    name_galley,
-                                                    fg,
-                                                );
-
-                                                if *has_note {
-                                                    let note_galley = ui.fonts(|f| {
-                                                        f.layout_no_wrap(
-                                                            "📝".to_string(),
-                                                            egui::FontId::proportional(12.0),
-                                                            fg,
-                                                        )
-                                                    });
-                                                    let note_x = gear_rect.left()
-                                                        - 4.0
-                                                        - note_galley.size().x;
-                                                    ui.painter().galley(
-                                                        egui::pos2(note_x, text_y),
-                                                        note_galley,
-                                                        fg,
-                                                    );
-                                                }
-
-                                                let gear_fg = if gear_resp.hovered() {
-                                                    theme::TEXT
-                                                } else {
-                                                    theme::SUBTEXT0
-                                                };
-                                                ui.painter().text(
-                                                    gear_rect.center(),
-                                                    egui::Align2::CENTER_CENTER,
-                                                    "⚙",
-                                                    egui::FontId::proportional(12.0),
-                                                    gear_fg,
-                                                );
-                                            }
-
-                                            // In the main window, clicking a workspace
-                                            // hosted in an extra window is a no-op (it
-                                            // lives elsewhere). In an extra window,
-                                            // clicking activates as normal.
-                                            if name_resp.clicked() && !*in_extra_window {
-                                                open_workspace_id = Some(*id);
-                                            }
-                                            if gear_resp.clicked() {
-                                                edit_workspace_id = Some(*id);
-                                            }
-                                            let in_main = cur_win.is_none();
-                                            name_resp.context_menu(|ui| {
-                                                let enabled = !*in_extra_window;
-                                                if ui
-                                                    .add_enabled(
-                                                        enabled,
-                                                        egui::Button::new("Open workspace"),
-                                                    )
-                                                    .clicked()
-                                                {
-                                                    open_workspace_id = Some(*id);
-                                                    ui.close_menu();
-                                                }
-                                                // "Open in new window" is only available
-                                                // from the main window for workspaces
-                                                // that don't already live elsewhere.
-                                                if in_main
-                                                    && !*in_extra_window
-                                                    && ui.button("Open in new window").clicked()
-                                                {
-                                                    new_window_workspace_id = Some(*id);
-                                                    ui.close_menu();
-                                                }
-                                                ui.separator();
-                                                if ui.button("Edit workspace…").clicked() {
-                                                    edit_workspace_id = Some(*id);
-                                                    ui.close_menu();
-                                                }
-                                            });
-                                        }
-                                    }
-
-                                    // "Other" group — unaffiliated panes. Only meaningful
-                                    // in the main window; extra windows host exactly one
-                                    // workspace each and never display unaffiliated panes.
-                                    let show_other = cur_win.is_none();
-                                    let other_active = active_group_snap.is_none();
-                                    let other_has_note = !self.note_store.get(None).is_empty();
-                                    let other_fill = if other_active {
-                                        theme::SURFACE2
-                                    } else {
-                                        theme::SURFACE0
-                                    };
-                                    let other_fg = if other_active {
-                                        theme::TEXT
-                                    } else {
-                                        theme::SUBTEXT0
-                                    };
-                                    let other_stroke = if other_active {
-                                        egui::Stroke::new(2.0, theme::TEXT)
-                                    } else {
-                                        egui::Stroke::new(1.0, theme::OVERLAY0)
-                                    };
-                                    let other_w = ui.available_width();
-                                    let (other_rect, other_resp) = if show_other {
-                                        ui.allocate_exact_size(
-                                            egui::vec2(other_w, 28.0),
-                                            egui::Sense::click(),
-                                        )
-                                    } else {
-                                        // Allocate a zero-height placeholder; subsequent
-                                        // code is guarded by `show_other` so the response
-                                        // and rect are never used.
-                                        (
-                                            egui::Rect::NOTHING,
-                                            ui.interact(
-                                                egui::Rect::NOTHING,
-                                                egui::Id::new("other_skip"),
-                                                egui::Sense::hover(),
-                                            ),
-                                        )
-                                    };
-                                    if show_other && ui.is_rect_visible(other_rect) {
-                                        let rounding = egui::Rounding::same(4.0);
-                                        ui.painter().rect_filled(other_rect, rounding, other_fill);
-                                        ui.painter().rect_stroke(
-                                            other_rect,
-                                            rounding,
-                                            other_stroke,
-                                        );
-
-                                        let other_name = if other_active {
-                                            "▶ Other".to_string()
-                                        } else {
-                                            "Other".to_string()
-                                        };
-                                        let other_galley = ui.fonts(|f| {
-                                            f.layout_no_wrap(
-                                                other_name,
-                                                egui::FontId::proportional(13.0),
-                                                other_fg,
-                                            )
-                                        });
-                                        let text_y =
-                                            other_rect.center().y - other_galley.size().y / 2.0;
-                                        ui.painter().galley(
-                                            egui::pos2(other_rect.left() + 8.0, text_y),
-                                            other_galley,
-                                            other_fg,
-                                        );
-
-                                        if other_has_note {
-                                            let note_galley = ui.fonts(|f| {
-                                                f.layout_no_wrap(
-                                                    "📝".to_string(),
-                                                    egui::FontId::proportional(12.0),
-                                                    other_fg,
-                                                )
-                                            });
-                                            let note_x =
-                                                other_rect.right() - 8.0 - note_galley.size().x;
-                                            ui.painter().galley(
-                                                egui::pos2(note_x, text_y),
-                                                note_galley,
-                                                other_fg,
-                                            );
-                                        }
-                                    }
-                                    if show_other && other_resp.clicked() {
-                                        open_workspace_id = Some(u64::MAX); // sentinel for "Other"
-                                    }
-                                });
-                        }
-                    });
-                });
-        } // end if self.show_left_panel
-
-        if let Some(ws_id) = open_workspace_id {
-            let (cols, rows) = self.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
-            // u64::MAX is the sentinel for the "Other" group
-            let group = if ws_id == u64::MAX { None } else { Some(ws_id) };
-            self.switch_group(group, cols, rows);
-        }
-
-        if let Some(ws_id) = edit_workspace_id {
-            if let Some(ws) = self
-                .workspace_store
-                .workspaces
-                .iter()
-                .find(|w| w.id == ws_id)
-            {
-                self.workspace_edit_dialog =
-                    Some(WorkspaceEditDialog::new(ws.id, ws.name.clone(), ws.color));
-            }
-        }
-
-        if let Some(ws_id) = new_window_workspace_id {
-            self.open_workspace_in_new_window(ctx, ws_id);
-        }
-
-        if let Some(qpid) = quit_pane_id {
-            if let Some(pos) = self.panes.iter().position(|p| p.id == qpid) {
-                // Capture the session id (if any) before removing the pane so we can
-                // tear it down after the pane and split-tree cleanup.
-                let killed_sid = match &self.panes[pos].content {
-                    PaneContent::Terminal(sid) => Some(*sid),
-                    _ => None,
-                };
-                self.panes.remove(pos);
-                if self.active_pane_id == Some(qpid) {
-                    self.active_pane_id = self.panes.last().map(|p| p.id);
-                }
-                // Clean up split tree: if this was a root, remove it; if a leaf in
-                // someone else's tree, remove the leaf and collapse the parent split.
-                if self.pane_trees.remove(&qpid).is_none() {
-                    let root_pid_opt = self
-                        .pane_trees
-                        .iter()
-                        .find(|(_, tree)| tree.leaf_ids().contains(&qpid))
-                        .map(|(&rpid, _)| rpid);
-                    if let Some(root_pid) = root_pid_opt {
-                        let result = if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
-                            tree.remove_pane(qpid)
-                        } else {
-                            RemoveResult::NotFound
-                        };
-                        if let RemoveResult::CollapseToSibling(replacement) = result {
-                            if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
-                                *tree = replacement;
-                            }
-                        }
-                    }
-                }
-                if let Some(sid) = killed_sid {
-                    self.uninit_sessions.remove(&sid);
-                    self.sessions.retain(|e| e.id != sid);
-                    if self.active_id == Some(sid) {
-                        self.active_id = self.sessions.first().map(|e| e.id);
-                        self.update_is_active_flags();
-                    }
-                }
-                // Ensure active session is shown in a pane
-                if self.panes.is_empty() {
-                    if let Some(new_sid) = self.active_id {
-                        let pane_id = self.next_pane_id;
-                        self.next_pane_id += 1;
-                        self.panes.push(PaneEntry {
-                            id: pane_id,
-                            content: PaneContent::Terminal(new_sid),
-                            manual_width: None,
-                            last_size: (0, 0),
-                        });
-                        self.pane_trees.insert(
-                            pane_id,
-                            PaneNode::Leaf {
-                                pane_id,
-                                last_size: (0, 0),
-                            },
-                        );
-                        self.active_pane_id = Some(pane_id);
-                    }
-                }
-                self.save_session();
-            }
-        }
-
-        if let Some(qpid) = clicked_sidebar_pane_id {
-            let group_opt = self
-                .panes
-                .iter()
-                .find(|p| p.id == qpid)
-                .map(|p| Self::pane_group(&self.sessions, &self.workspace_store, p));
-            if let Some(group) = group_opt {
-                self.active_group = group;
-                self.activate_pane(qpid);
-                self.last_pane_per_group.insert(group, qpid);
-            }
-        }
-
-        if let Some(ref new_shell) = spawn_new_session {
-            let new_shell = new_shell.clone();
-            let cwd = self.active_cwd().or_else(|| {
-                self.active_group.and_then(|gid| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == gid)
-                        .map(|w| w.path.clone())
-                })
-            });
-            let (cols, rows) = self
-                .panes
-                .iter()
-                .find(|p| Some(p.id) == self.active_pane_id)
-                .map(|p| p.last_size)
-                .unwrap_or_else(|| self.panes.first().map(|p| p.last_size).unwrap_or((80, 24)));
-            if let Some(new_id) = self.spawn_session(&new_shell, cols, rows, cwd) {
-                self.active_id = Some(new_id);
-                if !self
-                    .panes
-                    .iter()
-                    .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
-                {
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
-                    self.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::Terminal(new_id),
-                        manual_width: None,
-                        last_size: (cols, rows),
-                    });
-                    self.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (cols, rows),
-                        },
-                    );
-                    self.activate_pane(pane_id);
-                }
-            }
-        }
-
-        if duplicate_session {
-            let dup_shell = self
-                .sessions
-                .iter()
-                .find(|e| Some(e.id) == self.active_id)
-                .map(|e| e.shell.clone())
-                .unwrap_or_else(default_shell);
-            let cwd = self.active_cwd().or_else(|| {
-                self.active_group.and_then(|gid| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == gid)
-                        .map(|w| w.path.clone())
-                })
-            });
-            let (cols, rows) = self
-                .panes
-                .iter()
-                .find(|p| Some(p.id) == self.active_pane_id)
-                .map(|p| p.last_size)
-                .unwrap_or_else(|| self.panes.first().map(|p| p.last_size).unwrap_or((80, 24)));
-            // Build the command string to replay in the new session
-            let cmd_to_run: Option<String> = active_fg.as_ref().map(|fp| {
-                let parts: Vec<String> = fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
-                let joined = parts.join(" ");
-                // PowerShell does not invoke a quoted path string as a command without
-                // the call operator; & works for both bare names and quoted full paths.
-                #[cfg(target_os = "windows")]
-                {
-                    format!("& {}", joined)
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    joined
-                }
-            });
-            if let Some(new_id) = self.spawn_session(&dup_shell, cols, rows, cwd) {
-                self.active_id = Some(new_id);
-                if !self
-                    .panes
-                    .iter()
-                    .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
-                {
-                    // Insert new pane immediately after the current active pane
-                    let insert_at = self
-                        .panes
-                        .iter()
-                        .position(|p| Some(p.id) == self.active_pane_id)
-                        .map(|i| i + 1)
-                        .unwrap_or(self.panes.len());
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
-                    self.panes.insert(
-                        insert_at,
-                        PaneEntry {
-                            id: pane_id,
-                            content: PaneContent::Terminal(new_id),
-                            manual_width: None,
-                            last_size: (cols, rows),
-                        },
-                    );
-                    self.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (cols, rows),
-                        },
-                    );
-                    self.activate_pane(pane_id);
-                }
-                // Queue the command; it will be sent once the new shell emits OSC 7 (prompt ready).
-                if let Some(cmd) = cmd_to_run {
-                    if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == new_id) {
-                        entry.pending_command = Some(cmd);
-                    }
-                }
-            }
-        }
+        self.render_left_panel(ctx);
 
         // ── Snapshot right-panel data before closures capture self ──────────
         let active_cwd = self.active_cwd();
@@ -3113,9 +453,12 @@ impl App {
 
         let mut new_tab: Option<RightTab> = None;
         let mut close_tab: Option<PathBuf> = None;
-        let mut open_md: Option<PathBuf> = None;
         let mut open_editor: Option<PathBuf> = None;
         let mut open_ws_dialog: Option<PathBuf> = None;
+        let mut open_terminal_at: Option<PathBuf> = None;
+        let mut git_stage_action: Option<GitStageAction> = None;
+        let mut git_open_diff_file: Option<String> = None;
+        let mut git_open_file: Option<String> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
@@ -3126,6 +469,7 @@ impl App {
                 .default_width(300.0)
                 .width_range(100.0..=600.0)
                 .resizable(true)
+                .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
                     let panel_rect = ui.max_rect();
                     let panel_w = panel_rect.width();
@@ -3149,7 +493,7 @@ impl App {
                         egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, content_h));
                     ui.allocate_ui_at_rect(content_rect, |ui| {
                         egui::Frame::none()
-                            .fill(theme::SURFACE0)
+                            .fill(theme::active().surface0)
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
                                 egui::ScrollArea::horizontal()
@@ -3159,29 +503,30 @@ impl App {
                                         ui.set_min_height(theme::HEADER_H);
                                         ui.horizontal(|ui| {
                                             ui.set_min_height(theme::HEADER_H);
-                                            ui.spacing_mut().item_spacing.x = 2.0;
+                                            ui.spacing_mut().item_spacing.x = 0.0;
 
-                                            if ui
-                                                .selectable_label(
+                                            {
+                                                let resp = ui.selectable_label(
                                                     active_tab == RightTab::Directory,
                                                     egui::RichText::new("Directory")
                                                         .size(theme::HEADER_FONT_SZ),
-                                                )
-                                                .clicked()
-                                            {
-                                                new_tab = Some(RightTab::Directory);
+                                                );
+                                                if resp.clicked() {
+                                                    new_tab = Some(RightTab::Directory);
+                                                }
+                                                resp.on_hover_text("Ctrl+Shift+D");
                                             }
 
-                                            if is_git
-                                                && ui
-                                                    .selectable_label(
-                                                        active_tab == RightTab::GitDiff,
-                                                        egui::RichText::new("Git Diff")
-                                                            .size(theme::HEADER_FONT_SZ),
-                                                    )
-                                                    .clicked()
-                                            {
-                                                new_tab = Some(RightTab::GitDiff);
+                                            if is_git {
+                                                let resp = ui.selectable_label(
+                                                    active_tab == RightTab::GitDiff,
+                                                    egui::RichText::new("Git Diff")
+                                                        .size(theme::HEADER_FONT_SZ),
+                                                );
+                                                if resp.clicked() {
+                                                    new_tab = Some(RightTab::GitDiff);
+                                                }
+                                                resp.on_hover_text("Ctrl+Shift+G");
                                             }
 
                                             for path in &md_tabs {
@@ -3207,7 +552,7 @@ impl App {
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
                                                                 .size(theme::HEADER_FONT_SZ)
-                                                                .color(theme::OVERLAY1),
+                                                                .color(theme::active().overlay1),
                                                         )
                                                         .frame(false)
                                                         .min_size(egui::vec2(
@@ -3215,7 +560,7 @@ impl App {
                                                             theme::HEADER_H,
                                                         )),
                                                     )
-                                                    .on_hover_text("Close tab")
+                                                    .on_hover_text("Close tab (Ctrl+Shift+W)")
                                                     .clicked()
                                                 {
                                                     close_tab = Some(path.clone());
@@ -3239,7 +584,7 @@ impl App {
                                                     egui::RichText::new(theme::short_path(cwd))
                                                         .monospace()
                                                         .size(theme::CWD_FONT_SZ)
-                                                        .color(theme::FG_PATH),
+                                                        .color(theme::active().fg_path),
                                                 )
                                                 .on_hover_text(cwd.display().to_string());
                                                 let already_saved = self
@@ -3262,29 +607,95 @@ impl App {
                                                     open_ws_dialog = Some(cwd.clone());
                                                 }
                                             });
-                                            ui.add_space(4.0);
-                                            let mut cache = SubdirCache {
-                                                map: &mut self.subdir_cache,
-                                                ttl: Duration::from_secs(2),
+                                            // ── Directory search bar ───────────────────
+                                            if self.dir_search_active {
+                                                let dir_search_id = egui::Id::new("dir_search_input");
+                                                ui.horizontal(|ui| {
+                                                    ui.label(egui::RichText::new("🔍").size(12.0));
+                                                    let te = egui::TextEdit::singleline(&mut self.dir_search_query)
+                                                        .desired_width(ui.available_width() - theme::BTN_W)
+                                                        .hint_text("Filter files…")
+                                                        .font(egui::FontId::proportional(theme::SESSION_FONT_SZ))
+                                                        .id(dir_search_id);
+                                                    let r = ui.add(te);
+                                                    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                                        self.dir_search_active = false;
+                                                        self.dir_search_query.clear();
+                                                        self.dir_search_debounce_query.clear();
+                                                        self.dir_search_debounce_at = None;
+                                                    }
+                                                    r.request_focus();
+                                                });
+
+                                                if self.dir_search_query != self.dir_search_debounce_query {
+                                                    self.dir_search_debounce_at = Some(Instant::now());
+                                                    self.dir_search_debounce_query = self.dir_search_query.clone();
+                                                }
+                                            }
+
+                                            ui.add_space(theme::SP_SM);
+
+                                            let debounced_dir_query = if self.dir_search_active
+                                                && !self.dir_search_query.is_empty()
+                                                && self.dir_search_debounce_at.map_or(true, |t| t.elapsed() >= Duration::from_millis(150))
+                                            {
+                                                Some(self.dir_search_query.clone())
+                                            } else {
+                                                if self.dir_search_debounce_at.map_or(false, |t| t.elapsed() < Duration::from_millis(150)) {
+                                                    ctx.request_repaint_after(std::time::Duration::from_millis(160));
+                                                }
+                                                None
                                             };
-                                            render_dir_tree(
-                                                ui,
-                                                &dir_entries,
-                                                &mut open_md,
-                                                &mut open_editor,
-                                                &mut cache,
-                                            );
+
+                                            if let Some(ref q) = debounced_dir_query {
+                                                let matcher = SkimMatcherV2::default();
+                                                let mut flat = Vec::new();
+                                                collect_all_files(cwd, &mut flat, 5);
+                                                flat.sort_by(|a, b| a.name.cmp(&b.name));
+                                                let filtered: Vec<FileEntry> = flat
+                                                    .into_iter()
+                                                    .filter(|e| matcher.fuzzy_match(&e.name, q).is_some())
+                                                    .take(100)
+                                                    .collect();
+                                                render_flat_file_list(
+                                                    ui,
+                                                    &filtered,
+                                                    cwd,
+                                                    &mut open_editor,
+                                                    &mut open_terminal_at,
+                                                );
+                                            } else {
+                                                let mut cache = SubdirCache {
+                                                    map: &mut self.subdir_cache,
+                                                    ttl: Duration::from_secs(2),
+                                                };
+                                                render_dir_tree(
+                                                    ui,
+                                                    &dir_entries,
+                                                    &mut open_editor,
+                                                    &mut open_terminal_at,
+                                                    &mut cache,
+                                                );
+                                            }
                                         } else {
                                             ui.label(
                                                 egui::RichText::new("(no active session)")
                                                     .italics()
-                                                    .color(theme::OVERLAY0)
+                                                    .color(theme::active().overlay0)
                                                     .size(12.0),
                                             );
                                         }
                                     }
                                     RightTab::GitDiff => {
-                                        render_git_diff(ui, &git_diff, &git_status);
+                                        let result =
+                                            render_git_diff(ui, &git_diff, &git_status);
+                                        git_stage_action = result.stage_action;
+                                        if result.open_diff_file.is_some() {
+                                            git_open_diff_file = result.open_diff_file;
+                                        }
+                                        if result.open_file.is_some() {
+                                            git_open_file = result.open_file;
+                                        }
                                     }
                                     RightTab::Markdown(_path) => {
                                         let content = md_active_content
@@ -3315,9 +726,9 @@ impl App {
                         div_rect,
                         0.0,
                         if div_resp.hovered() || div_resp.dragged() {
-                            theme::WS_DIV_ACTIVE
+                            theme::active().ws_div_active
                         } else {
-                            theme::WS_DIV_IDLE
+                            theme::active().ws_div_idle
                         },
                     );
                     if !self.notes_panel_collapsed && div_resp.dragged() {
@@ -3348,45 +759,62 @@ impl App {
                         egui::vec2(panel_w, notes_h),
                     );
                     ui.allocate_ui_at_rect(notes_rect, |ui| {
+                        let header_rect = egui::Rect::from_min_size(
+                            notes_rect.min,
+                            egui::vec2(notes_rect.width(), theme::HEADER_H),
+                        );
                         ui.painter()
-                            .rect_filled(notes_rect, 0.0, theme::BG_WORKSPACE_FILL);
+                            .rect_filled(header_rect, 0.0, theme::active().bg_workspace_fill);
+
+                        if !self.notes_panel_collapsed {
+                            let content_rect = egui::Rect::from_min_max(
+                                egui::pos2(notes_rect.left(), notes_rect.min.y + theme::HEADER_H),
+                                notes_rect.max,
+                            );
+                            ui.painter()
+                                .rect_filled(content_rect, 0.0, theme::active().bg_term);
+                        }
 
                         ui.allocate_ui_with_layout(
                             egui::vec2(ui.available_width(), theme::HEADER_H),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                let arrow = if self.notes_panel_collapsed {
-                                    "▶"
-                                } else {
-                                    "▼"
-                                };
-                                if ui
-                                    .add(
-                                        egui::Button::new(egui::RichText::new(arrow).size(11.0))
-                                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                                            .frame(true),
-                                    )
-                                    .clicked()
-                                {
-                                    self.notes_panel_collapsed = !self.notes_panel_collapsed;
-                                }
                                 ui.label(
                                     egui::RichText::new("Notes")
                                         .strong()
                                         .size(theme::HEADER_FONT_SZ),
                                 );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let arrow = if self.notes_panel_collapsed {
+                                            "▶"
+                                        } else {
+                                            "▼"
+                                        };
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new(arrow)
+                                                        .size(theme::HEADER_FONT_SZ),
+                                                )
+                                                .min_size(egui::vec2(
+                                                    theme::HEADER_H,
+                                                    theme::HEADER_H,
+                                                ))
+                                                .frame(false),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.notes_panel_collapsed =
+                                                !self.notes_panel_collapsed;
+                                        }
+                                    },
+                                );
                             },
                         );
 
                         if !self.notes_panel_collapsed {
-                            ui.painter().rect_filled(
-                                egui::Rect::from_min_max(
-                                    egui::pos2(notes_rect.left(), notes_rect.min.y + COLLAPSED_H),
-                                    notes_rect.max,
-                                ),
-                                0.0,
-                                theme::BG_TERM,
-                            );
                             egui::ScrollArea::both()
                                 .id_source("notes_scroll")
                                 .auto_shrink([false; 2])
@@ -3423,23 +851,35 @@ impl App {
                 self.right_tab = RightTab::Directory;
             }
         }
-        if let Some(path) = open_md {
-            if let (Some(cwd), Some(ws)) = (active_cwd.as_ref(), self.watch_state.as_mut()) {
-                if let Some(data) = ws.dir_data.get_mut(cwd) {
-                    if !data.md_files.contains_key(&path) {
-                        let content = std::fs::read_to_string(&path).unwrap_or_default();
-                        data.md_files.insert(path.clone(), Arc::new(content));
-                    }
-                }
-            }
-            self.shown_md_tabs.insert(path.clone());
-            self.right_tab = RightTab::Markdown(path);
-        }
 
         // Open workspace dialog
         if let Some(path) = open_ws_dialog {
             if self.workspace_dialog.is_none() {
                 self.workspace_dialog = Some(WorkspaceDialog::new(path));
+            }
+        }
+
+        // Execute git stage/unstage action
+        if let Some(action) = git_stage_action {
+            if let Some(cwd) = active_cwd.as_ref() {
+                use std::process::Command;
+                let ok = match &action {
+                    GitStageAction::Stage(path) => Command::new("git")
+                        .args(["add", "--", path])
+                        .current_dir(cwd)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false),
+                    GitStageAction::Unstage(path) => Command::new("git")
+                        .args(["reset", "HEAD", "--", path])
+                        .current_dir(cwd)
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false),
+                };
+                if ok {
+                    self.git_worker.enqueue_git(cwd);
+                }
             }
         }
 
@@ -3487,6 +927,7 @@ impl App {
                         .find(|w| w.id == id)
                         .map(|w| w.color)
                 }),
+                PaneContent::FileDiff(_) => None,
             })
             .collect();
 
@@ -3536,6 +977,7 @@ impl App {
         let mut close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
         let mut editor_saves: Vec<u32> = vec![];
+        let mut editor_preview_toggles: Vec<u32> = vec![];
         let mut pane_widths_snap: Vec<(u32, f32)> = vec![];
         let mut resize_total_h: f32 = 0.0;
         let mut resize_cell_w: f32 = 0.0;
@@ -3550,7 +992,7 @@ impl App {
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(egui::Margin::same(2.0)))
+            .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
             let font_id    = FontId::monospace(14.0);
@@ -3561,7 +1003,7 @@ impl App {
                 let galley = fonts.layout_no_wrap(
                     "MMMMMMMMMMMMMMMMMMMM".to_string(),
                     font_id.clone(),
-                    theme::TEXT,
+                    theme::active().text,
                 );
                 galley.rect.width() / 20.0
             });
@@ -3587,7 +1029,7 @@ impl App {
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         egui::RichText::new("No sessions in this group.\nUse '+ New' in the Sessions panel to add one.")
-                            .color(theme::OVERLAY0).size(14.0)
+                            .color(theme::active().overlay0).size(14.0)
                     );
                 });
             } else {
@@ -3606,7 +1048,7 @@ impl App {
 
                 // ── Tab bar (horizontally scrollable) ────────────────────────
                 ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
-                    ui.painter().rect_filled(tab_bar_rect, 0.0, theme::SURFACE0);
+                    ui.painter().rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
                     egui::ScrollArea::horizontal()
                         .id_source("tab_bar_scroll")
                         .auto_shrink([false, false])
@@ -3618,47 +1060,51 @@ impl App {
                                     let is_active = Some(pane_id) == active_pane_id_snap;
                                     let ws_color  = ws_colors[i];
 
-                                    let (title, title_cwd): (String, std::path::PathBuf) = match &self.panes[i].content {
+                                    let display = match &self.panes[i].content {
                                         PaneContent::Terminal(sid) => {
                                             let sid = *sid;
                                             self.sessions.iter()
                                                 .find(|e| e.id == sid)
                                                 .map(|e| {
                                                     let s = e.session.read();
-                                                    (s.title(), s.cwd.clone())
+                                                    let title = s.title();
+                                                    let cwd = s.cwd.clone();
+                                                    drop(s);
+                                                    let fg = self.foreground_worker.get(e.id);
+                                                    effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell))
                                                 })
-                                                .unwrap_or_else(|| (format!("Terminal {sid}"), std::path::PathBuf::new()))
+                                                .unwrap_or_else(|| format!("Terminal {sid}"))
                                         }
                                         PaneContent::DeferredTerminal { cwd, .. } => {
-                                            let name = cwd.as_ref()
-                                                .and_then(|p| p.file_name())
-                                                .map(|n| n.to_string_lossy().into_owned())
-                                                .unwrap_or_else(|| "Terminal".to_string());
-                                            (name, cwd.clone().unwrap_or_default())
+                                            let cwd_path = cwd.clone().unwrap_or_default();
+                                            effective_title("", &cwd_path, None, None)
                                         }
                                         PaneContent::FileEditor(ed) => {
                                             let fname = ed.path.file_name()
                                                 .map(|n| n.to_string_lossy().into_owned())
                                                 .unwrap_or_default();
-                                            let t = if ed.save_error {
+                                            if ed.save_error {
                                                 format!("! {fname}")
                                             } else if ed.dirty {
                                                 format!("* {fname}")
                                             } else {
                                                 fname
-                                            };
-                                            (t, std::path::PathBuf::new())
+                                            }
+                                        }
+                                        PaneContent::FileDiff(d) => {
+                                            let fname = d.path.file_name()
+                                                .map(|n| n.to_string_lossy().into_owned())
+                                                .unwrap_or_default();
+                                            format!("\u{21c4} {fname}")
                                         }
                                     };
-                                    let display = effective_title(&title, &title_cwd);
 
-                                    let tab_w: f32 = 160.0;
-                                    let (_, tab_rect) = ui.allocate_space(egui::vec2(tab_w, tab_h));
+                                    let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
 
                                     let hbg = theme::header_bg(ws_color, is_active);
                                     let title_color = match ws_color {
                                         Some(c) => theme::text_on(theme::tinted(c, if is_active { 0.75 } else { 0.35 })),
-                                        None    => if is_active { theme::TEXT } else { theme::SUBTEXT1 },
+                                        None    => if is_active { theme::active().text } else { theme::active().subtext1 },
                                     };
 
                                     let painter = ui.painter().clone();
@@ -3667,7 +1113,7 @@ impl App {
                                     // Workspace colour strip on left edge
                                     if let Some(c) = ws_color {
                                         painter.rect_filled(
-                                            egui::Rect::from_min_size(tab_rect.min, egui::vec2(3.0, tab_h)),
+                                            egui::Rect::from_min_size(tab_rect.min, egui::vec2(theme::TAB_COLOR_STRIP_W, tab_h)),
                                             0.0,
                                             theme::from_rgb(c),
                                         );
@@ -3677,20 +1123,20 @@ impl App {
                                     if is_active {
                                         painter.rect_filled(
                                             egui::Rect::from_min_size(
-                                                egui::pos2(tab_rect.min.x, tab_rect.max.y - 2.0),
-                                                egui::vec2(tab_w, 2.0),
+                                                egui::pos2(tab_rect.min.x, tab_rect.max.y - theme::TAB_ACTIVE_HIGHLIGHT_H),
+                                                egui::vec2(theme::TAB_W, theme::TAB_ACTIVE_HIGHLIGHT_H),
                                             ),
-                                            0.0, theme::TEXT,
+                                            0.0, theme::active().text,
                                         );
                                     }
 
                                     // Right-edge separator between tabs
                                     painter.rect_filled(
                                         egui::Rect::from_min_size(
-                                            egui::pos2(tab_rect.max.x - 1.0, tab_rect.min.y),
-                                            egui::vec2(1.0, tab_h),
+                                            egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
+                                            egui::vec2(theme::STROKE_THIN, tab_h),
                                         ),
-                                        0.0, theme::SURFACE2,
+                                        0.0, theme::active().surface2,
                                     );
 
                                     // Register tab-wide click first (lower z-order); close button
@@ -3713,19 +1159,19 @@ impl App {
                                         egui::Sense::click(),
                                     );
                                     if close_resp.hovered() {
-                                        painter.rect_filled(close_rect, 0.0, theme::DANGER_BG);
+                                        painter.rect_filled(close_rect, 0.0, theme::active().danger_bg);
                                     }
                                     painter.text(
                                         close_rect.center(), egui::Align2::CENTER_CENTER,
                                         "×", egui::FontId::proportional(14.0),
-                                        theme::DANGER_FG,
+                                        theme::active().danger_fg,
                                     );
 
                                     // Title text (clipped before close button)
-                                    let text_x = tab_rect.min.x + if ws_color.is_some() { 7.0 } else { 5.0 };
+                                    let text_x = tab_rect.min.x + theme::TAB_PAD_X + if ws_color.is_some() { theme::TAB_COLOR_STRIP_W } else { 0.0 };
                                     painter.with_clip_rect(egui::Rect::from_min_max(
                                         egui::pos2(text_x, tab_rect.min.y),
-                                        egui::pos2(close_rect.min.x - 3.0, tab_rect.max.y),
+                                        egui::pos2(close_rect.min.x - theme::SP_XS, tab_rect.max.y),
                                     )).text(
                                         egui::pos2(text_x, tab_rect.center().y),
                                         egui::Align2::LEFT_CENTER,
@@ -3734,10 +1180,28 @@ impl App {
                                         title_color,
                                     );
 
-                                    if close_resp.on_hover_text("Close tab").clicked() {
+                                    if close_resp.on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
                                         close_pane_id = Some(pane_id);
                                     } else if tab_resp.clicked() {
                                         clicked_pane_id = Some(pane_id);
+                                    }
+
+                                    // Tab drag-to-reorder
+                                    if tab_resp.drag_started() {
+                                        self.tab_drag_source = Some(i);
+                                    }
+                                    if let Some(drag_idx) = self.tab_drag_source {
+                                        if tab_resp.hovered() && drag_idx != i {
+                                            let indicator_x = if drag_idx < i { tab_rect.max.x } else { tab_rect.min.x };
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(
+                                                    egui::pos2(indicator_x - 1.5, tab_rect.min.y),
+                                                    egui::vec2(3.0, tab_h),
+                                                ),
+                                                0.0,
+                                                theme::active().blue,
+                                            );
+                                        }
                                     }
 
                                     // Right-click context menu for tab operations.
@@ -3778,6 +1242,31 @@ impl App {
                         });
                 });
 
+                // Tab drag-to-reorder: finalize on pointer release
+                if self.tab_drag_source.is_some() && ui.input(|i| i.pointer.any_released()) {
+                    if let Some(drag_idx) = self.tab_drag_source.take() {
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+                        if let Some(pos) = pointer_pos {
+                            // Find which tab the pointer is over by index
+                            let tab_count = visible_indices.len();
+                            if tab_count > 1 {
+                                let tab_bar_x = ui.min_rect().min.x;
+                                let rel_x = pos.x - tab_bar_x;
+                                let target_i = ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
+                                let target_vis = visible_indices.get(target_i).copied();
+                                let drag_vis = visible_indices.get(drag_idx).copied();
+                                if let (Some(from), Some(to)) = (drag_vis, target_vis) {
+                                    if from != to {
+                                        let pane = self.panes.remove(from);
+                                        let insert_at = if to > from { to - 1 } else { to };
+                                        self.panes.insert(insert_at, pane);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // ── Active tab content (full-size, split-aware) ──────────────
                 if let Some(&active_i) = visible_indices.iter()
                     .find(|&&i| Some(self.panes[i].id) == active_pane_id_snap)
@@ -3804,11 +1293,16 @@ impl App {
                         active_term_ui_id: &'a mut Option<egui::Id>,
                         clicked_pane_id: &'a mut Option<u32>,
                         editor_saves: &'a mut Vec<u32>,
+                        editor_preview_toggles: &'a mut Vec<u32>,
                         pane_widths_snap: &'a mut Vec<(u32, f32)>,
                         split_ratio_changes: &'a mut Vec<(u32, f32)>,
+                        term_selection: &'a Option<TermSelection>,
+                        term_selection_sid: Option<u32>,
                         workspace_dialog_open: bool,
                         workspace_edit_dialog_open: bool,
                         show_settings: bool,
+                        font_size: f32,
+                        cursor_style: CursorStyle,
                     }
 
                     fn render_node(
@@ -3841,8 +1335,20 @@ impl App {
                                             let sid = *sid;
                                             if let Some(idx) = rctx.sessions.iter().position(|e| e.id == sid) {
                                                 let session = Arc::clone(&rctx.sessions[idx].session);
+                                                let sel_range = if rctx.term_selection_sid == Some(sid) {
+                                                    rctx.term_selection.as_ref().map(|s| {
+                                                        crate::renderer::terminal_pass::SelectionRange {
+                                                            start_col: s.start_col,
+                                                            start_row: s.start_row,
+                                                            end_col: s.end_col,
+                                                            end_row: s.end_row,
+                                                        }
+                                                    })
+                                                } else {
+                                                    None
+                                                };
                                                 let geo = crate::renderer::terminal_pass::TerminalView::new(session)
-                                                    .show(ui, is_focused, rctx.cursor_blink_on);
+                                                    .show(ui, is_focused, rctx.cursor_blink_on, sel_range.as_ref(), rctx.font_size, rctx.cursor_style);
                                                 if is_focused {
                                                     *rctx.active_term_geo = Some(geo);
                                                 }
@@ -3871,28 +1377,137 @@ impl App {
                                             }
                                         }
                                         PaneContent::DeferredTerminal { .. } => {
-                                            ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::BG_TERM);
+                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
                                         }
-                                        PaneContent::FileEditor(_) => {
-                                            ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::BG_TERM);
-                                            if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
+                                        PaneContent::FileEditor(ed) => {
+                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+                                            if !file_browser::is_supported_text_file(&ed.path, &ed.content) {
+                                                ui.centered_and_justified(|ui| {
+                                                    ui.label(
+                                                        egui::RichText::new("File type not supported for preview")
+                                                            .size(16.0)
+                                                            .color(theme::active().overlay0),
+                                                    );
+                                                });
+                                            } else {
+                                            let is_md = ed.path.extension().and_then(|e| e.to_str()) == Some("md");
+                                            let previewing = is_md && ed.show_preview;
+                                            if is_md {
+                                                ui.horizontal(|ui| {
+                                                    let t = theme::active();
+                                                    let raw_color = if !previewing { t.text } else { t.overlay0 };
+                                                    let preview_color = if previewing { t.text } else { t.overlay0 };
+                                                    let raw_bg = if !previewing { t.surface2 } else { egui::Color32::TRANSPARENT };
+                                                    let preview_bg = if previewing { t.surface2 } else { egui::Color32::TRANSPARENT };
+                                                    if ui.add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new("Raw")
+                                                                .size(11.0)
+                                                                .color(raw_color),
+                                                        )
+                                                        .fill(raw_bg)
+                                                        .rounding(egui::Rounding::same(theme::ROUNDING))
+                                                        .min_size(egui::vec2(56.0, 20.0)),
+                                                    ).clicked() && previewing {
+                                                        rctx.editor_preview_toggles.push(pane_id);
+                                                    }
+                                                    if ui.add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new("Preview")
+                                                                .size(11.0)
+                                                                .color(preview_color),
+                                                        )
+                                                        .fill(preview_bg)
+                                                        .rounding(egui::Rounding::same(theme::ROUNDING))
+                                                        .min_size(egui::vec2(56.0, 20.0)),
+                                                    ).clicked() && !previewing {
+                                                        rctx.editor_preview_toggles.push(pane_id);
+                                                    }
+                                                });
+                                                ui.separator();
+                                            }
+                                            if previewing {
+                                                if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
+                                                    if let Some(ref text) = et.1 {
+                                                        egui::ScrollArea::both()
+                                                            .id_source(("editor_preview_scroll", pane_id))
+                                                            .auto_shrink([false; 2])
+                                                            .show(ui, |ui| {
+                                                                render_markdown(ui, text);
+                                                            });
+                                                    }
+                                                }
+                                            } else if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
                                                 if let Some(ref mut text) = et.1 {
                                                     egui::ScrollArea::both()
                                                         .id_source(("editor_scroll", pane_id))
                                                         .auto_shrink([false; 2])
                                                         .show(ui, |ui| {
-                                                            ui.add(
-                                                                egui::TextEdit::multiline(text)
-                                                                    .font(egui::TextStyle::Monospace)
-                                                                    .desired_width(f32::INFINITY)
-                                                                    .frame(false),
-                                                            );
+                                                            let line_count = text.lines().count().max(1);
+                                                            let digits = ((line_count as f64).log10().floor() as usize) + 1;
+                                                            let char_w = 7.5_f32; // approx monospace char width at default size
+                                                            let gutter_w = (digits as f32 + 1.5) * char_w;
+                                                            let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+
+                                                            ui.horizontal_top(|ui| {
+                                                                ui.spacing_mut().item_spacing.x = 0.0;
+                                                                // Line number gutter
+                                                                ui.vertical(|ui| {
+                                                                    ui.set_min_width(gutter_w);
+                                                                    // Pad top to match TextEdit internal padding
+                                                                    ui.add_space(2.0);
+                                                                    for n in 1..=line_count {
+                                                                        let num_str = format!("{:>width$}", n, width = digits);
+                                                                        ui.add_sized(
+                                                                            egui::vec2(gutter_w, line_h),
+                                                                            egui::Label::new(
+                                                                                egui::RichText::new(num_str)
+                                                                                    .monospace()
+                                                                                    .color(theme::active().overlay0),
+                                                                            ),
+                                                                        );
+                                                                    }
+                                                                });
+                                                                // Separator line
+                                                                let sep_rect = ui.allocate_exact_size(
+                                                                    egui::vec2(1.0, line_h * line_count as f32 + 4.0),
+                                                                    egui::Sense::hover(),
+                                                                ).0;
+                                                                ui.painter().rect_filled(sep_rect, 0.0, theme::active().surface1);
+                                                                ui.add_space(theme::SP_SM);
+                                                                // Editor
+                                                                ui.add(
+                                                                    egui::TextEdit::multiline(text)
+                                                                        .font(egui::TextStyle::Monospace)
+                                                                        .desired_width(f32::INFINITY)
+                                                                        .frame(false),
+                                                                );
+                                                            });
                                                         });
                                                 }
-                                                if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
-                                                    rctx.editor_saves.push(pane_id);
-                                                }
                                             }
+                                            if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
+                                                rctx.editor_saves.push(pane_id);
+                                            }
+                                            } // end else (supported file)
+                                        }
+                                        PaneContent::FileDiff(d) => {
+                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(format!("⇄ {}", d.path.display()))
+                                                        .strong()
+                                                        .size(13.0)
+                                                        .color(theme::active().git_filename),
+                                                );
+                                            });
+                                            ui.separator();
+                                            egui::ScrollArea::both()
+                                                .id_source(("diff_scroll", pane_id))
+                                                .auto_shrink([false; 2])
+                                                .show(ui, |ui| {
+                                                    render_inline_diff(ui, &d.diff_content);
+                                                });
                                         }
                                     }
                                 });
@@ -3921,11 +1536,11 @@ impl App {
                                 let div_id = egui::Id::new(("split_div", *split_id));
                                 let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
                                 let div_color = if div_resp.dragged() || div_resp.hovered() {
-                                    crate::theme::DIVIDER_ACTIVE
+                                    theme::active().divider_active
                                 } else {
-                                    crate::theme::DIVIDER_IDLE
+                                    theme::active().divider_idle
                                 };
-                                ui.painter().rect_filled(div_rect, 0.0, div_color);
+                                ui.painter().rect_filled(div_rect, theme::STROKE_THIN, div_color);
 
                                 // Handle drag to resize
                                 if div_resp.dragged() {
@@ -3960,14 +1575,208 @@ impl App {
                         active_term_ui_id: &mut self.active_term_ui_id,
                         clicked_pane_id: &mut clicked_pane_id,
                         editor_saves: &mut editor_saves,
+                        editor_preview_toggles: &mut editor_preview_toggles,
                         pane_widths_snap: &mut pane_widths_snap,
                         split_ratio_changes: &mut split_ratio_changes,
+                        term_selection: &self.term_selection,
+                        term_selection_sid: self.term_selection_sid,
                         workspace_dialog_open: self.workspace_dialog.is_some(),
                         workspace_edit_dialog_open: self.workspace_edit_dialog.is_some(),
                         show_settings: self.show_settings,
+                        font_size: self.settings.font_size,
+                        cursor_style: self.settings.cursor_style,
                     };
                     render_node(ui, &tree, content_rect, &mut rctx);
                 }
+
+            // ── URL detection + search overlay ────────────────────────────
+            if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.active_id) {
+                if let Some(entry) = self.sessions.iter().find(|e| e.id == sid) {
+                    {
+                        use alacritty_terminal::grid::Dimensions;
+                        use alacritty_terminal::index::{Column, Line};
+                        use alacritty_terminal::term::cell::Flags;
+                        let session = entry.session.read();
+                        let term = &session.term;
+                        let grid = term.grid();
+                        let cols = term.columns();
+                        let display_offset = grid.display_offset();
+                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
+                        let history = grid.history_size() as i32;
+                        let term_rows = term.screen_lines() as i32;
+                        let mut lines = Vec::with_capacity(visible_rows);
+                        for screen_row in 0..visible_rows {
+                            let grid_line = screen_row as i32 - display_offset as i32;
+                            let mut text = String::with_capacity(cols);
+                            if grid_line >= -history && grid_line < term_rows {
+                                for col in 0..cols {
+                                    let cell = &grid[Line(grid_line)][Column(col)];
+                                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                                        continue;
+                                    }
+                                    text.push(cell.c);
+                                }
+                            }
+                            lines.push((grid_line, text));
+                        }
+                        drop(session);
+                        self.detected_urls = crate::url_detector::detect_urls(&lines);
+                    }
+
+                    if !self.detected_urls.is_empty() {
+                        let t = theme::active();
+                        let painter = ui.painter();
+                        let session = entry.session.read();
+                        let display_offset = session.term.grid().display_offset();
+                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
+                        drop(session);
+                        for detected in &self.detected_urls {
+                            let screen_row = detected.line + display_offset as i32;
+                            if screen_row < 0 || screen_row >= visible_rows as i32 {
+                                continue;
+                            }
+                            let y = geo.rect.min.y + screen_row as f32 * geo.cell_h + geo.cell_h - 1.5;
+                            let x0 = geo.rect.min.x + detected.start_col as f32 * geo.cell_w;
+                            let x1 = geo.rect.min.x + detected.end_col as f32 * geo.cell_w;
+                            painter.line_segment(
+                                [egui::pos2(x0, y), egui::pos2(x1, y)],
+                                egui::Stroke::new(0.5, t.overlay0),
+                            );
+                        }
+
+                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+                        let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
+                        if ctrl_held {
+                            if let Some(pos) = pointer_pos {
+                                if let Some((col, row)) = geo.to_cell(pos) {
+                                    let session = entry.session.read();
+                                    let d_off = session.term.grid().display_offset();
+                                    drop(session);
+                                    let grid_line = row as i32 - d_off as i32;
+                                    if let Some(det) = self.detected_urls.iter().find(|u| u.line == grid_line && (col as usize) >= u.start_col && (col as usize) < u.end_col) {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        let sy = geo.rect.min.y + row as f32 * geo.cell_h + geo.cell_h - 1.5;
+                                        let sx0 = geo.rect.min.x + det.start_col as f32 * geo.cell_w;
+                                        let sx1 = geo.rect.min.x + det.end_col as f32 * geo.cell_w;
+                                        ui.painter().line_segment(
+                                            [egui::pos2(sx0, sy), egui::pos2(sx1, sy)],
+                                            egui::Stroke::new(1.5, t.blue),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
+                        let clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
+                        if ctrl_held && clicked {
+                            if let Some(pos) = pointer_pos {
+                                if let Some((col, row)) = geo.to_cell(pos) {
+                                    let session = entry.session.read();
+                                    let d_off = session.term.grid().display_offset();
+                                    drop(session);
+                                    let grid_line = row as i32 - d_off as i32;
+                                    if let Some(url) = crate::url_detector::url_at_position(&self.detected_urls, grid_line, col as usize) {
+                                        let _ = open::that(url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if self.term_search.active && !self.term_search.matches.is_empty() {
+                        let session = entry.session.read();
+                        let display_offset = session.term.grid().display_offset();
+                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
+                        drop(session);
+                        let painter = ui.painter();
+                        for (i, m) in self.term_search.matches.iter().enumerate() {
+                            let screen_row = m.line + display_offset as i32;
+                            if screen_row < 0 || screen_row >= visible_rows as i32 {
+                                continue;
+                            }
+                            let y = geo.rect.min.y + screen_row as f32 * geo.cell_h;
+                            let x0 = geo.rect.min.x + m.start_col as f32 * geo.cell_w;
+                            let x1 = geo.rect.min.x + m.end_col as f32 * geo.cell_w;
+                            let color = if Some(i) == self.term_search.current_index {
+                                egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
+                            } else {
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 0, 50)
+                            };
+                            painter.rect_filled(
+                                egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + geo.cell_h)),
+                                0.0,
+                                color,
+                            );
+                        }
+                    }
+
+                    if self.term_search.active {
+                        let t = theme::active();
+                        let bar_w = 320.0_f32;
+                        let bar_h = 30.0_f32;
+                        let bar_rect = egui::Rect::from_min_size(
+                            egui::pos2(geo.rect.max.x - bar_w - 8.0, geo.rect.min.y + 8.0),
+                            egui::vec2(bar_w, bar_h),
+                        );
+                        ui.painter().rect_filled(bar_rect, 4.0, t.surface0);
+                        ui.painter().rect_stroke(bar_rect, 4.0, egui::Stroke::new(1.0, t.overlay0));
+
+                        let input_rect = egui::Rect::from_min_max(
+                            egui::pos2(bar_rect.min.x + 6.0, bar_rect.min.y + 4.0),
+                            egui::pos2(bar_rect.max.x - 90.0, bar_rect.max.y - 4.0),
+                        );
+                        let resp = ui.put(
+                            input_rect,
+                            egui::TextEdit::singleline(&mut self.term_search.query)
+                                .desired_width(input_rect.width())
+                                .font(egui::FontId::monospace(12.0))
+                                .hint_text("Search\u{2026}"),
+                        );
+                        if resp.changed() {
+                            self.term_search.search(&entry.session);
+                        }
+                        resp.request_focus();
+
+                        let navigated = if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
+                            self.term_search.prev_match();
+                            true
+                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            self.term_search.next_match();
+                            true
+                        } else {
+                            false
+                        };
+                        if navigated || resp.changed() {
+                            if let Some(m) = self.term_search.current_match() {
+                                let match_line = m.line;
+                                let mut session = entry.session.write();
+                                let screen_lines = session.term.screen_lines() as i32;
+                                let display_offset = session.term.grid().display_offset() as i32;
+                                let top_line = -(display_offset);
+                                let bottom_line = top_line + screen_lines - 1;
+                                if match_line < top_line || match_line > bottom_line {
+                                    let target_offset = -(match_line - screen_lines / 2);
+                                    let delta = target_offset - display_offset;
+                                    session.term.scroll_display(Scroll::Delta(delta));
+                                }
+                            }
+                        }
+
+                        let count_text = if self.term_search.matches.is_empty() {
+                            if self.term_search.query.is_empty() { String::new() } else { "0/0".to_string() }
+                        } else {
+                            format!("{}/{}", self.term_search.current_index.unwrap_or(0) + 1, self.term_search.matches.len())
+                        };
+                        ui.painter().text(
+                            egui::pos2(bar_rect.max.x - 48.0, bar_rect.center().y),
+                            egui::Align2::CENTER_CENTER,
+                            &count_text,
+                            egui::FontId::monospace(11.0),
+                            t.subtext0,
+                        );
+                    }
+                }
+            }
 
             // ── Terminal input routing ─────────────────────────────────────
             let any_other_widget_focused = {
@@ -3976,7 +1785,76 @@ impl App {
             };
             let modal_open = self.workspace_dialog.is_some()
                 || self.workspace_edit_dialog.is_some()
-                || self.show_settings;
+                || self.show_settings
+                || self.show_shortcut_help
+                || self.show_quick_switcher;
+
+            // Global shortcuts that work even when a modal/dialog is open
+            {
+                let consumed = ctx.input_mut(|i| {
+                    let cs = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false };
+                    if i.consume_key(cs, egui::Key::Slash) || i.consume_key(cs, egui::Key::Questionmark) {
+                        Some(AppAction::ToggleShortcutHelp)
+                    } else if i.consume_key(cs, egui::Key::Comma) {
+                        Some(AppAction::OpenSettings)
+                    } else if i.consume_key(cs, egui::Key::F) {
+                        Some(AppAction::FocusSessionSearch)
+                    } else if i.consume_key(cs, egui::Key::P) {
+                        Some(AppAction::FocusFileSearch)
+                    } else if i.consume_key(cs, egui::Key::Space) {
+                        Some(AppAction::OpenQuickSwitcher)
+                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
+                        Some(AppAction::SearchTerminal)
+                    } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) && (self.show_shortcut_help || self.term_search.active) {
+                        if self.term_search.active {
+                            Some(AppAction::SearchTerminal)
+                        } else {
+                            Some(AppAction::ToggleShortcutHelp)
+                        }
+                    } else {
+                        None
+                    }
+                });
+                match consumed {
+                    Some(AppAction::ToggleShortcutHelp) => self.show_shortcut_help = !self.show_shortcut_help,
+                    Some(AppAction::OpenQuickSwitcher) => {
+                        self.show_quick_switcher = !self.show_quick_switcher;
+                        if !self.show_quick_switcher {
+                            self.quick_switcher_query.clear();
+                        }
+                    }
+                    Some(AppAction::OpenSettings) => {
+                        self.show_shortcut_help = false;
+                        self.show_settings = !self.show_settings;
+                    }
+                    Some(AppAction::FocusSessionSearch) => {
+                        self.show_left_panel = true;
+                        self.session_search_active = !self.session_search_active;
+                        if !self.session_search_active {
+                            self.session_search_query.clear();
+                        }
+                    }
+                    Some(AppAction::FocusFileSearch) => {
+                        self.show_right_panel = true;
+                        self.right_tab = RightTab::Directory;
+                        self.dir_search_active = !self.dir_search_active;
+                        if !self.dir_search_active {
+                            self.dir_search_query.clear();
+                            self.dir_search_debounce_query.clear();
+                            self.dir_search_debounce_at = None;
+                        }
+                    }
+                    Some(AppAction::SearchTerminal) => {
+                        self.term_search.active = !self.term_search.active;
+                        if !self.term_search.active {
+                            self.term_search.query.clear();
+                            self.term_search.matches.clear();
+                            self.term_search.current_index = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
 
             // Tab must be consumed from egui *outside* the any_other_widget_focused guard.
             // If Tab cycles egui focus away, the guard becomes true and the consume never
@@ -4029,6 +1907,8 @@ impl App {
                     match event {
                         egui::Event::Text(text) => {
                             if let Some(sid) = active_session_id {
+                                self.term_selection = None;
+                                self.term_selection_sid = None;
                                 self.scroll_accum.remove(&sid);
                                 if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
                                     self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
@@ -4037,18 +1917,103 @@ impl App {
                             }
                         }
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
-                            // ── Phase D: pane split shortcuts ──────────────
-                            // Ctrl+Shift+\ → split horizontally (side by side)
-                            if modifiers.ctrl && modifiers.shift && *key == egui::Key::Backslash {
-                                split_request = Some(SplitDir::Horizontal);
-                            }
-                            // Ctrl+Shift+- → split vertically (stacked)
-                            else if modifiers.ctrl && modifiers.shift && *key == egui::Key::Minus {
-                                split_request = Some(SplitDir::Vertical);
-                            }
-                            // Ctrl+Shift+W → close focused split pane
-                            else if modifiers.ctrl && modifiers.shift && *key == egui::Key::W {
-                                close_split_pane = true;
+                            if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
+                                match action {
+                                    AppAction::SplitHorizontal => split_request = Some(SplitDir::Horizontal),
+                                    AppAction::SplitVertical => split_request = Some(SplitDir::Vertical),
+                                    AppAction::CloseCurrentPane => close_split_pane = true,
+                                    AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
+                                    AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
+                                    AppAction::FocusTerminal => {
+                                        ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
+                                    }
+                                    AppAction::NewTerminalTab => {
+                                        self.deferred_spawn = Some(self.configured_shell());
+                                    }
+                                    AppAction::OpenSettings => { /* handled in global shortcuts block above */ }
+                                                    AppAction::ToggleShortcutHelp => { /* handled in global shortcuts block above */ }
+                                                    AppAction::OpenQuickSwitcher => { /* handled in global shortcuts block above */ }
+                                    AppAction::CopySelection => {
+                                        if let Some(sid) = active_session_id {
+                                            if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
+                                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                                    let text = self.extract_selected_text(idx);
+                                                    if !text.is_empty() {
+                                                        ctx.output_mut(|o| o.copied_text = text);
+                                                    }
+                                                }
+                                                self.term_selection = None;
+                                                self.term_selection_sid = None;
+                                            }
+                                        }
+                                    }
+                                    AppAction::DuplicateSession => self.deferred_duplicate = true,
+                                    AppAction::FocusSessionSearch => {
+                                        self.show_left_panel = true;
+                                        self.session_search_active = !self.session_search_active;
+                                        if !self.session_search_active {
+                                            self.session_search_query.clear();
+                                        }
+                                    }
+                                    AppAction::FocusFileSearch => {
+                                        self.show_right_panel = true;
+                                        self.right_tab = RightTab::Directory;
+                                        self.dir_search_active = !self.dir_search_active;
+                                        if !self.dir_search_active {
+                                            self.dir_search_query.clear();
+                                            self.dir_search_debounce_query.clear();
+                                            self.dir_search_debounce_at = None;
+                                        }
+                                    }
+                                    AppAction::PreviousTab => {
+                                        if nv > 1 {
+                                            let cur = self.active_pane_id.and_then(|pid| visible_indices.iter().position(|&i| self.panes[i].id == pid)).unwrap_or(0);
+                                            let prev = if cur == 0 { nv - 1 } else { cur - 1 };
+                                            clicked_pane_id = Some(self.panes[visible_indices[prev]].id);
+                                        }
+                                    }
+                                    AppAction::NextTab => {
+                                        if nv > 1 {
+                                            let cur = self.active_pane_id.and_then(|pid| visible_indices.iter().position(|&i| self.panes[i].id == pid)).unwrap_or(0);
+                                            let next = (cur + 1) % nv;
+                                            clicked_pane_id = Some(self.panes[visible_indices[next]].id);
+                                        }
+                                    }
+                                    AppAction::NextWorkspace => {
+                                        let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter().map(|w| w.id).collect();
+                                        if !ws_ids.is_empty() {
+                                            let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
+                                            let next = (cur + 1) % ws_ids.len();
+                                            self.deferred_open_workspace = Some(ws_ids[next]);
+                                        }
+                                    }
+                                    AppAction::PrevWorkspace => {
+                                        let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter().map(|w| w.id).collect();
+                                        if !ws_ids.is_empty() {
+                                            let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
+                                            let prev = if cur == 0 { ws_ids.len() - 1 } else { cur - 1 };
+                                            self.deferred_open_workspace = Some(ws_ids[prev]);
+                                        }
+                                    }
+                                    AppAction::RightTabDirectory => {
+                                        self.show_right_panel = true;
+                                        self.right_tab = RightTab::Directory;
+                                    }
+                                    AppAction::RightTabGitDiff => {
+                                        self.show_right_panel = true;
+                                        self.right_tab = RightTab::GitDiff;
+                                    }
+                                    AppAction::ToggleNotes => {
+                                        self.notes_panel_collapsed = !self.notes_panel_collapsed;
+                                    }
+                                    _ => {
+                                        if let Some(tab_idx) = action.tab_index() {
+                                            if tab_idx < nv {
+                                                clicked_pane_id = Some(self.panes[visible_indices[tab_idx]].id);
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             // Alt+Arrow → move focus between split panes
                             else if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
@@ -4060,9 +2025,7 @@ impl App {
                                     _ => None,
                                 };
                                 if let Some(_dir) = dir_opt {
-                                    // Focus movement: find the next leaf in traversal order
                                     if let Some(active_pid) = active_pane_id_snap {
-                                        // Find the root pane's tree
                                         let root_pid_opt = self.pane_trees.iter()
                                             .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                                             .map(|(&rpid, _)| rpid);
@@ -4085,6 +2048,14 @@ impl App {
                                             }
                                         }
                                     }
+                                } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
+                                    if let Some(sid) = active_session_id {
+                                        self.scroll_accum.remove(&sid);
+                                        if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                            self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                            let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
+                                        }
+                                    }
                                 }
                             } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
                                 if let Some(sid) = active_session_id {
@@ -4097,13 +2068,25 @@ impl App {
                             }
                         }
                         // egui-winit converts Ctrl+C to Event::Copy before emitting Event::Key,
-                        // so we must handle Copy here to send the SIGINT byte to the PTY.
+                        // so we must handle Copy here. If there's a text selection, copy it
+                        // to clipboard; otherwise send SIGINT (^C) to the PTY.
                         egui::Event::Copy => {
                             if let Some(sid) = active_session_id {
-                                self.scroll_accum.remove(&sid);
-                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                    let _ = self.sessions[idx].pty_tx.send(vec![3u8]);
+                                if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
+                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                        let text = self.extract_selected_text(idx);
+                                        if !text.is_empty() {
+                                            ctx.output_mut(|o| o.copied_text = text);
+                                        }
+                                    }
+                                    self.term_selection = None;
+                                    self.term_selection_sid = None;
+                                } else {
+                                    self.scroll_accum.remove(&sid);
+                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                        self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                        let _ = self.sessions[idx].pty_tx.send(vec![3u8]);
+                                    }
                                 }
                             }
                         }
@@ -4151,6 +2134,45 @@ impl App {
                                                 let bytes = mouse_event_bytes(btn, col, row, *pressed, sgr);
                                                 let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
                                             }
+                                        }
+                                    } else if *button == egui::PointerButton::Primary {
+                                        if let Some(geo) = &self.active_term_geo {
+                                            if let Some((col, row)) = geo.to_cell(*pos) {
+                                                if *pressed {
+                                                    self.term_selection = Some(TermSelection {
+                                                        start_col: col,
+                                                        start_row: row,
+                                                        end_col: col,
+                                                        end_row: row,
+                                                    });
+                                                    self.term_selecting = true;
+                                                    self.term_selection_sid = Some(sid);
+                                                } else {
+                                                    self.term_selecting = false;
+                                                    if let Some(sel) = &self.term_selection {
+                                                        if sel.start_col == sel.end_col && sel.start_row == sel.end_row {
+                                                            self.term_selection = None;
+                                                            self.term_selection_sid = None;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        egui::Event::PointerMoved(pos) => {
+                            if self.term_selecting {
+                                if let Some(geo) = &self.active_term_geo {
+                                    let clamped = egui::pos2(
+                                        pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
+                                        pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
+                                    );
+                                    if let Some((col, row)) = geo.to_cell(clamped) {
+                                        if let Some(sel) = &mut self.term_selection {
+                                            sel.end_col = col;
+                                            sel.end_row = row;
                                         }
                                     }
                                 }
@@ -4485,7 +2507,8 @@ impl App {
                     } else {
                         unreachable!()
                     };
-                    if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
+                    let shell = self.configured_shell();
+                    if let Some(sid) = self.spawn_session_no_pane(&shell, 80, 24, cwd) {
                         if let Some(cmd) = pending_command {
                             if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
                                 entry.pending_command = Some(cmd);
@@ -4530,6 +2553,15 @@ impl App {
                             ed.save_error = true;
                         }
                     }
+                }
+            }
+        }
+
+        for toggle_id in &editor_preview_toggles {
+            if let Some(p) = self.panes.iter_mut().find(|p| p.id == *toggle_id) {
+                if let PaneContent::FileEditor(ref mut ed) = p.content {
+                    ed.show_preview = !ed.show_preview;
+                    self.md_prefer_preview = ed.show_preview;
                 }
             }
         }
@@ -4604,6 +2636,7 @@ impl App {
             } else {
                 let pane_id = self.next_pane_id;
                 self.next_pane_id += 1;
+                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
                 self.panes.push(PaneEntry {
                     id: pane_id,
                     content: PaneContent::FileEditor(FileEditorState {
@@ -4612,6 +2645,7 @@ impl App {
                         dirty: false,
                         save_error: false,
                         workspace_id: self.active_group,
+                        show_preview: is_md && self.md_prefer_preview,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4627,942 +2661,118 @@ impl App {
             }
         }
 
-        // ── Settings overlay ───────────────────────────────────────────────
-        if self.show_settings {
-            let mut settings_changed = false;
-            let mut close_settings = false;
-            let screen_rect = ctx.screen_rect();
-            let dialog_w = (screen_rect.width() * 0.38).clamp(320.0, 520.0);
-            let dialog_h = 220.0_f32;
-
-            egui::Area::new(egui::Id::new("settings_dim"))
-                .fixed_pos(screen_rect.min)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    let resp = ui.interact(
-                        screen_rect,
-                        egui::Id::new("settings_dim_click"),
-                        egui::Sense::click(),
-                    );
-                    ui.painter().rect_filled(
-                        screen_rect,
-                        0.0,
-                        egui::Color32::from_black_alpha(160),
-                    );
-                    if resp.clicked() {
-                        close_settings = true;
-                    }
-                });
-
-            egui::Area::new(egui::Id::new("settings_dialog"))
-                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
-                .order(egui::Order::Tooltip)
-                .show(ctx, |ui| {
-                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                        ui.set_min_width(dialog_w);
-
-                        // Header
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Settings").strong().size(15.0));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(
-                                    egui::Button::new(egui::RichText::new("×").size(16.0))
-                                        .min_size(egui::vec2(24.0, 24.0))
-                                ).clicked() {
-                                    close_settings = true;
-                                }
-                            });
-                        });
-                        ui.separator();
-                        ui.add_space(8.0);
-
-                        // Default workspace
-                        ui.label(egui::RichText::new("Default workspace on launch").size(13.0));
-                        ui.add_space(4.0);
-                        let selected_name = self.settings.default_workspace_id
-                            .and_then(|id| self.workspace_store.workspaces.iter().find(|w| w.id == id))
-                            .map(|w| w.name.clone())
-                            .unwrap_or_else(|| "(none)".to_string());
-                        egui::ComboBox::from_id_source("settings_default_ws")
-                            .selected_text(&selected_name)
-                            .width(dialog_w - 32.0)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(
-                                    self.settings.default_workspace_id.is_none(),
-                                    "(none)",
-                                ).clicked() {
-                                    self.settings.default_workspace_id = None;
-                                    settings_changed = true;
-                                }
-                                let ws_list: Vec<(u64, String)> = self.workspace_store.workspaces
-                                    .iter().map(|w| (w.id, w.name.clone())).collect();
-                                for (id, name) in ws_list {
-                                    if ui.selectable_label(
-                                        self.settings.default_workspace_id == Some(id),
-                                        &name,
-                                    ).clicked() {
-                                        self.settings.default_workspace_id = Some(id);
-                                        settings_changed = true;
-                                    }
-                                }
-                            });
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new("Used when there is no session to restore.")
-                                .size(11.0).color(theme::OVERLAY0)
-                        );
-
-                        ui.add_space(12.0);
-
-                        // Restore last session
-                        let mut restore = self.settings.restore_last_session;
-                        if ui.checkbox(&mut restore, "Restore last session on launch").changed() {
-                            self.settings.restore_last_session = restore;
-                            settings_changed = true;
-                        }
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new("When disabled, always opens a fresh session in the default workspace.")
-                                .size(11.0).color(theme::OVERLAY0)
-                        );
+        // 9b. Git diff file double-clicked → open FileDiff pane
+        if let Some(rel_path) = git_open_diff_file {
+            if let Some(cwd) = self.active_cwd() {
+                let full_path = cwd.join(&rel_path);
+                let existing_id = self
+                    .panes
+                    .iter()
+                    .find(|p| matches!(&p.content, PaneContent::FileDiff(d) if d.path == full_path))
+                    .map(|p| p.id);
+                if let Some(pid) = existing_id {
+                    self.activate_pane(pid);
+                } else {
+                    use std::process::Command;
+                    let diff_output = Command::new("git")
+                        .args(["diff", "HEAD", "--", &rel_path])
+                        .current_dir(&cwd)
+                        .output()
+                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                        .unwrap_or_default();
+                    let pane_id = self.next_pane_id;
+                    self.next_pane_id += 1;
+                    self.panes.push(PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::FileDiff(FileDiffState {
+                            path: full_path,
+                            diff_content: diff_output,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
                     });
-                });
-
-            if settings_changed {
-                self.settings.save();
-            }
-            if close_settings {
-                self.show_settings = false;
-            }
-        }
-
-        // ── Workspace save dialog (modal overlay) ──────────────────────────
-        if self.workspace_dialog.is_some() {
-            let mut save_it = false;
-            let mut cancel = false;
-            let screen_rect = ctx.screen_rect();
-            let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
-
-            egui::Area::new(egui::Id::new("ws_dialog_dim"))
-                .fixed_pos(screen_rect.min)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    ui.painter().rect_filled(
-                        screen_rect,
-                        0.0,
-                        egui::Color32::from_black_alpha(160),
+                    self.pane_trees.insert(
+                        pane_id,
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (0, 0),
+                        },
                     );
-                });
-
-            egui::Area::new(egui::Id::new("ws_dialog"))
-                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
-                .order(egui::Order::Tooltip)
-                .show(ctx, |ui| {
-                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                        ui.set_min_width(dialog_w);
-
-                        ui.label(egui::RichText::new("Save Workspace").strong().size(15.0));
-                        ui.add_space(8.0);
-
-                        if let Some(dlg) = &mut self.workspace_dialog {
-                            ui.label("Name");
-                            let name_resp = ui.add(
-                                egui::TextEdit::singleline(&mut dlg.name)
-                                    .hint_text("e.g. My Project")
-                                    .desired_width(f32::INFINITY),
-                            );
-                            if !dlg.focus_requested {
-                                name_resp.request_focus();
-                                dlg.focus_requested = true;
-                            }
-                            ui.add_space(6.0);
-
-                            ui.label(
-                                egui::RichText::new(theme::short_path(&dlg.path))
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(theme::FG_PATH),
-                            )
-                            .on_hover_text(dlg.path.display().to_string());
-                            ui.add_space(8.0);
-
-                            ui.label("Color");
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                                for &preset in PRESET_COLORS {
-                                    let selected =
-                                        dlg.selected_color == preset && !dlg.show_custom_picker;
-                                    let swatch = egui::Button::new("")
-                                        .fill(theme::from_rgb(preset))
-                                        .stroke(if selected {
-                                            egui::Stroke::new(2.5, egui::Color32::WHITE)
-                                        } else {
-                                            egui::Stroke::new(1.0, egui::Color32::from_gray(60))
-                                        })
-                                        .min_size(egui::vec2(24.0, 24.0))
-                                        .rounding(4.0);
-                                    if ui.add(swatch).clicked() {
-                                        dlg.selected_color = preset;
-                                        dlg.show_custom_picker = false;
-                                        dlg.custom_color = [
-                                            preset[0] as f32 / 255.0,
-                                            preset[1] as f32 / 255.0,
-                                            preset[2] as f32 / 255.0,
-                                        ];
-                                    }
-                                }
-
-                                // Custom — inline picker, one click opens directly
-                                let picker_resp = egui::color_picker::color_edit_button_rgb(
-                                    ui,
-                                    &mut dlg.custom_color,
-                                );
-                                if picker_resp.changed() {
-                                    dlg.show_custom_picker = true;
-                                    dlg.selected_color = [
-                                        (dlg.custom_color[0] * 255.0) as u8,
-                                        (dlg.custom_color[1] * 255.0) as u8,
-                                        (dlg.custom_color[2] * 255.0) as u8,
-                                    ];
-                                }
-                            });
-
-                            ui.add_space(12.0);
-                            ui.horizontal(|ui| {
-                                let can_save = !dlg.name.trim().is_empty();
-                                if ui
-                                    .add_enabled(can_save, egui::Button::new("Save"))
-                                    .clicked()
-                                {
-                                    save_it = true;
-                                }
-                                if ui.button("Cancel").clicked() {
-                                    cancel = true;
-                                }
-                            });
-                        }
-                    });
-                });
-
-            if save_it {
-                if let Some(dlg) = self.workspace_dialog.take() {
-                    let id = self.workspace_store.next_id();
-                    self.workspace_store.workspaces.push(Workspace {
-                        id,
-                        name: dlg.name.trim().to_string(),
-                        path: dlg.path,
-                        color: dlg.selected_color,
-                        host_window_id: None,
-                    });
-                    self.workspace_store.save();
-                    let (cols, rows) = self.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
-                    self.switch_group(Some(id), cols, rows);
+                    self.activate_pane(pane_id);
                 }
-            } else if cancel {
-                self.workspace_dialog = None;
             }
         }
 
-        // ── Workspace edit dialog (modal overlay) ──────────────────────────
-        if self.workspace_edit_dialog.is_some() {
-            let mut save_it = false;
-            let mut delete_it = false;
-            let mut cancel = false;
-            let screen_rect = ctx.screen_rect();
-            let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
-
-            egui::Area::new(egui::Id::new("ws_edit_dim"))
-                .fixed_pos(screen_rect.min)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    ui.painter().rect_filled(
-                        screen_rect,
-                        0.0,
-                        egui::Color32::from_black_alpha(160),
+        // 9b2. Git file double-clicked → open file in editor
+        if let Some(rel_path) = git_open_file {
+            if let Some(cwd) = self.active_cwd() {
+                let full_path = cwd.join(&rel_path);
+                let existing_id = self
+                    .panes
+                    .iter()
+                    .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == full_path))
+                    .map(|p| p.id);
+                if let Some(pid) = existing_id {
+                    self.activate_pane(pid);
+                } else {
+                    let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+                    let pane_id = self.next_pane_id;
+                    self.next_pane_id += 1;
+                    let is_md = full_path.extension().and_then(|e| e.to_str()) == Some("md");
+                    self.panes.push(PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::FileEditor(FileEditorState {
+                            path: full_path,
+                            content,
+                            dirty: false,
+                            save_error: false,
+                            workspace_id: self.active_group,
+                            show_preview: is_md && self.md_prefer_preview,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
+                    });
+                    self.pane_trees.insert(
+                        pane_id,
+                        PaneNode::Leaf {
+                            pane_id,
+                            last_size: (0, 0),
+                        },
                     );
-                });
-
-            egui::Area::new(egui::Id::new("ws_edit_dialog"))
-                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
-                .order(egui::Order::Tooltip)
-                .show(ctx, |ui| {
-                    egui::Frame::window(&ctx.style()).show(ui, |ui| {
-                        ui.set_min_width(dialog_w);
-
-                        ui.label(
-                            egui::RichText::new("⚙ Workspace Settings")
-                                .strong()
-                                .size(15.0),
-                        );
-                        ui.add_space(8.0);
-
-                        if let Some(dlg) = &mut self.workspace_edit_dialog {
-                            ui.label("Name");
-                            let name_resp = ui.add(
-                                egui::TextEdit::singleline(&mut dlg.name)
-                                    .hint_text("Workspace name")
-                                    .desired_width(f32::INFINITY),
-                            );
-                            if !dlg.focus_requested {
-                                name_resp.request_focus();
-                                dlg.focus_requested = true;
-                            }
-                            ui.add_space(8.0);
-
-                            ui.label("Color");
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                                for &preset in PRESET_COLORS {
-                                    let selected =
-                                        dlg.selected_color == preset && !dlg.show_custom_picker;
-                                    let swatch = egui::Button::new("")
-                                        .fill(theme::from_rgb(preset))
-                                        .stroke(if selected {
-                                            egui::Stroke::new(2.5, egui::Color32::WHITE)
-                                        } else {
-                                            egui::Stroke::new(1.0, egui::Color32::from_gray(60))
-                                        })
-                                        .min_size(egui::vec2(24.0, 24.0))
-                                        .rounding(4.0);
-                                    if ui.add(swatch).clicked() {
-                                        dlg.selected_color = preset;
-                                        dlg.show_custom_picker = false;
-                                        dlg.custom_color = [
-                                            preset[0] as f32 / 255.0,
-                                            preset[1] as f32 / 255.0,
-                                            preset[2] as f32 / 255.0,
-                                        ];
-                                    }
-                                }
-
-                                // Custom — inline picker, one click opens directly
-                                let picker_resp = egui::color_picker::color_edit_button_rgb(
-                                    ui,
-                                    &mut dlg.custom_color,
-                                );
-                                if picker_resp.changed() {
-                                    dlg.show_custom_picker = true;
-                                    dlg.selected_color = [
-                                        (dlg.custom_color[0] * 255.0) as u8,
-                                        (dlg.custom_color[1] * 255.0) as u8,
-                                        (dlg.custom_color[2] * 255.0) as u8,
-                                    ];
-                                }
-                            });
-
-                            ui.add_space(12.0);
-                            ui.separator();
-                            ui.add_space(8.0);
-
-                            if dlg.confirm_delete {
-                                ui.colored_label(
-                                    egui::Color32::from_rgb(220, 70, 70),
-                                    "Are you sure? This cannot be undone.",
-                                );
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("Delete Workspace")
-                                                    .color(egui::Color32::WHITE),
-                                            )
-                                            .fill(egui::Color32::from_rgb(180, 40, 40)),
-                                        )
-                                        .clicked()
-                                    {
-                                        delete_it = true;
-                                    }
-                                    if ui.button("Cancel").clicked() {
-                                        dlg.confirm_delete = false;
-                                    }
-                                });
-                            } else {
-                                ui.horizontal(|ui| {
-                                    let can_save = !dlg.name.trim().is_empty();
-                                    if ui
-                                        .add_enabled(can_save, egui::Button::new("Save"))
-                                        .clicked()
-                                    {
-                                        save_it = true;
-                                    }
-                                    if ui.button("Cancel").clicked() {
-                                        cancel = true;
-                                    }
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("Delete").color(
-                                                            egui::Color32::from_rgb(220, 80, 80),
-                                                        ),
-                                                    )
-                                                    .stroke(egui::Stroke::new(
-                                                        1.0,
-                                                        egui::Color32::from_rgb(220, 80, 80),
-                                                    )),
-                                                )
-                                                .clicked()
-                                            {
-                                                dlg.confirm_delete = true;
-                                            }
-                                        },
-                                    );
-                                });
-                            }
-                        }
-                    });
-                });
-
-            if save_it {
-                if let Some(dlg) = self.workspace_edit_dialog.take() {
-                    if let Some(ws) = self
-                        .workspace_store
-                        .workspaces
-                        .iter_mut()
-                        .find(|w| w.id == dlg.workspace_id)
-                    {
-                        ws.name = dlg.name.trim().to_string();
-                        ws.color = dlg.selected_color;
-                    }
-                    self.workspace_store.save();
+                    self.activate_pane(pane_id);
                 }
-            } else if delete_it {
-                if let Some(dlg) = self.workspace_edit_dialog.take() {
-                    self.workspace_store
-                        .workspaces
-                        .retain(|w| w.id != dlg.workspace_id);
-                    self.workspace_store.save();
-                    if self.active_group == Some(dlg.workspace_id) {
-                        self.active_group = None;
-                    }
-                }
-            } else if cancel {
-                self.workspace_edit_dialog = None;
             }
         }
-    }
-}
 
-// ── Directory tree rendering ──────────────────────────────────────────────────
-
-fn render_dir_tree(
-    ui: &mut egui::Ui,
-    entries: &[FileEntry],
-    open_md: &mut Option<PathBuf>,
-    open_editor: &mut Option<PathBuf>,
-    cache: &mut SubdirCache<'_>,
-) {
-    use crate::theme;
-    const ROW_SZ: f32 = 13.0;
-
-    if entries.is_empty() {
-        ui.label(
-            egui::RichText::new("(empty directory)")
-                .italics()
-                .color(theme::OVERLAY0)
-                .size(12.0),
-        );
-        return;
-    }
-
-    ui.spacing_mut().item_spacing.y = 2.0;
-
-    for entry in entries {
-        if entry.is_dir {
-            let id = ui.make_persistent_id(&entry.path);
-            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                id,
-                false,
-            );
-            let is_open = state.is_open();
-            let chevron = if is_open { "▼" } else { "▶" };
-            let resp = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} {}", chevron, &entry.name))
-                        .color(theme::FG_DIR_ENTRY)
-                        .size(ROW_SZ),
-                )
-                .sense(egui::Sense::click()),
-            );
-            if resp.clicked() {
-                state.toggle(ui);
-            }
-            // Only resolve children when the node is open; otherwise we'd
-            // populate the cache for every collapsed directory in the tree.
-            if is_open {
-                let children = cache.get_or_read(&entry.path);
-                state.show_body_indented(&resp, ui, |ui| {
-                    render_dir_tree(ui, &children, open_md, open_editor, cache);
-                });
-            }
-        } else {
-            let ext = entry
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            let is_md = ext == "md";
-            let color = if is_md {
-                theme::FG_MD_FILE
-            } else {
-                theme::FG_OTHER_FILE
-            };
-            let resp = ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
-                        .color(color)
-                        .size(ROW_SZ),
-                )
-                .sense(egui::Sense::click()),
-            );
-            if resp.double_clicked() {
-                *open_editor = Some(entry.path.clone());
-            } else if resp.clicked() && is_md {
-                *open_md = Some(entry.path.clone());
-            }
-        }
-    }
-}
-
-fn file_icon(ext: &str) -> &'static str {
-    match ext {
-        "rs" => "⚙",
-        "md" => "📝",
-        "toml" | "yaml" | "yml" => "≡",
-        "json" => "≡",
-        "txt" => "≡",
-        "sh" | "bat" | "ps1" | "cmd" => "▸",
-        "py" => "▸",
-        "js" | "ts" | "jsx" | "tsx" => "▸",
-        _ => "·",
-    }
-}
-
-// ── Git diff rendering ────────────────────────────────────────────────────────
-
-fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) {
-    use crate::theme;
-
-    if !status.is_empty() {
-        ui.label(
-            egui::RichText::new("Status")
-                .strong()
-                .size(theme::STATUS_FONT_SZ),
-        );
-        ui.add_space(4.0);
-        for line in status.lines() {
-            if line.len() < 3 {
-                continue;
-            }
-            let code = line[..2].trim();
-            let path = line[3..].trim();
-            let (tag, color) = match code {
-                "M" | "MM" | " M" => ("M", theme::GIT_MODIFIED),
-                "A" | " A" => ("A", theme::GIT_ADDED),
-                "D" | " D" => ("D", theme::GIT_REMOVED),
-                "R" | " R" => ("R", theme::GIT_RENAMED),
-                "??" => ("?", theme::GIT_UNTRACKED),
-                _ => ("?", theme::GIT_UNTRACKED),
-            };
-            ui.horizontal(|ui| {
-                // Coloured badge with subtle background tint
-                let (badge_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
-                ui.painter()
-                    .rect_filled(badge_rect, 3.0, color.gamma_multiply(0.25));
-                ui.painter().text(
-                    badge_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    tag,
-                    egui::FontId::monospace(10.0),
-                    color,
-                );
-                ui.label(
-                    egui::RichText::new(path)
-                        .monospace()
-                        .size(theme::STATUS_FONT_SZ),
-                );
+        // 9c. Folder double-clicked in directory → open new terminal pane at that path
+        if let Some(dir_path) = open_terminal_at {
+            let pane_id = self.next_pane_id;
+            self.next_pane_id += 1;
+            self.panes.push(PaneEntry {
+                id: pane_id,
+                content: PaneContent::DeferredTerminal {
+                    cwd: Some(dir_path),
+                    pending_command: None,
+                },
+                manual_width: None,
+                last_size: (0, 0),
             });
-        }
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(4.0);
-    }
-
-    if diff.is_empty() {
-        ui.add_space(8.0);
-        ui.vertical_centered(|ui| {
-            ui.label(
-                egui::RichText::new("No changes")
-                    .italics()
-                    .color(theme::OVERLAY0)
-                    .size(13.0),
+            self.pane_trees.insert(
+                pane_id,
+                PaneNode::Leaf {
+                    pane_id,
+                    last_size: (0, 0),
+                },
             );
-            ui.label(
-                egui::RichText::new("Working tree is clean")
-                    .size(11.0)
-                    .color(theme::OVERLAY0),
-            );
-        });
-        return;
-    }
-
-    let mut skip_meta = false;
-    for line in diff.lines() {
-        if line.starts_with("=== ") {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(line).strong().color(theme::GIT_HEADER));
-            skip_meta = false;
-        } else if line.starts_with("diff --git ") {
-            ui.add_space(6.0);
-            let fname = line
-                .strip_prefix("diff --git ")
-                .and_then(|s| s.split(" b/").last())
-                .unwrap_or(line);
-            ui.label(
-                egui::RichText::new(fname)
-                    .strong()
-                    .color(theme::GIT_FILENAME)
-                    .size(13.0),
-            );
-            skip_meta = true;
-        } else if skip_meta
-            && (line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ "))
-        {
-            // skip file header meta lines
-        } else if line.starts_with("@@") {
-            skip_meta = false;
-            ui.label(
-                egui::RichText::new(line)
-                    .monospace()
-                    .size(theme::DIFF_FONT_SZ)
-                    .color(theme::GIT_HUNK),
-            );
-        } else if line.starts_with('+') {
-            skip_meta = false;
-            ui.label(
-                egui::RichText::new(line)
-                    .monospace()
-                    .size(theme::DIFF_FONT_SZ)
-                    .color(theme::GIT_ADDED),
-            );
-        } else if line.starts_with('-') {
-            skip_meta = false;
-            ui.label(
-                egui::RichText::new(line)
-                    .monospace()
-                    .size(theme::DIFF_FONT_SZ)
-                    .color(theme::GIT_REMOVED),
-            );
-        } else {
-            skip_meta = false;
-            ui.label(
-                egui::RichText::new(line)
-                    .monospace()
-                    .size(theme::DIFF_FONT_SZ)
-                    .color(theme::SUBTEXT0),
-            );
-        }
-    }
-}
-
-// ── Markdown preview rendering ────────────────────────────────────────────────
-
-fn render_markdown(ui: &mut egui::Ui, content: &str) {
-    use crate::theme;
-    let mut in_code = false;
-    let mut code_buf: Vec<&str> = Vec::new();
-
-    for line in content.lines() {
-        if line.starts_with("```") {
-            if in_code {
-                // Flush code block into a framed widget
-                in_code = false;
-                egui::Frame::none()
-                    .fill(theme::MD_CODE_BG)
-                    .stroke(egui::Stroke::new(1.0, theme::MD_CODE_BORDER))
-                    .inner_margin(egui::Margin::symmetric(8.0, 6.0))
-                    .rounding(egui::Rounding::same(4.0))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        for code_line in &code_buf {
-                            ui.label(
-                                egui::RichText::new(*code_line)
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(theme::MD_CODE),
-                            );
-                        }
-                    });
-                code_buf.clear();
-                ui.add_space(4.0);
-            } else {
-                in_code = true;
-                ui.add_space(4.0);
-            }
-            continue;
-        }
-        if in_code {
-            code_buf.push(line);
-            continue;
+            self.activate_pane(pane_id);
         }
 
-        if let Some(t) = line.strip_prefix("# ") {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(t).size(22.0).strong());
-            ui.add_space(2.0);
-        } else if let Some(t) = line.strip_prefix("## ") {
-            ui.add_space(3.0);
-            ui.label(egui::RichText::new(t).size(18.0).strong());
-        } else if let Some(t) = line.strip_prefix("### ") {
-            ui.label(egui::RichText::new(t).size(15.0).strong());
-        } else if let Some(t) = line.strip_prefix("#### ") {
-            ui.label(egui::RichText::new(t).size(13.0).strong());
-        } else if let Some(t) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("•").color(theme::MD_BULLET));
-                theme::render_inline(ui, t);
-            });
-        } else if let Some(t) = line.strip_prefix("> ") {
-            ui.horizontal(|ui| {
-                // Left border strip
-                let bar_h = ui.text_style_height(&egui::TextStyle::Body);
-                let (bar_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(3.0, bar_h), egui::Sense::hover());
-                ui.painter().rect_filled(bar_rect, 0.0, theme::OVERLAY0);
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(t).italics().color(theme::MD_BLOCKQUOTE));
-            });
-        } else if line.starts_with("---") && line.chars().all(|c| c == '-') {
-            ui.separator();
-        } else if line.is_empty() {
-            ui.add_space(4.0);
-        } else {
-            theme::render_inline(ui, line);
-        }
-    }
-}
+        self.render_settings_overlay(ctx);
 
-// ── Key → PTY bytes ───────────────────────────────────────────────────────────
+        self.render_quick_switcher(ctx);
 
-fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<u8>> {
-    use egui::Key::*;
-    let ctrl = modifiers.ctrl;
-    let shift = modifiers.shift;
-    let alt = modifiers.alt;
+        self.render_workspace_save_dialog(ctx);
 
-    // Ctrl+letter → bytes 1–26 (no other modifiers active)
-    if ctrl && !shift && !alt {
-        let byte: Option<u8> = match key {
-            A => Some(1),
-            B => Some(2),
-            C => Some(3),
-            D => Some(4),
-            E => Some(5),
-            F => Some(6),
-            G => Some(7),
-            H => Some(8),
-            I => Some(9),
-            J => Some(10),
-            K => Some(11),
-            L => Some(12),
-            M => Some(13),
-            N => Some(14),
-            O => Some(15),
-            P => Some(16),
-            Q => Some(17),
-            R => Some(18),
-            S => Some(19),
-            T => Some(20),
-            U => Some(21),
-            V => Some(22),
-            W => Some(23),
-            X => Some(24),
-            Y => Some(25),
-            Z => Some(26),
-            _ => None,
-        };
-        if let Some(b) = byte {
-            return Some(vec![b]);
-        }
-    }
-
-    // Alt+letter → ESC + lowercase letter
-    if alt && !ctrl && !shift {
-        let ch: Option<u8> = match key {
-            A => Some(b'a'),
-            B => Some(b'b'),
-            C => Some(b'c'),
-            D => Some(b'd'),
-            E => Some(b'e'),
-            F => Some(b'f'),
-            G => Some(b'g'),
-            H => Some(b'h'),
-            I => Some(b'i'),
-            J => Some(b'j'),
-            K => Some(b'k'),
-            L => Some(b'l'),
-            M => Some(b'm'),
-            N => Some(b'n'),
-            O => Some(b'o'),
-            P => Some(b'p'),
-            Q => Some(b'q'),
-            R => Some(b'r'),
-            S => Some(b's'),
-            T => Some(b't'),
-            U => Some(b'u'),
-            V => Some(b'v'),
-            W => Some(b'w'),
-            X => Some(b'x'),
-            Y => Some(b'y'),
-            Z => Some(b'z'),
-            _ => None,
-        };
-        if let Some(c) = ch {
-            return Some(vec![0x1b, c]);
-        }
-    }
-
-    // Alt+Backspace → word delete
-    if alt && !ctrl && *key == Backspace {
-        return Some(vec![0x1b, 0x7f]);
-    }
-
-    // Arrow keys with modifier: \x1b[1;<mod><dir>
-    // Modifier codes: 2=shift, 3=alt, 4=shift+alt, 5=ctrl, 6=shift+ctrl, 7=alt+ctrl, 8=all
-    let arrow_mod: Option<u8> = match (shift, alt, ctrl) {
-        (true, false, false) => Some(b'2'),
-        (false, true, false) => Some(b'3'),
-        (true, true, false) => Some(b'4'),
-        (false, false, true) => Some(b'5'),
-        (true, false, true) => Some(b'6'),
-        (false, true, true) => Some(b'7'),
-        (true, true, true) => Some(b'8'),
-        _ => None,
-    };
-    if let Some(m) = arrow_mod {
-        let dir: Option<u8> = match key {
-            ArrowUp => Some(b'A'),
-            ArrowDown => Some(b'B'),
-            ArrowRight => Some(b'C'),
-            ArrowLeft => Some(b'D'),
-            _ => None,
-        };
-        if let Some(d) = dir {
-            return Some(vec![0x1b, b'[', b'1', b';', m, d]);
-        }
-    }
-
-    Some(match key {
-        Enter => b"\r".to_vec(),
-        Backspace => b"\x7f".to_vec(),
-        Tab if !shift => b"\t".to_vec(),
-        Tab => b"\x1b[Z".to_vec(),
-        Escape => b"\x1b".to_vec(),
-        ArrowUp => b"\x1b[A".to_vec(),
-        ArrowDown => b"\x1b[B".to_vec(),
-        ArrowRight => b"\x1b[C".to_vec(),
-        ArrowLeft => b"\x1b[D".to_vec(),
-        Home => b"\x1b[H".to_vec(),
-        End => b"\x1b[F".to_vec(),
-        PageUp => b"\x1b[5~".to_vec(),
-        PageDown => b"\x1b[6~".to_vec(),
-        Delete => b"\x1b[3~".to_vec(),
-        Insert => b"\x1b[2~".to_vec(),
-        F1 => b"\x1bOP".to_vec(),
-        F2 => b"\x1bOQ".to_vec(),
-        F3 => b"\x1bOR".to_vec(),
-        F4 => b"\x1bOS".to_vec(),
-        F5 => b"\x1b[15~".to_vec(),
-        F6 => b"\x1b[17~".to_vec(),
-        F7 => b"\x1b[18~".to_vec(),
-        F8 => b"\x1b[19~".to_vec(),
-        F9 => b"\x1b[20~".to_vec(),
-        F10 => b"\x1b[21~".to_vec(),
-        F11 => b"\x1b[23~".to_vec(),
-        F12 => b"\x1b[24~".to_vec(),
-        _ => return None,
-    })
-}
-
-fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr: bool) -> Vec<u8> {
-    if sgr {
-        // SGR extended: \x1b[<btn;col;rowM (press) or \x1b[<btn;col;rowm (release)
-        let final_char = if pressed { b'M' } else { b'm' };
-        format!(
-            "\x1b[<{};{};{}{}",
-            btn,
-            col + 1,
-            row + 1,
-            final_char as char
-        )
-        .into_bytes()
-    } else {
-        // X10/normal: \x1b[M + (btn+32) + (col+33) + (row+33), clamped to 255
-        let b = btn + 32;
-        let x = ((col + 1) + 32).min(255) as u8;
-        let y = ((row + 1) + 32).min(255) as u8;
-        vec![0x1b, b'[', b'M', b, x, y]
-    }
-}
-
-// ── App ───────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod title_tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn display_title_plain_text_unchanged() {
-        assert_eq!(display_title("  vim  "), "vim");
-    }
-
-    #[test]
-    fn display_title_unix_path_returns_last_segment() {
-        assert_eq!(display_title("/home/user/projects/myapp"), "myapp");
-    }
-
-    #[test]
-    fn display_title_tilde_path_returns_last_segment() {
-        assert_eq!(display_title("~/projects/myapp"), "myapp");
-    }
-
-    #[test]
-    fn display_title_windows_path_returns_last_segment() {
-        assert_eq!(display_title("C:\\Users\\testuser\\proj"), "proj");
-    }
-
-    #[test]
-    fn effective_title_shell_default_uses_cwd() {
-        let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("bash", cwd), "myproject");
-        assert_eq!(effective_title("Session 1", cwd), "myproject");
-        assert_eq!(effective_title("PowerShell.exe", cwd), "myproject");
-        assert_eq!(effective_title("", cwd), "myproject");
-    }
-
-    #[test]
-    fn effective_title_real_title_uses_display_title() {
-        let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("vim README.md", cwd), "vim README.md");
-    }
-
-    #[test]
-    fn effective_title_real_title_strips_path() {
-        let cwd = Path::new("/home/user");
-        assert_eq!(effective_title("/home/user/projects/src", cwd), "src");
-    }
-
-    #[test]
-    fn effective_title_empty_cwd_falls_back_to_title() {
-        let cwd = Path::new("");
-        // cwd has no file_name → falls back to the title text itself
-        let result = effective_title("Session 1", cwd);
-        assert_eq!(result, "Session 1");
+        self.render_workspace_edit_dialog(ctx);
     }
 }

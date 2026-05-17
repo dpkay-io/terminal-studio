@@ -100,6 +100,16 @@ cargo build --release
 
 ---
 
+## Updating
+
+Terminal Studio checks for updates automatically once per day. When an update is available, an **Update** button appears in the toolbar.
+
+**To update manually:** open Settings (`Ctrl+Shift+,`) → scroll to **About** → click **Update to vX.Y.Z**.
+
+The update downloads in the background. When ready, click **Restart to finish update**. Your terminal sessions are preserved when "Restore last session" is enabled in Settings.
+
+---
+
 ## Usage
 
 ### Keyboard shortcuts

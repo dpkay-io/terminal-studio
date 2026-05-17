@@ -38,3 +38,5 @@ case ":$PATH:" in
     printf '  export PATH="$PATH:%s"\n' "$INSTALL_DIR"
     ;;
 esac
+
+printf '\nTerminal Studio will notify you of future updates automatically.\n'

@@ -97,11 +97,12 @@ impl Session {
         cwd: Option<PathBuf>,
         ctx: Context,
         pty_tx: mpsc::Sender<Vec<u8>>,
+        scrollback_lines: usize,
     ) -> Self {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
         let proxy = EventProxy::new(id, title.clone(), ctx, pty_tx);
         let config = Config {
-            scrolling_history: 10_000,
+            scrolling_history: scrollback_lines,
             ..Config::default()
         };
         let size = TermSize {

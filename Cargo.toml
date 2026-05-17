@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"
@@ -38,6 +38,32 @@ env_logger = "0.11"
 
 # File-system watching (cross-platform: ReadDirectoryChangesW / inotify / FSEvents)
 notify = "6"
+
+# Native file/folder picker dialogs
+rfd = "0.15"
+
+# Fuzzy matching for search bars (Sublime Text-style scoring)
+fuzzy-matcher = "0.3"
+
+# Lightweight system resource monitoring (CPU, RAM, network)
+sysinfo = "0.33"
+
+# Self-update: HTTP client (rustls = no OpenSSL), async runtime, version comparison
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["rt"] }
+semver = "1"
+
+# URL detection in terminal output
+regex = "1"
+
+# Cross-platform "open URL in browser"
+open = "5"
+
+# Clipboard access (OSC 52 support)
+arboard = "3"
+
+# Base64 decoding (OSC 52 payloads)
+base64 = "0.22"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [

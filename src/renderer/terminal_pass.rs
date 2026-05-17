@@ -10,8 +10,28 @@ use alacritty_terminal::{
 use egui::{vec2, FontId, Pos2, Rect, Sense};
 use parking_lot::RwLock;
 
+use crate::app::settings::CursorStyle;
 use crate::terminal::Session;
 use crate::theme;
+
+pub struct SelectionRange {
+    pub start_col: u16,
+    pub start_row: u16,
+    pub end_col: u16,
+    pub end_row: u16,
+}
+
+impl SelectionRange {
+    fn ordered(&self) -> (u16, u16, u16, u16) {
+        if self.start_row < self.end_row
+            || (self.start_row == self.end_row && self.start_col <= self.end_col)
+        {
+            (self.start_col, self.start_row, self.end_col, self.end_row)
+        } else {
+            (self.end_col, self.end_row, self.start_col, self.start_row)
+        }
+    }
+}
 
 pub struct TerminalGeometry {
     pub rect: Rect,
@@ -79,12 +99,15 @@ impl TerminalView {
         ui: &mut egui::Ui,
         is_focused: bool,
         cursor_visible: bool,
+        selection: Option<&SelectionRange>,
+        font_size: f32,
+        cursor_style: CursorStyle,
     ) -> TerminalGeometry {
         let rect = ui.available_rect_before_wrap();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, theme::BASE);
+        painter.rect_filled(rect, 0.0, theme::active().bg_term);
 
-        let font_id = FontId::monospace(14.0);
+        let font_id = FontId::monospace(font_size);
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
         let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
 
@@ -240,9 +263,9 @@ impl TerminalView {
                             let visible = text_buf.trim_end_matches(' ');
                             if !visible.is_empty() {
                                 let span_font = if span_bold {
-                                    FontId::monospace(14.5)
+                                    FontId::monospace(font_size + 0.5)
                                 } else {
-                                    FontId::monospace(14.0)
+                                    FontId::monospace(font_size)
                                 };
                                 painter.text(
                                     egui::pos2(rect.min.x + span_start as f32 * cell_width, y),
@@ -296,26 +319,60 @@ impl TerminalView {
         // bounds, so `cursor` is Some only when we should consider drawing.
         if let Some((cx, cy)) = cursor {
             if cursor_visible || !is_focused {
-                let cursor_rect = Rect::from_min_size(
-                    rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height),
-                    vec2(cell_width, cell_height),
-                );
+                let cursor_origin = rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
                 if is_focused {
-                    painter.rect_filled(
-                        cursor_rect,
-                        0.0,
-                        egui::Color32::from_rgba_premultiplied(255, 255, 255, 200),
-                    );
+                    match cursor_style {
+                        CursorStyle::Block => {
+                            let cursor_rect = Rect::from_min_size(
+                                cursor_origin,
+                                vec2(cell_width, cell_height),
+                            );
+                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                        }
+                        CursorStyle::Underline => {
+                            let cursor_rect = Rect::from_min_size(
+                                egui::pos2(cursor_origin.x, cursor_origin.y + cell_height - 2.0),
+                                vec2(cell_width, 2.0),
+                            );
+                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                        }
+                        CursorStyle::Beam => {
+                            let cursor_rect = Rect::from_min_size(
+                                cursor_origin,
+                                vec2(2.0, cell_height),
+                            );
+                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                        }
+                    }
                 } else {
+                    let cursor_rect = Rect::from_min_size(
+                        cursor_origin,
+                        vec2(cell_width, cell_height),
+                    );
                     painter.rect_stroke(
                         cursor_rect,
                         0.0,
-                        egui::Stroke::new(
-                            1.5,
-                            egui::Color32::from_rgba_premultiplied(255, 255, 255, 160),
-                        ),
+                        egui::Stroke::new(1.5, theme::active().cursor_dim_color),
                     );
                 }
+            }
+        }
+
+        // ── Selection highlight ────────────────────────────────────────────────
+        if let Some(sel) = selection {
+            let sel_color = theme::active().selection_bg;
+            let (sc, sr, ec, er) = sel.ordered();
+            for screen_row in sr..=er.min(visible_rows as u16 - 1) {
+                let y = rect.min.y + screen_row as f32 * cell_height;
+                let start_col = if screen_row == sr { sc } else { 0 };
+                let end_col = if screen_row == er { ec + 1 } else { cols as u16 };
+                let x0 = rect.min.x + start_col as f32 * cell_width;
+                let x1 = rect.min.x + end_col as f32 * cell_width;
+                painter.rect_filled(
+                    Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + cell_height)),
+                    0.0,
+                    sel_color,
+                );
             }
         }
 
@@ -332,11 +389,7 @@ impl TerminalView {
                 egui::pos2(rect.max.x - bar_w, thumb_y),
                 egui::vec2(bar_w, thumb_h),
             );
-            painter.rect_filled(
-                bar_rect,
-                1.0,
-                egui::Color32::from_rgba_unmultiplied(180, 180, 180, 150),
-            );
+            painter.rect_filled(bar_rect, 1.0, theme::active().scrollbar_color);
         }
 
         ui.allocate_rect(rect, Sense::click_and_drag());
@@ -361,28 +414,29 @@ fn resolve_color(color: Color, is_fg: bool) -> egui::Color32 {
 }
 
 fn resolve_named(named: NamedColor, is_fg: bool) -> egui::Color32 {
+    let t = theme::active();
     match named {
-        NamedColor::Foreground => theme::TEXT,
+        NamedColor::Foreground => t.text,
         NamedColor::Background => egui::Color32::TRANSPARENT,
-        NamedColor::Black => egui::Color32::from_rgb(30, 30, 46),
-        NamedColor::Red => egui::Color32::from_rgb(243, 139, 168),
-        NamedColor::Green => egui::Color32::from_rgb(166, 227, 161),
-        NamedColor::Yellow => egui::Color32::from_rgb(249, 226, 175),
-        NamedColor::Blue => egui::Color32::from_rgb(137, 180, 250),
-        NamedColor::Magenta => egui::Color32::from_rgb(245, 194, 231),
-        NamedColor::Cyan => egui::Color32::from_rgb(148, 226, 213),
-        NamedColor::White => egui::Color32::from_rgb(205, 214, 244),
-        NamedColor::BrightBlack => egui::Color32::from_rgb(88, 91, 112),
-        NamedColor::BrightRed => egui::Color32::from_rgb(243, 139, 168),
-        NamedColor::BrightGreen => egui::Color32::from_rgb(166, 227, 161),
-        NamedColor::BrightYellow => egui::Color32::from_rgb(249, 226, 175),
-        NamedColor::BrightBlue => egui::Color32::from_rgb(137, 180, 250),
-        NamedColor::BrightMagenta => egui::Color32::from_rgb(245, 194, 231),
-        NamedColor::BrightCyan => egui::Color32::from_rgb(148, 226, 213),
-        NamedColor::BrightWhite => egui::Color32::from_rgb(255, 255, 255),
+        NamedColor::Black => t.ansi[0],
+        NamedColor::Red => t.ansi[1],
+        NamedColor::Green => t.ansi[2],
+        NamedColor::Yellow => t.ansi[3],
+        NamedColor::Blue => t.ansi[4],
+        NamedColor::Magenta => t.ansi[5],
+        NamedColor::Cyan => t.ansi[6],
+        NamedColor::White => t.ansi[7],
+        NamedColor::BrightBlack => t.ansi[8],
+        NamedColor::BrightRed => t.ansi[9],
+        NamedColor::BrightGreen => t.ansi[10],
+        NamedColor::BrightYellow => t.ansi[11],
+        NamedColor::BrightBlue => t.ansi[12],
+        NamedColor::BrightMagenta => t.ansi[13],
+        NamedColor::BrightCyan => t.ansi[14],
+        NamedColor::BrightWhite => t.ansi[15],
         _ => {
             if is_fg {
-                theme::TEXT
+                t.text
             } else {
                 egui::Color32::TRANSPARENT
             }
@@ -392,22 +446,11 @@ fn resolve_named(named: NamedColor, is_fg: bool) -> egui::Color32 {
 
 fn ansi_indexed(index: u8) -> (u8, u8, u8) {
     match index {
-        0 => (30, 30, 46),
-        1 => (243, 139, 168),
-        2 => (166, 227, 161),
-        3 => (249, 226, 175),
-        4 => (137, 180, 250),
-        5 => (245, 194, 231),
-        6 => (148, 226, 213),
-        7 => (205, 214, 244),
-        8 => (88, 91, 112),
-        9 => (243, 139, 168),
-        10 => (166, 227, 161),
-        11 => (249, 226, 175),
-        12 => (137, 180, 250),
-        13 => (245, 194, 231),
-        14 => (148, 226, 213),
-        15 => (255, 255, 255),
+        0..=15 => {
+            let c = theme::active().ansi[index as usize];
+            let [r, g, b, _] = c.to_array();
+            (r, g, b)
+        }
         16..=231 => {
             let n = index - 16;
             let b = (n % 6) * 51;

@@ -162,6 +162,7 @@ impl SessionManager {
         rows: u16,
         cwd: Option<std::path::PathBuf>,
         shell: &ShellKind,
+        scrollback_lines: usize,
     ) -> anyhow::Result<SpawnResult> {
         let id = self.next_id;
         self.next_id += 1;
@@ -218,6 +219,7 @@ impl SessionManager {
             cwd,
             self.ctx.clone(),
             pty_tx.clone(),
+            scrollback_lines,
         )));
 
         let alive = Arc::new(AtomicBool::new(true));

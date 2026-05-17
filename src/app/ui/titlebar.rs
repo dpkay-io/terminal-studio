@@ -1,0 +1,665 @@
+use std::time::Duration;
+use crate::theme;
+use crate::updater::UpdateStatus;
+use super::super::App;
+use super::super::pane::RightTab;
+
+impl App {
+    pub(in crate::app) fn render_titlebar(&mut self, ctx: &egui::Context) {
+        // Request an extra repaint the frame after the window gains focus so that
+        // any stale wgpu surface frames (visible as a distorted first frame after
+        // restoring from the taskbar) are immediately replaced with a correct one.
+        // Per-window: each viewport tracks its own focus state.
+        {
+            let focused = ctx.input(|i| i.focused);
+            if focused && !self.was_focused {
+                ctx.request_repaint();
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+            self.was_focused = focused;
+        }
+
+        // ── Track last active pane per group ───────────────────────────────
+        self.track_active_pane_group();
+
+        // Validate current right_tab; fall back to Directory if stale
+        {
+            let keep = match &self.right_tab {
+                RightTab::Directory => true,
+                RightTab::GitDiff => self
+                    .active_cwd()
+                    .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
+                    .map(|d| d.is_git)
+                    .unwrap_or(false),
+                RightTab::Markdown(p) => self.shown_md_tabs.contains(p),
+            };
+            if !keep {
+                self.right_tab = RightTab::Directory;
+            }
+        }
+
+        // ── Update window title with active workspace ───────────────────────
+        let ws_title: String = self
+            .active_workspace()
+            .map(|w| format!("Terminal Studio — {}", w.name))
+            .unwrap_or_else(|| "Terminal Studio".to_string());
+        let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
+        // Only send the title command when it changes. Sending every frame
+        // produces a SetWindowTextW syscall on Windows for no reason.
+        if self.last_title_sent.as_deref() != Some(ws_title.as_str()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(ws_title.clone()));
+            self.last_title_sent = Some(ws_title.clone());
+        }
+
+        // ── Custom titlebar ─────────────────────────────────────────────────
+        let tb_bg = match active_ws_color {
+            Some(c) => theme::from_rgb(c),
+            None => theme::active().bg_panel_fill,
+        };
+        let tb_fg = active_ws_color
+            .map(theme::text_on)
+            .unwrap_or(theme::active().subtext1);
+
+        egui::TopBottomPanel::top("titlebar")
+            .exact_height(theme::TITLEBAR_H)
+            .frame(egui::Frame::none().fill(tb_bg))
+            .show(ctx, |ui| {
+                let r = ui.max_rect();
+                let painter = ui.painter().clone();
+
+                // Drag the whole bar to move the window
+                if ui
+                    .interact(r, egui::Id::new("tb_drag"), egui::Sense::drag())
+                    .dragged()
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+
+                // ── macOS: traffic lights on the left ──────────────────────
+                #[cfg(target_os = "macos")]
+                {
+                    let btn_y = r.center().y;
+                    // hover_any: show colour only when any circle is hovered
+                    let hover_pos = ctx.input(|i| i.pointer.hover_pos());
+                    let hover_any = hover_pos
+                        .map(|p| {
+                            [18.0_f32, 38.0, 58.0].iter().any(|&ox| {
+                                (p.x - (r.min.x + ox)).abs() < 8.0 && (p.y - btn_y).abs() < 8.0
+                            })
+                        })
+                        .unwrap_or(false);
+
+                    let circles: &[(f32, egui::Color32, usize)] = &[
+                        (r.min.x + 18.0, egui::Color32::from_rgb(255, 96, 89), 0), // close
+                        (r.min.x + 38.0, egui::Color32::from_rgb(255, 189, 68), 1), // minimize
+                        (r.min.x + 58.0, egui::Color32::from_rgb(39, 201, 63), 2), // maximize
+                    ];
+                    for &(cx, color, idx) in circles {
+                        let pos = egui::pos2(cx, btn_y);
+                        let brect = egui::Rect::from_center_size(pos, egui::vec2(14.0, 14.0));
+                        let resp = ui.interact(
+                            brect,
+                            egui::Id::new(("tb_mac", idx)),
+                            egui::Sense::click(),
+                        );
+                        let fill = if hover_any {
+                            color
+                        } else {
+                            egui::Color32::from_gray(80)
+                        };
+                        painter.circle_filled(pos, 6.0, fill);
+                        if resp.clicked() {
+                            match idx {
+                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                                _ => {
+                                    let is_max =
+                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                        !is_max,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    // Left panel toggle (after traffic lights)
+                    let mac_btn_w = 28.0_f32;
+                    let mac_icon_sz = 13.0_f32;
+                    let left_tbr = egui::Rect::from_min_size(
+                        egui::pos2(r.min.x + 72.0, r.min.y),
+                        egui::vec2(mac_btn_w, r.height()),
+                    );
+                    let left_resp = ui.interact(
+                        left_tbr,
+                        egui::Id::new("tb_left_toggle"),
+                        egui::Sense::click(),
+                    );
+                    let left_bg = if self.show_left_panel {
+                        theme::active().surface2
+                    } else if left_resp.hovered() {
+                        theme::active().surface1
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    painter.rect_filled(left_tbr, 0.0, left_bg);
+                    painter.text(
+                        left_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "≡",
+                        egui::FontId::proportional(mac_icon_sz),
+                        tb_fg,
+                    );
+                    if left_resp.clicked() {
+                        self.show_left_panel = !self.show_left_panel;
+                    }
+                    left_resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
+
+                    // Gear / Settings (rightmost on macOS)
+                    let gear_mac_tbr = egui::Rect::from_min_size(
+                        egui::pos2(r.max.x - mac_btn_w, r.min.y),
+                        egui::vec2(mac_btn_w, r.height()),
+                    );
+                    let gear_mac_resp = ui.interact(
+                        gear_mac_tbr,
+                        egui::Id::new("tb_settings"),
+                        egui::Sense::click(),
+                    );
+                    if gear_mac_resp.hovered() || self.show_settings {
+                        painter.rect_filled(gear_mac_tbr, 0.0, theme::active().surface1);
+                    }
+                    painter.text(
+                        gear_mac_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "⚙",
+                        egui::FontId::proportional(mac_icon_sz),
+                        tb_fg,
+                    );
+                    if gear_mac_resp.clicked() {
+                        self.show_settings = !self.show_settings;
+                    }
+                    gear_mac_resp.on_hover_text("Settings (Ctrl+Shift+,)");
+
+                    // Keyboard shortcuts button (macOS) with hint label
+                    let mac_kb_btn_x;
+                    {
+                        let hint_text = "Ctrl+Shift+/";
+                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_galley = painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
+                        let hint_w = if self.show_shortcut_help { 0.0 } else { hint_galley.size().x + 6.0 };
+                        let total_w = mac_btn_w + hint_w;
+                        let kb_x = r.max.x - mac_btn_w - total_w;
+                        mac_kb_btn_x = kb_x;
+                        let kb_tbr = egui::Rect::from_min_size(
+                            egui::pos2(kb_x, r.min.y),
+                            egui::vec2(total_w, r.height()),
+                        );
+                        let kb_resp = ui.interact(
+                            kb_tbr,
+                            egui::Id::new("tb_shortcuts"),
+                            egui::Sense::click(),
+                        );
+                        let bg = if kb_resp.hovered() || self.show_shortcut_help {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(kb_tbr, 4.0, bg);
+                        let icon_center = egui::pos2(kb_tbr.max.x - mac_btn_w * 0.5, kb_tbr.center().y);
+                        painter.text(
+                            icon_center,
+                            egui::Align2::CENTER_CENTER,
+                            "⌨",
+                            egui::FontId::proportional(mac_icon_sz),
+                            tb_fg,
+                        );
+                        if !self.show_shortcut_help {
+                            let hint_x = kb_tbr.min.x + 4.0;
+                            painter.text(
+                                egui::pos2(hint_x, kb_tbr.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                hint_text,
+                                hint_font,
+                                theme::active().subtext0,
+                            );
+                        }
+                        if kb_resp.clicked() {
+                            self.show_shortcut_help = !self.show_shortcut_help;
+                        }
+                        kb_resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
+                    }
+
+                    // Right panel toggle (macOS)
+                    let right_tbr = egui::Rect::from_min_size(
+                        egui::pos2(mac_kb_btn_x - mac_btn_w, r.min.y),
+                        egui::vec2(mac_btn_w, r.height()),
+                    );
+                    let right_resp = ui.interact(
+                        right_tbr,
+                        egui::Id::new("tb_right_toggle"),
+                        egui::Sense::click(),
+                    );
+                    let right_bg = if self.show_right_panel {
+                        theme::active().surface2
+                    } else if right_resp.hovered() {
+                        theme::active().surface1
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    painter.rect_filled(right_tbr, 0.0, right_bg);
+                    painter.text(
+                        right_tbr.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "⊞",
+                        egui::FontId::proportional(mac_icon_sz),
+                        tb_fg,
+                    );
+                    if right_resp.clicked() {
+                        self.show_right_panel = !self.show_right_panel;
+                    }
+                    right_resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+
+                    // System monitor widget (before right toggle on macOS)
+                    let sysmon_mac_x = r.max.x - mac_btn_w * 3.0 - theme::SYSMON_W;
+                    {
+                        let sr = egui::Rect::from_min_size(
+                            egui::pos2(sysmon_mac_x, r.min.y),
+                            egui::vec2(theme::SYSMON_W, r.height()),
+                        );
+                        self.paint_sys_monitor(&painter, sr, tb_fg);
+                    }
+
+                    // Update button (macOS) — left of sys monitor when visible
+                    {
+                        let update_state = self.update_checker.state();
+                        let show_update_btn = matches!(
+                            update_state.status,
+                            UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired
+                        );
+                        if show_update_btn {
+                            let label = match &update_state.status {
+                                UpdateStatus::UpdateAvailable { version, .. } => {
+                                    format!("\u{2B06} Update v{version}")
+                                }
+                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
+                                _ => String::new(),
+                            };
+                            let update_x = sysmon_mac_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
+                            let br = egui::Rect::from_min_size(
+                                egui::pos2(update_x, r.min.y + theme::SP_SM),
+                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
+                            );
+                            let resp = ui.interact(
+                                br,
+                                egui::Id::new("tb_update_btn"),
+                                egui::Sense::click(),
+                            );
+                            let t = theme::active();
+                            let bg = if resp.hovered() { t.green } else { t.surface2 };
+                            painter.rect_filled(br, 4.0, bg);
+                            painter.text(
+                                br.center(),
+                                egui::Align2::CENTER_CENTER,
+                                &label,
+                                egui::FontId::proportional(11.0),
+                                egui::Color32::WHITE,
+                            );
+                            if resp.clicked() {
+                                match &update_state.status {
+                                    UpdateStatus::UpdateAvailable { .. } => {
+                                        self.show_settings = true;
+                                    }
+                                    UpdateStatus::RestartRequired => {
+                                        crate::updater::restart_app();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+
+                    // Title centered — "Terminal Studio" subtle, workspace name prominent
+                    if let Some(_ws_color) = active_ws_color {
+                        let prefix = "Terminal Studio \u{2014} ";
+                        let ws_name = self
+                            .active_workspace()
+                            .map(|w| w.name.clone())
+                            .unwrap_or_default();
+                        let prefix_galley = ui.fonts(|f| {
+                            f.layout_no_wrap(
+                                prefix.to_string(),
+                                egui::FontId::proportional(12.0),
+                                tb_fg.linear_multiply(0.5),
+                            )
+                        });
+                        let name_galley = ui.fonts(|f| {
+                            f.layout_no_wrap(
+                                ws_name,
+                                egui::FontId::proportional(13.0),
+                                tb_fg,
+                            )
+                        });
+                        let total_w = prefix_galley.size().x + name_galley.size().x;
+                        let start_x = r.center().x - total_w / 2.0;
+                        let text_y = r.center().y - prefix_galley.size().y / 2.0;
+                        painter.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
+                        let name_y = r.center().y - name_galley.size().y / 2.0;
+                        painter.galley(
+                            egui::pos2(start_x + total_w - name_galley.size().x, name_y),
+                            name_galley,
+                            tb_fg,
+                        );
+                    } else {
+                        painter.text(
+                            r.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Terminal Studio",
+                            egui::FontId::proportional(12.0),
+                            tb_fg.linear_multiply(0.6),
+                        );
+                    }
+                }
+
+                // ── Windows / Linux: controls on the right ─────────────────
+                #[cfg(not(target_os = "macos"))]
+                {
+                    let btn_w = theme::TITLEBAR_BTN_W;
+                    let icon_sz = 13.0_f32;
+                    // right-to-left: close(0), maximize(1), minimize(2)
+                    let btns: &[(&str, usize, bool)] = &[
+                        ("×", 0, true),  // close   — danger colour on hover
+                        ("□", 1, false), // maximize
+                        ("–", 2, false), // minimize
+                    ];
+
+                    // Left panel toggle — leftmost button
+                    {
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(r.min.x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_left_toggle"), egui::Sense::click());
+                        let bg = if self.show_left_panel {
+                            theme::active().surface2
+                        } else if resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "≡",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_left_panel = !self.show_left_panel;
+                        }
+                        resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
+                    }
+
+                    // Gear / Settings button — just before window controls
+                    {
+                        let gear_x = r.max.x - btn_w * (btns.len() as f32 + 1.0);
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(gear_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_settings"), egui::Sense::click());
+                        let bg = if resp.hovered() || self.show_settings {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "⚙",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_settings = !self.show_settings;
+                        }
+                        resp.on_hover_text("Settings (Ctrl+Shift+,)");
+                    }
+
+                    // Keyboard shortcuts button with hint label
+                    let kb_btn_x;
+                    {
+                        let hint_text = "Ctrl+Shift+/";
+                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_galley = painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
+                        let hint_w = if self.show_shortcut_help { 0.0 } else { hint_galley.size().x + 6.0 };
+                        let total_w = btn_w + hint_w;
+                        let kb_x = r.max.x - btn_w * (btns.len() as f32 + 1.0) - total_w;
+                        kb_btn_x = kb_x;
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(kb_x, r.min.y),
+                            egui::vec2(total_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_shortcuts"), egui::Sense::click());
+                        let bg = if resp.hovered() || self.show_shortcut_help {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 4.0, bg);
+                        let icon_center = egui::pos2(br.max.x - btn_w * 0.5, br.center().y);
+                        painter.text(
+                            icon_center,
+                            egui::Align2::CENTER_CENTER,
+                            "⌨",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if !self.show_shortcut_help {
+                            let hint_x = br.min.x + 4.0;
+                            painter.text(
+                                egui::pos2(hint_x, br.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                hint_text,
+                                hint_font,
+                                theme::active().subtext0,
+                            );
+                        }
+                        if resp.clicked() {
+                            self.show_shortcut_help = !self.show_shortcut_help;
+                        }
+                        resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
+                    }
+
+                    // Right panel toggle — after keyboard shortcuts button
+                    let right_toggle_x = kb_btn_x - btn_w;
+                    {
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(right_toggle_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new("tb_right_toggle"), egui::Sense::click());
+                        let bg = if self.show_right_panel {
+                            theme::active().surface2
+                        } else if resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "⊞",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_right_panel = !self.show_right_panel;
+                        }
+                        resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+                    }
+
+                    // System monitor widget — before right toggle
+                    let sysmon_x = right_toggle_x - theme::SYSMON_W;
+                    {
+                        let sr = egui::Rect::from_min_size(
+                            egui::pos2(sysmon_x, r.min.y),
+                            egui::vec2(theme::SYSMON_W, r.height()),
+                        );
+                        self.paint_sys_monitor(&painter, sr, tb_fg);
+                    }
+
+                    // Update button — visible only when update is available or restart required
+                    let mut update_btn_end_x = sysmon_x;
+                    {
+                        let update_state = self.update_checker.state();
+                        let show_update_btn = matches!(
+                            update_state.status,
+                            UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired
+                        );
+                        if show_update_btn {
+                            let label = match &update_state.status {
+                                UpdateStatus::UpdateAvailable { version, .. } => {
+                                    format!("\u{2B06} Update v{version}")
+                                }
+                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
+                                _ => String::new(),
+                            };
+                            let update_x = sysmon_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
+                            let br = egui::Rect::from_min_size(
+                                egui::pos2(update_x, r.min.y + theme::SP_SM),
+                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
+                            );
+                            let resp = ui.interact(
+                                br,
+                                egui::Id::new("tb_update_btn"),
+                                egui::Sense::click(),
+                            );
+                            let t = theme::active();
+                            let bg = if resp.hovered() { t.green } else { t.surface2 };
+                            painter.rect_filled(br, 4.0, bg);
+                            painter.text(
+                                br.center(),
+                                egui::Align2::CENTER_CENTER,
+                                &label,
+                                egui::FontId::proportional(11.0),
+                                egui::Color32::WHITE,
+                            );
+                            if resp.clicked() {
+                                match &update_state.status {
+                                    UpdateStatus::UpdateAvailable { .. } => {
+                                        self.show_settings = true;
+                                    }
+                                    UpdateStatus::RestartRequired => {
+                                        crate::updater::restart_app();
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            update_btn_end_x = update_x;
+                        }
+                    }
+
+                    for &(symbol, idx, is_danger) in btns {
+                        let x = r.max.x - btn_w * (idx as f32 + 1.0);
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, egui::Id::new(("tb_btn", idx)), egui::Sense::click());
+                        let bg = if resp.hovered() {
+                            if is_danger {
+                                theme::active().danger_bg
+                            } else {
+                                theme::active().surface1
+                            }
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        let fg = if resp.hovered() && is_danger {
+                            egui::Color32::WHITE
+                        } else {
+                            tb_fg
+                        };
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            symbol,
+                            egui::FontId::proportional(12.0),
+                            fg,
+                        );
+                        if resp.clicked() {
+                            match idx {
+                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                1 => {
+                                    let is_max =
+                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+                                        !is_max,
+                                    ));
+                                }
+                                2 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                                _ => {}
+                            }
+                        }
+                    }
+                    // Title between left toggle and update button (or sys monitor)
+                    let clip_min_x = r.min.x + btn_w + theme::TITLEBAR_ICON_GAP;
+                    let clip_max_x = update_btn_end_x - theme::TITLEBAR_ICON_GAP;
+                    let clip_rect = egui::Rect::from_min_max(
+                        egui::pos2(clip_min_x, r.min.y),
+                        egui::pos2(clip_max_x, r.max.y),
+                    );
+                    let clipped = painter.with_clip_rect(clip_rect);
+                    // "Terminal Studio" is subtle; workspace name is prominent
+                    if let Some(_ws_color) = active_ws_color {
+                        let prefix = "Terminal Studio \u{2014} ";
+                        let ws_name = self
+                            .active_workspace()
+                            .map(|w| w.name.clone())
+                            .unwrap_or_default();
+                        let prefix_galley = ui.fonts(|f| {
+                            f.layout_no_wrap(
+                                prefix.to_string(),
+                                egui::FontId::proportional(12.0),
+                                tb_fg.linear_multiply(0.5),
+                            )
+                        });
+                        let name_galley = ui.fonts(|f| {
+                            f.layout_no_wrap(
+                                ws_name,
+                                egui::FontId::proportional(13.0),
+                                tb_fg,
+                            )
+                        });
+                        let total_w = prefix_galley.size().x + name_galley.size().x;
+                        let start_x = r.center().x - total_w / 2.0;
+                        let text_y = r.center().y - prefix_galley.size().y / 2.0;
+                        clipped.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
+                        let name_y = r.center().y - name_galley.size().y / 2.0;
+                        clipped.galley(
+                            egui::pos2(start_x + total_w - name_galley.size().x, name_y),
+                            name_galley,
+                            tb_fg,
+                        );
+                    } else {
+                        clipped.text(
+                            r.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "Terminal Studio",
+                            egui::FontId::proportional(12.0),
+                            tb_fg.linear_multiply(0.6),
+                        );
+                    }
+                }
+            });
+
+    }
+}

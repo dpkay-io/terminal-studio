@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::theme;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -118,6 +119,22 @@ impl PaneNode {
         }
     }
 
+    /// Remap all pane_ids in the tree using the given mapping.
+    /// IDs not present in the map are left unchanged.
+    pub fn remap_ids(&mut self, id_map: &std::collections::HashMap<u32, u32>) {
+        match self {
+            PaneNode::Leaf { pane_id, .. } => {
+                if let Some(&new_id) = id_map.get(pane_id) {
+                    *pane_id = new_id;
+                }
+            }
+            PaneNode::Split { a, b, .. } => {
+                a.remap_ids(id_map);
+                b.remap_ids(id_map);
+            }
+        }
+    }
+
     /// Find a leaf by pane_id and return a mutable reference to its `ratio` parent.
     /// Used for drag-to-resize: finds the split node whose divider is being dragged.
     pub fn find_split_ratio_mut(&mut self, split_id: u32) -> Option<&mut f32> {
@@ -159,8 +176,7 @@ pub fn split_rect(
     dir: SplitDir,
     ratio: f32,
 ) -> (egui::Rect, egui::Rect, egui::Rect) {
-    const DIV: f32 = 4.0;
-    let half = DIV / 2.0;
+    let half = theme::DIVIDER_W / 2.0;
     match dir {
         SplitDir::Horizontal => {
             let x = rect.min.x + rect.width() * ratio;

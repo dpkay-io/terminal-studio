@@ -1,10 +1,16 @@
 mod app;
+mod keybindings;
 mod pane_tree;
 mod pty;
 mod renderer;
+mod search;
+mod shortcuts;
 mod single_instance;
+mod sys_monitor;
 mod terminal;
 mod theme;
+mod updater;
+mod url_detector;
 mod workspace;
 
 // Generates a 32×32 "TS" icon using Catppuccin Mocha base + blue.
@@ -44,6 +50,7 @@ fn make_icon() -> egui::IconData {
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
+    updater::cleanup_old_binary();
 
     // Single-instance enforcement: exit early if another instance is running.
     // Pass --no-singleton to bypass (useful for development).

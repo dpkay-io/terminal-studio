@@ -4,18 +4,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+use base64::Engine;
 use egui::Context;
 use parking_lot::RwLock;
 use vte::Perform;
 
 use crate::terminal::Session;
 
-/// Minimal VTE 0.13 performer for OSC 7 (CWD tracking) tee — all other
-/// sequences are no-ops.  Runs on the raw byte stream before alacritty
-/// parses it, so we extract CWD without wrapping Term.
+/// Minimal VTE 0.13 performer for OSC 7 (CWD tracking) and OSC 52
+/// (clipboard set) tee — all other sequences are no-ops.  Runs on the raw
+/// byte stream before alacritty parses it.
 struct CwdPerformer {
     new_cwd: Option<PathBuf>,
     new_prompt_ready: bool,
+    /// Base64-decoded clipboard text from OSC 52.
+    clipboard_text: Option<String>,
 }
 
 impl CwdPerformer {
@@ -23,6 +26,7 @@ impl CwdPerformer {
         CwdPerformer {
             new_cwd: None,
             new_prompt_ready: false,
+            clipboard_text: None,
         }
     }
 }
@@ -33,9 +37,16 @@ impl Perform for CwdPerformer {
     fn csi_dispatch(&mut self, _: &vte::Params, _: &[u8], _: bool, _: char) {}
     fn esc_dispatch(&mut self, _: &[u8], _: bool, _: u8) {}
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        if params.first() != Some(&b"7".as_ref()) {
-            return;
+        match params.first().copied() {
+            Some(b"7") => self.handle_osc7(params),
+            Some(b"52") => self.handle_osc52(params),
+            _ => {}
         }
+    }
+}
+
+impl CwdPerformer {
+    fn handle_osc7(&mut self, params: &[&[u8]]) {
         let Some(&uri_bytes) = params.get(1) else {
             return;
         };
@@ -57,6 +68,25 @@ impl Perform for CwdPerformer {
 
         self.new_cwd = Some(PathBuf::from(path_str));
         self.new_prompt_ready = true;
+    }
+
+    fn handle_osc52(&mut self, params: &[&[u8]]) {
+        // OSC 52 format: \x1b]52;<selection>;<base64_data>\x07
+        // params[0] = b"52", params[1] = selection target (e.g. b"c"), params[2] = base64 data
+        // A query (empty data or "?") is ignored for now.
+        let Some(&data_bytes) = params.get(2) else {
+            return;
+        };
+        // Empty data or "?" means query — ignore
+        if data_bytes.is_empty() || data_bytes == b"?" {
+            return;
+        }
+        let engine = base64::engine::general_purpose::STANDARD;
+        if let Ok(decoded) = engine.decode(data_bytes) {
+            if let Ok(text) = String::from_utf8(decoded) {
+                self.clipboard_text = Some(text);
+            }
+        }
     }
 }
 
@@ -85,7 +115,7 @@ pub fn reader_thread(
             }
         };
 
-        // ── Tee: scan for OSC 7 without holding session lock ─────────────────
+        // ── Tee: scan for OSC 7 / OSC 52 without holding session lock ────────
         let mut cwd_perf = CwdPerformer::new();
         for b in &buf[..n] {
             cwd_parser.advance(&mut cwd_perf, *b);
@@ -94,6 +124,12 @@ pub fn reader_thread(
             let mut s = session.write();
             s.cwd = cwd;
             s.prompt_ready = cwd_perf.new_prompt_ready;
+        }
+        // OSC 52: set system clipboard
+        if let Some(text) = cwd_perf.clipboard_text.take() {
+            if let Ok(mut clip) = arboard::Clipboard::new() {
+                let _ = clip.set_text(text);
+            }
         }
 
         // ── Feed alacritty Term in 4 KB chunks (UI can render between chunks) ─
