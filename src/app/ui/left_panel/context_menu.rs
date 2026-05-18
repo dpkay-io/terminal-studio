@@ -125,6 +125,11 @@ impl App {
     }
 
     /// Handle clicking a session row in the sidebar to activate or switch windows.
+    ///
+    /// Routing: find which window "owns" the pane's workspace.
+    ///  - If an extra window is dedicated to that workspace → switch to it.
+    ///  - Otherwise the main window is the home → switch to it.
+    ///  - If the owning window is already the current window → activate locally.
     fn process_sidebar_click(&mut self, clicked_sidebar_pane_id: Option<u32>) {
         let Some(qpid) = clicked_sidebar_pane_id else {
             return;
@@ -137,27 +142,46 @@ impl App {
             .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p));
         let Some(group) = group_opt else { return };
 
-        let target_ew = group.and_then(|ws_id| {
+        // Find the extra window that owns this workspace (if any).
+        let owner_ew = group.and_then(|ws_id| {
             self.extra_windows
                 .iter()
                 .enumerate()
-                .find(|(_, ew)| {
-                    ew.workspace_id == ws_id && self.current_window_id.as_ref() != Some(&ew.id)
-                })
-                .map(|(idx, ew)| (idx, ew.viewport_id))
+                .find(|(_, ew)| ew.workspace_id == ws_id)
+                .map(|(idx, ew)| (idx, ew.viewport_id, ew.id.clone()))
         });
-        if let Some((idx, viewport_id)) = target_ew {
-            self.pending_window_focus =
-                Some(super::super::super::multi_window::PendingWindowFocus {
+
+        use super::super::super::multi_window::PendingWindowFocus;
+        let is_main_window = self.current_window_id.is_none();
+
+        match owner_ew {
+            Some((idx, viewport_id, ref ew_id))
+                if self.current_window_id.as_ref() != Some(ew_id) =>
+            {
+                // Pane lives in a different extra window → switch to it.
+                self.pending_window_focus = Some(PendingWindowFocus {
                     target_viewport_id: viewport_id,
-                    target_window_idx: idx,
+                    target_window_idx: Some(idx),
                     pane_id: qpid,
                     group,
                 });
-        } else {
-            self.active_group = group;
-            self.activate_pane(qpid);
-            self.last_pane_per_group.insert(group, qpid);
+            }
+            None if !is_main_window => {
+                // No extra window owns this workspace → it lives in the main
+                // window, but we're in an extra window → switch to main.
+                self.pending_window_focus = Some(PendingWindowFocus {
+                    target_viewport_id: egui::ViewportId::ROOT,
+                    target_window_idx: None,
+                    pane_id: qpid,
+                    group,
+                });
+            }
+            _ => {
+                // Pane is in the current window → activate locally.
+                self.active_group = group;
+                self.activate_pane(qpid);
+                self.last_pane_per_group.insert(group, qpid);
+            }
         }
     }
 

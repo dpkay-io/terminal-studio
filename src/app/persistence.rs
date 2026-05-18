@@ -25,6 +25,9 @@ pub(super) enum SavedPaneContent {
         dirty: bool,
         workspace_id: Option<u64>,
     },
+    NoteEditor {
+        workspace_id: Option<u64>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]

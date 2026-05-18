@@ -414,6 +414,7 @@ impl App {
                     .unwrap_or_default();
                 format!("\u{21c4} {fname}")
             }
+            PaneContent::NoteEditor(_) => "Notes".to_string(),
         }
     }
 }

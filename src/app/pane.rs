@@ -51,6 +51,11 @@ pub(super) struct FileDiffState {
     pub(super) diff_content: String,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct NoteEditorState {
+    pub(super) workspace_id: Option<u64>,
+}
+
 #[derive(Debug)]
 pub(super) enum PaneContent {
     Terminal(u32),
@@ -60,6 +65,7 @@ pub(super) enum PaneContent {
     },
     FileEditor(FileEditorState),
     FileDiff(FileDiffState),
+    NoteEditor(NoteEditorState),
 }
 
 pub(super) struct PaneEntry {

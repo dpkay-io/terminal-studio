@@ -206,6 +206,9 @@ impl App {
                                                     theme::short_path(&d.path),
                                                 )
                                             }
+                                            PaneContent::NoteEditor(_) => {
+                                                ("Notes".to_string(), String::new())
+                                            }
                                         };
                                         // Apply fuzzy filter
                                         if !query.is_empty() {
@@ -282,6 +285,9 @@ impl App {
                                                 .unwrap_or("diff")
                                                 .to_string();
                                             (format!("diff: {}", name), theme::short_path(&d.path))
+                                        }
+                                        PaneContent::NoteEditor(_) => {
+                                            ("Notes".to_string(), String::new())
                                         }
                                     };
                                     if !query.is_empty() {

@@ -15,7 +15,7 @@ use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 use alacritty_terminal::grid::Dimensions;
 
 use super::multi_window::{ExtraWindow, SavedExtraWindow, WindowView};
-use super::pane::{FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry};
+use super::pane::{FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry};
 use super::pane_state::PaneState;
 use super::persistence::{
     session_data_path, AppSession, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,
@@ -61,6 +61,26 @@ impl App {
             }
             vis.override_text_color = Some(t.text);
             cc.egui_ctx.set_visuals(vis);
+
+            let mut style = (*cc.egui_ctx.style()).clone();
+            style.spacing.scroll = egui::style::ScrollStyle {
+                floating: true,
+                bar_width: 12.0,
+                handle_min_length: 20.0,
+                bar_inner_margin: 2.0,
+                bar_outer_margin: 0.0,
+                floating_width: 4.0,
+                floating_allocated_width: 0.0,
+                foreground_color: true,
+                dormant_background_opacity: 0.0,
+                active_background_opacity: 0.4,
+                interact_background_opacity: 0.7,
+                dormant_handle_opacity: 0.0,
+                active_handle_opacity: 0.7,
+                interact_handle_opacity: 1.0,
+            };
+            style.always_scroll_the_only_direction = true;
+            cc.egui_ctx.set_style(style);
         }
 
         #[cfg(target_os = "windows")]
@@ -88,6 +108,7 @@ impl App {
         let mgr = SessionManager::new(ctx.clone());
         let loaded_settings = AppSettings::load();
         let last_update_check = loaded_settings.last_update_check;
+        let show_sys_monitor = loaded_settings.show_sys_monitor;
         let mut app = App {
             session_manager: mgr,
             session_state: SessionState::new(),
@@ -123,7 +144,11 @@ impl App {
                 git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
                 search_worker: crate::search_worker::SearchWorker::spawn(ctx.clone()),
                 file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
-                sys_monitor: SysMonitor::spawn(ctx.clone(), Duration::from_secs(2)),
+                sys_monitor: if show_sys_monitor {
+                    SysMonitor::spawn(ctx.clone(), Duration::from_secs(2))
+                } else {
+                    None
+                },
                 update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
             },
             was_focused: true,
@@ -297,6 +322,7 @@ impl App {
                 .and_then(|c| ws_store.find_for_cwd(c).map(|w| w.id)),
             PaneContent::FileEditor(ed) => ed.workspace_id,
             PaneContent::FileDiff(d) => ws_store.find_for_cwd(&d.path).map(|w| w.id),
+            PaneContent::NoteEditor(ne) => ne.workspace_id,
         }
     }
 
@@ -701,6 +727,9 @@ impl App {
                         workspace_id: ed.workspace_id,
                     },
                     PaneContent::FileDiff(_) => return None,
+                    PaneContent::NoteEditor(ne) => SavedPaneContent::NoteEditor {
+                        workspace_id: ne.workspace_id,
+                    },
                 };
                 Some(SavedPane {
                     content,
@@ -850,6 +879,11 @@ impl App {
                         show_preview: is_md,
                     })
                 }
+                SavedPaneContent::NoteEditor { workspace_id } => {
+                    PaneContent::NoteEditor(NoteEditorState {
+                        workspace_id: *workspace_id,
+                    })
+                }
             };
             let pane_id = self.pane_state.next_pane_id;
             self.pane_state.next_pane_id += 1;
@@ -951,6 +985,26 @@ impl App {
         }
         vis.override_text_color = Some(t.text);
         ctx.set_visuals(vis);
+
+        let mut style = (*ctx.style()).clone();
+        style.spacing.scroll = egui::style::ScrollStyle {
+            floating: true,
+            bar_width: 12.0,
+            handle_min_length: 20.0,
+            bar_inner_margin: 2.0,
+            bar_outer_margin: 0.0,
+            floating_width: 4.0,
+            floating_allocated_width: 0.0,
+            foreground_color: true,
+            dormant_background_opacity: 0.0,
+            active_background_opacity: 0.4,
+            interact_background_opacity: 0.7,
+            dormant_handle_opacity: 0.0,
+            active_handle_opacity: 0.7,
+            interact_handle_opacity: 1.0,
+        };
+        style.always_scroll_the_only_direction = true;
+        ctx.set_style(style);
     }
 
     pub(super) fn extract_selected_text(&self, session_idx: usize) -> String {

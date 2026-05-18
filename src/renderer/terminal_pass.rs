@@ -37,6 +37,11 @@ pub struct TerminalGeometry {
     pub rect: Rect,
     pub cell_w: f32,
     pub cell_h: f32,
+    /// When the user drags the terminal scrollbar, this is set to the target
+    /// `display_offset` that the caller should apply to the terminal.
+    pub scrollbar_drag_offset: Option<usize>,
+    /// True while the pointer hovers over the scrollbar hit region.
+    pub scrollbar_hovered: bool,
 }
 
 impl TerminalGeometry {
@@ -415,20 +420,84 @@ impl TerminalView {
             }
         }
 
-        // ── Scrollback indicator ───────────────────────────────────────────────
+        // ── Interactive scrollbar ───────────────────────────────────────────────
+        let mut scrollbar_drag_offset = None;
+        let mut scrollbar_hovered = false;
+
         if history > 0 {
-            let bar_w = 3.0_f32;
             let total_lines = history + visible_rows;
+
+            let bar_w_thin = 4.0_f32;
+            let bar_w_wide = 12.0_f32;
+            let hit_w = 16.0_f32;
+
+            let hit_rect = egui::Rect::from_min_max(
+                egui::pos2(rect.max.x - hit_w, rect.min.y),
+                rect.max,
+            );
+
+            let (pointer_pos, primary_down, any_down) = ui.input(|i| {
+                (
+                    i.pointer.latest_pos(),
+                    i.pointer.primary_down(),
+                    i.pointer.any_down(),
+                )
+            });
+
+            let pointer_in_hit = pointer_pos
+                .map(|p| hit_rect.contains(p))
+                .unwrap_or(false);
+
+            let sb_mem_id = ui.id().with("term_sb_dragging");
+            let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
+            let is_dragging = (was_dragging || (pointer_in_hit && primary_down)) && any_down;
+            ui.data_mut(|d| d.insert_temp(sb_mem_id, is_dragging));
+
+            scrollbar_hovered = pointer_in_hit || is_dragging;
+
+            let bar_w = if scrollbar_hovered { bar_w_wide } else { bar_w_thin };
             let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
-            let thumb_h = (rect.height() * thumb_frac).max(4.0);
+            let thumb_h = (rect.height() * thumb_frac).max(20.0);
+            let track_h = rect.height() - thumb_h;
+
             let lines_above = history.saturating_sub(display_offset);
-            let top_frac = lines_above as f32 / total_lines as f32;
-            let thumb_y = rect.min.y + rect.height() * top_frac;
+            let top_frac = lines_above as f32 / (total_lines - visible_rows).max(1) as f32;
+            let thumb_y = rect.min.y + track_h * top_frac;
+
+            if is_dragging {
+                if let Some(pos) = pointer_pos {
+                    let click_y = (pos.y - rect.min.y - thumb_h * 0.5).clamp(0.0, track_h);
+                    let frac = if track_h > 0.0 { click_y / track_h } else { 0.0 };
+                    let target_lines_above =
+                        (frac * (total_lines - visible_rows) as f32).round() as usize;
+                    let target_offset = history.saturating_sub(target_lines_above);
+                    scrollbar_drag_offset = Some(target_offset);
+                }
+            }
+
+            let bar_color = if is_dragging {
+                egui::Color32::from_rgba_unmultiplied(
+                    t.scrollbar_color.r(),
+                    t.scrollbar_color.g(),
+                    t.scrollbar_color.b(),
+                    230,
+                )
+            } else if pointer_in_hit {
+                t.scrollbar_color
+            } else {
+                egui::Color32::from_rgba_unmultiplied(
+                    t.scrollbar_color.r(),
+                    t.scrollbar_color.g(),
+                    t.scrollbar_color.b(),
+                    100,
+                )
+            };
+
             let bar_rect = egui::Rect::from_min_size(
                 egui::pos2(rect.max.x - bar_w, thumb_y),
                 egui::vec2(bar_w, thumb_h),
             );
-            painter.rect_filled(bar_rect, 1.0, t.scrollbar_color);
+            painter.rect_filled(bar_rect, bar_w * 0.5, bar_color);
         }
 
         ui.allocate_rect(rect, Sense::click_and_drag());
@@ -437,6 +506,8 @@ impl TerminalView {
             rect,
             cell_w: cell_width,
             cell_h: cell_height,
+            scrollbar_drag_offset,
+            scrollbar_hovered,
         }
     }
 }

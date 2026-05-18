@@ -183,7 +183,7 @@ pub(super) fn render_dir_tree(
                     .sense(egui::Sense::click()),
                 )
                 .on_hover_text(&entry.name);
-            if resp.double_clicked() || (resp.clicked() && is_md) {
+            if resp.clicked() {
                 *open_editor = Some(entry.path.clone());
             }
         }
@@ -264,61 +264,17 @@ pub(super) fn render_flat_file_list(
                 .sense(egui::Sense::click()),
             )
             .on_hover_text(entry.path.display().to_string());
-        if resp.double_clicked() || (resp.clicked() && is_md) {
+        if resp.clicked() {
             *open_editor = Some(entry.path.clone());
         }
     }
 }
 
-pub(super) fn is_supported_text_file(path: &Path, content: &str) -> bool {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    let text_exts = [
-        "rs",
-        "toml",
-        "yaml",
-        "yml",
-        "json",
-        "txt",
-        "md",
-        "sh",
-        "bat",
-        "ps1",
-        "cmd",
-        "py",
-        "js",
-        "ts",
-        "jsx",
-        "tsx",
-        "html",
-        "css",
-        "scss",
-        "xml",
-        "csv",
-        "ini",
-        "cfg",
-        "conf",
-        "log",
-        "env",
-        "gitignore",
-        "dockerfile",
-        "makefile",
-        "c",
-        "cpp",
-        "h",
-        "hpp",
-        "go",
-        "rb",
-        "lua",
-        "sql",
-        "vim",
-    ];
-    if text_exts.contains(&ext.to_ascii_lowercase().as_str()) {
+pub(super) fn is_supported_text_file(_path: &Path, content: &str) -> bool {
+    if content.is_empty() {
         return true;
     }
-    if ext.is_empty() && !content.is_empty() {
-        return content.len() < 512_000 && content.is_ascii();
-    }
-    false
+    content.len() < 2_000_000 && !content.as_bytes().contains(&0)
 }
 
 pub(super) fn file_icon(ext: &str) -> &'static str {

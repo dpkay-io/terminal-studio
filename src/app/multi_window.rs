@@ -72,7 +72,8 @@ impl WindowView {
 
 pub(super) struct PendingWindowFocus {
     pub(super) target_viewport_id: egui::ViewportId,
-    pub(super) target_window_idx: usize,
+    /// `None` = main window, `Some(idx)` = extra window at that index.
+    pub(super) target_window_idx: Option<usize>,
     pub(super) pane_id: u32,
     pub(super) group: Option<u64>,
 }

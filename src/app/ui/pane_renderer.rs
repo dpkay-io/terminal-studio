@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::super::file_browser;
 use super::super::markdown::render_markdown;
-use super::super::pane::{PaneContent, PaneEntry, SessionEntry, TermSelection};
+use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::CursorStyle;
 use super::super::App;
 use crate::pane_tree::{split_rect, PaneNode, SplitDir};
@@ -66,6 +66,9 @@ pub(in crate::app) fn render_node(
                 }
                 PaneContent::FileDiff(d) => {
                     render_file_diff_leaf(ui, d, pane_id);
+                }
+                PaneContent::NoteEditor(ne) => {
+                    render_note_editor_leaf(ui, ne, pane_id, rctx);
                 }
             });
 
@@ -161,7 +164,7 @@ fn render_terminal_leaf(
         } else {
             None
         };
-        let geo = crate::renderer::terminal_pass::TerminalView::new(session).show(
+        let geo = crate::renderer::terminal_pass::TerminalView::new(Arc::clone(&session)).show(
             ui,
             is_focused,
             rctx.cursor_blink_on,
@@ -169,6 +172,18 @@ fn render_terminal_leaf(
             rctx.font_size,
             rctx.cursor_style,
         );
+        if let Some(target_offset) = geo.scrollbar_drag_offset {
+            use alacritty_terminal::grid::Scroll;
+            let mut s = session.write();
+            let current = s.term.grid().display_offset();
+            let delta = target_offset as i32 - current as i32;
+            if delta != 0 {
+                s.term.scroll_display(Scroll::Delta(delta));
+            }
+        }
+        if geo.scrollbar_hovered || geo.scrollbar_drag_offset.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
         let pointer_in_rect = ui.input(|i| {
             i.pointer.latest_pos().map(|p| geo.rect.contains(p)).unwrap_or(false)
         });
@@ -209,7 +224,7 @@ fn render_file_editor_leaf(
     if !file_browser::is_supported_text_file(&ed.path, &ed.content) {
         ui.centered_and_justified(|ui| {
             ui.label(
-                egui::RichText::new("File type not supported for preview")
+                egui::RichText::new("Binary file — cannot display as text")
                     .size(16.0)
                     .color(theme::active().overlay0),
             );
@@ -328,6 +343,47 @@ fn render_file_editor_leaf(
         }
         if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
             rctx.editor_saves.push(pane_id);
+        }
+    }
+}
+
+fn render_note_editor_leaf(
+    ui: &mut egui::Ui,
+    ne: &NoteEditorState,
+    pane_id: u32,
+    rctx: &mut RenderCtx<'_>,
+) {
+    let t = theme::active();
+    ui.painter().rect_filled(ui.max_rect(), 0.0, t.bg_term);
+
+    let label = match ne.workspace_id {
+        Some(_) => "Workspace Notes",
+        None => "General Notes",
+    };
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .strong()
+                .size(13.0)
+                .color(t.text),
+        );
+    });
+    ui.separator();
+
+    if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
+        if let Some(ref mut text) = et.1 {
+            egui::ScrollArea::both()
+                .id_source(("note_editor_scroll", pane_id))
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(text)
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Notes for this workspace\u{2026}")
+                            .frame(false),
+                    );
+                });
         }
     }
 }

@@ -265,8 +265,13 @@ impl App {
                     right_resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
 
                     // System monitor widget (before right toggle on macOS)
-                    let sysmon_mac_x = r.max.x - mac_btn_w * 3.0 - theme::SYSMON_W;
-                    {
+                    let sysmon_w = if self.settings.show_sys_monitor {
+                        theme::SYSMON_W
+                    } else {
+                        0.0
+                    };
+                    let sysmon_mac_x = r.max.x - mac_btn_w * 3.0 - sysmon_w;
+                    if self.settings.show_sys_monitor {
                         let sr = egui::Rect::from_min_size(
                             egui::pos2(sysmon_mac_x, r.min.y),
                             egui::vec2(theme::SYSMON_W, r.height()),
@@ -513,8 +518,13 @@ impl App {
                     }
 
                     // System monitor widget — before right toggle
-                    let sysmon_x = right_toggle_x - theme::SYSMON_W;
-                    {
+                    let sysmon_w = if self.settings.show_sys_monitor {
+                        theme::SYSMON_W
+                    } else {
+                        0.0
+                    };
+                    let sysmon_x = right_toggle_x - sysmon_w;
+                    if self.settings.show_sys_monitor {
                         let sr = egui::Rect::from_min_size(
                             egui::pos2(sysmon_x, r.min.y),
                             egui::vec2(theme::SYSMON_W, r.height()),

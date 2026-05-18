@@ -375,7 +375,7 @@ impl App {
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
                 let matcher = SkimMatcherV2::default();
-                for (pane_idx, pane) in self.pane_state.panes.iter().enumerate() {
+                for pane in self.pane_state.panes.iter() {
                     let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) =
                         match &pane.content {
                             PaneContent::Terminal(sid) => {
@@ -436,6 +436,16 @@ impl App {
                                     .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
                                 (name, None, false)
                             }
+                            PaneContent::NoteEditor(ne) => {
+                                let color = ne.workspace_id.and_then(|id| {
+                                    self.workspace_store
+                                        .workspaces
+                                        .iter()
+                                        .find(|w| w.id == id)
+                                        .map(|w| w.color)
+                                });
+                                ("Notes".to_string(), color, false)
+                            }
                         };
 
                     if !session_filter.is_empty()
@@ -454,10 +464,19 @@ impl App {
                     }
 
                     let in_other_window = pane_ws.is_some_and(|ws_id| {
-                        self.extra_windows.iter().any(|ew| {
-                            ew.workspace_id == ws_id
-                                && self.current_window_id.as_ref() != Some(&ew.id)
-                        })
+                        let owned_by_extra = self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
+                        if owned_by_extra {
+                            // Workspace has a dedicated extra window — "other" if
+                            // that window isn't the one we're currently rendering.
+                            self.extra_windows.iter().any(|ew| {
+                                ew.workspace_id == ws_id
+                                    && self.current_window_id.as_ref() != Some(&ew.id)
+                            })
+                        } else {
+                            // Workspace lives in the main window — "other" only
+                            // when we're rendering from an extra window.
+                            self.current_window_id.is_some()
+                        }
                     });
 
                     let is_active = self.pane_state.active_pane_id == Some(pane.id);
@@ -508,20 +527,7 @@ impl App {
                         theme::active().danger_fg,
                     );
 
-                    // Pane indicator badge (P1, P2...) between title and quit btn
-                    let pane_badge = format!("P{}", pane_idx + 1);
-                    let badge_w = theme::BADGE_W;
                     let win_icon_w: f32 = if in_other_window { 14.0 } else { 0.0 };
-                    painter.text(
-                        egui::pos2(
-                            quit_rect.min.x - badge_w / 2.0 - 2.0 - win_icon_w,
-                            row_rect.center().y,
-                        ),
-                        egui::Align2::CENTER_CENTER,
-                        &pane_badge,
-                        egui::FontId::proportional(10.0),
-                        theme::active().overlay0,
-                    );
 
                     if in_other_window {
                         painter.text(
@@ -536,14 +542,14 @@ impl App {
                         );
                     }
 
-                    // Title text clipped to leave room for quit button + badge + icon
+                    // Title text clipped to leave room for quit button + window icon
                     let text_x = row_rect.min.x
                         + if ws_color.is_some() {
                             theme::WS_BORDER_W + theme::BAR_PAD_X
                         } else {
                             theme::BAR_PAD_X
                         };
-                    let clip_max = quit_rect.min.x - badge_w - win_icon_w - 3.0;
+                    let clip_max = quit_rect.min.x - win_icon_w - 3.0;
                     let text_color = if dimmed {
                         theme::active().overlay0
                     } else if is_active {

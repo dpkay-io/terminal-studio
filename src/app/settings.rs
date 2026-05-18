@@ -25,6 +25,7 @@ pub(super) struct AppSettings {
     pub(super) cursor_blink: bool,
     pub(super) scroll_on_output: bool,
     pub(super) default_shell: Option<String>,
+    pub(super) show_sys_monitor: bool,
 }
 
 impl Default for AppSettings {
@@ -41,6 +42,7 @@ impl Default for AppSettings {
             cursor_blink: true,
             scroll_on_output: false,
             default_shell: None,
+            show_sys_monitor: true,
         }
     }
 }

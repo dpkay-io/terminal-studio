@@ -84,6 +84,31 @@ impl App {
                             .color(theme::active().overlay0),
                         );
 
+                        ui.add_space(theme::SP_MD);
+
+                        // Show system monitor
+                        {
+                            let mut show = self.settings.show_sys_monitor;
+                            if ui
+                                .checkbox(&mut show, "Show system monitor in titlebar")
+                                .changed()
+                            {
+                                self.settings.show_sys_monitor = show;
+                                if show {
+                                    if self.workers.sys_monitor.is_none() {
+                                        self.workers.sys_monitor =
+                                            crate::sys_monitor::SysMonitor::spawn(
+                                                ctx.clone(),
+                                                std::time::Duration::from_secs(2),
+                                            );
+                                    }
+                                } else {
+                                    self.workers.sys_monitor = None;
+                                }
+                                settings_changed = true;
+                            }
+                        }
+
                         ui.add_space(theme::SP_XL);
                         ui.separator();
                         ui.add_space(theme::SP_MD);

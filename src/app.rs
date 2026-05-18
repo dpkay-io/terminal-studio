@@ -44,7 +44,10 @@ use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
-use pane::{FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, TermSelection};
+use pane::{
+    FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab,
+    TermSelection,
+};
 use pane_state::PaneState;
 use session_state::SessionState;
 use settings::AppSettings;
@@ -419,24 +422,42 @@ impl eframe::App for App {
 
         // Process pending cross-window focus actions (set by sidebar click routing).
         if let Some(action) = self.pending_window_focus.take() {
-            if action.target_window_idx < self.extra_windows.len() {
-                let ew = &mut self.extra_windows[action.target_window_idx];
-                ew.view.active_group = action.group;
-                ew.view.active_pane_id = Some(action.pane_id);
-                if let Some(pane) = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .find(|p| p.id == action.pane_id)
-                {
-                    if let PaneContent::Terminal(sid) = pane.content {
-                        ew.view.active_id = Some(sid);
+            match action.target_window_idx {
+                Some(idx) if idx < self.extra_windows.len() => {
+                    // Target is an extra window.
+                    let ew = &mut self.extra_windows[idx];
+                    ew.view.active_group = action.group;
+                    ew.view.active_pane_id = Some(action.pane_id);
+                    if let Some(pane) = self
+                        .pane_state
+                        .panes
+                        .iter()
+                        .find(|p| p.id == action.pane_id)
+                    {
+                        if let PaneContent::Terminal(sid) = pane.content {
+                            ew.view.active_id = Some(sid);
+                        }
                     }
+                    ew.view
+                        .last_pane_per_group
+                        .insert(action.group, action.pane_id);
+                    ctx.send_viewport_cmd_to(
+                        action.target_viewport_id,
+                        egui::ViewportCommand::Focus,
+                    );
                 }
-                ew.view
-                    .last_pane_per_group
-                    .insert(action.group, action.pane_id);
-                ctx.send_viewport_cmd_to(action.target_viewport_id, egui::ViewportCommand::Focus);
+                None => {
+                    // Target is the main window — set its state directly
+                    // (at this point the main view is restored in self).
+                    self.active_group = action.group;
+                    self.activate_pane(action.pane_id);
+                    self.last_pane_per_group.insert(action.group, action.pane_id);
+                    ctx.send_viewport_cmd_to(
+                        egui::ViewportId::ROOT,
+                        egui::ViewportCommand::Focus,
+                    );
+                }
+                _ => {}
             }
         }
 
@@ -598,6 +619,7 @@ impl App {
 
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
+        let mut pending_open_note: Option<Option<u64>> = None;
 
         // ── Right panel ──────────────────────────────────────────────────────
         if self.show_right_panel {
@@ -1002,6 +1024,23 @@ impl App {
                                             self.notes_panel_collapsed =
                                                 !self.notes_panel_collapsed;
                                         }
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("\u{2197}")
+                                                        .size(theme::HEADER_FONT_SZ),
+                                                )
+                                                .min_size(egui::vec2(
+                                                    theme::HEADER_H,
+                                                    theme::HEADER_H,
+                                                ))
+                                                .frame(false),
+                                            )
+                                            .on_hover_text("Open in pane")
+                                            .clicked()
+                                        {
+                                            pending_open_note = Some(self.active_group);
+                                        }
                                     },
                                 );
                             },
@@ -1084,6 +1123,9 @@ impl App {
             .map(|p| {
                 let text = match &p.content {
                     PaneContent::FileEditor(ed) => Some(ed.content.clone()),
+                    PaneContent::NoteEditor(ne) => {
+                        Some(self.note_store.get(ne.workspace_id).to_string())
+                    }
                     _ => None,
                 };
                 (p.id, text)
@@ -1117,6 +1159,13 @@ impl App {
                         .map(|w| w.color)
                 }),
                 PaneContent::FileDiff(_) => None,
+                PaneContent::NoteEditor(ne) => ne.workspace_id.and_then(|id| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == id)
+                        .map(|w| w.color)
+                }),
             })
             .collect();
 
@@ -1904,6 +1953,10 @@ impl App {
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
                         egui::Event::PointerButton { pos, button, pressed, .. } => {
+                            let sb_active = self.active_term_geo.as_ref()
+                                .map(|g| g.scrollbar_hovered || g.scrollbar_drag_offset.is_some())
+                                .unwrap_or(false);
+                            if !sb_active {
                             if let Some(sid) = active_session_id {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                     let (has_mouse, sgr) = {
@@ -1957,6 +2010,7 @@ impl App {
                                     }
                                 }
                             }
+                            } // !sb_active
                         }
                         egui::Event::PointerMoved(pos) if self.term_selecting => {
                             if let Some(geo) = &self.active_term_geo {
@@ -2351,12 +2405,21 @@ impl App {
         for (i, (pane_id, new_text)) in editor_texts.iter().enumerate() {
             if let Some(ref new_text) = new_text {
                 if i < self.pane_state.panes.len() && self.pane_state.panes[i].id == *pane_id {
-                    if let PaneContent::FileEditor(ref mut ed) = self.pane_state.panes[i].content {
-                        if *new_text != ed.content {
+                    match self.pane_state.panes[i].content {
+                        PaneContent::FileEditor(ref mut ed)
+                            if *new_text != ed.content =>
+                        {
                             ed.content = new_text.clone();
                             ed.dirty = true;
                             ed.save_error = false;
                         }
+                        PaneContent::NoteEditor(ref ne)
+                            if *new_text != self.note_store.get(ne.workspace_id) =>
+                        {
+                            self.note_store.set(ne.workspace_id, new_text.clone());
+                            self.note_store.save();
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -2492,7 +2555,11 @@ impl App {
                     let results = Arc::clone(&self.file_load_results);
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
-                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                        let content = match std::fs::read(&path) {
+                            Ok(bytes) => String::from_utf8(bytes)
+                                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                            Err(_) => String::new(),
+                        };
                         results.lock().push((pane_id, content));
                         ctx_clone.request_repaint();
                     });
@@ -2538,11 +2605,47 @@ impl App {
                     let results = Arc::clone(&self.file_load_results);
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
-                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                        let content = match std::fs::read(&path) {
+                            Ok(bytes) => String::from_utf8(bytes)
+                                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                            Err(_) => String::new(),
+                        };
                         results.lock().push((pane_id, content));
                         ctx_clone.request_repaint();
                     });
                 }
+            }
+        }
+
+        // 9a2. Open notes in a pane
+        if let Some(ws_id) = pending_open_note {
+            let existing_id = self
+                .pane_state
+                .panes
+                .iter()
+                .find(|p| matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id))
+                .map(|p| p.id);
+            if let Some(pid) = existing_id {
+                self.activate_pane(pid);
+            } else {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::NoteEditor(NoteEditorState {
+                        workspace_id: ws_id,
+                    }),
+                    manual_width: None,
+                    last_size: (0, 0),
+                });
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                self.activate_pane(pane_id);
             }
         }
 
@@ -2624,7 +2727,11 @@ impl App {
                         let results = Arc::clone(&self.file_load_results);
                         let ctx_clone = ctx.clone();
                         std::thread::spawn(move || {
-                            let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+                            let content = match std::fs::read(&full_path) {
+                                Ok(bytes) => String::from_utf8(bytes)
+                                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                                Err(_) => String::new(),
+                            };
                             results.lock().push((pane_id, content));
                             ctx_clone.request_repaint();
                         });

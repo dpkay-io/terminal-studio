@@ -382,7 +382,6 @@ pub const DIVIDER_W: f32 = 4.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const BTN_W: f32 = 24.0;
 pub const SESSION_ROW_H: f32 = 28.0;
-pub const BADGE_W: f32 = 22.0;
 pub const WS_BORDER_W: f32 = 2.0;
 pub const LEFT_SIDEBAR_W: f32 = 200.0;
 pub const BAR_PAD_X: f32 = 6.0;
