@@ -1,5 +1,7 @@
 use std::path::PathBuf;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc};
+
+use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GITHUB_RELEASES_URL: &str =
@@ -41,7 +43,7 @@ pub struct UpdateChecker {
 }
 
 impl UpdateChecker {
-    pub fn spawn(ctx: egui::Context, last_check: Option<u64>) -> Self {
+    pub fn spawn(ctx: egui::Context, last_check: Option<u64>) -> Option<Self> {
         let state = Arc::new(Mutex::new(UpdateState {
             status: UpdateStatus::Idle,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -50,16 +52,19 @@ impl UpdateChecker {
         let shared = state.clone();
         let (cmd_tx, cmd_rx) = mpsc::channel();
 
-        std::thread::Builder::new()
+        if let Err(e) = std::thread::Builder::new()
             .name("update-checker".into())
             .spawn(move || worker(shared, ctx, cmd_rx, last_check))
-            .expect("failed to spawn update-checker thread");
+        {
+            log::error!("failed to spawn update-checker thread: {e}");
+            return None;
+        }
 
-        Self { state, cmd_tx }
+        Some(Self { state, cmd_tx })
     }
 
     pub fn state(&self) -> UpdateState {
-        self.state.lock().unwrap().clone()
+        self.state.lock().clone()
     }
 
     pub fn trigger_check(&self) {
@@ -107,7 +112,7 @@ fn worker(
 
 fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock();
         s.status = UpdateStatus::Checking;
     }
     ctx.request_repaint();
@@ -183,14 +188,14 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
             return;
         }
 
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock();
         s.status = UpdateStatus::UpdateAvailable {
             version: version_str.to_string(),
             download_url,
         };
         s.last_check = Some(now);
     } else {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock();
         s.status = UpdateStatus::UpToDate;
         s.last_check = Some(now);
     }
@@ -199,7 +204,7 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
 
 fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     let download_url = {
-        let s = shared.lock().unwrap();
+        let s = shared.lock();
         match &s.status {
             UpdateStatus::UpdateAvailable { download_url, .. } => download_url.clone(),
             _ => return,
@@ -207,7 +212,7 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     };
 
     {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock();
         s.status = UpdateStatus::Downloading { progress_pct: 0.0 };
     }
     ctx.request_repaint();
@@ -249,7 +254,7 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
 
         // Report completion
         {
-            let mut s = shared.lock().unwrap();
+            let mut s = shared.lock();
             s.status = UpdateStatus::Downloading {
                 progress_pct: 100.0,
             };
@@ -274,7 +279,7 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     }
 
     {
-        let mut s = shared.lock().unwrap();
+        let mut s = shared.lock();
         s.status = UpdateStatus::RestartRequired;
     }
     ctx.request_repaint();
@@ -348,7 +353,7 @@ fn platform_asset_name() -> &'static str {
 
 fn set_error(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, msg: &str) {
     log::error!("Update error: {msg}");
-    let mut s = shared.lock().unwrap();
+    let mut s = shared.lock();
     s.status = UpdateStatus::Error(msg.to_string());
     ctx.request_repaint();
 }

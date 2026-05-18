@@ -31,7 +31,7 @@ impl ForegroundWorker {
         let pids_bg = pids.clone();
         let alive_bg = alive.clone();
 
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name("foreground-detector".into())
             .spawn(move || {
                 while alive_bg.load(Ordering::Relaxed) {
@@ -43,7 +43,9 @@ impl ForegroundWorker {
                     thread::sleep(Duration::from_millis(500));
                 }
             })
-            .expect("failed to spawn foreground-detector thread");
+        {
+            log::error!("failed to spawn foreground-detector thread: {e}");
+        }
 
         ForegroundWorker { cache, pids, alive }
     }

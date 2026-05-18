@@ -145,7 +145,7 @@ pub fn reader_thread(
 
         // ── Repaint ──────────────────────────────────────────────────────────
         let repaint_ms = if is_active.load(Ordering::Relaxed) {
-            8
+            16
         } else {
             50
         };

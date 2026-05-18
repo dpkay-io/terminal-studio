@@ -71,8 +71,9 @@ pub(super) fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
             if name.starts_with('.') {
                 continue;
             }
+            let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
             entries.push(FileEntry {
-                is_dir: p.is_dir(),
+                is_dir,
                 name,
                 path: p,
             });

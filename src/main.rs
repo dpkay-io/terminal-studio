@@ -1,5 +1,6 @@
 mod app;
 mod file_search_worker;
+mod git;
 mod keybindings;
 mod md_detector;
 mod pane_tree;

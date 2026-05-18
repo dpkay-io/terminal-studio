@@ -275,8 +275,8 @@ impl App {
                     }
 
                     // Update button (macOS) — left of sys monitor when visible
-                    {
-                        let update_state = self.update_checker.state();
+                    if let Some(ref uc) = self.workers.update_checker {
+                        let update_state = uc.state();
                         let show_update_btn = matches!(
                             update_state.status,
                             UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired
@@ -524,8 +524,8 @@ impl App {
 
                     // Update button — visible only when update is available or restart required
                     let mut update_btn_end_x = sysmon_x;
-                    {
-                        let update_state = self.update_checker.state();
+                    if let Some(ref uc) = self.workers.update_checker {
+                        let update_state = uc.state();
                         let show_update_btn = matches!(
                             update_state.status,
                             UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired

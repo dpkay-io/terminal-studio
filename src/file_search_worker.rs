@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::Duration;
 
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -51,14 +52,15 @@ impl FileSearchWorker {
         let generation_bg = Arc::clone(&generation);
         let alive_bg = Arc::clone(&alive);
 
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name("file-search-worker".into())
             .spawn(move || {
                 let matcher = SkimMatcherV2::default();
                 while alive_bg.load(Ordering::Relaxed) {
-                    let job = match rx.recv() {
+                    let job = match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(j) => j,
-                        Err(_) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
 
                     if *generation_bg.lock() != job.generation {
@@ -107,7 +109,9 @@ impl FileSearchWorker {
                     ctx.request_repaint();
                 }
             })
-            .expect("failed to spawn file-search-worker thread");
+        {
+            log::error!("failed to spawn file-search-worker thread: {e}");
+        }
 
         FileSearchWorker {
             tx,

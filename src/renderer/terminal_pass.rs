@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 
 use crate::app::settings::CursorStyle;
 use crate::terminal::Session;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct SelectionRange {
     pub start_col: u16,
@@ -62,6 +62,7 @@ struct CellInfo {
     italic: bool,
     underline: bool,
     strike: bool,
+    wide: bool,
 }
 
 impl CellInfo {
@@ -73,6 +74,7 @@ impl CellInfo {
         italic: false,
         underline: false,
         strike: false,
+        wide: false,
     };
 }
 
@@ -105,7 +107,8 @@ impl TerminalView {
     ) -> TerminalGeometry {
         let rect = ui.available_rect_before_wrap();
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, theme::active().bg_term);
+        let t = theme::active();
+        painter.rect_filled(rect, 0.0, t.bg_term);
 
         let font_id = FontId::monospace(font_size);
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
@@ -151,7 +154,7 @@ impl TerminalView {
                     let hidden = cell.flags.contains(Flags::HIDDEN);
                     let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                     let ch = if hidden || spacer { ' ' } else { cell.c };
-                    let mut fg = resolve_color(eff_fg, true);
+                    let mut fg = resolve_color(eff_fg, true, t);
                     if cell.flags.contains(Flags::DIM) {
                         let [r, g, b, a] = fg.to_array();
                         fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
@@ -159,11 +162,12 @@ impl TerminalView {
                     buf.push(CellInfo {
                         ch,
                         fg,
-                        bg: resolve_color(eff_bg, false),
+                        bg: resolve_color(eff_bg, false, t),
                         bold: cell.flags.contains(Flags::BOLD),
                         italic: cell.flags.contains(Flags::ITALIC),
                         underline: cell.flags.contains(Flags::UNDERLINE),
                         strike: cell.flags.contains(Flags::STRIKEOUT),
+                        wide: cell.flags.contains(Flags::WIDE_CHAR),
                     });
                 }
             }
@@ -326,19 +330,19 @@ impl TerminalView {
                         CursorStyle::Block => {
                             let cursor_rect =
                                 Rect::from_min_size(cursor_origin, vec2(cell_width, cell_height));
-                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
                         }
                         CursorStyle::Underline => {
                             let cursor_rect = Rect::from_min_size(
                                 egui::pos2(cursor_origin.x, cursor_origin.y + cell_height - 2.0),
                                 vec2(cell_width, 2.0),
                             );
-                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
                         }
                         CursorStyle::Beam => {
                             let cursor_rect =
                                 Rect::from_min_size(cursor_origin, vec2(2.0, cell_height));
-                            painter.rect_filled(cursor_rect, 0.0, theme::active().cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
                         }
                     }
                 } else {
@@ -347,7 +351,7 @@ impl TerminalView {
                     painter.rect_stroke(
                         cursor_rect,
                         0.0,
-                        egui::Stroke::new(1.5, theme::active().cursor_dim_color),
+                        egui::Stroke::new(1.5, t.cursor_dim_color),
                     );
                 }
             }
@@ -355,8 +359,31 @@ impl TerminalView {
 
         // ── Selection highlight ────────────────────────────────────────────────
         if let Some(sel) = selection {
-            let sel_color = theme::active().selection_bg;
+            let sel_color = t.selection_bg;
             let (sc, sr, ec, er) = sel.ordered();
+            // Snap start/end to wide-char boundaries using the cell buffer.
+            let (sc, ec) = RENDER_BUF.with(|buf| {
+                let buf = buf.borrow();
+                let snap_start = |col: u16, row: u16| -> u16 {
+                    if col > 0 && (row as usize) < visible_rows {
+                        let prev_idx = row as usize * cols + (col as usize - 1);
+                        if prev_idx < buf.len() && buf[prev_idx].wide {
+                            return col - 1;
+                        }
+                    }
+                    col
+                };
+                let snap_end = |col: u16, row: u16| -> u16 {
+                    if (row as usize) < visible_rows {
+                        let idx = row as usize * cols + col as usize;
+                        if idx < buf.len() && buf[idx].wide {
+                            return col + 1;
+                        }
+                    }
+                    col
+                };
+                (snap_start(sc, sr), snap_end(ec, er))
+            });
             for screen_row in sr..=er.min(visible_rows as u16 - 1) {
                 let y = rect.min.y + screen_row as f32 * cell_height;
                 let start_col = if screen_row == sr { sc } else { 0 };
@@ -388,7 +415,7 @@ impl TerminalView {
                 egui::pos2(rect.max.x - bar_w, thumb_y),
                 egui::vec2(bar_w, thumb_h),
             );
-            painter.rect_filled(bar_rect, 1.0, theme::active().scrollbar_color);
+            painter.rect_filled(bar_rect, 1.0, t.scrollbar_color);
         }
 
         ui.allocate_rect(rect, Sense::click_and_drag());
@@ -401,19 +428,18 @@ impl TerminalView {
     }
 }
 
-fn resolve_color(color: Color, is_fg: bool) -> egui::Color32 {
+fn resolve_color(color: Color, is_fg: bool, t: &Theme) -> egui::Color32 {
     match color {
-        Color::Named(named) => resolve_named(named, is_fg),
+        Color::Named(named) => resolve_named(named, is_fg, t),
         Color::Spec(Rgb { r, g, b }) => egui::Color32::from_rgb(r, g, b),
         Color::Indexed(i) => {
-            let (r, g, b) = ansi_indexed(i);
+            let (r, g, b) = ansi_indexed(i, t);
             egui::Color32::from_rgb(r, g, b)
         }
     }
 }
 
-fn resolve_named(named: NamedColor, is_fg: bool) -> egui::Color32 {
-    let t = theme::active();
+fn resolve_named(named: NamedColor, is_fg: bool, t: &Theme) -> egui::Color32 {
     match named {
         NamedColor::Foreground => t.text,
         NamedColor::Background => egui::Color32::TRANSPARENT,
@@ -443,10 +469,10 @@ fn resolve_named(named: NamedColor, is_fg: bool) -> egui::Color32 {
     }
 }
 
-fn ansi_indexed(index: u8) -> (u8, u8, u8) {
+fn ansi_indexed(index: u8, t: &Theme) -> (u8, u8, u8) {
     match index {
         0..=15 => {
-            let c = theme::active().ansi[index as usize];
+            let c = t.ansi[index as usize];
             let [r, g, b, _] = c.to_array();
             (r, g, b)
         }

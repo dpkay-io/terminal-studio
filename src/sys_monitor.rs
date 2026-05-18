@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use sysinfo::{Networks, System};
@@ -15,35 +18,54 @@ pub struct SystemStats {
 
 pub struct SysMonitor {
     stats: Arc<Mutex<SystemStats>>,
+    alive: Arc<AtomicBool>,
 }
 
 impl SysMonitor {
-    pub fn spawn(ctx: egui::Context, interval: Duration) -> Self {
+    pub fn spawn(ctx: egui::Context, interval: Duration) -> Option<Self> {
         let stats: Arc<Mutex<SystemStats>> = Arc::default();
         let shared = stats.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_bg = alive.clone();
 
-        std::thread::Builder::new()
+        if let Err(e) = std::thread::Builder::new()
             .name("sys-monitor".into())
-            .spawn(move || poll_loop(shared, ctx, interval))
-            .expect("failed to spawn sys-monitor thread");
+            .spawn(move || poll_loop(shared, ctx, interval, alive_bg))
+        {
+            log::error!("failed to spawn sys-monitor thread: {e}");
+            return None;
+        }
 
-        Self { stats }
+        Some(Self { stats, alive })
     }
 
     pub fn stats(&self) -> SystemStats {
-        self.stats.lock().unwrap().clone()
+        self.stats.lock().clone()
     }
 }
 
-fn poll_loop(shared: Arc<Mutex<SystemStats>>, ctx: egui::Context, interval: Duration) {
+impl Drop for SysMonitor {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::Relaxed);
+    }
+}
+
+fn poll_loop(
+    shared: Arc<Mutex<SystemStats>>,
+    ctx: egui::Context,
+    interval: Duration,
+    alive: Arc<AtomicBool>,
+) {
     let mut sys = System::new();
     let mut nets = Networks::new_with_refreshed_list();
 
     // Initial CPU sample — sysinfo needs two calls to compute delta.
     sys.refresh_cpu_usage();
-    std::thread::sleep(interval);
+    if !sleep_interruptible(interval, &alive) {
+        return;
+    }
 
-    loop {
+    while alive.load(Ordering::Relaxed) {
         sys.refresh_cpu_usage();
         sys.refresh_memory();
 
@@ -67,7 +89,7 @@ fn poll_loop(shared: Arc<Mutex<SystemStats>>, ctx: egui::Context, interval: Dura
         };
 
         {
-            let mut s = shared.lock().unwrap();
+            let mut s = shared.lock();
             s.cpu_percent = cpu;
             s.ram_percent = ram;
             s.net_rx_per_sec = rx_per_sec;
@@ -75,8 +97,24 @@ fn poll_loop(shared: Arc<Mutex<SystemStats>>, ctx: egui::Context, interval: Dura
         }
 
         ctx.request_repaint();
-        std::thread::sleep(interval);
+        if !sleep_interruptible(interval, &alive) {
+            break;
+        }
     }
+}
+
+fn sleep_interruptible(duration: Duration, alive: &AtomicBool) -> bool {
+    let step = Duration::from_millis(250);
+    let mut remaining = duration;
+    while remaining > Duration::ZERO {
+        if !alive.load(Ordering::Relaxed) {
+            return false;
+        }
+        let sleep_time = remaining.min(step);
+        std::thread::sleep(sleep_time);
+        remaining = remaining.saturating_sub(sleep_time);
+    }
+    alive.load(Ordering::Relaxed)
 }
 
 pub fn format_bytes_rate(bps: u64) -> String {

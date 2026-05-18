@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::Duration;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -57,14 +58,15 @@ impl SearchWorker {
         let generation_bg = Arc::clone(&generation);
         let alive_bg = Arc::clone(&alive);
 
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name("search-worker".into())
             .spawn(move || {
                 let matcher = SkimMatcherV2::default();
                 while alive_bg.load(Ordering::Relaxed) {
-                    let job = match rx.recv() {
+                    let job = match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(j) => j,
-                        Err(_) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
 
                     if *generation_bg.lock() != job.generation {
@@ -74,33 +76,43 @@ impl SearchWorker {
                     let query_lower = job.query.to_lowercase();
                     let mut all_matches = Vec::new();
 
-                    for (session_id, session_title, session) in &job.sessions {
+                    for (session_id, session_title, session_lock) in &job.sessions {
+                        // Check generation BEFORE acquiring the session lock
                         if *generation_bg.lock() != job.generation {
                             break;
                         }
 
-                        let session = session.read();
-                        let term = &session.term;
-                        let grid = term.grid();
-                        let cols = term.columns();
-                        let total_lines = term.screen_lines() as i32;
-                        let history = grid.history_size() as i32;
+                        // Extract all needed data under a short-lived read lock,
+                        // then release it before doing any further locking or heavy work.
+                        let lines: Vec<(i32, String)> = {
+                            let session = session_lock.read();
+                            let term = &session.term;
+                            let grid = term.grid();
+                            let cols = term.columns();
+                            let total_lines = term.screen_lines() as i32;
+                            let history = grid.history_size() as i32;
 
-                        for line_idx in (-history)..total_lines {
-                            let mut line_text = String::with_capacity(cols);
-                            for col in 0..cols {
-                                let cell = &grid[Line(line_idx)][Column(col)];
-                                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                                    continue;
+                            let mut extracted = Vec::new();
+                            for line_idx in (-history)..total_lines {
+                                let mut line_text = String::with_capacity(cols);
+                                for col in 0..cols {
+                                    let cell = &grid[Line(line_idx)][Column(col)];
+                                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                                        continue;
+                                    }
+                                    line_text.push(cell.c);
                                 }
-                                line_text.push(cell.c);
+                                let trimmed = line_text.trim_end().to_string();
+                                if !trimmed.is_empty() {
+                                    extracted.push((line_idx, trimmed));
+                                }
                             }
+                            extracted
+                        };
+                        // Session read lock is now released.
 
-                            let trimmed = line_text.trim_end();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-
+                        // Fuzzy-match on the extracted lines without holding any lock.
+                        for (line_idx, trimmed) in &lines {
                             if let Some(score) = matcher.fuzzy_match(trimmed, &job.query) {
                                 let line_lower = trimmed.to_lowercase();
                                 let (start, end) = if let Some(pos) = line_lower.find(&query_lower)
@@ -113,8 +125,8 @@ impl SearchWorker {
                                 all_matches.push(GlobalSearchMatch {
                                     session_id: *session_id,
                                     session_title: session_title.clone(),
-                                    line: line_idx,
-                                    line_text: trimmed.to_string(),
+                                    line: *line_idx,
+                                    line_text: trimmed.clone(),
                                     start_col: start,
                                     end_col: end,
                                     score,
@@ -137,7 +149,9 @@ impl SearchWorker {
                     ctx.request_repaint();
                 }
             })
-            .expect("failed to spawn search-worker thread");
+        {
+            log::error!("failed to spawn search-worker thread: {e}");
+        }
 
         SearchWorker {
             tx,

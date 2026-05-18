@@ -72,7 +72,7 @@ pub(super) struct PaneEntry {
 pub(super) struct SessionEntry {
     pub(super) id: u32,
     pub(super) session: Arc<RwLock<Session>>,
-    pub(super) pty_tx: mpsc::Sender<Vec<u8>>,
+    pub(super) pty_tx: mpsc::SyncSender<Vec<u8>>,
     pub(super) master: Box<dyn portable_pty::MasterPty + Send>,
     pub(super) shell_pid: u32,
     pub(super) alive: Arc<AtomicBool>,

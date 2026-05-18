@@ -264,51 +264,60 @@ impl App {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let update_state = self.update_checker.state();
-                                    match &update_state.status {
-                                        UpdateStatus::Checking => {
-                                            ui.spinner();
-                                            ui.label("Checking\u{2026}");
-                                        }
-                                        UpdateStatus::UpToDate => {
-                                            ui.label(
-                                                egui::RichText::new("Up to date")
-                                                    .size(12.0)
-                                                    .color(theme::active().green),
-                                            );
-                                        }
-                                        UpdateStatus::UpdateAvailable { version, .. } => {
-                                            if ui.button(format!("Update to v{version}")).clicked()
-                                            {
-                                                self.update_checker.start_update();
+                                    if let Some(ref uc) = self.workers.update_checker {
+                                        let update_state = uc.state();
+                                        match &update_state.status {
+                                            UpdateStatus::Checking => {
+                                                ui.spinner();
+                                                ui.label("Checking\u{2026}");
+                                            }
+                                            UpdateStatus::UpToDate => {
+                                                ui.label(
+                                                    egui::RichText::new("Up to date")
+                                                        .size(12.0)
+                                                        .color(theme::active().green),
+                                                );
+                                            }
+                                            UpdateStatus::UpdateAvailable { version, .. } => {
+                                                if ui
+                                                    .button(format!("Update to v{version}"))
+                                                    .clicked()
+                                                {
+                                                    uc.start_update();
+                                                }
+                                            }
+                                            UpdateStatus::Downloading { progress_pct } => {
+                                                ui.add(
+                                                    egui::ProgressBar::new(progress_pct / 100.0)
+                                                        .text("Downloading\u{2026}"),
+                                                );
+                                            }
+                                            UpdateStatus::RestartRequired => {
+                                                if ui
+                                                    .button("Restart to finish update")
+                                                    .clicked()
+                                                {
+                                                    crate::updater::restart_app();
+                                                }
+                                            }
+                                            UpdateStatus::Error(msg) => {
+                                                ui.label(
+                                                    egui::RichText::new(msg)
+                                                        .size(11.0)
+                                                        .color(theme::active().red),
+                                                );
+                                                if ui.small_button("Retry").clicked() {
+                                                    uc.trigger_check();
+                                                }
+                                            }
+                                            _ => {
+                                                if ui.button("Check for updates").clicked() {
+                                                    uc.trigger_check();
+                                                }
                                             }
                                         }
-                                        UpdateStatus::Downloading { progress_pct } => {
-                                            ui.add(
-                                                egui::ProgressBar::new(progress_pct / 100.0)
-                                                    .text("Downloading\u{2026}"),
-                                            );
-                                        }
-                                        UpdateStatus::RestartRequired => {
-                                            if ui.button("Restart to finish update").clicked() {
-                                                crate::updater::restart_app();
-                                            }
-                                        }
-                                        UpdateStatus::Error(msg) => {
-                                            ui.label(
-                                                egui::RichText::new(msg)
-                                                    .size(11.0)
-                                                    .color(theme::active().red),
-                                            );
-                                            if ui.small_button("Retry").clicked() {
-                                                self.update_checker.trigger_check();
-                                            }
-                                        }
-                                        _ => {
-                                            if ui.button("Check for updates").clicked() {
-                                                self.update_checker.trigger_check();
-                                            }
-                                        }
+                                    } else {
+                                        ui.label("Update checker unavailable");
                                     }
                                 },
                             );
@@ -317,8 +326,8 @@ impl App {
                 });
 
             // Persist last_update_check timestamp
-            {
-                let us = self.update_checker.state();
+            if let Some(ref uc) = self.workers.update_checker {
+                let us = uc.state();
                 if us.last_check != self.settings.last_update_check {
                     self.settings.last_update_check = us.last_check;
                     settings_changed = true;
@@ -328,6 +337,7 @@ impl App {
             if settings_changed {
                 self.settings.save();
                 self.apply_theme_visuals(ctx);
+                self.cached_cell_size = None;
             }
             if close_settings {
                 self.show_settings = false;

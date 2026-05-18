@@ -1,3 +1,4 @@
+use crate::git::parser::{parse_git_status, FileChangeKind};
 use crate::theme;
 
 pub(super) enum GitStageAction {
@@ -13,6 +14,26 @@ pub(super) struct GitDiffResult {
     pub(super) open_file: Option<String>,
 }
 
+fn kind_to_tag(kind: FileChangeKind) -> &'static str {
+    match kind {
+        FileChangeKind::Modified => "M",
+        FileChangeKind::Added => "A",
+        FileChangeKind::Deleted => "D",
+        FileChangeKind::Renamed => "R",
+        FileChangeKind::Untracked => "?",
+    }
+}
+
+fn kind_to_color(kind: FileChangeKind) -> egui::Color32 {
+    match kind {
+        FileChangeKind::Modified => theme::active().git_modified,
+        FileChangeKind::Added => theme::active().git_added,
+        FileChangeKind::Deleted => theme::active().git_removed,
+        FileChangeKind::Renamed => theme::active().git_renamed,
+        FileChangeKind::Untracked => theme::active().git_untracked,
+    }
+}
+
 pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -24,61 +45,21 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
             path: String,
             color: egui::Color32,
         }
+
+        let parsed = parse_git_status(status);
         let mut staged: Vec<StatusEntry> = Vec::new();
         let mut unstaged: Vec<StatusEntry> = Vec::new();
 
-        for line in status.lines() {
-            if line.len() < 3 {
-                continue;
-            }
-            let x = line.as_bytes()[0];
-            let y = line.as_bytes()[1];
-            let path = line[3..].trim().to_string();
-
-            match x {
-                b'M' => staged.push(StatusEntry {
-                    tag: "M",
-                    path: path.clone(),
-                    color: theme::active().git_modified,
-                }),
-                b'A' => staged.push(StatusEntry {
-                    tag: "A",
-                    path: path.clone(),
-                    color: theme::active().git_added,
-                }),
-                b'D' => staged.push(StatusEntry {
-                    tag: "D",
-                    path: path.clone(),
-                    color: theme::active().git_removed,
-                }),
-                b'R' => staged.push(StatusEntry {
-                    tag: "R",
-                    path: path.clone(),
-                    color: theme::active().git_renamed,
-                }),
-                _ => {}
-            }
-
-            if x == b'?' && y == b'?' {
-                unstaged.push(StatusEntry {
-                    tag: "?",
-                    path,
-                    color: theme::active().git_untracked,
-                });
+        for fs in &parsed {
+            let entry = StatusEntry {
+                tag: kind_to_tag(fs.kind),
+                path: fs.path.clone(),
+                color: kind_to_color(fs.kind),
+            };
+            if fs.staged {
+                staged.push(entry);
             } else {
-                match y {
-                    b'M' => unstaged.push(StatusEntry {
-                        tag: "M",
-                        path,
-                        color: theme::active().git_modified,
-                    }),
-                    b'D' => unstaged.push(StatusEntry {
-                        tag: "D",
-                        path,
-                        color: theme::active().git_removed,
-                    }),
-                    _ => {}
-                }
+                unstaged.push(entry);
             }
         }
 

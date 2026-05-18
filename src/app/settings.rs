@@ -67,10 +67,14 @@ impl AppSettings {
             return;
         };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log::warn!("failed to create settings dir: {e}");
+            }
         }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(path, text);
+            if let Err(e) = std::fs::write(path, text) {
+                log::error!("failed to save settings: {e}");
+            }
         }
     }
 }

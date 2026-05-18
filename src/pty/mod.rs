@@ -139,7 +139,7 @@ type SpawnResult = (
     u32,
     Arc<RwLock<Session>>,
     Box<dyn portable_pty::MasterPty + Send>,
-    mpsc::Sender<Vec<u8>>, // was: Box<dyn Write + Send>
+    mpsc::SyncSender<Vec<u8>>,
     u32,
     Arc<AtomicBool>,
     Arc<AtomicBool>, // is_active: true when this session is the focused pane
@@ -196,7 +196,7 @@ impl SessionManager {
         let reader = pty_pair.master.try_clone_reader()?;
 
         // Create PTY writer channel
-        let (pty_tx, pty_rx) = mpsc::channel::<Vec<u8>>();
+        let (pty_tx, pty_rx) = mpsc::sync_channel::<Vec<u8>>(64);
 
         // Spawn PTY writer thread
         let mut pty_writer = pty_pair.master.take_writer()?;

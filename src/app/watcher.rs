@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -12,7 +14,7 @@ pub(super) struct WatchState {
     pub(super) watcher: RecommendedWatcher,
     pub(super) watched: HashSet<PathBuf>,
     pub(super) git_dirs: HashMap<PathBuf, PathBuf>,
-    pub(super) events: Arc<std::sync::Mutex<Vec<Event>>>,
+    pub(super) events: Arc<Mutex<Vec<Event>>>,
     pub(super) dir_data: HashMap<PathBuf, DirData>,
     pub(super) last_sync: Instant,
     pub(super) last_session_count: usize,
@@ -20,13 +22,11 @@ pub(super) struct WatchState {
 
 impl WatchState {
     pub(super) fn new(ctx: egui::Context) -> Option<Self> {
-        let events: Arc<std::sync::Mutex<Vec<Event>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
         let ev = Arc::clone(&events);
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
             if let Ok(event) = res {
-                if let Ok(mut g) = ev.lock() {
-                    g.push(event);
-                }
+                ev.lock().push(event);
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
         })
@@ -111,9 +111,7 @@ impl WatchState {
 
     pub(super) fn process_events(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let events: Vec<Event> = {
-            let Ok(mut g) = self.events.lock() else {
-                return (vec![], vec![]);
-            };
+            let mut g = self.events.lock();
             std::mem::take(&mut *g)
         };
 

@@ -6,13 +6,10 @@ use std::time::{Duration, Instant};
 use egui::FontId;
 
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
-use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::shortcuts::{AppAction, ShortcutRegistry};
-use crate::sys_monitor::SysMonitor;
 use crate::theme;
-use crate::updater::UpdateChecker;
 use crate::workspace::{NoteStore, WindowId, WorkspaceStore};
 use alacritty_terminal::{
     grid::{Dimensions, Scroll},
@@ -29,38 +26,40 @@ mod input;
 mod markdown;
 mod multi_window;
 mod pane;
+mod pane_state;
 mod persistence;
+mod session_state;
 pub(crate) mod settings;
 mod state;
 mod title;
 mod ui;
 mod watcher;
+mod worker_manager;
 mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
 
 use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, SubdirCache};
-use git_diff::{render_git_diff, render_inline_diff, GitStageAction};
-use git_worker::GitWorker;
+use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
 use pane::{
-    FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry, TermSelection,
+    FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, TermSelection,
 };
-use settings::{AppSettings, CursorStyle};
-use title::effective_title;
+use pane_state::PaneState;
+use session_state::SessionState;
+use settings::AppSettings;
+
 use watcher::WatchState;
+use worker_manager::WorkerManager;
 use workspace_ui::{WorkspaceDialog, WorkspaceEditDialog};
 
 pub struct App {
     session_manager: SessionManager,
-    sessions: Vec<SessionEntry>,
-    active_id: Option<u32>,
+    session_state: SessionState,
 
-    panes: Vec<PaneEntry>,
-    active_pane_id: Option<u32>,
-    next_pane_id: u32,
+    pane_state: PaneState,
     right_tab: RightTab,
     shown_md_tabs: HashSet<PathBuf>,
     md_prefer_preview: bool,
@@ -99,15 +98,12 @@ pub struct App {
     resize_debounce: HashMap<u32, (u16, u16, Instant)>,
     // Fractional scroll accumulator — carries sub-line scrolls across frames.
     scroll_accum: HashMap<u32, f32>,
-    // Background thread for foreground-process detection; UI reads from cache only.
-    foreground_worker: ForegroundWorker,
+    // Background workers: foreground detection, git, search, sys monitor, update checker.
+    workers: WorkerManager,
     // Used to detect when the window gains focus so we can flush stale GPU frames.
     was_focused: bool,
     // Shells available on this system, computed once at startup.
     available_shells: Vec<ShellKind>,
-    // IDs of sessions that have not yet received their first OSC 7 (CWD not set).
-    // Avoids scanning all sessions every frame once all are initialized.
-    uninit_sessions: HashSet<u32>,
     // Cursor blink phase (toggles every 500 ms)
     cursor_blink_on: bool,
     cursor_blink_last: Instant,
@@ -126,16 +122,11 @@ pub struct App {
     /// viewport. Used by per-window-aware code (e.g. workspace switcher filter).
     current_window_id: Option<WindowId>,
 
-    // ── Phase D: pane split trees ─────────────────────────────────────────
-    /// Maps root_pane_id → layout tree for that tab.
-    /// Each entry in `panes` that is a "root" (i.e. visible in the tab strip)
-    /// has an entry here.  Panes created by splitting are *not* in the tab
-    /// strip; they live only as leaves inside another pane's tree.
-    pane_trees: HashMap<u32, PaneNode>,
-    /// Monotonically-increasing counter for generating unique split node IDs.
-    next_split_id: u32,
 
     // ── Per-frame UI caches ───────────────────────────────────────────────
+    /// Cached cell dimensions for the central panel font measurement.
+    /// Invalidated when font_size changes.
+    cached_cell_size: Option<(f32, f32, f32)>,
     /// Cache of `fs::read_dir` results for expanded subdirectories in the
     /// file browser, keyed by absolute path. Without this the dir tree
     /// re-reads disk on every frame for every expanded node.
@@ -150,17 +141,7 @@ pub struct App {
     session_search_active: bool,
     dir_search_query: String,
     dir_search_active: bool,
-    dir_search_debounce_query: String,
-    dir_search_debounce_at: Option<Instant>,
-
-    // System resource monitor (CPU / RAM / Network), polled every 2 s.
-    sys_monitor: SysMonitor,
-
-    // Self-update: background checker for new releases.
-    update_checker: UpdateChecker,
-
-    // Background worker for git status/diff and directory listing.
-    git_worker: GitWorker,
+    dir_search_debouncer: crate::app::ui::debounce::Debouncer,
 
     // Terminal content search (Ctrl+F)
     term_search: crate::search::SearchState,
@@ -168,12 +149,8 @@ pub struct App {
     // Global search across all sessions (Ctrl+Shift+N)
     show_global_search: bool,
     global_search_query: String,
-    global_search_debounce_at: Option<Instant>,
-    search_worker: crate::search_worker::SearchWorker,
+    global_search_debouncer: crate::app::ui::debounce::Debouncer,
     global_search_selected: usize,
-
-    // Background file search worker for directory panel
-    file_search_worker: crate::file_search_worker::FileSearchWorker,
 
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
@@ -200,12 +177,24 @@ pub struct App {
 
     // Pending cross-window focus request set by sidebar click, processed after viewports render.
     pending_window_focus: Option<PendingWindowFocus>,
+
+    // Maps full file path → pane_id for FileDiff panes awaiting async diff results.
+    pending_diff_panes: HashMap<PathBuf, u32>,
+
+    // Async file load results buffer: spawned threads push (pane_id, content) here,
+    // drained at the start of each update() frame.
+    file_load_results: Arc<parking_lot::Mutex<Vec<(u32, String)>>>,
+    // Async md content load results from background threads.
+    md_load_results: Arc<parking_lot::Mutex<Vec<(PathBuf, String, Option<u64>)>>>,
 }
 
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_session();
         self.save_windows();
+        for entry in &self.session_state.sessions {
+            entry.alive.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -222,8 +211,31 @@ impl eframe::App for App {
             }
         }
 
+        // Drain async file load results from background threads.
+        {
+            let mut results = self.file_load_results.lock();
+            for (pane_id, content) in results.drain(..) {
+                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                    if let PaneContent::FileEditor(ref mut ed) = pane.content {
+                        ed.content = content;
+                    }
+                }
+            }
+        }
+
+        // Drain async markdown content loads from background threads.
+        {
+            let mut results = self.md_load_results.lock();
+            for (path, content, ws_id) in results.drain(..) {
+                self.terminal_md_content.insert(path.clone(), (Arc::new(content), ws_id));
+                self.shown_md_tabs.insert(path.clone());
+                self.show_right_panel = true;
+                self.right_tab = RightTab::Markdown(path);
+            }
+        }
+
         // Send deferred duplicate commands once the shell signals it is at a prompt (OSC 7).
-        for entry in &mut self.sessions {
+        for entry in &mut self.session_state.sessions {
             if entry.pending_command.is_some() {
                 let ready = entry.session.read().prompt_ready;
                 if ready {
@@ -231,9 +243,9 @@ impl eframe::App for App {
                     log::debug!("PTY[{}] replaying command: {:?}", entry.id, cmd);
                     // Windows ConPTY/PSReadLine executes on \r, not \n.
                     #[cfg(target_os = "windows")]
-                    let _ = entry.pty_tx.send(format!("{}\r", cmd).into_bytes());
+                    let _ = entry.pty_tx.try_send(format!("{}\r", cmd).into_bytes());
                     #[cfg(not(target_os = "windows"))]
-                    let _ = entry.pty_tx.send(format!("{}\n", cmd).into_bytes());
+                    let _ = entry.pty_tx.try_send(format!("{}\n", cmd).into_bytes());
                 } else {
                     // Keep repainting until the prompt arrives.
                     ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -244,15 +256,15 @@ impl eframe::App for App {
         // Poll quickly while any session is still initializing (CWD not set yet).
         // Only check sessions we know are still uninitialized to avoid per-frame
         // read locks on all sessions in the steady state.
-        if !self.uninit_sessions.is_empty() {
-            self.uninit_sessions.retain(|&id| {
-                self.sessions
+        if !self.session_state.uninit_sessions.is_empty() {
+            self.session_state.uninit_sessions.retain(|&id| {
+                self.session_state.sessions
                     .iter()
                     .find(|e| e.id == id)
                     .map(|e| e.session.read().cwd.as_os_str().is_empty())
                     .unwrap_or(false)
             });
-            if !self.uninit_sessions.is_empty() {
+            if !self.session_state.uninit_sessions.is_empty() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
         }
@@ -260,12 +272,12 @@ impl eframe::App for App {
         // ── Sync watchers + process FS events ──────────────────────────────
         if let Some(ws) = &mut self.watch_state {
             // Resync when sessions are added/removed or after 1s to catch CWD changes.
-            let session_count = self.sessions.len();
+            let session_count = self.session_state.sessions.len();
             let now = Instant::now();
             if session_count != ws.last_session_count
                 || now.duration_since(ws.last_sync) >= Duration::from_secs(1)
             {
-                ws.sync(&self.sessions);
+                ws.sync(&self.session_state.sessions);
                 ws.last_sync = now;
                 ws.last_session_count = session_count;
             }
@@ -289,7 +301,7 @@ impl eframe::App for App {
                 .map(|ws| ws.take_pending_git_refreshes())
                 .unwrap_or_default();
             for dir in &pending {
-                self.git_worker.enqueue_git(dir);
+                self.workers.git_worker.enqueue_git(dir);
             }
 
             let watched_dirs: Vec<PathBuf> = self
@@ -299,36 +311,45 @@ impl eframe::App for App {
                 .unwrap_or_default();
             let completed: Vec<(PathBuf, (String, String))> = watched_dirs
                 .iter()
-                .filter_map(|d| self.git_worker.take_git(d).map(|r| (d.clone(), r)))
+                .filter_map(|d| self.workers.git_worker.take_git(d).map(|r| (d.clone(), r)))
                 .collect();
             if let Some(ws) = &mut self.watch_state {
                 for (dir, (diff, status)) in completed {
                     ws.apply_git_result(&dir, diff, status);
                 }
             }
+
+            // Drain completed diff results and update pending FileDiff panes
+            let diff_results = self.workers.git_worker.take_diff_results();
+            for (full_path, diff_output) in diff_results {
+                if let Some(pane_id) = self.pending_diff_panes.remove(&full_path) {
+                    if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::FileDiff(ref mut d) = pane.content {
+                            d.diff_content = diff_output;
+                        }
+                    }
+                }
+            }
         }
 
         // ── Global search debounce: fire after 200ms of stable input ─────
-        if let Some(t) = self.global_search_debounce_at {
-            if t.elapsed() >= Duration::from_millis(200) {
-                self.global_search_debounce_at = None;
-                let query = self.global_search_query.clone();
-                if !query.is_empty() {
-                    let sessions: Vec<_> = self
-                        .sessions
-                        .iter()
-                        .map(|e| {
-                            let title = e.session.read().title();
-                            (e.id, title, e.session.clone())
-                        })
-                        .collect();
-                    self.search_worker.search(query, sessions);
-                } else {
-                    self.search_worker.cancel();
-                }
+        if self.global_search_debouncer.ready() {
+            let query = self.global_search_query.clone();
+            if !query.is_empty() {
+                let sessions: Vec<_> = self
+                    .session_state.sessions
+                    .iter()
+                    .map(|e| {
+                        let title = e.session.read().title();
+                        (e.id, title, e.session.clone())
+                    })
+                    .collect();
+                self.workers.search_worker.search(query, sessions);
             } else {
-                ctx.request_repaint_after(Duration::from_millis(50));
+                self.workers.search_worker.cancel();
             }
+        } else if self.global_search_debouncer.pending() {
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
 
         // ── Render the main window ────────────────────────────────────────
@@ -399,7 +420,7 @@ impl eframe::App for App {
                 let ew = &mut self.extra_windows[action.target_window_idx];
                 ew.view.active_group = action.group;
                 ew.view.active_pane_id = Some(action.pane_id);
-                if let Some(pane) = self.panes.iter().find(|p| p.id == action.pane_id) {
+                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == action.pane_id) {
                     if let PaneContent::Terminal(sid) = pane.content {
                         ew.view.active_id = Some(sid);
                     }
@@ -725,65 +746,40 @@ impl App {
                                                     open_ws_dialog = Some(cwd.clone());
                                                 }
                                             });
-                                            // ── Directory search bar ───────────────────
-                                            if self.dir_search_active {
-                                                let dir_search_id =
-                                                    egui::Id::new("dir_search_input");
-                                                ui.horizontal(|ui| {
-                                                    ui.label(egui::RichText::new("🔍").size(12.0));
-                                                    let te = egui::TextEdit::singleline(
-                                                        &mut self.dir_search_query,
-                                                    )
-                                                    .desired_width(
-                                                        ui.available_width() - theme::BTN_W,
-                                                    )
-                                                    .hint_text("Search files…")
-                                                    .font(egui::FontId::proportional(
-                                                        theme::SESSION_FONT_SZ,
-                                                    ))
-                                                    .id(dir_search_id);
-                                                    let r = ui.add(te);
-                                                    if r.lost_focus()
-                                                        && ui.input(|i| {
-                                                            i.key_pressed(egui::Key::Escape)
-                                                        })
-                                                    {
-                                                        self.dir_search_active = false;
-                                                        self.dir_search_query.clear();
-                                                        self.dir_search_debounce_query.clear();
-                                                        self.dir_search_debounce_at = None;
-                                                        self.file_search_worker.cancel();
-                                                    }
-                                                    r.request_focus();
-                                                });
-
-                                                if self.dir_search_query
-                                                    != self.dir_search_debounce_query
-                                                {
-                                                    self.dir_search_debounce_at =
-                                                        Some(Instant::now());
-                                                    self.dir_search_debounce_query =
-                                                        self.dir_search_query.clone();
+                                            // ── Directory search bar (always visible) ──
+                                            {
+                                                let focus = self.dir_search_active;
+                                                let sb = crate::app::ui::search_bar::search_bar_persistent(
+                                                    ui,
+                                                    &mut self.dir_search_query,
+                                                    "\u{1f50d}",
+                                                    "Search files\u{2026}",
+                                                    egui::Id::new("dir_search_input"),
+                                                    focus,
+                                                );
+                                                if focus {
+                                                    self.dir_search_active = false;
                                                 }
+                                                if sb.escaped {
+                                                    self.dir_search_query.clear();
+                                                    self.dir_search_debouncer.reset();
+                                                    self.workers.file_search_worker.cancel();
+                                                }
+                                                self.dir_search_debouncer.update(&self.dir_search_query);
                                             }
 
                                             ui.add_space(theme::SP_SM);
 
                                             // ── Dispatch to file search worker ─────────
-                                            let show_search_results = if self.dir_search_active
-                                                && !self.dir_search_query.is_empty()
+                                            let show_search_results = if !self.dir_search_query.is_empty()
                                             {
-                                                let debounce_ready =
-                                                    self.dir_search_debounce_at.map_or(true, |t| {
-                                                        t.elapsed() >= Duration::from_millis(150)
-                                                    });
-                                                if debounce_ready {
-                                                    let results = self.file_search_worker.results();
+                                                if self.dir_search_debouncer.ready() || !self.dir_search_debouncer.pending() {
+                                                    let results = self.workers.file_search_worker.results();
                                                     if results.query != self.dir_search_query
                                                         || results.root != *cwd
                                                     {
                                                         drop(results);
-                                                        self.file_search_worker.search(
+                                                        self.workers.file_search_worker.search(
                                                             self.dir_search_query.clone(),
                                                             cwd.clone(),
                                                         );
@@ -799,7 +795,7 @@ impl App {
                                             };
 
                                             if show_search_results {
-                                                let results = self.file_search_worker.results();
+                                                let results = self.workers.file_search_worker.results();
                                                 if !results.completed {
                                                     ui.label(
                                                         egui::RichText::new("Searching…")
@@ -1040,51 +1036,32 @@ impl App {
             }
         }
 
-        // Execute git stage/unstage action
+        // Execute git stage/unstage action (non-blocking via worker thread)
         if let Some(action) = git_stage_action {
             if let Some(cwd) = active_cwd.as_ref() {
-                use std::process::Command;
-                let ok = match &action {
-                    GitStageAction::Stage(path) => Command::new("git")
-                        .args(["add", "--", path])
-                        .current_dir(cwd)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false),
-                    GitStageAction::Unstage(path) => Command::new("git")
-                        .args(["reset", "HEAD", "--", path])
-                        .current_dir(cwd)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false),
-                    GitStageAction::StageAll => Command::new("git")
-                        .args(["add", "-A"])
-                        .current_dir(cwd)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false),
-                    GitStageAction::UnstageAll => Command::new("git")
-                        .args(["reset", "HEAD"])
-                        .current_dir(cwd)
-                        .status()
-                        .map(|s| s.success())
-                        .unwrap_or(false),
-                };
-                if ok {
-                    self.git_worker.enqueue_git(cwd);
+                match action {
+                    GitStageAction::Stage(path) => {
+                        self.workers.git_worker.enqueue_stage(cwd, path);
+                    }
+                    GitStageAction::Unstage(path) => {
+                        self.workers.git_worker.enqueue_unstage(cwd, path);
+                    }
+                    GitStageAction::StageAll => {
+                        self.workers.git_worker.enqueue_stage_all(cwd);
+                    }
+                    GitStageAction::UnstageAll => {
+                        self.workers.git_worker.enqueue_unstage_all(cwd);
+                    }
                 }
             }
         }
 
-        // Load file content for double-clicked file
-        let pending_open_editor: Option<(PathBuf, String)> = open_editor.map(|path| {
-            let content = std::fs::read_to_string(&path).unwrap_or_default();
-            (path, content)
-        });
+        // File to open in editor (content loaded async after pane creation)
+        let pending_open_editor: Option<PathBuf> = open_editor;
 
         // ── Snapshot editor contents for TextEdit (must be mutable locals) ─
         let mut editor_texts: Vec<(u32, Option<String>)> = self
-            .panes
+            .pane_state.panes
             .iter()
             .map(|p| {
                 let text = match &p.content {
@@ -1097,12 +1074,12 @@ impl App {
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
         let ws_colors: Vec<Option<[u8; 3]>> = self
-            .panes
+            .pane_state.panes
             .iter()
             .map(|p| match &p.content {
                 PaneContent::Terminal(sid) => {
                     let sid = *sid;
-                    self.sessions.iter().find(|e| e.id == sid).and_then(|e| {
+                    self.session_state.find(sid).and_then(|e| {
                         let cwd = e.session.read().cwd.clone();
                         if cwd.as_os_str().is_empty() {
                             return None;
@@ -1126,15 +1103,18 @@ impl App {
 
         // ── Group membership + visible pane indices for active group ─────────
         let pane_groups: Vec<Option<u64>> = self
-            .panes
+            .pane_state.panes
             .iter()
-            .map(|p| Self::pane_group(&self.sessions, &self.workspace_store, p))
+            .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p))
             .collect();
         let active_group_snap = self.active_group;
         let visible_indices: Vec<usize> = pane_groups
             .iter()
             .enumerate()
-            .filter(|(_, g)| **g == active_group_snap)
+            .filter(|(i, g)| {
+                **g == active_group_snap
+                    && self.pane_state.pane_trees.contains_key(&self.pane_state.panes[*i].id)
+            })
             .map(|(i, _)| i)
             .collect();
         // If the focused pane's computed group no longer matches `active_group`, follow it.
@@ -1145,19 +1125,23 @@ impl App {
         // actually removed (e.g., closed). Callers that deliberately change `active_group`
         // without changing `active_pane_id` (e.g., `open_workspace_in_new_window`) must clear
         // `active_pane_id` themselves so this fallback path runs instead of the follow path.
-        if let Some(pid) = self.active_pane_id {
-            if !visible_indices.iter().any(|&i| self.panes[i].id == pid) {
-                let pane_idx = self.panes.iter().position(|p| p.id == pid);
+        if let Some(pid) = self.pane_state.active_pane_id {
+            let root_id = self.pane_state.root_of(pid);
+            let root_visible = root_id.map_or(false, |rid| {
+                visible_indices.iter().any(|&i| self.pane_state.panes[i].id == rid)
+            });
+            if !root_visible {
+                let pane_idx = self.pane_state.panes.iter().position(|p| p.id == pid);
                 if let Some(idx) = pane_idx {
                     // Pane still exists — its group changed. Follow it.
                     self.active_group = pane_groups[idx];
                 } else {
                     // Pane was removed — fall back to first pane in the current group.
-                    self.active_pane_id = visible_indices.first().map(|&i| self.panes[i].id);
-                    if let Some(new_pid) = self.active_pane_id {
-                        if let Some(pane) = self.panes.iter().find(|p| p.id == new_pid) {
+                    self.pane_state.active_pane_id = visible_indices.first().map(|&i| self.pane_state.panes[i].id);
+                    if let Some(new_pid) = self.pane_state.active_pane_id {
+                        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
                             if let PaneContent::Terminal(sid) = pane.content {
-                                self.active_id = Some(sid);
+                                self.session_state.active_id = Some(sid);
                             }
                         }
                     }
@@ -1188,19 +1172,23 @@ impl App {
             .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
-            let font_id    = FontId::monospace(14.0);
-            let cw         = ui.fonts(|fonts| {
-                // Use a galley measurement (same as terminal_pass) so the PTY column count
-                // matches the renderer exactly. glyph_width can differ from rendered advance
-                // on HiDPI displays, causing the terminal to appear at half width.
-                let galley = fonts.layout_no_wrap(
-                    "MMMMMMMMMMMMMMMMMMMM".to_string(),
-                    font_id.clone(),
-                    theme::active().text,
-                );
-                galley.rect.width() / 20.0
-            });
-            let ch         = ui.fonts(|f| f.row_height(&font_id));
+            let font_id    = FontId::monospace(self.settings.font_size);
+            let (cw, ch) = match self.cached_cell_size {
+                Some((fs, w, h)) if fs == self.settings.font_size => (w, h),
+                _ => {
+                    let w = ui.fonts(|fonts| {
+                        let galley = fonts.layout_no_wrap(
+                            "MMMMMMMMMMMMMMMMMMMM".to_string(),
+                            font_id.clone(),
+                            theme::active().text,
+                        );
+                        galley.rect.width() / 20.0
+                    });
+                    let h = ui.fonts(|f| f.row_height(&font_id));
+                    self.cached_cell_size = Some((self.settings.font_size, w, h));
+                    (w, h)
+                }
+            };
             resize_cell_w  = cw;
             resize_cell_h  = ch;
             resize_total_h = panel_rect.height();
@@ -1208,13 +1196,13 @@ impl App {
 
             let nv = visible_indices.len();
 
-            let active_pane_id_snap = self.active_pane_id;
-            let active_is_editor = self.active_pane_id
-                .and_then(|pid| self.panes.iter().find(|p| p.id == pid))
+            let active_pane_id_snap = self.pane_state.active_pane_id;
+            let active_is_editor = self.pane_state.active_pane_id
+                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .map(|p| matches!(p.content, PaneContent::FileEditor(_)))
                 .unwrap_or(false);
-            let active_session_id: Option<u32> = self.active_pane_id
-                .and_then(|pid| self.panes.iter().find(|p| p.id == pid))
+            let active_session_id: Option<u32> = self.pane_state.active_pane_id
+                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .and_then(|p| match &p.content { PaneContent::Terminal(sid) => Some(*sid), _ => None });
 
             if nv == 0 {
@@ -1245,624 +1233,42 @@ impl App {
                     egui::vec2(panel_rect.width(), (panel_h - tab_h).max(0.0)),
                 );
 
-                // ── Tab bar (horizontally scrollable) ────────────────────────
-                ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
-                    ui.painter().rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
-                    egui::ScrollArea::horizontal()
-                        .id_source("tab_bar_scroll")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                for &i in &visible_indices {
-                                    let pane_id   = self.panes[i].id;
-                                    let is_active = Some(pane_id) == active_pane_id_snap;
-                                    let ws_color  = ws_colors[i];
-
-                                    let display = match &self.panes[i].content {
-                                        PaneContent::Terminal(sid) => {
-                                            let sid = *sid;
-                                            self.sessions.iter()
-                                                .find(|e| e.id == sid)
-                                                .map(|e| {
-                                                    let s = e.session.read();
-                                                    let title = s.title();
-                                                    let cwd = s.cwd.clone();
-                                                    drop(s);
-                                                    let fg = self.foreground_worker.get(e.id);
-                                                    effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell))
-                                                })
-                                                .unwrap_or_else(|| format!("Terminal {sid}"))
-                                        }
-                                        PaneContent::DeferredTerminal { cwd, .. } => {
-                                            let cwd_path = cwd.clone().unwrap_or_default();
-                                            effective_title("", &cwd_path, None, None)
-                                        }
-                                        PaneContent::FileEditor(ed) => {
-                                            let fname = ed.path.file_name()
-                                                .map(|n| n.to_string_lossy().into_owned())
-                                                .unwrap_or_default();
-                                            if ed.save_error {
-                                                format!("! {fname}")
-                                            } else if ed.dirty {
-                                                format!("* {fname}")
-                                            } else {
-                                                fname
-                                            }
-                                        }
-                                        PaneContent::FileDiff(d) => {
-                                            let fname = d.path.file_name()
-                                                .map(|n| n.to_string_lossy().into_owned())
-                                                .unwrap_or_default();
-                                            format!("\u{21c4} {fname}")
-                                        }
-                                    };
-
-                                    let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
-
-                                    let hbg = theme::header_bg(ws_color, is_active);
-                                    let title_color = match ws_color {
-                                        Some(c) => theme::text_on(theme::tinted(c, if is_active { 0.75 } else { 0.35 })),
-                                        None    => if is_active { theme::active().text } else { theme::active().subtext1 },
-                                    };
-
-                                    let painter = ui.painter().clone();
-                                    painter.rect_filled(tab_rect, 0.0, hbg);
-
-                                    // Workspace colour strip on left edge
-                                    if let Some(c) = ws_color {
-                                        painter.rect_filled(
-                                            egui::Rect::from_min_size(tab_rect.min, egui::vec2(theme::TAB_COLOR_STRIP_W, tab_h)),
-                                            0.0,
-                                            theme::from_rgb(c),
-                                        );
-                                    }
-
-                                    // Bottom highlight on active tab
-                                    if is_active {
-                                        painter.rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(tab_rect.min.x, tab_rect.max.y - theme::TAB_ACTIVE_HIGHLIGHT_H),
-                                                egui::vec2(theme::TAB_W, theme::TAB_ACTIVE_HIGHLIGHT_H),
-                                            ),
-                                            0.0, theme::active().text,
-                                        );
-                                    }
-
-                                    // Right-edge separator between tabs
-                                    painter.rect_filled(
-                                        egui::Rect::from_min_size(
-                                            egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
-                                            egui::vec2(theme::STROKE_THIN, tab_h),
-                                        ),
-                                        0.0, theme::active().surface2,
-                                    );
-
-                                    // Register tab-wide click first (lower z-order); close button
-                                    // is registered second so it has higher priority in egui's
-                                    // last-registered-wins model for overlapping regions.
-                                    let tab_resp = ui.interact(
-                                        tab_rect,
-                                        egui::Id::new(("tab_click", pane_id)),
-                                        egui::Sense::click_and_drag(),
-                                    );
-
-                                    // Close button (×)
-                                    let close_rect = egui::Rect::from_min_size(
-                                        egui::pos2(tab_rect.max.x - theme::BTN_W, tab_rect.min.y),
-                                        egui::vec2(theme::BTN_W, tab_h),
-                                    );
-                                    let close_resp = ui.interact(
-                                        close_rect,
-                                        egui::Id::new(("tab_close", pane_id)),
-                                        egui::Sense::click(),
-                                    );
-                                    if close_resp.hovered() {
-                                        painter.rect_filled(close_rect, 0.0, theme::active().danger_bg);
-                                    }
-                                    painter.text(
-                                        close_rect.center(), egui::Align2::CENTER_CENTER,
-                                        "×", egui::FontId::proportional(14.0),
-                                        theme::active().danger_fg,
-                                    );
-
-                                    // Title text (clipped before close button)
-                                    let text_x = tab_rect.min.x + theme::TAB_PAD_X + if ws_color.is_some() { theme::TAB_COLOR_STRIP_W } else { 0.0 };
-                                    painter.with_clip_rect(egui::Rect::from_min_max(
-                                        egui::pos2(text_x, tab_rect.min.y),
-                                        egui::pos2(close_rect.min.x - theme::SP_XS, tab_rect.max.y),
-                                    )).text(
-                                        egui::pos2(text_x, tab_rect.center().y),
-                                        egui::Align2::LEFT_CENTER,
-                                        &display,
-                                        egui::FontId::proportional(theme::HEADER_FONT_SZ),
-                                        title_color,
-                                    );
-
-                                    if close_resp.on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
-                                        close_pane_id = Some(pane_id);
-                                    } else if tab_resp.clicked() {
-                                        clicked_pane_id = Some(pane_id);
-                                    }
-
-                                    // Tab drag-to-reorder
-                                    if tab_resp.drag_started() {
-                                        self.tab_drag_source = Some(i);
-                                    }
-                                    if let Some(drag_idx) = self.tab_drag_source {
-                                        if tab_resp.hovered() && drag_idx != i {
-                                            let indicator_x = if drag_idx < i { tab_rect.max.x } else { tab_rect.min.x };
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(
-                                                    egui::pos2(indicator_x - 1.5, tab_rect.min.y),
-                                                    egui::vec2(3.0, tab_h),
-                                                ),
-                                                0.0,
-                                                theme::active().blue,
-                                            );
-                                        }
-                                    }
-
-                                    // Right-click context menu for tab operations.
-                                    let extra_window_names: Vec<(u64, String)> = self
-                                        .extra_windows
-                                        .iter()
-                                        .map(|w| (w.workspace_id, w.title.clone()))
-                                        .collect();
-                                    tab_resp.context_menu(|ui| {
-                                        ui.label(
-                                            egui::RichText::new("Move tab to window…")
-                                                .size(12.0)
-                                                .color(egui::Color32::from_gray(180)),
-                                        );
-                                        ui.separator();
-                                        if extra_window_names.is_empty() {
-                                            ui.label(
-                                                egui::RichText::new("No other windows")
-                                                    .italics()
-                                                    .color(egui::Color32::from_gray(140)),
-                                            );
-                                        } else {
-                                            for (_, win_title) in &extra_window_names {
-                                                ui.add_enabled_ui(false, |ui| {
-                                                    let _ = ui.button(win_title);
-                                                });
-                                            }
-                                            ui.label(
-                                                egui::RichText::new("(tab move coming in Phase D)")
-                                                    .italics()
-                                                    .size(11.0)
-                                                    .color(egui::Color32::from_gray(130)),
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-                        });
-                });
-
-                // ── Tab-bar action buttons (split / close-all) ──────────
-                ui.allocate_ui_at_rect(tab_actions_rect, |ui| {
-                    ui.painter().rect_filled(tab_actions_rect, 0.0, theme::active().surface0);
-                    // Left separator
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            tab_actions_rect.left_top(),
-                            egui::vec2(theme::STROKE_THIN, tab_h),
-                        ),
-                        0.0,
-                        theme::active().surface2,
-                    );
-                    let icon_sz = egui::vec2(theme::BTN_W, tab_h);
-                    let t = theme::active();
-                    let mut x = tab_actions_rect.min.x + 2.0;
-
-                    let icon_stroke = egui::Stroke::new(1.2, t.subtext1);
-                    let icon_hover_stroke = egui::Stroke::new(1.2, t.text);
-                    let icon_inset = 6.0_f32;
-
-                    // Split horizontal (side-by-side)
-                    let split_h_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-                    let split_h_resp = ui.interact(split_h_rect, egui::Id::new("tab_split_h"), egui::Sense::click());
-                    let sh_stroke = if split_h_resp.hovered() {
-                        ui.painter().rect_filled(split_h_rect, 2.0, t.surface2);
-                        icon_hover_stroke
-                    } else { icon_stroke };
-                    {
-                        let r = split_h_rect.shrink(icon_inset);
-                        let p = ui.painter();
-                        p.rect_stroke(r, 1.0, sh_stroke);
-                        p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
-                    }
-                    if split_h_resp.on_hover_text("Split horizontal (Ctrl+Shift+\\)").clicked() {
-                        split_request = Some(SplitDir::Horizontal);
-                    }
-                    x += icon_sz.x;
-
-                    // Split vertical (top-bottom)
-                    let split_v_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-                    let split_v_resp = ui.interact(split_v_rect, egui::Id::new("tab_split_v"), egui::Sense::click());
-                    let sv_stroke = if split_v_resp.hovered() {
-                        ui.painter().rect_filled(split_v_rect, 2.0, t.surface2);
-                        icon_hover_stroke
-                    } else { icon_stroke };
-                    {
-                        let r = split_v_rect.shrink(icon_inset);
-                        let p = ui.painter();
-                        p.rect_stroke(r, 1.0, sv_stroke);
-                        p.line_segment([r.left_center(), r.right_center()], sv_stroke);
-                    }
-                    if split_v_resp.on_hover_text("Split vertical (Ctrl+Shift+-)").clicked() {
-                        split_request = Some(SplitDir::Vertical);
-                    }
-                    x += icon_sz.x;
-
-                    // Close all tabs in workspace
-                    let close_all_rect = egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-                    let close_all_resp = ui.interact(close_all_rect, egui::Id::new("tab_close_all"), egui::Sense::click());
-                    if close_all_resp.hovered() {
-                        ui.painter().rect_filled(close_all_rect, 2.0, t.danger_bg);
-                    }
-                    ui.painter().text(
-                        close_all_rect.center(), egui::Align2::CENTER_CENTER,
-                        "\u{2716}", egui::FontId::proportional(12.0),
-                        t.danger_fg,
-                    );
-                    if close_all_resp.on_hover_text("Close all sessions").clicked() {
-                        self.show_close_all_confirm = true;
-                    }
-                });
-
-                // Tab drag-to-reorder: finalize on pointer release
-                if self.tab_drag_source.is_some() && ui.input(|i| i.pointer.any_released()) {
-                    if let Some(drag_idx) = self.tab_drag_source.take() {
-                        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                        if let Some(pos) = pointer_pos {
-                            // Find which tab the pointer is over by index
-                            let tab_count = visible_indices.len();
-                            if tab_count > 1 {
-                                let tab_bar_x = ui.min_rect().min.x;
-                                let rel_x = pos.x - tab_bar_x;
-                                let target_i = ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
-                                let target_vis = visible_indices.get(target_i).copied();
-                                let drag_vis = visible_indices.get(drag_idx).copied();
-                                if let (Some(from), Some(to)) = (drag_vis, target_vis) {
-                                    if from != to {
-                                        let pane = self.panes.remove(from);
-                                        let insert_at = if to > from { to - 1 } else { to };
-                                        self.panes.insert(insert_at, pane);
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // ── Tab bar (horizontally scrollable) + action buttons ──────
+                let tab_result = self.render_tab_bar(
+                    ui,
+                    &visible_indices,
+                    active_pane_id_snap,
+                    &ws_colors,
+                    tab_h,
+                    tab_bar_rect,
+                    tab_actions_rect,
+                );
+                if tab_result.close_pane_id.is_some() {
+                    close_pane_id = tab_result.close_pane_id;
+                }
+                if tab_result.clicked_pane_id.is_some() {
+                    clicked_pane_id = tab_result.clicked_pane_id;
+                }
+                if tab_result.split_request.is_some() {
+                    split_request = tab_result.split_request;
                 }
 
                 // ── Active tab content (full-size, split-aware) ──────────────
-                if let Some(&active_i) = visible_indices.iter()
-                    .find(|&&i| Some(self.panes[i].id) == active_pane_id_snap)
-                {
-                    let root_pane_id = self.panes[active_i].id;
-
-                    // Render the pane tree rooted at root_pane_id recursively.
-                    // We clone the tree to avoid borrowing self during the render pass.
-                    let tree = self.pane_trees.get(&root_pane_id).cloned()
-                        .unwrap_or_else(|| PaneNode::Leaf {
-                            pane_id: root_pane_id,
-                            last_size: self.panes[active_i].last_size,
-                        });
-
-                    // Recursive renderer (closure-based to avoid an out-of-closure fn
-                    // that would need to take all these args).
-                    struct RenderCtx<'a> {
-                        sessions: &'a [SessionEntry],
-                        panes: &'a [PaneEntry],
-                        editor_texts: &'a mut Vec<(u32, Option<String>)>,
-                        cursor_blink_on: bool,
-                        focused_pane_id: Option<u32>,
-                        active_term_geo: &'a mut Option<TerminalGeometry>,
-                        active_term_ui_id: &'a mut Option<egui::Id>,
-                        clicked_pane_id: &'a mut Option<u32>,
-                        editor_saves: &'a mut Vec<u32>,
-                        editor_preview_toggles: &'a mut Vec<u32>,
-                        pane_widths_snap: &'a mut Vec<(u32, f32)>,
-                        split_ratio_changes: &'a mut Vec<(u32, f32)>,
-                        term_selection: &'a Option<TermSelection>,
-                        term_selection_sid: Option<u32>,
-                        workspace_dialog_open: bool,
-                        workspace_edit_dialog_open: bool,
-                        show_settings: bool,
-                        font_size: f32,
-                        cursor_style: CursorStyle,
-                    }
-
-                    fn render_node(
-                        ui: &mut egui::Ui,
-                        node: &PaneNode,
-                        rect: egui::Rect,
-                        rctx: &mut RenderCtx<'_>,
-                    ) {
-                        use crate::pane_tree::{split_rect, SplitDir};
-                        match node {
-                            PaneNode::Leaf { pane_id, .. } => {
-                                let pane_id = *pane_id;
-                                let is_focused = rctx.focused_pane_id == Some(pane_id);
-                                let pane = rctx.panes.iter().find(|p| p.id == pane_id);
-                                let Some(pane) = pane else { return };
-
-                                // Track width for resize
-                                rctx.pane_widths_snap.push((pane_id, rect.width()));
-
-                                // Focused pane gets a highlighted border
-                                if is_focused && rctx.focused_pane_id.is_some() {
-                                    // Check if there's actually a split (more than one leaf in visible tree)
-                                    // We draw a subtle focus border only when there's a sibling
-                                    // (a simple single-pane view has no border)
-                                }
-
-                                ui.allocate_ui_at_rect(rect, |ui| {
-                                    match &pane.content {
-                                        PaneContent::Terminal(sid) => {
-                                            let sid = *sid;
-                                            if let Some(idx) = rctx.sessions.iter().position(|e| e.id == sid) {
-                                                let session = Arc::clone(&rctx.sessions[idx].session);
-                                                let sel_range = if rctx.term_selection_sid == Some(sid) {
-                                                    rctx.term_selection.as_ref().map(|s| {
-                                                        crate::renderer::terminal_pass::SelectionRange {
-                                                            start_col: s.start_col,
-                                                            start_row: s.start_row,
-                                                            end_col: s.end_col,
-                                                            end_row: s.end_row,
-                                                        }
-                                                    })
-                                                } else {
-                                                    None
-                                                };
-                                                let geo = crate::renderer::terminal_pass::TerminalView::new(session)
-                                                    .show(ui, is_focused, rctx.cursor_blink_on, sel_range.as_ref(), rctx.font_size, rctx.cursor_style);
-                                                if is_focused {
-                                                    *rctx.active_term_geo = Some(geo);
-                                                }
-                                            }
-                                            if is_focused {
-                                                let this_id = ui.id();
-                                                *rctx.active_term_ui_id = Some(this_id);
-                                                let dialog_open = rctx.workspace_dialog_open
-                                                    || rctx.workspace_edit_dialog_open
-                                                    || rctx.show_settings;
-                                                // Re-assert focus only when no other widget owns
-                                                // it. This recovers from transient focus steals
-                                                // (scroll areas, autocomplete) without trampling
-                                                // intentional focus on widgets like the notes
-                                                // TextEdit or the workspace search box.
-                                                if !dialog_open {
-                                                    let other_focused = ui.memory(|m| {
-                                                        m.focused()
-                                                            .map(|id| id != this_id)
-                                                            .unwrap_or(false)
-                                                    });
-                                                    if !other_focused {
-                                                        ui.memory_mut(|m| m.request_focus(this_id));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        PaneContent::DeferredTerminal { .. } => {
-                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                                        }
-                                        PaneContent::FileEditor(ed) => {
-                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                                            if !file_browser::is_supported_text_file(&ed.path, &ed.content) {
-                                                ui.centered_and_justified(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new("File type not supported for preview")
-                                                            .size(16.0)
-                                                            .color(theme::active().overlay0),
-                                                    );
-                                                });
-                                            } else {
-                                            let is_md = ed.path.extension().and_then(|e| e.to_str()) == Some("md");
-                                            let previewing = is_md && ed.show_preview;
-                                            if is_md {
-                                                ui.horizontal(|ui| {
-                                                    let t = theme::active();
-                                                    let raw_color = if !previewing { t.text } else { t.overlay0 };
-                                                    let preview_color = if previewing { t.text } else { t.overlay0 };
-                                                    let raw_bg = if !previewing { t.surface2 } else { egui::Color32::TRANSPARENT };
-                                                    let preview_bg = if previewing { t.surface2 } else { egui::Color32::TRANSPARENT };
-                                                    if ui.add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new("Raw")
-                                                                .size(11.0)
-                                                                .color(raw_color),
-                                                        )
-                                                        .fill(raw_bg)
-                                                        .rounding(egui::Rounding::same(theme::ROUNDING))
-                                                        .min_size(egui::vec2(56.0, 20.0)),
-                                                    ).clicked() && previewing {
-                                                        rctx.editor_preview_toggles.push(pane_id);
-                                                    }
-                                                    if ui.add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new("Preview")
-                                                                .size(11.0)
-                                                                .color(preview_color),
-                                                        )
-                                                        .fill(preview_bg)
-                                                        .rounding(egui::Rounding::same(theme::ROUNDING))
-                                                        .min_size(egui::vec2(56.0, 20.0)),
-                                                    ).clicked() && !previewing {
-                                                        rctx.editor_preview_toggles.push(pane_id);
-                                                    }
-                                                });
-                                                ui.separator();
-                                            }
-                                            if previewing {
-                                                if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
-                                                    if let Some(ref text) = et.1 {
-                                                        egui::ScrollArea::both()
-                                                            .id_source(("editor_preview_scroll", pane_id))
-                                                            .auto_shrink([false; 2])
-                                                            .show(ui, |ui| {
-                                                                render_markdown(ui, text);
-                                                            });
-                                                    }
-                                                }
-                                            } else if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
-                                                if let Some(ref mut text) = et.1 {
-                                                    egui::ScrollArea::both()
-                                                        .id_source(("editor_scroll", pane_id))
-                                                        .auto_shrink([false; 2])
-                                                        .show(ui, |ui| {
-                                                            let line_count = text.lines().count().max(1);
-                                                            let digits = ((line_count as f64).log10().floor() as usize) + 1;
-                                                            let char_w = 7.5_f32; // approx monospace char width at default size
-                                                            let gutter_w = (digits as f32 + 1.5) * char_w;
-                                                            let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
-
-                                                            ui.horizontal_top(|ui| {
-                                                                ui.spacing_mut().item_spacing.x = 0.0;
-                                                                // Line number gutter
-                                                                ui.vertical(|ui| {
-                                                                    ui.set_min_width(gutter_w);
-                                                                    // Pad top to match TextEdit internal padding
-                                                                    ui.add_space(2.0);
-                                                                    for n in 1..=line_count {
-                                                                        let num_str = format!("{:>width$}", n, width = digits);
-                                                                        ui.add_sized(
-                                                                            egui::vec2(gutter_w, line_h),
-                                                                            egui::Label::new(
-                                                                                egui::RichText::new(num_str)
-                                                                                    .monospace()
-                                                                                    .color(theme::active().overlay0),
-                                                                            ),
-                                                                        );
-                                                                    }
-                                                                });
-                                                                // Separator line
-                                                                let sep_rect = ui.allocate_exact_size(
-                                                                    egui::vec2(1.0, line_h * line_count as f32 + 4.0),
-                                                                    egui::Sense::hover(),
-                                                                ).0;
-                                                                ui.painter().rect_filled(sep_rect, 0.0, theme::active().surface1);
-                                                                ui.add_space(theme::SP_SM);
-                                                                // Editor
-                                                                ui.add(
-                                                                    egui::TextEdit::multiline(text)
-                                                                        .font(egui::TextStyle::Monospace)
-                                                                        .desired_width(f32::INFINITY)
-                                                                        .frame(false),
-                                                                );
-                                                            });
-                                                        });
-                                                }
-                                            }
-                                            if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
-                                                rctx.editor_saves.push(pane_id);
-                                            }
-                                            } // end else (supported file)
-                                        }
-                                        PaneContent::FileDiff(d) => {
-                                            ui.painter().rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                                            ui.horizontal(|ui| {
-                                                ui.label(
-                                                    egui::RichText::new(format!("⇄ {}", d.path.display()))
-                                                        .strong()
-                                                        .size(13.0)
-                                                        .color(theme::active().git_filename),
-                                                );
-                                            });
-                                            ui.separator();
-                                            egui::ScrollArea::both()
-                                                .id_source(("diff_scroll", pane_id))
-                                                .auto_shrink([false; 2])
-                                                .show(ui, |ui| {
-                                                    render_inline_diff(ui, &d.diff_content);
-                                                });
-                                        }
-                                    }
-                                });
-
-                                // Click to focus pane
-                                if ui.ctx().input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary)) {
-                                    if let Some(pos) = ui.ctx().input(|inp| inp.pointer.interact_pos()) {
-                                        if rect.contains(pos) {
-                                            *rctx.clicked_pane_id = Some(pane_id);
-                                            // Release focus from any other widget (e.g. the
-                                            // notes TextEdit) so the terminal can take keyboard
-                                            // focus on the next frame.
-                                            if let Some(fid) = ui.ctx().memory(|m| m.focused()) {
-                                                ui.ctx().memory_mut(|m| m.surrender_focus(fid));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            PaneNode::Split { split_id, dir, ratio, a, b } => {
-                                let (rect_a, div_rect, rect_b) = split_rect(rect, *dir, *ratio);
-                                render_node(ui, a, rect_a, rctx);
-                                render_node(ui, b, rect_b, rctx);
-
-                                // Draw divider
-                                let div_id = egui::Id::new(("split_div", *split_id));
-                                let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
-                                let div_color = if div_resp.dragged() || div_resp.hovered() {
-                                    theme::active().divider_active
-                                } else {
-                                    theme::active().divider_idle
-                                };
-                                ui.painter().rect_filled(div_rect, theme::STROKE_THIN, div_color);
-
-                                // Handle drag to resize
-                                if div_resp.dragged() {
-                                    let delta = div_resp.drag_delta();
-                                    let movement = match dir {
-                                        SplitDir::Horizontal => delta.x / rect.width(),
-                                        SplitDir::Vertical   => delta.y / rect.height(),
-                                    };
-                                    let new_ratio = (*ratio + movement).clamp(0.1, 0.9);
-                                    rctx.split_ratio_changes.push((*split_id, new_ratio));
-                                }
-
-                                // Cursor feedback
-                                let cursor = match dir {
-                                    SplitDir::Horizontal => egui::CursorIcon::ResizeHorizontal,
-                                    SplitDir::Vertical   => egui::CursorIcon::ResizeVertical,
-                                };
-                                if div_resp.hovered() || div_resp.dragged() {
-                                    ui.ctx().set_cursor_icon(cursor);
-                                }
-                            }
-                        }
-                    }
-
-                    let mut rctx = RenderCtx {
-                        sessions: &self.sessions,
-                        panes: &self.panes,
-                        editor_texts: &mut editor_texts,
-                        cursor_blink_on: self.cursor_blink_on,
-                        focused_pane_id: active_pane_id_snap,
-                        active_term_geo: &mut self.active_term_geo,
-                        active_term_ui_id: &mut self.active_term_ui_id,
-                        clicked_pane_id: &mut clicked_pane_id,
-                        editor_saves: &mut editor_saves,
-                        editor_preview_toggles: &mut editor_preview_toggles,
-                        pane_widths_snap: &mut pane_widths_snap,
-                        split_ratio_changes: &mut split_ratio_changes,
-                        term_selection: &self.term_selection,
-                        term_selection_sid: self.term_selection_sid,
-                        workspace_dialog_open: self.workspace_dialog.is_some(),
-                        workspace_edit_dialog_open: self.workspace_edit_dialog.is_some(),
-                        show_settings: self.show_settings,
-                        font_size: self.settings.font_size,
-                        cursor_style: self.settings.cursor_style,
-                    };
-                    render_node(ui, &tree, content_rect, &mut rctx);
-                }
+                self.render_pane_content(
+                    ui,
+                    content_rect,
+                    active_pane_id_snap,
+                    &mut editor_texts,
+                    &mut clicked_pane_id,
+                    &mut editor_saves,
+                    &mut editor_preview_toggles,
+                    &mut pane_widths_snap,
+                    &mut split_ratio_changes,
+                );
 
             // ── URL detection + search overlay ────────────────────────────
-            if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.active_id) {
-                if let Some(entry) = self.sessions.iter().find(|e| e.id == sid) {
+            if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.session_state.active_id) {
+                if let Some(entry) = self.session_state.find(sid) {
                     {
                         use alacritty_terminal::grid::Dimensions;
                         use alacritty_terminal::index::{Column, Line};
@@ -1898,11 +1304,15 @@ impl App {
                             for md in &self.detected_md_paths {
                                 if !self.auto_opened_md.contains(&md.path) {
                                     self.auto_opened_md.insert(md.path.clone());
-                                    let content = std::fs::read_to_string(&md.path).unwrap_or_default();
-                                    self.terminal_md_content.insert(md.path.clone(), (Arc::new(content), self.active_group));
-                                    self.shown_md_tabs.insert(md.path.clone());
-                                    self.show_right_panel = true;
-                                    self.right_tab = RightTab::Markdown(md.path.clone());
+                                    let path = md.path.clone();
+                                    let ws_id = self.active_group;
+                                    let results = Arc::clone(&self.md_load_results);
+                                    let ctx_clone = ctx.clone();
+                                    std::thread::spawn(move || {
+                                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                                        results.lock().push((path, content, ws_id));
+                                        ctx_clone.request_repaint();
+                                    });
                                 }
                             }
                         } else {
@@ -2183,21 +1593,12 @@ impl App {
                     }
                     Some(AppAction::FocusSessionSearch) => {
                         self.show_left_panel = true;
-                        self.session_search_active = !self.session_search_active;
-                        if !self.session_search_active {
-                            self.session_search_query.clear();
-                        }
+                        self.session_search_active = true;
                     }
                     Some(AppAction::FocusFileSearch) | Some(AppAction::RightTabDirectory) => {
                         self.show_right_panel = true;
                         self.right_tab = RightTab::Directory;
-                        self.dir_search_active = !self.dir_search_active;
-                        if !self.dir_search_active {
-                            self.dir_search_query.clear();
-                            self.dir_search_debounce_query.clear();
-                            self.dir_search_debounce_at = None;
-                            self.file_search_worker.cancel();
-                        }
+                        self.dir_search_active = true;
                     }
                     Some(AppAction::SearchTerminal) => {
                         self.term_search.active = !self.term_search.active;
@@ -2215,9 +1616,9 @@ impl App {
                             self.session_search_query.clear();
                         } else {
                             self.global_search_query.clear();
-                            self.global_search_debounce_at = None;
+                            self.global_search_debouncer.reset();
                             self.global_search_selected = 0;
-                            self.search_worker.cancel();
+                            self.workers.search_worker.cancel();
                         }
                     }
                     _ => {}
@@ -2236,10 +1637,10 @@ impl App {
                 if tab_fwd || tab_rev {
                     if let Some(sid) = active_session_id {
                         self.scroll_accum.remove(&sid);
-                        if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                            self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
                             let bytes = if tab_fwd { b"\t".to_vec() } else { b"\x1b[Z".to_vec() };
-                            let _ = self.sessions[idx].pty_tx.send(bytes);
+                            let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes);
                         }
                     }
                 }
@@ -2251,19 +1652,19 @@ impl App {
                 if active_session_id != self.last_focused_sid {
                     // Send focus-out to the session we just left
                     if let Some(old_sid) = self.last_focused_sid {
-                        if let Some(idx) = self.sessions.iter().position(|e| e.id == old_sid) {
-                            let tracking = self.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
+                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == old_sid) {
+                            let tracking = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
                             if tracking {
-                                let _ = self.sessions[idx].pty_tx.send(b"\x1b[O".to_vec());
+                                let _ = self.session_state.sessions[idx].pty_tx.try_send(b"\x1b[O".to_vec());
                             }
                         }
                     }
                     // Send focus-in to the newly active session
                     if let Some(sid) = active_session_id {
-                        if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                            let tracking = self.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
+                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                            let tracking = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::FOCUS_IN_OUT);
                             if tracking {
-                                let _ = self.sessions[idx].pty_tx.send(b"\x1b[I".to_vec());
+                                let _ = self.session_state.sessions[idx].pty_tx.try_send(b"\x1b[I".to_vec());
                             }
                         }
                     }
@@ -2278,9 +1679,9 @@ impl App {
                                 self.term_selection = None;
                                 self.term_selection_sid = None;
                                 self.scroll_accum.remove(&sid);
-                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                    let _ = self.sessions[idx].pty_tx.send(text.as_bytes().to_vec());
+                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                    self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(text.as_bytes().to_vec());
                                 }
                             }
                         }
@@ -2304,7 +1705,7 @@ impl App {
                                     AppAction::CopySelection => {
                                         if let Some(sid) = active_session_id {
                                             if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
-                                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                                     let text = self.extract_selected_text(idx);
                                                     if !text.is_empty() {
                                                         ctx.output_mut(|o| o.copied_text = text);
@@ -2318,34 +1719,27 @@ impl App {
                                     AppAction::DuplicateSession => self.deferred_duplicate = true,
                                     AppAction::FocusSessionSearch => {
                                         self.show_left_panel = true;
-                                        self.session_search_active = !self.session_search_active;
-                                        if !self.session_search_active {
-                                            self.session_search_query.clear();
-                                        }
+                                        self.session_search_active = true;
                                     }
                                     AppAction::FocusFileSearch => {
                                         self.show_right_panel = true;
                                         self.right_tab = RightTab::Directory;
-                                        self.dir_search_active = !self.dir_search_active;
-                                        if !self.dir_search_active {
-                                            self.dir_search_query.clear();
-                                            self.dir_search_debounce_query.clear();
-                                            self.dir_search_debounce_at = None;
-                                            self.file_search_worker.cancel();
-                                        }
+                                        self.dir_search_active = true;
                                     }
                                     AppAction::PreviousTab => {
                                         if nv > 1 {
-                                            let cur = self.active_pane_id.and_then(|pid| visible_indices.iter().position(|&i| self.panes[i].id == pid)).unwrap_or(0);
+                                            let root_id = self.pane_state.active_pane_id.and_then(|pid| self.pane_state.root_of(pid));
+                                            let cur = root_id.and_then(|rid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == rid)).unwrap_or(0);
                                             let prev = if cur == 0 { nv - 1 } else { cur - 1 };
-                                            clicked_pane_id = Some(self.panes[visible_indices[prev]].id);
+                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[prev]].id);
                                         }
                                     }
                                     AppAction::NextTab => {
                                         if nv > 1 {
-                                            let cur = self.active_pane_id.and_then(|pid| visible_indices.iter().position(|&i| self.panes[i].id == pid)).unwrap_or(0);
+                                            let root_id = self.pane_state.active_pane_id.and_then(|pid| self.pane_state.root_of(pid));
+                                            let cur = root_id.and_then(|rid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == rid)).unwrap_or(0);
                                             let next = (cur + 1) % nv;
-                                            clicked_pane_id = Some(self.panes[visible_indices[next]].id);
+                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[next]].id);
                                         }
                                     }
                                     AppAction::NextWorkspace => {
@@ -2367,13 +1761,7 @@ impl App {
                                     AppAction::RightTabDirectory => {
                                         self.show_right_panel = true;
                                         self.right_tab = RightTab::Directory;
-                                        self.dir_search_active = !self.dir_search_active;
-                                        if !self.dir_search_active {
-                                            self.dir_search_query.clear();
-                                            self.dir_search_debounce_query.clear();
-                                            self.dir_search_debounce_at = None;
-                                            self.file_search_worker.cancel();
-                                        }
+                                        self.dir_search_active = true;
                                     }
                                     AppAction::RightTabGitDiff => {
                                         self.show_right_panel = true;
@@ -2385,7 +1773,7 @@ impl App {
                                     _ => {
                                         if let Some(tab_idx) = action.tab_index() {
                                             if tab_idx < nv {
-                                                clicked_pane_id = Some(self.panes[visible_indices[tab_idx]].id);
+                                                clicked_pane_id = Some(self.pane_state.panes[visible_indices[tab_idx]].id);
                                             }
                                         }
                                     }
@@ -2402,11 +1790,11 @@ impl App {
                                 };
                                 if let Some(_dir) = dir_opt {
                                     if let Some(active_pid) = active_pane_id_snap {
-                                        let root_pid_opt = self.pane_trees.iter()
+                                        let root_pid_opt = self.pane_state.pane_trees.iter()
                                             .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                                             .map(|(&rpid, _)| rpid);
                                         if let Some(root_pid) = root_pid_opt {
-                                            if let Some(tree) = self.pane_trees.get(&root_pid) {
+                                            if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
                                                 let leaves = tree.leaf_ids();
                                                 if leaves.len() > 1 {
                                                     if let Some(pos) = leaves.iter().position(|&id| id == active_pid) {
@@ -2427,18 +1815,18 @@ impl App {
                                 } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
                                     if let Some(sid) = active_session_id {
                                         self.scroll_accum.remove(&sid);
-                                        if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                            self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                            let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
+                                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                            let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                         }
                                     }
                                 }
                             } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
                                 if let Some(sid) = active_session_id {
                                     self.scroll_accum.remove(&sid);
-                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                        self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                        let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
+                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                        self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                     }
                                 }
                             }
@@ -2449,7 +1837,7 @@ impl App {
                         egui::Event::Copy => {
                             if let Some(sid) = active_session_id {
                                 if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
-                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                         let text = self.extract_selected_text(idx);
                                         if !text.is_empty() {
                                             ctx.output_mut(|o| o.copied_text = text);
@@ -2459,9 +1847,9 @@ impl App {
                                     self.term_selection_sid = None;
                                 } else {
                                     self.scroll_accum.remove(&sid);
-                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                        self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                        let _ = self.sessions[idx].pty_tx.send(vec![3u8]);
+                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                        self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(vec![3u8]);
                                     }
                                 }
                             }
@@ -2471,9 +1859,9 @@ impl App {
                         egui::Event::Paste(text) => {
                             if let Some(sid) = active_session_id {
                                 self.scroll_accum.remove(&sid);
-                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                                    self.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                    let bp = self.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
+                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                    self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                    let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
                                     let data = if bp {
                                         let mut v = b"\x1b[200~".to_vec();
                                         v.extend_from_slice(text.as_bytes());
@@ -2482,16 +1870,16 @@ impl App {
                                     } else {
                                         text.as_bytes().to_vec()
                                     };
-                                    let _ = self.sessions[idx].pty_tx.send(data);
+                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
                                 }
                             }
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
                         egui::Event::PointerButton { pos, button, pressed, .. } => {
                             if let Some(sid) = active_session_id {
-                                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                     let (has_mouse, sgr) = {
-                                        let s = self.sessions[idx].session.read();
+                                        let s = self.session_state.sessions[idx].session.read();
                                         let mode = s.term.mode();
                                         let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
                                             || mode.contains(TermMode::MOUSE_DRAG)
@@ -2508,7 +1896,7 @@ impl App {
                                                     _ => return,
                                                 };
                                                 let bytes = mouse_event_bytes(btn, col, row, *pressed, sgr);
-                                                let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
+                                                let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                             }
                                         }
                                     } else if *button == egui::PointerButton::Primary {
@@ -2560,9 +1948,9 @@ impl App {
                                 .unwrap_or(false);
                             if over_term {
                                 if let Some(sid) = active_session_id {
-                                    if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
+                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                         let (has_mouse, sgr) = {
-                                            let s = self.sessions[idx].session.read();
+                                            let s = self.session_state.sessions[idx].session.read();
                                             let mode = s.term.mode();
                                             let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
                                                 || mode.contains(TermMode::MOUSE_DRAG)
@@ -2577,7 +1965,7 @@ impl App {
                                                         // Button 64 = scroll up, 65 = scroll down
                                                         let btn = if delta.y > 0.0 { 64u8 } else { 65 };
                                                         let bytes = mouse_event_bytes(btn, col, row, true, sgr);
-                                                        let _ = self.sessions[idx].pty_tx.send(bytes.to_vec());
+                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                                     }
                                                 }
                                             }
@@ -2608,7 +1996,7 @@ impl App {
                                                 } else {
                                                     -(lines as i32)
                                                 };
-                                                self.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_delta));
+                                                self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_delta));
                                             }
                                         }
                                     }
@@ -2626,7 +2014,7 @@ impl App {
 
         // Phase D-0: Apply split divider ratio changes from drag
         for (split_id_changed, new_ratio) in split_ratio_changes {
-            for tree in self.pane_trees.values_mut() {
+            for tree in self.pane_state.pane_trees.values_mut() {
                 if let Some(ratio) = tree.find_split_ratio_mut(split_id_changed) {
                     *ratio = new_ratio;
                     break;
@@ -2636,17 +2024,17 @@ impl App {
 
         // Phase D-1: Handle split request (Ctrl+Shift+\ or Ctrl+Shift+-)
         if let Some(dir) = split_request {
-            if let Some(active_pid) = self.active_pane_id {
+            if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Find the root pane that contains the active pane
                 let root_pid_opt = self
-                    .pane_trees
+                    .pane_state.pane_trees
                     .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
                 if let Some(root_pid) = root_pid_opt {
                     // Get current size for the new pane
                     let (cols, rows) = self
-                        .panes
+                        .pane_state.panes
                         .iter()
                         .find(|p| p.id == active_pid)
                         .map(|p| p.last_size)
@@ -2654,7 +2042,7 @@ impl App {
                     // Get cwd and shell from active session
                     let (cwd, shell) = {
                         let active_session_entry = self
-                            .panes
+                            .pane_state.panes
                             .iter()
                             .find(|p| p.id == active_pid)
                             .and_then(|p| {
@@ -2664,7 +2052,7 @@ impl App {
                                     None
                                 }
                             })
-                            .and_then(|sid| self.sessions.iter().find(|e| e.id == sid));
+                            .and_then(|sid| self.session_state.find(sid));
                         let cwd = active_session_entry
                             .map(|e| e.session.read().cwd.clone())
                             .filter(|p| !p.as_os_str().is_empty());
@@ -2675,24 +2063,24 @@ impl App {
                     };
                     // Spawn a new session (no pane entry yet — leaf only in tree)
                     if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
-                        let new_pane_id = self.next_pane_id;
-                        self.next_pane_id += 1;
-                        let split_id = self.next_split_id;
-                        self.next_split_id += 1;
+                        let new_pane_id = self.pane_state.next_pane_id;
+                        self.pane_state.next_pane_id += 1;
+                        let split_id = self.pane_state.next_split_id;
+                        self.pane_state.next_split_id += 1;
                         // Add pane entry (NOT a root pane, so no pane_trees entry)
-                        self.panes.push(PaneEntry {
+                        self.pane_state.panes.push(PaneEntry {
                             id: new_pane_id,
                             content: PaneContent::Terminal(new_sid),
                             manual_width: None,
                             last_size: (cols, rows),
                         });
                         // Modify the tree to split the active leaf
-                        if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                        if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                             tree.split_pane(active_pid, new_pane_id, split_id, dir);
                         }
                         // Focus the new pane
-                        self.active_pane_id = Some(new_pane_id);
-                        self.active_id = Some(new_sid);
+                        self.pane_state.active_pane_id = Some(new_pane_id);
+                        self.session_state.active_id = Some(new_sid);
                         self.update_is_active_flags();
                         ctx.request_repaint();
                     }
@@ -2702,10 +2090,10 @@ impl App {
 
         // Phase D-2: Handle Ctrl+Shift+W — close the focused split pane
         if close_split_pane {
-            if let Some(active_pid) = self.active_pane_id {
+            if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Find the root that contains the active pane
                 let root_pid_opt = self
-                    .pane_trees
+                    .pane_state.pane_trees
                     .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
@@ -2713,7 +2101,7 @@ impl App {
                     let is_root_itself = root_pid == active_pid;
                     // Check if tree has only one leaf (the root itself)
                     let leaf_count = self
-                        .pane_trees
+                        .pane_state.pane_trees
                         .get(&root_pid)
                         .map(|t| t.leaf_ids().len())
                         .unwrap_or(1);
@@ -2723,53 +2111,51 @@ impl App {
                         // We set close_pane_id to None earlier so we'll handle directly:
                         if leaf_count <= 1 {
                             // Kill session if terminal
-                            if let Some(pos) = self.panes.iter().position(|p| p.id == active_pid) {
-                                if let PaneContent::Terminal(sid) = self.panes[pos].content {
-                                    self.uninit_sessions.remove(&sid);
-                                    self.sessions.retain(|e| e.id != sid);
-                                    if self.active_id == Some(sid) {
-                                        self.active_id = self.sessions.first().map(|e| e.id);
+                            if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == active_pid) {
+                                if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
+                                    self.session_state.remove(sid);
+                                    if self.session_state.active_id == Some(sid) {
+                                        self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
                                         self.update_is_active_flags();
                                     }
                                 }
-                                self.panes.remove(pos);
+                                self.pane_state.panes.remove(pos);
                             }
-                            self.pane_trees.remove(&root_pid);
-                            self.active_pane_id = self.panes.last().map(|p| p.id);
+                            self.pane_state.pane_trees.remove(&root_pid);
+                            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
                             self.save_session();
                         }
                     } else {
                         // Remove the leaf from the tree, collapsing the parent split
-                        let remove_result = if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                        let remove_result = if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                             tree.remove_pane(active_pid)
                         } else {
                             RemoveResult::NotFound
                         };
                         if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                            if let Some(tree) = self.pane_trees.get_mut(&root_pid) {
+                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                 *tree = replacement;
                             }
                         }
                         // Kill the session of the removed pane
-                        if let Some(pos) = self.panes.iter().position(|p| p.id == active_pid) {
-                            if let PaneContent::Terminal(sid) = self.panes[pos].content {
-                                self.uninit_sessions.remove(&sid);
-                                self.sessions.retain(|e| e.id != sid);
-                                if self.active_id == Some(sid) {
-                                    self.active_id = self.sessions.first().map(|e| e.id);
+                        if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == active_pid) {
+                            if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
+                                self.session_state.remove(sid);
+                                if self.session_state.active_id == Some(sid) {
+                                    self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
                                     self.update_is_active_flags();
                                 }
                             }
-                            self.panes.remove(pos);
+                            self.pane_state.panes.remove(pos);
                         }
                         // Focus sibling — pick the first leaf of the root tree
-                        if let Some(tree) = self.pane_trees.get(&root_pid) {
+                        if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
                             let leaves = tree.leaf_ids();
-                            self.active_pane_id = leaves.first().copied();
-                            if let Some(new_pid) = self.active_pane_id {
-                                if let Some(pane) = self.panes.iter().find(|p| p.id == new_pid) {
+                            self.pane_state.active_pane_id = leaves.first().copied();
+                            if let Some(new_pid) = self.pane_state.active_pane_id {
+                                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
                                     if let PaneContent::Terminal(sid) = pane.content {
-                                        self.active_id = Some(sid);
+                                        self.session_state.active_id = Some(sid);
                                         self.update_is_active_flags();
                                     }
                                 }
@@ -2782,42 +2168,41 @@ impl App {
 
         // 1. Divider drags → freeze manual widths on both adjacent panes
         for (left_idx, right_idx, delta_x, left_w, right_w) in divider_drags {
-            self.panes[left_idx].manual_width = Some((left_w + delta_x).max(theme::MIN_PANE_W));
-            self.panes[right_idx].manual_width = Some((right_w - delta_x).max(theme::MIN_PANE_W));
+            self.pane_state.panes[left_idx].manual_width = Some((left_w + delta_x).max(theme::MIN_PANE_W));
+            self.pane_state.panes[right_idx].manual_width = Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
         // 2. Close pane (tab-strip close — kills the entire split tree for that root)
         if let Some(pid) = close_pane_id {
             // Collect all pane IDs in this root's split tree so we can kill them all.
             let tree_ids: Vec<u32> = self
-                .pane_trees
+                .pane_state.pane_trees
                 .get(&pid)
                 .map(|t| t.leaf_ids())
                 .unwrap_or_else(|| vec![pid]);
             // Kill every session belonging to any leaf of this tree.
             for leaf_pid in &tree_ids {
-                if let Some(pos) = self.panes.iter().position(|p| p.id == *leaf_pid) {
-                    if let PaneContent::Terminal(sid) = self.panes[pos].content {
-                        self.uninit_sessions.remove(&sid);
-                        self.sessions.retain(|e| e.id != sid);
-                        if self.active_id == Some(sid) {
-                            self.active_id = self.sessions.first().map(|e| e.id);
+                if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == *leaf_pid) {
+                    if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
+                        self.session_state.remove(sid);
+                        if self.session_state.active_id == Some(sid) {
+                            self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
                             self.update_is_active_flags();
                         }
                     }
                 }
             }
             // Remove all leaf panes from the panes vec.
-            self.panes.retain(|p| !tree_ids.contains(&p.id));
+            self.pane_state.panes.retain(|p| !tree_ids.contains(&p.id));
             editor_texts.retain(|(id, _)| !tree_ids.contains(id));
             // Remove the root's tree entry.
-            self.pane_trees.remove(&pid);
+            self.pane_state.pane_trees.remove(&pid);
             if self
-                .active_pane_id
+                .pane_state.active_pane_id
                 .map(|ap| tree_ids.contains(&ap))
                 .unwrap_or(false)
             {
-                self.active_pane_id = self.panes.last().map(|p| p.id);
+                self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
             }
             self.save_session();
         }
@@ -2825,12 +2210,12 @@ impl App {
         // 3. Equalize pane widths for visible panes (split icon clicked)
         if equalize_widths {
             for &i in &visible_indices {
-                self.panes[i].manual_width = None;
+                self.pane_state.panes[i].manual_width = None;
             }
             loop {
                 let nv2 = visible_indices
                     .iter()
-                    .filter(|&&i| i < self.panes.len())
+                    .filter(|&&i| i < self.pane_state.panes.len())
                     .count();
                 if nv2 <= 1 {
                     break;
@@ -2841,17 +2226,16 @@ impl App {
                 }
                 // Remove the first visible pane
                 if let Some(&first_vi) = visible_indices.first() {
-                    let removed = self.panes.remove(first_vi);
+                    let removed = self.pane_state.panes.remove(first_vi);
                     if let PaneContent::Terminal(sid) = removed.content {
-                        self.uninit_sessions.remove(&sid);
-                        self.sessions.retain(|e| e.id != sid);
-                        if self.active_id == Some(sid) {
-                            self.active_id = self.sessions.first().map(|e| e.id);
+                        self.session_state.remove(sid);
+                        if self.session_state.active_id == Some(sid) {
+                            self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
                             self.update_is_active_flags();
                         }
                     }
-                    if self.active_pane_id == Some(removed.id) {
-                        self.active_pane_id = self.panes.first().map(|p| p.id);
+                    if self.pane_state.active_pane_id == Some(removed.id) {
+                        self.pane_state.active_pane_id = self.pane_state.panes.first().map(|p| p.id);
                     }
                     break; // recompute visible_indices next frame
                 }
@@ -2866,16 +2250,16 @@ impl App {
         // 5b. Materialize any DeferredTerminal that is now the active pane.
         // This runs after activate_pane() so the deferred pane spawns in the same
         // update() call as the click, meaning the terminal is ready by the next frame.
-        if let Some(pid) = self.active_pane_id {
-            if let Some(pane_idx) = self.panes.iter().position(|p| p.id == pid) {
+        if let Some(pid) = self.pane_state.active_pane_id {
+            if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
                 if matches!(
-                    &self.panes[pane_idx].content,
+                    &self.pane_state.panes[pane_idx].content,
                     PaneContent::DeferredTerminal { .. }
                 ) {
                     let (cwd, pending_command) = if let PaneContent::DeferredTerminal {
                         cwd,
                         pending_command,
-                    } = &self.panes[pane_idx].content
+                    } = &self.pane_state.panes[pane_idx].content
                     {
                         (cwd.clone(), pending_command.clone())
                     } else {
@@ -2884,13 +2268,13 @@ impl App {
                     let shell = self.configured_shell();
                     if let Some(sid) = self.spawn_session_no_pane(&shell, 80, 24, cwd) {
                         if let Some(cmd) = pending_command {
-                            if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
+                            if let Some(entry) = self.session_state.find_mut(sid) {
                                 entry.pending_command = Some(cmd);
                             }
                         }
-                        self.panes[pane_idx].content = PaneContent::Terminal(sid);
-                        self.panes[pane_idx].last_size = (0, 0); // force resize next frame
-                        self.active_id = Some(sid);
+                        self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
+                        self.pane_state.panes[pane_idx].last_size = (0, 0); // force resize next frame
+                        self.session_state.active_id = Some(sid);
                         self.update_is_active_flags();
                         ctx.request_repaint();
                     }
@@ -2901,8 +2285,8 @@ impl App {
         // 6. Editor text changes
         for (i, (pane_id, new_text)) in editor_texts.iter().enumerate() {
             if let Some(ref new_text) = new_text {
-                if i < self.panes.len() && self.panes[i].id == *pane_id {
-                    if let PaneContent::FileEditor(ref mut ed) = self.panes[i].content {
+                if i < self.pane_state.panes.len() && self.pane_state.panes[i].id == *pane_id {
+                    if let PaneContent::FileEditor(ref mut ed) = self.pane_state.panes[i].content {
                         if *new_text != ed.content {
                             ed.content = new_text.clone();
                             ed.dirty = true;
@@ -2915,7 +2299,7 @@ impl App {
 
         // 7. Editor saves (Ctrl+S)
         for save_id in &editor_saves {
-            if let Some(p) = self.panes.iter_mut().find(|p| p.id == *save_id) {
+            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     match std::fs::write(&ed.path, &ed.content) {
                         Ok(()) => {
@@ -2932,7 +2316,7 @@ impl App {
         }
 
         for toggle_id in &editor_preview_toggles {
-            if let Some(p) = self.panes.iter_mut().find(|p| p.id == *toggle_id) {
+            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *toggle_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     ed.show_preview = !ed.show_preview;
                     self.md_prefer_preview = ed.show_preview;
@@ -2946,12 +2330,12 @@ impl App {
         // issuing a clear-screen sequence on every drag frame, which would leave
         // the terminal blank for as long as the running app takes to redraw.
         for (pane_id, width) in pane_widths_snap {
-            if let Some(pane_idx) = self.panes.iter().position(|p| p.id == pane_id) {
-                if let PaneContent::Terminal(sid) = self.panes[pane_idx].content {
+            if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
+                if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
                     let cols = ((width / resize_cell_w) as u16).max(1);
                     let rows = (((resize_total_h - theme::HEADER_H) / resize_cell_h) as u16).max(1);
                     let target = (cols, rows);
-                    if target != self.panes[pane_idx].last_size {
+                    if target != self.pane_state.panes[pane_idx].last_size {
                         // Reset debounce timer only if the target itself changed
                         // (not just re-entering the same pending target each frame).
                         let need_reset = !matches!(self.resize_debounce.get(&sid), Some(&(dc, dr, _)) if (dc, dr) == target);
@@ -2979,14 +2363,14 @@ impl App {
                 self.scroll_accum.remove(&sid);
                 // Update pane's recorded size
                 if let Some(pane) = self
-                    .panes
+                    .pane_state.panes
                     .iter_mut()
                     .find(|p| matches!(p.content, PaneContent::Terminal(s) if s == sid))
                 {
                     pane.last_size = (cols, rows);
                 }
-                if let Some(idx) = self.sessions.iter().position(|e| e.id == sid) {
-                    let entry = &self.sessions[idx];
+                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                    let entry = &self.session_state.sessions[idx];
                     let mut sess = entry.session.write();
                     SessionManager::resize(&entry.master, cols, rows);
                     sess.resize(cols, rows);
@@ -2999,23 +2383,23 @@ impl App {
         }
 
         // 9. File opened from right panel → add FileEditor pane (or focus existing)
-        if let Some((path, content)) = pending_open_editor {
+        if let Some(path) = pending_open_editor {
             let existing_id = self
-                .panes
+                .pane_state.panes
                 .iter()
                 .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
                 .map(|p| p.id);
             if let Some(pid) = existing_id {
                 self.activate_pane(pid);
             } else {
-                let pane_id = self.next_pane_id;
-                self.next_pane_id += 1;
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
                 let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-                self.panes.push(PaneEntry {
+                self.pane_state.panes.push(PaneEntry {
                     id: pane_id,
                     content: PaneContent::FileEditor(FileEditorState {
-                        path,
-                        content,
+                        path: path.clone(),
+                        content: String::new(),
                         dirty: false,
                         save_error: false,
                         workspace_id: self.active_group,
@@ -3024,7 +2408,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                 });
-                self.pane_trees.insert(
+                self.pane_state.pane_trees.insert(
                     pane_id,
                     PaneNode::Leaf {
                         pane_id,
@@ -3032,27 +2416,35 @@ impl App {
                     },
                 );
                 self.activate_pane(pane_id);
+                {
+                    let results = Arc::clone(&self.file_load_results);
+                    let ctx_clone = ctx.clone();
+                    std::thread::spawn(move || {
+                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                        results.lock().push((pane_id, content));
+                        ctx_clone.request_repaint();
+                    });
+                }
             }
         }
 
         // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
         if let Some(path) = open_md_in_editor {
             let existing_id = self
-                .panes
+                .pane_state.panes
                 .iter()
                 .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
                 .map(|p| p.id);
             if let Some(pid) = existing_id {
                 self.activate_pane(pid);
             } else {
-                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                let pane_id = self.next_pane_id;
-                self.next_pane_id += 1;
-                self.panes.push(PaneEntry {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
                     id: pane_id,
                     content: PaneContent::FileEditor(FileEditorState {
-                        path,
-                        content,
+                        path: path.clone(),
+                        content: String::new(),
                         dirty: false,
                         save_error: false,
                         workspace_id: self.active_group,
@@ -3061,7 +2453,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                 });
-                self.pane_trees.insert(
+                self.pane_state.pane_trees.insert(
                     pane_id,
                     PaneNode::Leaf {
                         pane_id,
@@ -3069,46 +2461,52 @@ impl App {
                     },
                 );
                 self.activate_pane(pane_id);
+                {
+                    let results = Arc::clone(&self.file_load_results);
+                    let ctx_clone = ctx.clone();
+                    std::thread::spawn(move || {
+                        let content = std::fs::read_to_string(&path).unwrap_or_default();
+                        results.lock().push((pane_id, content));
+                        ctx_clone.request_repaint();
+                    });
+                }
             }
         }
 
-        // 9b. Git diff file double-clicked → open FileDiff pane
+        // 9b. Git diff file double-clicked → open FileDiff pane (non-blocking)
         if let Some(rel_path) = git_open_diff_file {
             if let Some(cwd) = self.active_cwd() {
                 let full_path = cwd.join(&rel_path);
                 let existing_id = self
-                    .panes
+                    .pane_state.panes
                     .iter()
                     .find(|p| matches!(&p.content, PaneContent::FileDiff(d) if d.path == full_path))
                     .map(|p| p.id);
                 if let Some(pid) = existing_id {
                     self.activate_pane(pid);
                 } else {
-                    use std::process::Command;
-                    let diff_output = Command::new("git")
-                        .args(["diff", "HEAD", "--", &rel_path])
-                        .current_dir(&cwd)
-                        .output()
-                        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                        .unwrap_or_default();
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
-                    self.panes.push(PaneEntry {
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    self.pane_state.panes.push(PaneEntry {
                         id: pane_id,
                         content: PaneContent::FileDiff(FileDiffState {
-                            path: full_path,
-                            diff_content: diff_output,
+                            path: full_path.clone(),
+                            diff_content: String::new(),
                         }),
                         manual_width: None,
                         last_size: (0, 0),
                     });
-                    self.pane_trees.insert(
+                    self.pane_state.pane_trees.insert(
                         pane_id,
                         PaneNode::Leaf {
                             pane_id,
                             last_size: (0, 0),
                         },
                     );
+                    self.pending_diff_panes
+                        .insert(full_path, pane_id);
+                    self.workers.git_worker
+                        .enqueue_diff(&cwd, rel_path);
                     self.activate_pane(pane_id);
                 }
             }
@@ -3119,22 +2517,21 @@ impl App {
             if let Some(cwd) = self.active_cwd() {
                 let full_path = cwd.join(&rel_path);
                 let existing_id = self
-                    .panes
+                    .pane_state.panes
                     .iter()
                     .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == full_path))
                     .map(|p| p.id);
                 if let Some(pid) = existing_id {
                     self.activate_pane(pid);
                 } else {
-                    let content = std::fs::read_to_string(&full_path).unwrap_or_default();
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
                     let is_md = full_path.extension().and_then(|e| e.to_str()) == Some("md");
-                    self.panes.push(PaneEntry {
+                    self.pane_state.panes.push(PaneEntry {
                         id: pane_id,
                         content: PaneContent::FileEditor(FileEditorState {
-                            path: full_path,
-                            content,
+                            path: full_path.clone(),
+                            content: String::new(),
                             dirty: false,
                             save_error: false,
                             workspace_id: self.active_group,
@@ -3143,7 +2540,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                     });
-                    self.pane_trees.insert(
+                    self.pane_state.pane_trees.insert(
                         pane_id,
                         PaneNode::Leaf {
                             pane_id,
@@ -3151,15 +2548,24 @@ impl App {
                         },
                     );
                     self.activate_pane(pane_id);
+                    {
+                        let results = Arc::clone(&self.file_load_results);
+                        let ctx_clone = ctx.clone();
+                        std::thread::spawn(move || {
+                            let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+                            results.lock().push((pane_id, content));
+                            ctx_clone.request_repaint();
+                        });
+                    }
                 }
             }
         }
 
         // 9c. Folder double-clicked in directory → open new terminal pane at that path
         if let Some(dir_path) = open_terminal_at {
-            let pane_id = self.next_pane_id;
-            self.next_pane_id += 1;
-            self.panes.push(PaneEntry {
+            let pane_id = self.pane_state.next_pane_id;
+            self.pane_state.next_pane_id += 1;
+            self.pane_state.panes.push(PaneEntry {
                 id: pane_id,
                 content: PaneContent::DeferredTerminal {
                     cwd: Some(dir_path),
@@ -3168,7 +2574,7 @@ impl App {
                 manual_width: None,
                 last_size: (0, 0),
             });
-            self.pane_trees.insert(
+            self.pane_state.pane_trees.insert(
                 pane_id,
                 PaneNode::Leaf {
                     pane_id,

@@ -37,7 +37,7 @@ pub struct EventProxy {
     pub id: u32,
     title: Arc<Mutex<String>>,
     pub ctx: Context,
-    pub pty_tx: mpsc::Sender<Vec<u8>>,
+    pub pty_tx: mpsc::SyncSender<Vec<u8>>,
 }
 
 impl EventProxy {
@@ -45,7 +45,7 @@ impl EventProxy {
         id: u32,
         title: Arc<Mutex<String>>,
         ctx: Context,
-        pty_tx: mpsc::Sender<Vec<u8>>,
+        pty_tx: mpsc::SyncSender<Vec<u8>>,
     ) -> Self {
         EventProxy {
             id,
@@ -63,7 +63,7 @@ impl EventListener for EventProxy {
                 *self.title.lock() = s;
             }
             Event::PtyWrite(s) => {
-                let _ = self.pty_tx.send(s.into_bytes());
+                let _ = self.pty_tx.try_send(s.into_bytes());
             }
             Event::MouseCursorDirty | Event::CursorBlinkingChange => {
                 // Coalesce: schedule a repaint at the next ~60 Hz tick rather
@@ -96,7 +96,7 @@ impl Session {
         rows: u16,
         cwd: Option<PathBuf>,
         ctx: Context,
-        pty_tx: mpsc::Sender<Vec<u8>>,
+        pty_tx: mpsc::SyncSender<Vec<u8>>,
         scrollback_lines: usize,
     ) -> Self {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
@@ -124,7 +124,7 @@ impl Session {
     #[cfg(test)]
     pub fn new_for_test(id: u32, cols: u16, rows: u16) -> Self {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
-        let (tx, _rx) = mpsc::channel();
+        let (tx, _rx) = mpsc::sync_channel(64);
         let ctx = Context::default();
         let proxy = EventProxy::new(id, title.clone(), ctx, tx);
         let config = Config {

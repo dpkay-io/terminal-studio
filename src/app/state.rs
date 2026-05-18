@@ -16,6 +16,8 @@ use alacritty_terminal::grid::Dimensions;
 
 use super::multi_window::{ExtraWindow, SavedExtraWindow, WindowView};
 use super::pane::{FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry};
+use super::pane_state::PaneState;
+use super::session_state::SessionState;
 use super::persistence::{
     session_data_path, AppSession, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,
 };
@@ -85,13 +87,11 @@ impl App {
 
         let mgr = SessionManager::new(ctx.clone());
         let loaded_settings = AppSettings::load();
+        let last_update_check = loaded_settings.last_update_check;
         let mut app = App {
             session_manager: mgr,
-            sessions: vec![],
-            active_id: None,
-            panes: vec![],
-            active_pane_id: None,
-            next_pane_id: 0,
+            session_state: SessionState::new(),
+            pane_state: PaneState::new(),
             right_tab: RightTab::Directory,
             shown_md_tabs: HashSet::new(),
             watch_state: WatchState::new(ctx.clone()),
@@ -112,17 +112,22 @@ impl App {
             show_quick_switcher: false,
             quick_switcher_query: String::new(),
             shortcut_registry: ShortcutRegistry::new(),
-            update_checker: UpdateChecker::spawn(ctx.clone(), loaded_settings.last_update_check),
             settings: loaded_settings,
             active_term_geo: None,
             last_focused_sid: None,
             active_term_ui_id: None,
             resize_debounce: HashMap::new(),
             scroll_accum: HashMap::new(),
-            foreground_worker: ForegroundWorker::spawn(),
+            workers: super::worker_manager::WorkerManager {
+                foreground_worker: ForegroundWorker::spawn(),
+                git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
+                search_worker: crate::search_worker::SearchWorker::spawn(ctx.clone()),
+                file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
+                sys_monitor: SysMonitor::spawn(ctx.clone(), Duration::from_secs(2)),
+                update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
+            },
             was_focused: true,
             available_shells: available_shells(),
-            uninit_sessions: HashSet::new(),
             cursor_blink_on: true,
             cursor_blink_last: Instant::now(),
             term_selection: None,
@@ -131,26 +136,20 @@ impl App {
             extra_windows: Vec::new(),
             next_window_id: 1,
             current_window_id: None,
-            pane_trees: HashMap::new(),
-            next_split_id: 1,
+            cached_cell_size: None,
             subdir_cache: HashMap::new(),
             last_title_sent: None,
             session_search_query: String::new(),
             session_search_active: false,
             dir_search_query: String::new(),
             dir_search_active: false,
-            dir_search_debounce_query: String::new(),
-            dir_search_debounce_at: None,
-            sys_monitor: SysMonitor::spawn(ctx.clone(), Duration::from_secs(2)),
-            git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
+            dir_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(150)),
             md_prefer_preview: false,
             term_search: crate::search::SearchState::new(),
             show_global_search: false,
             global_search_query: String::new(),
-            global_search_debounce_at: None,
-            search_worker: crate::search_worker::SearchWorker::spawn(ctx.clone()),
+            global_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(200)),
             global_search_selected: 0,
-            file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
             auto_opened_md: HashSet::new(),
@@ -162,6 +161,9 @@ impl App {
             show_close_all_confirm: false,
             session_workspace_filter: None,
             pending_window_focus: None,
+            pending_diff_panes: HashMap::new(),
+            file_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
+            md_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
         };
 
         let (init_cols, init_rows) = {
@@ -214,28 +216,28 @@ impl App {
                     pending_command: None,
                     shell: shell.clone(),
                 };
-                if self.active_id.is_none() {
-                    self.active_id = Some(id);
+                if self.session_state.active_id.is_none() {
+                    self.session_state.active_id = Some(id);
                 }
-                self.uninit_sessions.insert(id);
-                self.sessions.push(entry);
-                if self.panes.is_empty() {
-                    let pane_id = self.next_pane_id;
-                    self.next_pane_id += 1;
-                    self.panes.push(PaneEntry {
+                self.session_state.uninit_sessions.insert(id);
+                self.session_state.sessions.push(entry);
+                if self.pane_state.panes.is_empty() {
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    self.pane_state.panes.push(PaneEntry {
                         id: pane_id,
                         content: PaneContent::Terminal(id),
                         manual_width: None,
                         last_size: (cols, rows),
                     });
-                    self.pane_trees.insert(
+                    self.pane_state.pane_trees.insert(
                         pane_id,
                         PaneNode::Leaf {
                             pane_id,
                             last_size: (cols, rows),
                         },
                     );
-                    self.active_pane_id = Some(pane_id);
+                    self.pane_state.active_pane_id = Some(pane_id);
                 }
                 Some(id)
             }
@@ -259,13 +261,13 @@ impl App {
     }
 
     pub(super) fn active_session_index(&self) -> Option<usize> {
-        let id = self.active_id?;
-        self.sessions.iter().position(|e| e.id == id)
+        let id = self.session_state.active_id?;
+        self.session_state.sessions.iter().position(|e| e.id == id)
     }
 
     pub(super) fn active_cwd(&self) -> Option<PathBuf> {
         let idx = self.active_session_index()?;
-        let p = self.sessions[idx].session.read().cwd.clone();
+        let p = self.session_state.sessions[idx].session.read().cwd.clone();
         if p.as_os_str().is_empty() {
             None
         } else {
@@ -336,14 +338,14 @@ impl App {
         let mut view = WindowView::new_for_workspace(ws_id);
         view.session_workspace_filter = Some(Some(ws_id));
         let initial_pane = self
-            .panes
+            .pane_state.panes
             .iter()
-            .find(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == Some(ws_id))
+            .find(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == Some(ws_id))
             .map(|p| p.id);
         view.active_pane_id = initial_pane;
         if let Some(pid) = initial_pane {
             view.last_pane_per_group.insert(Some(ws_id), pid);
-            if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
+            if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
                 if let PaneContent::Terminal(sid) = pane.content {
                     view.active_id = Some(sid);
                 }
@@ -363,16 +365,16 @@ impl App {
 
         if self.current_window_id.is_none() && self.active_group == Some(ws_id) {
             self.active_group = None;
-            self.active_pane_id = None;
-            self.active_id = None;
+            self.pane_state.active_pane_id = None;
+            self.session_state.active_id = None;
         }
     }
 
     pub(super) fn swap_view(&mut self, view: &mut WindowView) {
         use std::mem::swap;
         swap(&mut self.active_group, &mut view.active_group);
-        swap(&mut self.active_pane_id, &mut view.active_pane_id);
-        swap(&mut self.active_id, &mut view.active_id);
+        swap(&mut self.pane_state.active_pane_id, &mut view.active_pane_id);
+        swap(&mut self.session_state.active_id, &mut view.active_id);
         swap(&mut self.last_pane_per_group, &mut view.last_pane_per_group);
         swap(&mut self.last_focused_sid, &mut view.last_focused_sid);
         swap(&mut self.right_tab, &mut view.right_tab);
@@ -418,7 +420,9 @@ impl App {
             return;
         };
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log::warn!("failed to create windows data dir: {e}");
+            }
         }
         let saved: Vec<SavedExtraWindow> = self
             .extra_windows
@@ -434,7 +438,9 @@ impl App {
             })
             .collect();
         if let Ok(text) = serde_json::to_string_pretty(&saved) {
-            let _ = std::fs::write(path, text);
+            if let Err(e) = std::fs::write(path, text) {
+                log::error!("failed to save windows data: {e}");
+            }
         }
     }
 
@@ -506,10 +512,10 @@ impl App {
     }
 
     pub(super) fn activate_pane(&mut self, pid: u32) {
-        self.active_pane_id = Some(pid);
-        if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
+        self.pane_state.active_pane_id = Some(pid);
+        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
             if let PaneContent::Terminal(sid) = pane.content {
-                self.active_id = Some(sid);
+                self.session_state.active_id = Some(sid);
                 self.update_is_active_flags();
             }
         }
@@ -519,9 +525,9 @@ impl App {
         self.active_group = group;
 
         let panes_in_group: Vec<u32> = self
-            .panes
+            .pane_state.panes
             .iter()
-            .filter(|p| Self::pane_group(&self.sessions, &self.workspace_store, p) == group)
+            .filter(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == group)
             .map(|p| p.id)
             .collect();
 
@@ -545,28 +551,28 @@ impl App {
                 .map(|w| w.path.clone())
         });
         if let Some(sid) = self.spawn_session(&default_shell(), cols, rows, cwd) {
-            self.active_id = Some(sid);
+            self.session_state.active_id = Some(sid);
             if !self
-                .panes
+                .pane_state.panes
                 .iter()
                 .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid))
             {
-                let pane_id = self.next_pane_id;
-                self.next_pane_id += 1;
-                self.panes.push(PaneEntry {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
                     id: pane_id,
                     content: PaneContent::Terminal(sid),
                     manual_width: None,
                     last_size: (cols, rows),
                 });
-                self.pane_trees.insert(
+                self.pane_state.pane_trees.insert(
                     pane_id,
                     PaneNode::Leaf {
                         pane_id,
                         last_size: (cols, rows),
                     },
                 );
-                self.active_pane_id = Some(pane_id);
+                self.pane_state.active_pane_id = Some(pane_id);
             }
             self.update_is_active_flags();
         }
@@ -584,8 +590,8 @@ impl App {
             .spawn(cols, rows, cwd, shell, self.settings.scrollback_lines)
         {
             Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
-                self.uninit_sessions.insert(id);
-                self.sessions.push(SessionEntry {
+                self.session_state.uninit_sessions.insert(id);
+                self.session_state.sessions.push(SessionEntry {
                     id,
                     session,
                     pty_tx,
@@ -606,8 +612,8 @@ impl App {
     }
 
     pub(super) fn update_is_active_flags(&self) {
-        let active = self.active_id;
-        for entry in &self.sessions {
+        let active = self.session_state.active_id;
+        for entry in &self.session_state.sessions {
             entry
                 .is_active
                 .store(active == Some(entry.id), Ordering::Relaxed);
@@ -620,24 +626,24 @@ impl App {
         };
 
         let session_id_to_index: HashMap<u32, usize> = self
-            .sessions
+            .session_state.sessions
             .iter()
             .enumerate()
             .map(|(i, e)| (e.id, i))
             .collect();
         let pane_id_to_index: HashMap<u32, usize> = self
-            .panes
+            .pane_state.panes
             .iter()
             .enumerate()
             .map(|(i, p)| (p.id, i))
             .collect();
 
         let sessions = self
-            .sessions
+            .session_state.sessions
             .iter()
             .map(|e| {
                 let cwd = e.session.read().cwd.clone();
-                let command = self.foreground_worker.get(e.id).map(|fp| {
+                let command = self.workers.foreground_worker.get(e.id).map(|fp| {
                     let parts: Vec<String> =
                         fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
                     let joined = parts.join(" ");
@@ -655,11 +661,10 @@ impl App {
             .collect();
 
         let panes = self
-            .panes
+            .pane_state.panes
             .iter()
-            .filter(|p| !matches!(&p.content, PaneContent::FileDiff(_)))
-            .map(|p| SavedPane {
-                content: match &p.content {
+            .filter_map(|p| {
+                let content = match &p.content {
                     PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
                         session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
                     },
@@ -676,17 +681,20 @@ impl App {
                         dirty: ed.dirty,
                         workspace_id: ed.workspace_id,
                     },
-                    PaneContent::FileDiff(_) => unreachable!(),
-                },
-                manual_width: p.manual_width,
+                    PaneContent::FileDiff(_) => return None,
+                };
+                Some(SavedPane {
+                    content,
+                    manual_width: p.manual_width,
+                })
             })
             .collect();
 
         let active_pane_index = self
-            .active_pane_id
+            .pane_state.active_pane_id
             .and_then(|pid| pane_id_to_index.get(&pid).copied());
         let active_session_index = self
-            .active_id
+            .session_state.active_id
             .and_then(|sid| session_id_to_index.get(&sid).copied());
         let last_pane_per_group = self
             .last_pane_per_group
@@ -716,10 +724,14 @@ impl App {
         };
 
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                log::warn!("failed to create session data dir: {e}");
+            }
         }
         if let Ok(text) = serde_json::to_string_pretty(&state) {
-            let _ = std::fs::write(path, text);
+            if let Err(e) = std::fs::write(path, text) {
+                log::error!("failed to save session state: {e}");
+            }
         }
     }
 
@@ -758,7 +770,7 @@ impl App {
                 };
                 if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
                     if let Some(cmd) = s.command.clone() {
-                        if let Some(entry) = self.sessions.iter_mut().find(|e| e.id == sid) {
+                        if let Some(entry) = self.session_state.find_mut(sid) {
                             entry.pending_command = Some(cmd);
                         }
                     }
@@ -818,16 +830,16 @@ impl App {
                     })
                 }
             };
-            let pane_id = self.next_pane_id;
-            self.next_pane_id += 1;
+            let pane_id = self.pane_state.next_pane_id;
+            self.pane_state.next_pane_id += 1;
             pane_ids.push(pane_id);
-            self.panes.push(PaneEntry {
+            self.pane_state.panes.push(PaneEntry {
                 id: pane_id,
                 content,
                 manual_width: saved.manual_width,
                 last_size: (0, 0),
             });
-            self.pane_trees.insert(
+            self.pane_state.pane_trees.insert(
                 pane_id,
                 PaneNode::Leaf {
                     pane_id,
@@ -841,14 +853,14 @@ impl App {
                 self.activate_pane(pid);
             }
         }
-        if self.active_pane_id.is_none() {
+        if self.pane_state.active_pane_id.is_none() {
             if let Some(&pid) = pane_ids.first() {
                 self.activate_pane(pid);
             }
         }
-        if self.active_id.is_none() {
+        if self.session_state.active_id.is_none() {
             if let Some(&sid) = eagerly_spawned.values().next() {
-                self.active_id = Some(sid);
+                self.session_state.active_id = Some(sid);
                 self.update_is_active_flags();
             }
         }
@@ -876,9 +888,9 @@ impl App {
     }
 
     pub(super) fn track_active_pane_group(&mut self) {
-        if let Some(pid) = self.active_pane_id {
-            if let Some(pane) = self.panes.iter().find(|p| p.id == pid) {
-                let group = Self::pane_group(&self.sessions, &self.workspace_store, pane);
+        if let Some(pid) = self.pane_state.active_pane_id {
+            if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
+                let group = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
                 if group == self.active_group {
                     self.last_pane_per_group.insert(self.active_group, pid);
                 }
@@ -925,7 +937,7 @@ impl App {
             None => return String::new(),
         };
         let (sc, sr, ec, er) = sel.ordered();
-        let session = self.sessions[session_idx].session.read();
+        let session = self.session_state.sessions[session_idx].session.read();
         let term = &session.term;
         let grid = term.grid();
         let term_cols = term.columns();
@@ -971,7 +983,11 @@ impl App {
         rect: egui::Rect,
         fg: egui::Color32,
     ) {
-        let stats = self.sys_monitor.stats();
+        let stats = self
+            .workers.sys_monitor
+            .as_ref()
+            .map(|m| m.stats())
+            .unwrap_or_default();
         let bar_h = 5.0_f32;
         let bar_w = rect.width() - 8.0;
         let x0 = rect.min.x + 4.0;
