@@ -305,3 +305,109 @@ impl SessionManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_name_all_variants() {
+        assert_eq!(ShellKind::PowerShell.display_name(), "PowerShell");
+        assert_eq!(ShellKind::Pwsh.display_name(), "PowerShell Core (pwsh)");
+        assert_eq!(ShellKind::Cmd.display_name(), "Command Prompt");
+        assert_eq!(ShellKind::Bash.display_name(), "Bash");
+        assert_eq!(ShellKind::Zsh.display_name(), "Zsh");
+        assert_eq!(ShellKind::Fish.display_name(), "Fish");
+        assert_eq!(ShellKind::Sh.display_name(), "Sh");
+    }
+
+    #[test]
+    fn test_executable_all_variants() {
+        assert_eq!(ShellKind::PowerShell.executable(), "powershell.exe");
+        if cfg!(target_os = "windows") {
+            assert_eq!(ShellKind::Pwsh.executable(), "pwsh.exe");
+        } else {
+            assert_eq!(ShellKind::Pwsh.executable(), "pwsh");
+        }
+        assert_eq!(ShellKind::Cmd.executable(), "cmd.exe");
+        assert_eq!(ShellKind::Bash.executable(), "bash");
+        assert_eq!(ShellKind::Zsh.executable(), "zsh");
+        assert_eq!(ShellKind::Fish.executable(), "fish");
+        assert_eq!(ShellKind::Sh.executable(), "sh");
+    }
+
+    #[test]
+    fn test_display_name_not_empty() {
+        let variants = [
+            ShellKind::PowerShell,
+            ShellKind::Pwsh,
+            ShellKind::Cmd,
+            ShellKind::Bash,
+            ShellKind::Zsh,
+            ShellKind::Fish,
+            ShellKind::Sh,
+        ];
+        for variant in &variants {
+            assert!(
+                !variant.display_name().is_empty(),
+                "{:?} has empty display_name",
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_shell_returns_known_variant() {
+        let shell = default_shell();
+        let known = [
+            ShellKind::PowerShell,
+            ShellKind::Pwsh,
+            ShellKind::Cmd,
+            ShellKind::Bash,
+            ShellKind::Zsh,
+            ShellKind::Fish,
+            ShellKind::Sh,
+        ];
+        assert!(
+            known.contains(&shell),
+            "default_shell() returned unknown variant: {:?}",
+            shell
+        );
+    }
+
+    #[test]
+    fn test_available_shells_not_empty() {
+        let shells = available_shells();
+        assert!(!shells.is_empty(), "available_shells() should return at least one shell");
+    }
+
+    #[test]
+    fn test_available_shells_no_duplicates() {
+        let shells = available_shells();
+        for (i, a) in shells.iter().enumerate() {
+            for (j, b) in shells.iter().enumerate() {
+                if i != j {
+                    assert_ne!(a, b, "duplicate shell found at indices {} and {}", i, j);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_shellkind_clone_eq() {
+        let a = ShellKind::Bash;
+        let b = a.clone();
+        assert_eq!(a, b);
+
+        let c = ShellKind::Zsh;
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_find_in_path_nonexistent() {
+        assert!(
+            !find_in_path("__this_shell_does_not_exist_xyz_42__"),
+            "find_in_path should return false for a non-existent executable"
+        );
+    }
+}

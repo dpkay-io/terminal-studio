@@ -198,3 +198,192 @@ fn collect_files_recursive(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::thread;
+    use std::time::Duration;
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("ts_fsw_{}_{}", name, std::process::id()))
+    }
+
+    #[test]
+    fn test_spawn_and_drop() {
+        let worker = FileSearchWorker::spawn(egui::Context::default());
+        drop(worker);
+        // No panic — success
+    }
+
+    #[test]
+    fn test_cancel_clears_results() {
+        let worker = FileSearchWorker::spawn(egui::Context::default());
+        worker.cancel();
+        let res = worker.results();
+        assert!(res.matches.is_empty());
+        assert!(res.completed);
+    }
+
+    #[test]
+    fn test_search_finds_files() {
+        let dir = unique_test_dir("finds_files");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("myfile.txt"), "hello").unwrap();
+        fs::write(dir.join("other.rs"), "world").unwrap();
+
+        let worker = FileSearchWorker::spawn(egui::Context::default());
+        worker.search("myfile".into(), dir.clone());
+
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(50));
+            if worker.results().completed {
+                break;
+            }
+        }
+
+        let res = worker.results();
+        assert!(res.completed);
+        assert!(
+            res.matches.iter().any(|m| m.name == "myfile.txt"),
+            "expected to find myfile.txt in matches: {:?}",
+            res.matches.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+
+        drop(res);
+        drop(worker);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_search_hidden_files_filtered() {
+        let dir = unique_test_dir("hidden_filter");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".hidden_file"), "secret").unwrap();
+        fs::write(dir.join("visible_file"), "public").unwrap();
+
+        let worker = FileSearchWorker::spawn(egui::Context::default());
+        worker.search("file".into(), dir.clone());
+
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(50));
+            if worker.results().completed {
+                break;
+            }
+        }
+
+        let res = worker.results();
+        assert!(res.completed);
+        assert!(
+            !res.matches.iter().any(|m| m.name.starts_with('.')),
+            "hidden files should be filtered out, but found: {:?}",
+            res.matches.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+        assert!(
+            res.matches.iter().any(|m| m.name == "visible_file"),
+            "expected visible_file in matches"
+        );
+
+        drop(res);
+        drop(worker);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_collect_files_recursive_basic() {
+        let dir = unique_test_dir("collect_basic");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), "").unwrap();
+        fs::write(dir.join("b.rs"), "").unwrap();
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("c.md"), "").unwrap();
+
+        let gen = Arc::new(Mutex::new(1u64));
+        let mut out = Vec::new();
+        collect_files_recursive(&dir, &mut out, 5, &gen, 1);
+
+        let names: Vec<&str> = out.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(names.contains(&"a.txt"), "missing a.txt in {:?}", names);
+        assert!(names.contains(&"b.rs"), "missing b.rs in {:?}", names);
+        assert!(names.contains(&"c.md"), "missing c.md in {:?}", names);
+        assert_eq!(out.len(), 3);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_collect_files_recursive_max_depth() {
+        let dir = unique_test_dir("max_depth");
+        let _ = fs::remove_dir_all(&dir);
+
+        // Create nested dirs: d1/d2/d3/d4/d5/d6/deep.txt
+        let mut nested = dir.clone();
+        for i in 1..=6 {
+            nested = nested.join(format!("d{}", i));
+        }
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("deep.txt"), "").unwrap();
+
+        // Also create a file at depth 1
+        fs::write(dir.join("shallow.txt"), "").unwrap();
+
+        let gen = Arc::new(Mutex::new(1u64));
+        let mut out = Vec::new();
+        collect_files_recursive(&dir, &mut out, 5, &gen, 1);
+
+        let names: Vec<&str> = out.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"shallow.txt"),
+            "shallow.txt should be found"
+        );
+        // deep.txt is at depth 7 (d1/d2/d3/d4/d5/d6/deep.txt), max_depth=5 stops recursion
+        assert!(
+            !names.contains(&"deep.txt"),
+            "deep.txt should NOT be found at depth > 5"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_collect_files_recursive_skips_dotfiles() {
+        let dir = unique_test_dir("dotfiles");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".hidden"), "").unwrap();
+        let hidden_dir = dir.join(".hidden_dir");
+        fs::create_dir_all(&hidden_dir).unwrap();
+        fs::write(hidden_dir.join("inside.txt"), "").unwrap();
+        fs::write(dir.join("normal.txt"), "").unwrap();
+
+        let gen = Arc::new(Mutex::new(1u64));
+        let mut out = Vec::new();
+        collect_files_recursive(&dir, &mut out, 5, &gen, 1);
+
+        let names: Vec<&str> = out.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["normal.txt"], "only normal.txt expected, got {:?}", names);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_collect_files_recursive_empty_dir() {
+        let dir = unique_test_dir("empty");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let gen = Arc::new(Mutex::new(1u64));
+        let mut out = Vec::new();
+        collect_files_recursive(&dir, &mut out, 5, &gen, 1);
+
+        assert!(out.is_empty(), "empty dir should produce no results");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

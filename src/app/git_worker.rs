@@ -219,3 +219,87 @@ impl Drop for GitWorker {
         self.ctx.request_repaint();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spawn_and_drop() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        drop(worker);
+        // No panic means success
+    }
+
+    #[test]
+    fn test_take_git_empty() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        let result = worker.take_git(Path::new("/nonexistent/path"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_take_dir_empty() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        let result = worker.take_dir(Path::new("/nonexistent/path"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_take_diff_results_empty() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        let results = worker.take_diff_results();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_enqueue_git_inflight_dedup() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        let path = PathBuf::from("/some/fake/path");
+        // Enqueue the same path twice — should not panic
+        worker.enqueue_git(&path);
+        worker.enqueue_git(&path);
+    }
+
+    #[test]
+    fn test_enqueue_and_take_git_with_real_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_git(&cwd);
+
+        let mut result = None;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(r) = worker.take_git(&cwd) {
+                result = Some(r);
+                break;
+            }
+        }
+        assert!(result.is_some(), "git worker should have produced a result");
+        let (branch, status) = result.unwrap();
+        // We're in a git repo, so branch should be non-empty
+        assert!(!branch.is_empty(), "branch name should not be empty");
+        // status is a string (may be empty if working tree is clean)
+        let _ = status;
+    }
+
+    #[test]
+    fn test_enqueue_dir_and_take() {
+        let cwd = std::env::current_dir().unwrap();
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_dir(&cwd);
+
+        let mut result = None;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(r) = worker.take_dir(&cwd) {
+                result = Some(r);
+                break;
+            }
+        }
+        assert!(result.is_some(), "dir listing should have produced a result");
+        let entries = result.unwrap();
+        // The project directory should have at least some entries (Cargo.toml, src/, etc.)
+        assert!(!entries.is_empty(), "directory listing should not be empty");
+    }
+}

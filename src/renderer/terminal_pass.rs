@@ -573,3 +573,130 @@ fn ansi_indexed(index: u8, t: &Theme) -> (u8, u8, u8) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{pos2, vec2, Rect};
+
+    // ── SelectionRange::ordered ────────────────────────────────────────────
+
+    #[test]
+    fn test_selection_ordered_already_ordered() {
+        let sel = SelectionRange {
+            start_col: 2,
+            start_row: 1,
+            end_col: 10,
+            end_row: 5,
+        };
+        assert_eq!(sel.ordered(), (2, 1, 10, 5));
+    }
+
+    #[test]
+    fn test_selection_ordered_reversed() {
+        let sel = SelectionRange {
+            start_col: 10,
+            start_row: 5,
+            end_col: 2,
+            end_row: 1,
+        };
+        assert_eq!(sel.ordered(), (2, 1, 10, 5));
+    }
+
+    #[test]
+    fn test_selection_ordered_same_row_reversed() {
+        let sel = SelectionRange {
+            start_col: 15,
+            start_row: 3,
+            end_col: 5,
+            end_row: 3,
+        };
+        assert_eq!(sel.ordered(), (5, 3, 15, 3));
+    }
+
+    #[test]
+    fn test_selection_ordered_same_position() {
+        let sel = SelectionRange {
+            start_col: 7,
+            start_row: 4,
+            end_col: 7,
+            end_row: 4,
+        };
+        assert_eq!(sel.ordered(), (7, 4, 7, 4));
+    }
+
+    // ── TerminalGeometry::to_cell ──────────────────────────────────────────
+
+    fn make_geo() -> TerminalGeometry {
+        TerminalGeometry {
+            rect: Rect::from_min_size(pos2(100.0, 50.0), vec2(800.0, 480.0)),
+            cell_w: 10.0,
+            cell_h: 20.0,
+            scrollbar_drag_offset: None,
+            scrollbar_hovered: false,
+        }
+    }
+
+    #[test]
+    fn test_to_cell_center() {
+        let geo = make_geo();
+        // Point at (150, 90) → col = (150-100)/10 = 5, row = (90-50)/20 = 2
+        let result = geo.to_cell(pos2(150.0, 90.0));
+        assert_eq!(result, Some((5, 2)));
+    }
+
+    #[test]
+    fn test_to_cell_top_left_corner() {
+        let geo = make_geo();
+        // Exact top-left of the rect → col 0, row 0
+        let result = geo.to_cell(pos2(100.0, 50.0));
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn test_to_cell_outside_returns_none() {
+        let geo = make_geo();
+        // Point before the rect
+        assert_eq!(geo.to_cell(pos2(99.0, 50.0)), None);
+        // Point below the rect
+        assert_eq!(geo.to_cell(pos2(100.0, 531.0)), None);
+        // Point to the right of the rect
+        assert_eq!(geo.to_cell(pos2(901.0, 50.0)), None);
+    }
+
+    // ── ansi_indexed ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ansi_indexed_standard_colors() {
+        let t = theme::active();
+        for i in 0..=15u8 {
+            let (r, g, b) = ansi_indexed(i, t);
+            let expected = t.ansi[i as usize];
+            let [er, eg, eb, _] = expected.to_array();
+            assert_eq!((r, g, b), (er, eg, eb), "mismatch at ANSI index {i}");
+        }
+    }
+
+    #[test]
+    fn test_ansi_indexed_216_cube() {
+        let t = theme::active();
+        // Index 16 → first cube entry → n=0 → r=0, g=0, b=0
+        assert_eq!(ansi_indexed(16, t), (0, 0, 0));
+        // Index 231 → last cube entry → n=215 → r=(215/36)*51=5*51=255,
+        //   g=((215/6)%6)*51=(35%6)*51=5*51=255, b=(215%6)*51=5*51=255
+        assert_eq!(ansi_indexed(231, t), (255, 255, 255));
+        // Index 16+36=52 → n=36 → r=1*51=51, g=0, b=0
+        assert_eq!(ansi_indexed(52, t), (51, 0, 0));
+    }
+
+    #[test]
+    fn test_ansi_indexed_grayscale() {
+        let t = theme::active();
+        // Index 232 → v = 8 + 0*10 = 8
+        assert_eq!(ansi_indexed(232, t), (8, 8, 8));
+        // Index 255 → v = 8 + 23*10 = 238
+        assert_eq!(ansi_indexed(255, t), (238, 238, 238));
+        // Index 243 → v = 8 + 11*10 = 118
+        assert_eq!(ansi_indexed(243, t), (118, 118, 118));
+    }
+}

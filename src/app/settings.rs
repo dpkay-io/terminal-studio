@@ -120,3 +120,101 @@ fn settings_data_path() -> Option<PathBuf> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_settings_values() {
+        let s = AppSettings::default();
+        assert_eq!(s.default_workspace_id, None);
+        assert!(s.restore_last_session);
+        assert_eq!(s.theme_id, theme::ThemeId::CatppuccinMocha);
+        assert_eq!(s.last_update_check, None);
+        assert_eq!(s.skip_version, None);
+        assert!((s.font_size - 14.0).abs() < f32::EPSILON);
+        assert_eq!(s.scrollback_lines, 10_000);
+        assert_eq!(s.cursor_style, CursorStyle::Block);
+        assert!(s.cursor_blink);
+        assert!(!s.scroll_on_output);
+        assert_eq!(s.default_shell, None);
+        assert!(s.show_sys_monitor);
+    }
+
+    #[test]
+    fn test_cursor_style_roundtrip() {
+        for style in [CursorStyle::Block, CursorStyle::Underline, CursorStyle::Beam] {
+            let json = serde_json::to_string(&style).unwrap();
+            let restored: CursorStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, style);
+        }
+    }
+
+    #[test]
+    fn test_settings_roundtrip() {
+        let original = AppSettings {
+            font_size: 18.0,
+            scrollback_lines: 5000,
+            cursor_style: CursorStyle::Beam,
+            cursor_blink: false,
+            restore_last_session: false,
+            default_workspace_id: Some(42),
+            scroll_on_output: true,
+            default_shell: Some("/bin/zsh".into()),
+            show_sys_monitor: false,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!((restored.font_size - 18.0).abs() < f32::EPSILON);
+        assert_eq!(restored.scrollback_lines, 5000);
+        assert_eq!(restored.cursor_style, CursorStyle::Beam);
+        assert!(!restored.cursor_blink);
+        assert!(!restored.restore_last_session);
+        assert_eq!(restored.default_workspace_id, Some(42));
+        assert!(restored.scroll_on_output);
+        assert_eq!(restored.default_shell, Some("/bin/zsh".into()));
+        assert!(!restored.show_sys_monitor);
+    }
+
+    #[test]
+    fn test_settings_missing_fields_use_defaults() {
+        let json = "{}";
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        let d = AppSettings::default();
+        assert!((s.font_size - d.font_size).abs() < f32::EPSILON);
+        assert_eq!(s.scrollback_lines, d.scrollback_lines);
+        assert_eq!(s.cursor_style, d.cursor_style);
+        assert_eq!(s.cursor_blink, d.cursor_blink);
+        assert_eq!(s.restore_last_session, d.restore_last_session);
+        assert_eq!(s.default_workspace_id, d.default_workspace_id);
+        assert_eq!(s.theme_id, d.theme_id);
+    }
+
+    #[test]
+    fn test_settings_partial_json() {
+        let json = r#"{"font_size": 16.0, "cursor_blink": false}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        // Explicit values from JSON
+        assert!((s.font_size - 16.0).abs() < f32::EPSILON);
+        assert!(!s.cursor_blink);
+        // Remaining fields fall back to defaults
+        assert_eq!(s.scrollback_lines, 10_000);
+        assert_eq!(s.cursor_style, CursorStyle::Block);
+        assert!(s.restore_last_session);
+        assert_eq!(s.theme_id, theme::ThemeId::CatppuccinMocha);
+    }
+
+    #[test]
+    fn test_windows_data_path_returns_some() {
+        let path = windows_data_path();
+        assert!(path.is_some(), "windows_data_path() should return Some");
+        let p = path.unwrap();
+        assert!(
+            p.ends_with("windows.json"),
+            "path should end with windows.json, got: {:?}",
+            p
+        );
+    }
+}

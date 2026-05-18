@@ -64,3 +64,138 @@ impl PaneState {
         self.find_mut(id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::pane::PaneContent;
+    use crate::pane_tree::{PaneNode, SplitDir};
+
+    fn make_pane(id: u32) -> PaneEntry {
+        PaneEntry {
+            id,
+            content: PaneContent::Terminal(id),
+            manual_width: None,
+            last_size: (80, 24),
+        }
+    }
+
+    #[test]
+    fn test_new_state_is_empty() {
+        let state = PaneState::new();
+        assert!(state.panes.is_empty());
+        assert_eq!(state.active_pane_id, None);
+        assert_eq!(state.next_pane_id, 0);
+        assert!(state.pane_trees.is_empty());
+        assert_eq!(state.next_split_id, 1);
+    }
+
+    #[test]
+    fn test_find_existing() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(5));
+        let found = state.find(5);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, 5);
+    }
+
+    #[test]
+    fn test_find_nonexistent() {
+        let state = PaneState::new();
+        assert!(state.find(42).is_none());
+    }
+
+    #[test]
+    fn test_find_mut_modifies() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        assert_eq!(state.find(1).unwrap().manual_width, None);
+
+        state.find_mut(1).unwrap().manual_width = Some(200.0);
+        assert_eq!(state.find(1).unwrap().manual_width, Some(200.0));
+    }
+
+    #[test]
+    fn test_remove_existing() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.remove(1);
+        assert!(state.find(1).is_none());
+        assert!(state.find(2).is_some());
+    }
+
+    #[test]
+    fn test_remove_nonexistent() {
+        let mut state = PaneState::new();
+        assert!(state.remove(99).is_none());
+    }
+
+    #[test]
+    fn test_remove_returns_entry() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(7));
+        let removed = state.remove(7);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, 7);
+    }
+
+    #[test]
+    fn test_active_when_none() {
+        let state = PaneState::new();
+        assert!(state.active().is_none());
+    }
+
+    #[test]
+    fn test_active_when_set() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(3));
+        state.panes.push(make_pane(4));
+        state.active_pane_id = Some(4);
+        let active = state.active().unwrap();
+        assert_eq!(active.id, 4);
+    }
+
+    #[test]
+    fn test_active_mut() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(10));
+        state.active_pane_id = Some(10);
+        state.active_mut().unwrap().last_size = (120, 40);
+        assert_eq!(state.find(10).unwrap().last_size, (120, 40));
+    }
+
+    #[test]
+    fn test_root_of_direct() {
+        let mut state = PaneState::new();
+        state.pane_trees.insert(
+            1,
+            PaneNode::Leaf {
+                pane_id: 1,
+                last_size: (0, 0),
+            },
+        );
+        assert_eq!(state.root_of(1), Some(1));
+    }
+
+    #[test]
+    fn test_root_of_child() {
+        let mut state = PaneState::new();
+        let tree = PaneNode::Split {
+            split_id: 1,
+            dir: SplitDir::Horizontal,
+            ratio: 0.5,
+            a: Box::new(PaneNode::Leaf {
+                pane_id: 2,
+                last_size: (0, 0),
+            }),
+            b: Box::new(PaneNode::Leaf {
+                pane_id: 3,
+                last_size: (0, 0),
+            }),
+        };
+        state.pane_trees.insert(1, tree);
+        assert_eq!(state.root_of(2), Some(1));
+        assert_eq!(state.root_of(3), Some(1));
+    }
+}

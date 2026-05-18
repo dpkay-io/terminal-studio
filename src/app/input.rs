@@ -152,3 +152,217 @@ pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr:
         vec![0x1b, b'[', b'M', b, x, y]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mods(ctrl: bool, shift: bool, alt: bool) -> egui::Modifiers {
+        egui::Modifiers {
+            alt,
+            ctrl,
+            shift,
+            mac_cmd: false,
+            command: false,
+        }
+    }
+
+    // ── Ctrl+letter ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_ctrl_a() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::A, &mods(true, false, false)),
+            Some(vec![1])
+        );
+    }
+
+    #[test]
+    fn test_ctrl_c() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::C, &mods(true, false, false)),
+            Some(vec![3])
+        );
+    }
+
+    #[test]
+    fn test_ctrl_z() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Z, &mods(true, false, false)),
+            Some(vec![26])
+        );
+    }
+
+    #[test]
+    fn test_ctrl_enter() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Enter, &mods(true, false, false)),
+            Some(vec![10])
+        );
+    }
+
+    // ── Alt+letter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_alt_a() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::A, &mods(false, false, true)),
+            Some(vec![0x1b, b'a'])
+        );
+    }
+
+    #[test]
+    fn test_alt_z() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Z, &mods(false, false, true)),
+            Some(vec![0x1b, b'z'])
+        );
+    }
+
+    #[test]
+    fn test_alt_backspace() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Backspace, &mods(false, false, true)),
+            Some(vec![0x1b, 0x7f])
+        );
+    }
+
+    // ── Arrow keys with modifiers ──────────────────────────────────────────
+
+    #[test]
+    fn test_arrow_shift() {
+        // Shift+Up → \x1b[1;2A
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::ArrowUp, &mods(false, true, false)),
+            Some(vec![0x1b, b'[', b'1', b';', b'2', b'A'])
+        );
+    }
+
+    #[test]
+    fn test_arrow_ctrl() {
+        // Ctrl+Right → \x1b[1;5C
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::ArrowRight, &mods(true, false, false)),
+            Some(vec![0x1b, b'[', b'1', b';', b'5', b'C'])
+        );
+    }
+
+    #[test]
+    fn test_arrow_alt() {
+        // Alt+Left → \x1b[1;3D
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::ArrowLeft, &mods(false, false, true)),
+            Some(vec![0x1b, b'[', b'1', b';', b'3', b'D'])
+        );
+    }
+
+    // ── Bare keys ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_bare_enter() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Enter, &mods(false, false, false)),
+            Some(b"\r".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_bare_tab() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Tab, &mods(false, false, false)),
+            Some(b"\t".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_shift_tab() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Tab, &mods(false, true, false)),
+            Some(b"\x1b[Z".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_escape() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Escape, &mods(false, false, false)),
+            Some(b"\x1b".to_vec())
+        );
+    }
+
+    // ── Function keys ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_f1() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::F1, &mods(false, false, false)),
+            Some(b"\x1bOP".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_f12() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::F12, &mods(false, false, false)),
+            Some(b"\x1b[24~".to_vec())
+        );
+    }
+
+    // ── Navigation keys ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_home_end_page() {
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Home, &mods(false, false, false)),
+            Some(b"\x1b[H".to_vec())
+        );
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::End, &mods(false, false, false)),
+            Some(b"\x1b[F".to_vec())
+        );
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::PageUp, &mods(false, false, false)),
+            Some(b"\x1b[5~".to_vec())
+        );
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::PageDown, &mods(false, false, false)),
+            Some(b"\x1b[6~".to_vec())
+        );
+    }
+
+    // ── Unknown key ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_unknown_key_returns_none() {
+        // Num0 with no modifiers is not mapped
+        assert_eq!(
+            key_to_pty_bytes(&egui::Key::Num0, &mods(false, false, false)),
+            None
+        );
+    }
+
+    // ── Mouse SGR mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mouse_sgr_press() {
+        let bytes = mouse_event_bytes(0, 5, 10, true, true);
+        // \x1b[<0;6;11M
+        assert_eq!(bytes, b"\x1b[<0;6;11M".to_vec());
+    }
+
+    #[test]
+    fn test_mouse_sgr_release() {
+        let bytes = mouse_event_bytes(0, 5, 10, false, true);
+        // \x1b[<0;6;11m
+        assert_eq!(bytes, b"\x1b[<0;6;11m".to_vec());
+    }
+
+    // ── Mouse X11 mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mouse_x11() {
+        let bytes = mouse_event_bytes(0, 5, 10, true, false);
+        // btn+32=32, col+1+32=38, row+1+32=43
+        assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 38, 43]);
+    }
+}

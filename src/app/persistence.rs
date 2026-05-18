@@ -78,3 +78,187 @@ pub(super) fn session_data_path() -> Option<PathBuf> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_saved_session_roundtrip() {
+        let original = SavedSession {
+            cwd: PathBuf::from("/tmp/mydir"),
+            command: Some("ls -la".into()),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.cwd, original.cwd);
+        assert_eq!(restored.command, original.command);
+    }
+
+    #[test]
+    fn test_saved_session_missing_command_defaults() {
+        let json = r#"{"cwd": "/home/user"}"#;
+        let s: SavedSession = serde_json::from_str(json).unwrap();
+        assert_eq!(s.cwd, PathBuf::from("/home/user"));
+        assert_eq!(s.command, None);
+    }
+
+    #[test]
+    fn test_saved_pane_content_terminal_roundtrip() {
+        let original = SavedPaneContent::Terminal { session_index: 42 };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
+        match restored {
+            SavedPaneContent::Terminal { session_index } => assert_eq!(session_index, 42),
+            _ => panic!("expected Terminal variant"),
+        }
+    }
+
+    #[test]
+    fn test_saved_pane_content_deferred_terminal_roundtrip() {
+        let original = SavedPaneContent::DeferredTerminal {
+            cwd: PathBuf::from("/usr/local"),
+            command: Some("bash".into()),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
+        match restored {
+            SavedPaneContent::DeferredTerminal { cwd, command } => {
+                assert_eq!(cwd, PathBuf::from("/usr/local"));
+                assert_eq!(command, Some("bash".into()));
+            }
+            _ => panic!("expected DeferredTerminal variant"),
+        }
+    }
+
+    #[test]
+    fn test_saved_pane_content_file_editor_roundtrip() {
+        let original = SavedPaneContent::FileEditor {
+            path: PathBuf::from("/tmp/test.rs"),
+            content: "fn main() {}".into(),
+            dirty: true,
+            workspace_id: Some(99),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
+        match restored {
+            SavedPaneContent::FileEditor {
+                path,
+                content,
+                dirty,
+                workspace_id,
+            } => {
+                assert_eq!(path, PathBuf::from("/tmp/test.rs"));
+                assert_eq!(content, "fn main() {}");
+                assert!(dirty);
+                assert_eq!(workspace_id, Some(99));
+            }
+            _ => panic!("expected FileEditor variant"),
+        }
+    }
+
+    #[test]
+    fn test_saved_pane_content_note_editor_roundtrip() {
+        let original = SavedPaneContent::NoteEditor {
+            workspace_id: Some(7),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
+        match restored {
+            SavedPaneContent::NoteEditor { workspace_id } => {
+                assert_eq!(workspace_id, Some(7));
+            }
+            _ => panic!("expected NoteEditor variant"),
+        }
+    }
+
+    #[test]
+    fn test_app_session_roundtrip() {
+        let original = AppSession {
+            sessions: vec![
+                SavedSession {
+                    cwd: PathBuf::from("/home/user"),
+                    command: None,
+                },
+                SavedSession {
+                    cwd: PathBuf::from("/tmp"),
+                    command: Some("vim".into()),
+                },
+            ],
+            panes: vec![
+                SavedPane {
+                    content: SavedPaneContent::Terminal { session_index: 0 },
+                    manual_width: None,
+                },
+                SavedPane {
+                    content: SavedPaneContent::FileEditor {
+                        path: PathBuf::from("/tmp/file.txt"),
+                        content: "hello".into(),
+                        dirty: false,
+                        workspace_id: Some(1),
+                    },
+                    manual_width: Some(400.0),
+                },
+                SavedPane {
+                    content: SavedPaneContent::NoteEditor {
+                        workspace_id: None,
+                    },
+                    manual_width: None,
+                },
+            ],
+            active_pane_index: Some(1),
+            active_session_index: Some(0),
+            active_group: Some(42),
+            last_pane_per_group: vec![(None, 0), (Some(42), 1)],
+            workspace_panel_ratio: 0.25,
+            workspace_panel_collapsed: false,
+            notes_panel_ratio: 0.3,
+            notes_panel_collapsed: true,
+            right_tab: SavedRightTab::Markdown(PathBuf::from("/docs/README.md")),
+            shown_md_tabs: vec![
+                PathBuf::from("/docs/README.md"),
+                PathBuf::from("/docs/CHANGELOG.md"),
+            ],
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: AppSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.sessions.len(), 2);
+        assert_eq!(restored.sessions[0].cwd, PathBuf::from("/home/user"));
+        assert_eq!(restored.sessions[1].command, Some("vim".into()));
+        assert_eq!(restored.panes.len(), 3);
+        assert_eq!(restored.active_pane_index, Some(1));
+        assert_eq!(restored.active_session_index, Some(0));
+        assert_eq!(restored.active_group, Some(42));
+        assert_eq!(restored.last_pane_per_group.len(), 2);
+        assert!((restored.workspace_panel_ratio - 0.25).abs() < f32::EPSILON);
+        assert!(!restored.workspace_panel_collapsed);
+        assert!((restored.notes_panel_ratio - 0.3).abs() < f32::EPSILON);
+        assert!(restored.notes_panel_collapsed);
+        match &restored.right_tab {
+            SavedRightTab::Markdown(p) => assert_eq!(p, &PathBuf::from("/docs/README.md")),
+            _ => panic!("expected Markdown variant"),
+        }
+        assert_eq!(restored.shown_md_tabs.len(), 2);
+    }
+
+    #[test]
+    fn test_session_data_path_returns_some() {
+        let path = session_data_path();
+        assert!(path.is_some(), "session_data_path() should return Some");
+        let p = path.unwrap();
+        assert!(
+            p.ends_with("session.json"),
+            "path should end with session.json, got: {:?}",
+            p
+        );
+    }
+
+    #[test]
+    fn test_corrupt_json_fails_gracefully() {
+        let result = serde_json::from_str::<AppSession>("not json");
+        assert!(result.is_err(), "corrupt JSON should return Err");
+
+        let result2 = serde_json::from_str::<AppSession>("{\"sessions\": 123}");
+        assert!(result2.is_err(), "invalid schema should return Err");
+    }
+}

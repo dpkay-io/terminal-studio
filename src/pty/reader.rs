@@ -155,3 +155,116 @@ pub fn reader_thread(
     alive.store(false, Ordering::SeqCst);
     log::info!("Session {} reader thread exiting", session.read().id);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_osc7_file_triple_slash() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"7", b"file:///home/user/project"];
+        performer.handle_osc7(params);
+
+        let cwd = performer.new_cwd.as_ref().expect("cwd should be set");
+        if cfg!(target_os = "windows") {
+            assert_eq!(cwd, &PathBuf::from("home\\user\\project"));
+        } else {
+            assert_eq!(cwd, &PathBuf::from("/home/user/project"));
+        }
+    }
+
+    #[test]
+    fn test_osc7_file_with_hostname() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"7", b"file://myhost/home/user"];
+        performer.handle_osc7(params);
+
+        let cwd = performer.new_cwd.as_ref().expect("cwd should be set");
+        if cfg!(target_os = "windows") {
+            assert_eq!(cwd, &PathBuf::from("\\home\\user"));
+        } else {
+            assert_eq!(cwd, &PathBuf::from("/home/user"));
+        }
+    }
+
+    #[test]
+    fn test_osc7_windows_path() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"7", b"file:///C:/Users/test"];
+        performer.handle_osc7(params);
+
+        let cwd = performer.new_cwd.as_ref().expect("cwd should be set");
+        if cfg!(target_os = "windows") {
+            assert_eq!(cwd, &PathBuf::from("C:\\Users\\test"));
+        } else {
+            assert_eq!(cwd, &PathBuf::from("C:/Users/test"));
+        }
+    }
+
+    #[test]
+    fn test_osc7_empty_params() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"7"];
+        performer.handle_osc7(params);
+        assert!(performer.new_cwd.is_none(), "cwd should not be set for empty URI");
+        assert!(!performer.new_prompt_ready);
+    }
+
+    #[test]
+    fn test_osc7_invalid_scheme() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"7", b"http://foo/bar"];
+        performer.handle_osc7(params);
+        assert!(performer.new_cwd.is_none(), "cwd should not be set for http scheme");
+        assert!(!performer.new_prompt_ready);
+    }
+
+    #[test]
+    fn test_osc7_sets_prompt_ready() {
+        let mut performer = CwdPerformer::new();
+        assert!(!performer.new_prompt_ready);
+
+        let params: &[&[u8]] = &[b"7", b"file:///tmp"];
+        performer.handle_osc7(params);
+        assert!(performer.new_prompt_ready, "prompt_ready should be true after valid OSC 7");
+    }
+
+    #[test]
+    fn test_osc52_valid_base64() {
+        let mut performer = CwdPerformer::new();
+        // "hello" in base64 is "aGVsbG8="
+        let params: &[&[u8]] = &[b"52", b"c", b"aGVsbG8="];
+        performer.handle_osc52(params);
+
+        let text = performer.clipboard_text.as_ref().expect("clipboard_text should be set");
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn test_osc52_query_ignored() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"52", b"c", b"?"];
+        performer.handle_osc52(params);
+        assert!(performer.clipboard_text.is_none(), "query '?' should be ignored");
+    }
+
+    #[test]
+    fn test_osc52_empty_data_ignored() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"52", b"c", b""];
+        performer.handle_osc52(params);
+        assert!(performer.clipboard_text.is_none(), "empty data should be ignored");
+    }
+
+    #[test]
+    fn test_osc52_invalid_base64_ignored() {
+        let mut performer = CwdPerformer::new();
+        let params: &[&[u8]] = &[b"52", b"c", b"!!!not-valid-base64!!!"];
+        performer.handle_osc52(params);
+        assert!(
+            performer.clipboard_text.is_none(),
+            "invalid base64 should be ignored"
+        );
+    }
+}

@@ -86,3 +86,124 @@ pub(super) struct SessionEntry {
     pub(super) pending_command: Option<String>,
     pub(super) shell: ShellKind,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_term_selection_ordered_normal() {
+        let sel = TermSelection {
+            start_col: 2,
+            start_row: 1,
+            end_col: 10,
+            end_row: 3,
+        };
+        assert_eq!(sel.ordered(), (2, 1, 10, 3));
+    }
+
+    #[test]
+    fn test_term_selection_ordered_reversed() {
+        let sel = TermSelection {
+            start_col: 10,
+            start_row: 5,
+            end_col: 2,
+            end_row: 1,
+        };
+        assert_eq!(sel.ordered(), (2, 1, 10, 5));
+    }
+
+    #[test]
+    fn test_term_selection_ordered_same_row() {
+        let sel = TermSelection {
+            start_col: 15,
+            start_row: 3,
+            end_col: 5,
+            end_row: 3,
+        };
+        // Same row, start_col > end_col => should swap
+        assert_eq!(sel.ordered(), (5, 3, 15, 3));
+    }
+
+    #[test]
+    fn test_term_selection_ordered_same_position() {
+        let sel = TermSelection {
+            start_col: 4,
+            start_row: 2,
+            end_col: 4,
+            end_row: 2,
+        };
+        assert_eq!(sel.ordered(), (4, 2, 4, 2));
+    }
+
+    #[test]
+    fn test_file_editor_state_clone() {
+        let state = FileEditorState {
+            path: PathBuf::from("/tmp/test.rs"),
+            content: "fn main() {}".to_string(),
+            dirty: true,
+            save_error: false,
+            workspace_id: Some(42),
+            show_preview: false,
+        };
+        let cloned = state.clone();
+        assert_eq!(cloned.path, state.path);
+        assert_eq!(cloned.content, state.content);
+        assert_eq!(cloned.dirty, state.dirty);
+        assert_eq!(cloned.save_error, state.save_error);
+        assert_eq!(cloned.workspace_id, state.workspace_id);
+        assert_eq!(cloned.show_preview, state.show_preview);
+    }
+
+    #[test]
+    fn test_pane_content_variants() {
+        // Verify each variant can be constructed and supports Debug
+        let terminal = PaneContent::Terminal(1);
+        let deferred = PaneContent::DeferredTerminal {
+            cwd: Some(PathBuf::from("/home")),
+            pending_command: Some("ls".to_string()),
+        };
+        let editor = PaneContent::FileEditor(FileEditorState {
+            path: PathBuf::from("test.txt"),
+            content: String::new(),
+            dirty: false,
+            save_error: false,
+            workspace_id: None,
+            show_preview: false,
+        });
+        let diff = PaneContent::FileDiff(FileDiffState {
+            path: PathBuf::from("file.rs"),
+            diff_content: "+added line".to_string(),
+        });
+        let note = PaneContent::NoteEditor(NoteEditorState {
+            workspace_id: Some(99),
+        });
+
+        // All variants implement Debug
+        assert!(!format!("{:?}", terminal).is_empty());
+        assert!(!format!("{:?}", deferred).is_empty());
+        assert!(!format!("{:?}", editor).is_empty());
+        assert!(!format!("{:?}", diff).is_empty());
+        assert!(!format!("{:?}", note).is_empty());
+    }
+
+    #[test]
+    fn test_right_tab_eq() {
+        assert_eq!(RightTab::Directory, RightTab::Directory);
+        assert_eq!(RightTab::GitDiff, RightTab::GitDiff);
+        assert_eq!(
+            RightTab::Markdown(PathBuf::from("README.md")),
+            RightTab::Markdown(PathBuf::from("README.md"))
+        );
+    }
+
+    #[test]
+    fn test_right_tab_ne() {
+        assert_ne!(RightTab::Directory, RightTab::GitDiff);
+        assert_ne!(
+            RightTab::Markdown(PathBuf::from("a.md")),
+            RightTab::Markdown(PathBuf::from("b.md"))
+        );
+        assert_ne!(RightTab::Directory, RightTab::Markdown(PathBuf::from("x.md")));
+    }
+}

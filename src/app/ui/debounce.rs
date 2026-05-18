@@ -90,4 +90,55 @@ mod tests {
         assert!(!d.ready());
         assert!(d.last_query.is_empty());
     }
+
+    #[test]
+    fn test_pending_when_waiting() {
+        let mut d = Debouncer::new(Duration::from_secs(10));
+        d.update("hello");
+        assert!(d.pending(), "should be pending right after update");
+    }
+
+    #[test]
+    fn test_pending_false_initially() {
+        let d = Debouncer::new(Duration::from_millis(100));
+        assert!(!d.pending(), "should not be pending when freshly created");
+    }
+
+    #[test]
+    fn test_pending_false_after_ready() {
+        let mut d = Debouncer::new(Duration::from_millis(0));
+        d.update("hello");
+        assert!(d.ready(), "should be ready with 0ms delay");
+        assert!(!d.pending(), "should not be pending after ready() consumed it");
+    }
+
+    #[test]
+    fn test_same_query_no_reset() {
+        let mut d = Debouncer::new(Duration::from_secs(10));
+        d.update("hello");
+        let trigger_before = d.trigger_at;
+        // Same query again — should NOT reset the timer
+        d.update("hello");
+        assert_eq!(d.trigger_at, trigger_before, "timer should not reset on same query");
+    }
+
+    #[test]
+    fn test_different_query_resets_timer() {
+        let mut d = Debouncer::new(Duration::from_secs(10));
+        d.update("hello");
+        let trigger_before = d.trigger_at;
+        // Small sleep so Instant::now() advances
+        std::thread::sleep(Duration::from_millis(5));
+        d.update("world");
+        assert_ne!(d.trigger_at, trigger_before, "timer should reset on different query");
+    }
+
+    #[test]
+    fn test_ready_fires_only_once() {
+        let mut d = Debouncer::new(Duration::from_millis(0));
+        d.update("hello");
+        assert!(d.ready(), "first ready() should fire");
+        assert!(!d.ready(), "second ready() should not fire");
+        assert!(!d.ready(), "third ready() should not fire either");
+    }
 }

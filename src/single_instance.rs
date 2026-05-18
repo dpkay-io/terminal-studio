@@ -163,3 +163,43 @@ impl Drop for SingleInstanceGuard {
         // the advisory lock automatically.
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_acquire_succeeds() {
+        // The first acquire in this test process should succeed.
+        // Note: this uses the real OS-level lock, so it may conflict with a
+        // running instance. If that happens, it is still not a panic.
+        let result = SingleInstanceGuard::try_acquire();
+        // We accept both Ok and Err — the key assertion is no panic.
+        // In CI with no running instance, this should be Ok.
+        if let Ok(guard) = result {
+            drop(guard);
+        }
+    }
+
+    #[test]
+    fn test_acquire_and_drop() {
+        // Acquire the guard, then drop it explicitly. No panic expected.
+        let result = SingleInstanceGuard::try_acquire();
+        if let Ok(guard) = result {
+            drop(guard);
+            // After dropping, a second acquire should also succeed.
+            let result2 = SingleInstanceGuard::try_acquire();
+            if let Ok(guard2) = result2 {
+                drop(guard2);
+            }
+        }
+    }
+
+    #[test]
+    fn test_guard_is_send() {
+        // Verify SingleInstanceGuard can be sent across threads (useful for
+        // holding in main thread state that may be moved).
+        fn assert_send<T: Send>() {}
+        assert_send::<SingleInstanceGuard>();
+    }
+}
