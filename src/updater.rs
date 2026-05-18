@@ -117,27 +117,18 @@ fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     }
     ctx.request_repaint();
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build();
-    let Ok(rt) = rt else {
-        set_error(shared, ctx, "Failed to create async runtime");
-        return;
-    };
-
-    let result = rt.block_on(async {
-        let client = reqwest::Client::builder()
+    let result = (|| -> anyhow::Result<serde_json::Value> {
+        let client = reqwest::blocking::Client::builder()
             .user_agent("terminal-studio-updater")
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
 
-        let resp = client.get(GITHUB_RELEASES_URL).send().await?;
+        let resp = client.get(GITHUB_RELEASES_URL).send()?;
         if !resp.status().is_success() {
             return Err(anyhow::anyhow!("GitHub API returned {}", resp.status()));
         }
-        let json: serde_json::Value = resp.json().await?;
-        Ok(json)
-    });
+        resp.json().map_err(Into::into)
+    })();
 
     match result {
         Ok(json) => parse_release(shared, ctx, &json),
@@ -230,29 +221,19 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         return;
     }
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build();
-    let Ok(rt) = rt else {
-        set_error(shared, ctx, "Failed to create async runtime");
-        return;
-    };
-
-    let download_result = rt.block_on(async {
-        let client = reqwest::Client::builder()
+    let download_result = (|| -> anyhow::Result<Vec<u8>> {
+        let client = reqwest::blocking::Client::builder()
             .user_agent("terminal-studio-updater")
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
-        let resp = client.get(&download_url).send().await?;
+        let resp = client.get(&download_url).send()?;
         if !resp.status().is_success() {
             return Err(anyhow::anyhow!("Download failed: HTTP {}", resp.status()));
         }
 
-        let total = resp.content_length().unwrap_or(0);
-        let bytes = resp.bytes().await?;
+        let bytes = resp.bytes()?.to_vec();
 
-        // Report completion
         {
             let mut s = shared.lock();
             s.status = UpdateStatus::Downloading {
@@ -261,9 +242,8 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         }
         ctx.request_repaint();
 
-        let _ = total; // progress tracking simplified for single .bytes() call
         Ok(bytes)
-    });
+    })();
 
     let bytes = match download_result {
         Ok(b) => b,

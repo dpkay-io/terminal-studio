@@ -378,7 +378,10 @@ mod tests {
     #[test]
     fn test_available_shells_not_empty() {
         let shells = available_shells();
-        assert!(!shells.is_empty(), "available_shells() should return at least one shell");
+        assert!(
+            !shells.is_empty(),
+            "available_shells() should return at least one shell"
+        );
     }
 
     #[test]

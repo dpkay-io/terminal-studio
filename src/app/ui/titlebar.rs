@@ -129,11 +129,8 @@ impl App {
                         egui::pos2(r.min.x + 72.0, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let left_resp = ui.interact(
-                        left_tbr,
-                        self.vp_id("tb_left_toggle"),
-                        egui::Sense::click(),
-                    );
+                    let left_resp =
+                        ui.interact(left_tbr, self.vp_id("tb_left_toggle"), egui::Sense::click());
                     let left_bg = if self.show_left_panel {
                         theme::active().surface2
                     } else if left_resp.hovered() {
@@ -198,11 +195,8 @@ impl App {
                             egui::pos2(kb_x, r.min.y),
                             egui::vec2(total_w, r.height()),
                         );
-                        let kb_resp = ui.interact(
-                            kb_tbr,
-                            self.vp_id("tb_shortcuts"),
-                            egui::Sense::click(),
-                        );
+                        let kb_resp =
+                            ui.interact(kb_tbr, self.vp_id("tb_shortcuts"), egui::Sense::click());
                         let bg = if kb_resp.hovered() || self.show_shortcut_help {
                             theme::active().surface1
                         } else {
@@ -300,11 +294,8 @@ impl App {
                                 egui::pos2(update_x, r.min.y + theme::SP_SM),
                                 egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
                             );
-                            let resp = ui.interact(
-                                br,
-                                self.vp_id("tb_update_btn"),
-                                egui::Sense::click(),
-                            );
+                            let resp =
+                                ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
                             painter.rect_filled(br, 4.0, bg);
@@ -415,8 +406,7 @@ impl App {
                             egui::pos2(gear_x, r.min.y),
                             egui::vec2(btn_w, r.height()),
                         );
-                        let resp =
-                            ui.interact(br, self.vp_id("tb_settings"), egui::Sense::click());
+                        let resp = ui.interact(br, self.vp_id("tb_settings"), egui::Sense::click());
                         let bg = if resp.hovered() || self.show_settings {
                             theme::active().surface1
                         } else {
@@ -554,11 +544,8 @@ impl App {
                                 egui::pos2(update_x, r.min.y + theme::SP_SM),
                                 egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
                             );
-                            let resp = ui.interact(
-                                br,
-                                self.vp_id("tb_update_btn"),
-                                egui::Sense::click(),
-                            );
+                            let resp =
+                                ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
                             painter.rect_filled(br, 4.0, bg);

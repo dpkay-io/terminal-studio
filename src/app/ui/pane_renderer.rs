@@ -185,7 +185,10 @@ fn render_terminal_leaf(
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         }
         let pointer_in_rect = ui.input(|i| {
-            i.pointer.latest_pos().map(|p| geo.rect.contains(p)).unwrap_or(false)
+            i.pointer
+                .latest_pos()
+                .map(|p| geo.rect.contains(p))
+                .unwrap_or(false)
         });
         if is_focused || pointer_in_rect {
             *rctx.active_term_geo = Some(geo);
@@ -199,12 +202,16 @@ fn render_terminal_leaf(
         if !dialog_open {
             let clicked = ui.input(|i| i.pointer.any_pressed())
                 && ui.input(|i| {
-                    i.pointer.latest_pos().map(|p| ui.max_rect().contains(p)).unwrap_or(false)
+                    i.pointer
+                        .latest_pos()
+                        .map(|p| ui.max_rect().contains(p))
+                        .unwrap_or(false)
                 });
             if clicked {
                 ui.memory_mut(|m| m.request_focus(this_id));
             } else {
-                let other_focused = ui.memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
+                let other_focused =
+                    ui.memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
                 if !other_focused {
                     ui.memory_mut(|m| m.request_focus(this_id));
                 }
@@ -361,12 +368,7 @@ fn render_note_editor_leaf(
         None => "General Notes",
     };
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(label)
-                .strong()
-                .size(13.0)
-                .color(t.text),
-        );
+        ui.label(egui::RichText::new(label).strong().size(13.0).color(t.text));
     });
     ui.separator();
 

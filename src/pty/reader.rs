@@ -207,7 +207,10 @@ mod tests {
         let mut performer = CwdPerformer::new();
         let params: &[&[u8]] = &[b"7"];
         performer.handle_osc7(params);
-        assert!(performer.new_cwd.is_none(), "cwd should not be set for empty URI");
+        assert!(
+            performer.new_cwd.is_none(),
+            "cwd should not be set for empty URI"
+        );
         assert!(!performer.new_prompt_ready);
     }
 
@@ -216,7 +219,10 @@ mod tests {
         let mut performer = CwdPerformer::new();
         let params: &[&[u8]] = &[b"7", b"http://foo/bar"];
         performer.handle_osc7(params);
-        assert!(performer.new_cwd.is_none(), "cwd should not be set for http scheme");
+        assert!(
+            performer.new_cwd.is_none(),
+            "cwd should not be set for http scheme"
+        );
         assert!(!performer.new_prompt_ready);
     }
 
@@ -227,7 +233,10 @@ mod tests {
 
         let params: &[&[u8]] = &[b"7", b"file:///tmp"];
         performer.handle_osc7(params);
-        assert!(performer.new_prompt_ready, "prompt_ready should be true after valid OSC 7");
+        assert!(
+            performer.new_prompt_ready,
+            "prompt_ready should be true after valid OSC 7"
+        );
     }
 
     #[test]
@@ -237,7 +246,10 @@ mod tests {
         let params: &[&[u8]] = &[b"52", b"c", b"aGVsbG8="];
         performer.handle_osc52(params);
 
-        let text = performer.clipboard_text.as_ref().expect("clipboard_text should be set");
+        let text = performer
+            .clipboard_text
+            .as_ref()
+            .expect("clipboard_text should be set");
         assert_eq!(text, "hello");
     }
 
@@ -246,7 +258,10 @@ mod tests {
         let mut performer = CwdPerformer::new();
         let params: &[&[u8]] = &[b"52", b"c", b"?"];
         performer.handle_osc52(params);
-        assert!(performer.clipboard_text.is_none(), "query '?' should be ignored");
+        assert!(
+            performer.clipboard_text.is_none(),
+            "query '?' should be ignored"
+        );
     }
 
     #[test]
@@ -254,7 +269,10 @@ mod tests {
         let mut performer = CwdPerformer::new();
         let params: &[&[u8]] = &[b"52", b"c", b""];
         performer.handle_osc52(params);
-        assert!(performer.clipboard_text.is_none(), "empty data should be ignored");
+        assert!(
+            performer.clipboard_text.is_none(),
+            "empty data should be ignored"
+        );
     }
 
     #[test]

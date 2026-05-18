@@ -451,11 +451,9 @@ impl eframe::App for App {
                     // (at this point the main view is restored in self).
                     self.active_group = action.group;
                     self.activate_pane(action.pane_id);
-                    self.last_pane_per_group.insert(action.group, action.pane_id);
-                    ctx.send_viewport_cmd_to(
-                        egui::ViewportId::ROOT,
-                        egui::ViewportCommand::Focus,
-                    );
+                    self.last_pane_per_group
+                        .insert(action.group, action.pane_id);
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
                 }
                 _ => {}
             }
@@ -2406,9 +2404,7 @@ impl App {
             if let Some(ref new_text) = new_text {
                 if i < self.pane_state.panes.len() && self.pane_state.panes[i].id == *pane_id {
                     match self.pane_state.panes[i].content {
-                        PaneContent::FileEditor(ref mut ed)
-                            if *new_text != ed.content =>
-                        {
+                        PaneContent::FileEditor(ref mut ed) if *new_text != ed.content => {
                             ed.content = new_text.clone();
                             ed.dirty = true;
                             ed.save_error = false;
@@ -2556,8 +2552,9 @@ impl App {
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
                         let content = match std::fs::read(&path) {
-                            Ok(bytes) => String::from_utf8(bytes)
-                                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
+                                String::from_utf8_lossy(e.as_bytes()).into_owned()
+                            }),
                             Err(_) => String::new(),
                         };
                         results.lock().push((pane_id, content));
@@ -2606,8 +2603,9 @@ impl App {
                     let ctx_clone = ctx.clone();
                     std::thread::spawn(move || {
                         let content = match std::fs::read(&path) {
-                            Ok(bytes) => String::from_utf8(bytes)
-                                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
+                                String::from_utf8_lossy(e.as_bytes()).into_owned()
+                            }),
                             Err(_) => String::new(),
                         };
                         results.lock().push((pane_id, content));
@@ -2728,8 +2726,9 @@ impl App {
                         let ctx_clone = ctx.clone();
                         std::thread::spawn(move || {
                             let content = match std::fs::read(&full_path) {
-                                Ok(bytes) => String::from_utf8(bytes)
-                                    .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
+                                Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
+                                    String::from_utf8_lossy(e.as_bytes()).into_owned()
+                                }),
                                 Err(_) => String::new(),
                             };
                             results.lock().push((pane_id, content));

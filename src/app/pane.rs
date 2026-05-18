@@ -204,6 +204,9 @@ mod tests {
             RightTab::Markdown(PathBuf::from("a.md")),
             RightTab::Markdown(PathBuf::from("b.md"))
         );
-        assert_ne!(RightTab::Directory, RightTab::Markdown(PathBuf::from("x.md")));
+        assert_ne!(
+            RightTab::Directory,
+            RightTab::Markdown(PathBuf::from("x.md"))
+        );
     }
 }

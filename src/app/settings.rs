@@ -144,7 +144,11 @@ mod tests {
 
     #[test]
     fn test_cursor_style_roundtrip() {
-        for style in [CursorStyle::Block, CursorStyle::Underline, CursorStyle::Beam] {
+        for style in [
+            CursorStyle::Block,
+            CursorStyle::Underline,
+            CursorStyle::Beam,
+        ] {
             let json = serde_json::to_string(&style).unwrap();
             let restored: CursorStyle = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, style);

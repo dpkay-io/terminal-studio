@@ -48,9 +48,8 @@ fuzzy-matcher = "0.3"
 # Lightweight system resource monitoring (CPU, RAM, network)
 sysinfo = "0.33"
 
-# Self-update: HTTP client (rustls = no OpenSSL), async runtime, version comparison
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
-tokio = { version = "1", features = ["rt"] }
+# Self-update: HTTP client (rustls = no OpenSSL), version comparison
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 semver = "1"
 
 # URL detection in terminal output

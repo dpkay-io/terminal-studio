@@ -162,14 +162,14 @@ impl TerminalView {
                     let mut fg = resolve_color(eff_fg, true, t);
                     if cell.flags.contains(Flags::BOLD) {
                         fg = match eff_fg {
-                            Color::Named(NamedColor::Black)   => t.ansi[8],
-                            Color::Named(NamedColor::Red)     => t.ansi[9],
-                            Color::Named(NamedColor::Green)   => t.ansi[10],
-                            Color::Named(NamedColor::Yellow)  => t.ansi[11],
-                            Color::Named(NamedColor::Blue)    => t.ansi[12],
+                            Color::Named(NamedColor::Black) => t.ansi[8],
+                            Color::Named(NamedColor::Red) => t.ansi[9],
+                            Color::Named(NamedColor::Green) => t.ansi[10],
+                            Color::Named(NamedColor::Yellow) => t.ansi[11],
+                            Color::Named(NamedColor::Blue) => t.ansi[12],
                             Color::Named(NamedColor::Magenta) => t.ansi[13],
-                            Color::Named(NamedColor::Cyan)    => t.ansi[14],
-                            Color::Named(NamedColor::White)   => t.ansi[15],
+                            Color::Named(NamedColor::Cyan) => t.ansi[14],
+                            Color::Named(NamedColor::White) => t.ansi[15],
                             _ => fg,
                         };
                     }
@@ -431,10 +431,8 @@ impl TerminalView {
             let bar_w_wide = 12.0_f32;
             let hit_w = 16.0_f32;
 
-            let hit_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.max.x - hit_w, rect.min.y),
-                rect.max,
-            );
+            let hit_rect =
+                egui::Rect::from_min_max(egui::pos2(rect.max.x - hit_w, rect.min.y), rect.max);
 
             let (pointer_pos, primary_down, any_down) = ui.input(|i| {
                 (
@@ -444,9 +442,7 @@ impl TerminalView {
                 )
             });
 
-            let pointer_in_hit = pointer_pos
-                .map(|p| hit_rect.contains(p))
-                .unwrap_or(false);
+            let pointer_in_hit = pointer_pos.map(|p| hit_rect.contains(p)).unwrap_or(false);
 
             let sb_mem_id = ui.id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
@@ -455,7 +451,11 @@ impl TerminalView {
 
             scrollbar_hovered = pointer_in_hit || is_dragging;
 
-            let bar_w = if scrollbar_hovered { bar_w_wide } else { bar_w_thin };
+            let bar_w = if scrollbar_hovered {
+                bar_w_wide
+            } else {
+                bar_w_thin
+            };
             let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
             let thumb_h = (rect.height() * thumb_frac).max(20.0);
             let track_h = rect.height() - thumb_h;
@@ -467,7 +467,11 @@ impl TerminalView {
             if is_dragging {
                 if let Some(pos) = pointer_pos {
                     let click_y = (pos.y - rect.min.y - thumb_h * 0.5).clamp(0.0, track_h);
-                    let frac = if track_h > 0.0 { click_y / track_h } else { 0.0 };
+                    let frac = if track_h > 0.0 {
+                        click_y / track_h
+                    } else {
+                        0.0
+                    };
                     let target_lines_above =
                         (frac * (total_lines - visible_rows) as f32).round() as usize;
                     let target_offset = history.saturating_sub(target_lines_above);

@@ -367,7 +367,12 @@ mod tests {
         collect_files_recursive(&dir, &mut out, 5, &gen, 1);
 
         let names: Vec<&str> = out.iter().map(|(n, _, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["normal.txt"], "only normal.txt expected, got {:?}", names);
+        assert_eq!(
+            names,
+            vec!["normal.txt"],
+            "only normal.txt expected, got {:?}",
+            names
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

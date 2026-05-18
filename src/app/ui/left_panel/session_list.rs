@@ -464,7 +464,8 @@ impl App {
                     }
 
                     let in_other_window = pane_ws.is_some_and(|ws_id| {
-                        let owned_by_extra = self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
+                        let owned_by_extra =
+                            self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
                         if owned_by_extra {
                             // Workspace has a dedicated extra window — "other" if
                             // that window isn't the one we're currently rendering.

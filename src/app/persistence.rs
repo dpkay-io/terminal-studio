@@ -200,9 +200,7 @@ mod tests {
                     manual_width: Some(400.0),
                 },
                 SavedPane {
-                    content: SavedPaneContent::NoteEditor {
-                        workspace_id: None,
-                    },
+                    content: SavedPaneContent::NoteEditor { workspace_id: None },
                     manual_width: None,
                 },
             ],

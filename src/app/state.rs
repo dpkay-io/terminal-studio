@@ -15,7 +15,9 @@ use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 use alacritty_terminal::grid::Dimensions;
 
 use super::multi_window::{ExtraWindow, SavedExtraWindow, WindowView};
-use super::pane::{FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry};
+use super::pane::{
+    FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
+};
 use super::pane_state::PaneState;
 use super::persistence::{
     session_data_path, AppSession, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,

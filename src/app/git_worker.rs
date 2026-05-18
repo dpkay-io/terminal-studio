@@ -297,7 +297,10 @@ mod tests {
                 break;
             }
         }
-        assert!(result.is_some(), "dir listing should have produced a result");
+        assert!(
+            result.is_some(),
+            "dir listing should have produced a result"
+        );
         let entries = result.unwrap();
         // The project directory should have at least some entries (Cargo.toml, src/, etc.)
         assert!(!entries.is_empty(), "directory listing should not be empty");

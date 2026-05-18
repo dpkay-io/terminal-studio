@@ -109,7 +109,10 @@ mod tests {
         let mut d = Debouncer::new(Duration::from_millis(0));
         d.update("hello");
         assert!(d.ready(), "should be ready with 0ms delay");
-        assert!(!d.pending(), "should not be pending after ready() consumed it");
+        assert!(
+            !d.pending(),
+            "should not be pending after ready() consumed it"
+        );
     }
 
     #[test]
@@ -119,7 +122,10 @@ mod tests {
         let trigger_before = d.trigger_at;
         // Same query again — should NOT reset the timer
         d.update("hello");
-        assert_eq!(d.trigger_at, trigger_before, "timer should not reset on same query");
+        assert_eq!(
+            d.trigger_at, trigger_before,
+            "timer should not reset on same query"
+        );
     }
 
     #[test]
@@ -130,7 +136,10 @@ mod tests {
         // Small sleep so Instant::now() advances
         std::thread::sleep(Duration::from_millis(5));
         d.update("world");
-        assert_ne!(d.trigger_at, trigger_before, "timer should reset on different query");
+        assert_ne!(
+            d.trigger_at, trigger_before,
+            "timer should reset on different query"
+        );
     }
 
     #[test]
