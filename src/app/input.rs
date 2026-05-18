@@ -32,6 +32,7 @@ pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> 
             X => Some(24),
             Y => Some(25),
             Z => Some(26),
+            Enter => Some(10),
             _ => None,
         };
         if let Some(b) = byte {

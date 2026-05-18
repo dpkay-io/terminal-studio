@@ -28,12 +28,13 @@ impl App {
         // ── Session search bar (always visible) ─────────────────────
         if !self.show_global_search {
             let focus = self.session_search_active;
+            let search_id = self.vp_id("session_search_input");
             let sb = search_bar_persistent(
                 ui,
                 &mut self.session_search_query,
                 "\u{1f50d}",
                 "Filter sessions\u{2026}",
-                egui::Id::new("session_search_input"),
+                search_id,
                 focus,
             );
             if focus {
@@ -47,12 +48,13 @@ impl App {
 
         // ── Global search bar (search across all sessions) ──────────
         if self.show_global_search {
+            let search_id = self.vp_id("global_search_input");
             let sb = search_bar(
                 ui,
                 &mut self.global_search_query,
                 "\u{1f50e}",
                 "Search in all sessions\u{2026}",
-                egui::Id::new("global_search_input"),
+                search_id,
             );
             if sb.response.changed() {
                 self.global_search_debouncer
@@ -230,7 +232,7 @@ impl App {
                     "All Workspaces".to_string()
                 }),
         };
-        egui::ComboBox::from_id_source("ws_session_filter")
+        egui::ComboBox::from_id_source(self.vp_id("ws_session_filter"))
             .width(ui.available_width() - 12.0)
             .selected_text(egui::RichText::new(&selected_label).size(theme::SESSION_FONT_SZ))
             .show_ui(ui, |ui| {
@@ -288,7 +290,7 @@ impl App {
         }
 
         egui::ScrollArea::vertical()
-            .id_source("global_search_scroll")
+            .id_source(self.vp_id("global_search_scroll"))
             .show(ui, |ui| {
                 let t = theme::active();
                 let mut current_session: Option<u32> = None;
@@ -370,7 +372,7 @@ impl App {
         actions: &mut SessionListActions,
     ) {
         egui::ScrollArea::vertical()
-            .id_source("sessions_scroll")
+            .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
                 let matcher = SkimMatcherV2::default();
                 for (pane_idx, pane) in self.pane_state.panes.iter().enumerate() {

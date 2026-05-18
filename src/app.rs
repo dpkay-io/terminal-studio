@@ -467,6 +467,14 @@ impl eframe::App for App {
     }
 }
 impl App {
+    pub(crate) fn vp_id(&self, base: &str) -> egui::Id {
+        let id = egui::Id::new(base);
+        match &self.current_window_id {
+            Some(w) => id.with(w.0),
+            None => id,
+        }
+    }
+
     fn render_window_body(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
             return;
@@ -593,7 +601,7 @@ impl App {
 
         // ── Right panel ──────────────────────────────────────────────────────
         if self.show_right_panel {
-            egui::SidePanel::right("right_panel")
+            egui::SidePanel::right(self.vp_id("right_panel"))
                 .default_width(300.0)
                 .width_range(100.0..=600.0)
                 .resizable(true)
@@ -625,7 +633,7 @@ impl App {
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
                                 egui::ScrollArea::horizontal()
-                                    .id_source("right_tab_bar")
+                                    .id_source(self.vp_id("right_tab_bar"))
                                     .max_height(theme::HEADER_H)
                                     .show(ui, |ui| {
                                         ui.set_min_height(theme::HEADER_H);
@@ -701,7 +709,7 @@ impl App {
                         ui.separator();
 
                         egui::ScrollArea::vertical()
-                            .id_source("right_content")
+                            .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
                                 match &active_tab {
@@ -757,12 +765,13 @@ impl App {
                                             // ── Directory search bar (always visible) ──
                                             {
                                                 let focus = self.dir_search_active;
+                                                let dir_search_id = self.vp_id("dir_search_input");
                                                 let sb = crate::app::ui::search_bar::search_bar_persistent(
                                                     ui,
                                                     &mut self.dir_search_query,
                                                     "\u{1f50d}",
                                                     "Search files\u{2026}",
-                                                    egui::Id::new("dir_search_input"),
+                                                    dir_search_id,
                                                     focus,
                                                 );
                                                 if focus {
@@ -896,7 +905,7 @@ impl App {
                     );
                     let div_resp = ui.interact(
                         div_rect,
-                        egui::Id::new("notes_panel_divider"),
+                        self.vp_id("notes_panel_divider"),
                         egui::Sense::drag(),
                     );
                     if div_resp.hovered() || div_resp.dragged() {
@@ -1000,12 +1009,12 @@ impl App {
 
                         if !self.notes_panel_collapsed {
                             egui::ScrollArea::both()
-                                .id_source("notes_scroll")
+                                .id_source(self.vp_id("notes_scroll"))
                                 .auto_shrink([false; 2])
                                 .show(ui, |ui| {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
-                                            .id(egui::Id::new("notes_textedit"))
+                                            .id(self.vp_id("notes_textedit"))
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
@@ -1652,6 +1661,7 @@ impl App {
                     i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
                     i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
                 ));
+                log::debug!("Tab consume: fwd={tab_fwd} rev={tab_rev}");
                 if tab_fwd || tab_rev {
                     if let Some(sid) = active_session_id {
                         self.scroll_accum.remove(&sid);
@@ -1919,7 +1929,11 @@ impl App {
                                         }
                                     } else if *button == egui::PointerButton::Primary {
                                         if let Some(geo) = &self.active_term_geo {
-                                            if let Some((col, row)) = geo.to_cell(*pos) {
+                                            let clamped = egui::pos2(
+                                                pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
+                                                pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
+                                            );
+                                            if let Some((col, row)) = geo.to_cell(clamped) {
                                                 if *pressed {
                                                     self.term_selection = Some(TermSelection {
                                                         start_col: col,
@@ -2015,6 +2029,9 @@ impl App {
                                                     -(lines as i32)
                                                 };
                                                 self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_delta));
+                                                self.term_selection = None;
+                                                self.term_selection_sid = None;
+                                                self.term_selecting = false;
                                             }
                                         }
                                     }

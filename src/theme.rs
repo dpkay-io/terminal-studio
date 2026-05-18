@@ -531,21 +531,21 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [203, 166, 247],
             teal: [148, 226, 213],
             ansi: [
-                [30, 30, 46],    // black
+                [49, 50, 68],    // black (surface0, visible against base)
                 [243, 139, 168], // red
                 [166, 227, 161], // green
                 [249, 226, 175], // yellow
                 [137, 180, 250], // blue
                 [245, 194, 231], // magenta
                 [148, 226, 213], // cyan
-                [205, 214, 244], // white
-                [88, 91, 112],   // bright black
-                [243, 139, 168], // bright red
-                [166, 227, 161], // bright green
-                [249, 226, 175], // bright yellow
-                [137, 180, 250], // bright blue
-                [245, 194, 231], // bright magenta
-                [148, 226, 213], // bright cyan
+                [186, 194, 222], // white (subtext0)
+                [108, 112, 134], // bright black (overlay0, ~4.1:1 contrast)
+                [255, 159, 188], // bright red
+                [186, 247, 181], // bright green
+                [255, 246, 195], // bright yellow
+                [157, 200, 255], // bright blue
+                [255, 214, 246], // bright magenta
+                [168, 246, 233], // bright cyan
                 [255, 255, 255], // bright white
             ],
         },
@@ -691,7 +691,7 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [211, 134, 155],
             teal: [142, 192, 124],
             ansi: [
-                [40, 40, 40],    // black
+                [60, 56, 54],    // black (surface0, visible against base)
                 [204, 36, 29],   // red
                 [152, 151, 26],  // green
                 [215, 153, 33],  // yellow
@@ -811,7 +811,7 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [198, 120, 221],
             teal: [86, 182, 194],
             ansi: [
-                [40, 44, 52],    // black
+                [53, 57, 65],    // black (surface0, visible against base)
                 [224, 108, 117], // red
                 [152, 195, 121], // green
                 [229, 192, 123], // yellow
@@ -891,7 +891,7 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [174, 129, 255],
             teal: [102, 217, 239],
             ansi: [
-                [39, 40, 34],    // black
+                [56, 57, 50],    // black (surface0, visible against base)
                 [249, 38, 114],  // red
                 [166, 226, 46],  // green
                 [230, 219, 116], // yellow
@@ -971,7 +971,7 @@ fn all_defs() -> Vec<ThemeDef> {
             mauve: [210, 166, 255],
             teal: [149, 230, 203],
             ansi: [
-                [15, 20, 30],    // black
+                [28, 34, 46],    // black (surface0, visible against base)
                 [240, 113, 120], // red
                 [170, 217, 76],  // green
                 [255, 180, 84],  // yellow

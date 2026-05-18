@@ -18,13 +18,13 @@ impl App {
             let t = theme::active();
 
             // Dim background
-            egui::Area::new(egui::Id::new("quick_switcher_dim"))
+            egui::Area::new(self.vp_id("quick_switcher_dim"))
                 .fixed_pos(screen_rect.min)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     let resp = ui.interact(
                         screen_rect,
-                        egui::Id::new("quick_switcher_dim_click"),
+                        self.vp_id("quick_switcher_dim_click"),
                         egui::Sense::click(),
                     );
                     ui.painter().rect_filled(
@@ -40,7 +40,7 @@ impl App {
             let dialog_w = (screen_rect.width() * 0.90).clamp(600.0, 1800.0);
             let dialog_h = (screen_rect.height() * 0.90).clamp(400.0, 1200.0);
 
-            egui::Area::new(egui::Id::new("quick_switcher_dialog"))
+            egui::Area::new(self.vp_id("quick_switcher_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
@@ -94,7 +94,7 @@ impl App {
                             }
 
                             // Search input
-                            let search_id = egui::Id::new("quick_switcher_search");
+                            let search_id = self.vp_id("quick_switcher_search");
                             let search_resp = ui.add(
                                 egui::TextEdit::singleline(&mut self.quick_switcher_query)
                                     .id(search_id)
@@ -561,7 +561,7 @@ impl App {
             let screen_rect = ctx.screen_rect();
             let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
 
-            egui::Area::new(egui::Id::new("ws_dialog_dim"))
+            egui::Area::new(self.vp_id("ws_dialog_dim"))
                 .fixed_pos(screen_rect.min)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -572,7 +572,7 @@ impl App {
                     );
                 });
 
-            egui::Area::new(egui::Id::new("ws_dialog"))
+            egui::Area::new(self.vp_id("ws_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
@@ -719,7 +719,7 @@ impl App {
             let screen_rect = ctx.screen_rect();
             let dialog_w = (screen_rect.width() * 0.4).clamp(300.0, 480.0);
 
-            egui::Area::new(egui::Id::new("ws_edit_dim"))
+            egui::Area::new(self.vp_id("ws_edit_dim"))
                 .fixed_pos(screen_rect.min)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
@@ -730,7 +730,7 @@ impl App {
                     );
                 });
 
-            egui::Area::new(egui::Id::new("ws_edit_dialog"))
+            egui::Area::new(self.vp_id("ws_edit_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
@@ -928,13 +928,13 @@ impl App {
         let screen_rect = ctx.screen_rect();
         let dialog_w = 340.0_f32;
 
-        egui::Area::new(egui::Id::new("close_all_dim"))
+        egui::Area::new(self.vp_id("close_all_dim"))
             .fixed_pos(screen_rect.min)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let resp = ui.interact(
                     screen_rect,
-                    egui::Id::new("close_all_dim_click"),
+                    self.vp_id("close_all_dim_click"),
                     egui::Sense::click(),
                 );
                 ui.painter().rect_filled(
@@ -947,7 +947,7 @@ impl App {
                 }
             });
 
-        egui::Area::new(egui::Id::new("close_all_dialog"))
+        egui::Area::new(self.vp_id("close_all_dialog"))
             .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 60.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {

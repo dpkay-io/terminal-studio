@@ -88,7 +88,7 @@ impl App {
             .collect();
 
         egui::ScrollArea::vertical()
-            .id_source("ws_panel_scroll")
+            .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::SP_SM;
                 for (id, name, color, has_note, in_extra_window) in &workspaces {
@@ -281,7 +281,7 @@ impl App {
                 egui::Rect::NOTHING,
                 ui.interact(
                     egui::Rect::NOTHING,
-                    egui::Id::new("other_skip"),
+                    self.vp_id("other_skip"),
                     egui::Sense::hover(),
                 ),
             )

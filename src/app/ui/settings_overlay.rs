@@ -12,13 +12,13 @@ impl App {
             let dialog_w = (screen_rect.width() * 0.38).clamp(320.0, 520.0);
             let dialog_h = 520.0_f32;
 
-            egui::Area::new(egui::Id::new("settings_dim"))
+            egui::Area::new(self.vp_id("settings_dim"))
                 .fixed_pos(screen_rect.min)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     let resp = ui.interact(
                         screen_rect,
-                        egui::Id::new("settings_dim_click"),
+                        self.vp_id("settings_dim_click"),
                         egui::Sense::click(),
                     );
                     ui.painter().rect_filled(
@@ -31,7 +31,7 @@ impl App {
                     }
                 });
 
-            egui::Area::new(egui::Id::new("settings_dialog"))
+            egui::Area::new(self.vp_id("settings_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
@@ -228,7 +228,7 @@ impl App {
                                 .collect();
                             ui.horizontal(|ui| {
                                 ui.label("Default shell:");
-                                egui::ComboBox::from_id_source("settings_shell")
+                                egui::ComboBox::from_id_source(self.vp_id("settings_shell"))
                                     .selected_text(&shell_display)
                                     .show_ui(ui, |ui| {
                                         if ui
@@ -348,13 +348,13 @@ impl App {
             let dialog_w = (screen_rect.width() * 0.55).clamp(400.0, 680.0);
             let dialog_h = (screen_rect.height() * 0.72).clamp(300.0, 560.0);
 
-            egui::Area::new(egui::Id::new("shortcut_dim"))
+            egui::Area::new(self.vp_id("shortcut_dim"))
                 .fixed_pos(screen_rect.min)
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     let resp = ui.interact(
                         screen_rect,
-                        egui::Id::new("shortcut_dim_click"),
+                        self.vp_id("shortcut_dim_click"),
                         egui::Sense::click(),
                     );
                     ui.painter().rect_filled(
@@ -367,7 +367,7 @@ impl App {
                     }
                 });
 
-            egui::Area::new(egui::Id::new("shortcut_dialog"))
+            egui::Area::new(self.vp_id("shortcut_dialog"))
                 .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {

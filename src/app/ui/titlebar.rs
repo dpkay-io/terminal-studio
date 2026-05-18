@@ -60,7 +60,7 @@ impl App {
             .map(theme::text_on)
             .unwrap_or(theme::active().subtext1);
 
-        egui::TopBottomPanel::top("titlebar")
+        egui::TopBottomPanel::top(self.vp_id("titlebar"))
             .exact_height(theme::TITLEBAR_H)
             .frame(egui::Frame::none().fill(tb_bg))
             .show(ctx, |ui| {
@@ -69,7 +69,7 @@ impl App {
 
                 // Drag the whole bar to move the window
                 if ui
-                    .interact(r, egui::Id::new("tb_drag"), egui::Sense::drag())
+                    .interact(r, self.vp_id("tb_drag"), egui::Sense::drag())
                     .dragged()
                 {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
@@ -99,7 +99,7 @@ impl App {
                         let brect = egui::Rect::from_center_size(pos, egui::vec2(14.0, 14.0));
                         let resp = ui.interact(
                             brect,
-                            egui::Id::new(("tb_mac", idx)),
+                            self.vp_id("tb_mac").with(idx),
                             egui::Sense::click(),
                         );
                         let fill = if hover_any {
@@ -131,7 +131,7 @@ impl App {
                     );
                     let left_resp = ui.interact(
                         left_tbr,
-                        egui::Id::new("tb_left_toggle"),
+                        self.vp_id("tb_left_toggle"),
                         egui::Sense::click(),
                     );
                     let left_bg = if self.show_left_panel {
@@ -161,7 +161,7 @@ impl App {
                     );
                     let gear_mac_resp = ui.interact(
                         gear_mac_tbr,
-                        egui::Id::new("tb_settings"),
+                        self.vp_id("tb_settings"),
                         egui::Sense::click(),
                     );
                     if gear_mac_resp.hovered() || self.show_settings {
@@ -200,7 +200,7 @@ impl App {
                         );
                         let kb_resp = ui.interact(
                             kb_tbr,
-                            egui::Id::new("tb_shortcuts"),
+                            self.vp_id("tb_shortcuts"),
                             egui::Sense::click(),
                         );
                         let bg = if kb_resp.hovered() || self.show_shortcut_help {
@@ -241,7 +241,7 @@ impl App {
                     );
                     let right_resp = ui.interact(
                         right_tbr,
-                        egui::Id::new("tb_right_toggle"),
+                        self.vp_id("tb_right_toggle"),
                         egui::Sense::click(),
                     );
                     let right_bg = if self.show_right_panel {
@@ -297,7 +297,7 @@ impl App {
                             );
                             let resp = ui.interact(
                                 br,
-                                egui::Id::new("tb_update_btn"),
+                                self.vp_id("tb_update_btn"),
                                 egui::Sense::click(),
                             );
                             let t = theme::active();
@@ -381,7 +381,7 @@ impl App {
                             egui::vec2(btn_w, r.height()),
                         );
                         let resp =
-                            ui.interact(br, egui::Id::new("tb_left_toggle"), egui::Sense::click());
+                            ui.interact(br, self.vp_id("tb_left_toggle"), egui::Sense::click());
                         let bg = if self.show_left_panel {
                             theme::active().surface2
                         } else if resp.hovered() {
@@ -411,7 +411,7 @@ impl App {
                             egui::vec2(btn_w, r.height()),
                         );
                         let resp =
-                            ui.interact(br, egui::Id::new("tb_settings"), egui::Sense::click());
+                            ui.interact(br, self.vp_id("tb_settings"), egui::Sense::click());
                         let bg = if resp.hovered() || self.show_settings {
                             theme::active().surface1
                         } else {
@@ -451,7 +451,7 @@ impl App {
                             egui::vec2(total_w, r.height()),
                         );
                         let resp =
-                            ui.interact(br, egui::Id::new("tb_shortcuts"), egui::Sense::click());
+                            ui.interact(br, self.vp_id("tb_shortcuts"), egui::Sense::click());
                         let bg = if resp.hovered() || self.show_shortcut_help {
                             theme::active().surface1
                         } else {
@@ -490,7 +490,7 @@ impl App {
                             egui::vec2(btn_w, r.height()),
                         );
                         let resp =
-                            ui.interact(br, egui::Id::new("tb_right_toggle"), egui::Sense::click());
+                            ui.interact(br, self.vp_id("tb_right_toggle"), egui::Sense::click());
                         let bg = if self.show_right_panel {
                             theme::active().surface2
                         } else if resp.hovered() {
@@ -546,7 +546,7 @@ impl App {
                             );
                             let resp = ui.interact(
                                 br,
-                                egui::Id::new("tb_update_btn"),
+                                self.vp_id("tb_update_btn"),
                                 egui::Sense::click(),
                             );
                             let t = theme::active();
@@ -581,7 +581,7 @@ impl App {
                             egui::vec2(btn_w, r.height()),
                         );
                         let resp =
-                            ui.interact(br, egui::Id::new(("tb_btn", idx)), egui::Sense::click());
+                            ui.interact(br, self.vp_id("tb_btn").with(idx), egui::Sense::click());
                         let bg = if resp.hovered() {
                             if is_danger {
                                 theme::active().danger_bg

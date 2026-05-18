@@ -60,7 +60,7 @@ impl App {
         };
 
         if self.show_left_panel {
-            egui::SidePanel::left("sessions")
+            egui::SidePanel::left(self.vp_id("sessions"))
                 .default_width(theme::LEFT_SIDEBAR_W)
                 .width_range(80.0..=400.0)
                 .resizable(true)
@@ -101,7 +101,7 @@ impl App {
                     );
                     let div_resp = ui.interact(
                         div_rect,
-                        egui::Id::new("ws_panel_divider"),
+                        self.vp_id("ws_panel_divider"),
                         egui::Sense::drag(),
                     );
                     if div_resp.hovered() || div_resp.dragged() {

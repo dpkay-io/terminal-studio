@@ -169,7 +169,10 @@ fn render_terminal_leaf(
             rctx.font_size,
             rctx.cursor_style,
         );
-        if is_focused {
+        let pointer_in_rect = ui.input(|i| {
+            i.pointer.latest_pos().map(|p| geo.rect.contains(p)).unwrap_or(false)
+        });
+        if is_focused || pointer_in_rect {
             *rctx.active_term_geo = Some(geo);
         }
     }
@@ -178,14 +181,18 @@ fn render_terminal_leaf(
         *rctx.active_term_ui_id = Some(this_id);
         let dialog_open =
             rctx.workspace_dialog_open || rctx.workspace_edit_dialog_open || rctx.show_settings;
-        // Re-assert focus only when no other widget owns it. This recovers
-        // from transient focus steals (scroll areas, autocomplete) without
-        // trampling intentional focus on widgets like the notes TextEdit or
-        // the workspace search box.
         if !dialog_open {
-            let other_focused = ui.memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
-            if !other_focused {
+            let clicked = ui.input(|i| i.pointer.any_pressed())
+                && ui.input(|i| {
+                    i.pointer.latest_pos().map(|p| ui.max_rect().contains(p)).unwrap_or(false)
+                });
+            if clicked {
                 ui.memory_mut(|m| m.request_focus(this_id));
+            } else {
+                let other_focused = ui.memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
+                if !other_focused {
+                    ui.memory_mut(|m| m.request_focus(this_id));
+                }
             }
         }
     }

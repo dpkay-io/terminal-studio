@@ -155,6 +155,19 @@ impl TerminalView {
                     let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                     let ch = if hidden || spacer { ' ' } else { cell.c };
                     let mut fg = resolve_color(eff_fg, true, t);
+                    if cell.flags.contains(Flags::BOLD) {
+                        fg = match eff_fg {
+                            Color::Named(NamedColor::Black)   => t.ansi[8],
+                            Color::Named(NamedColor::Red)     => t.ansi[9],
+                            Color::Named(NamedColor::Green)   => t.ansi[10],
+                            Color::Named(NamedColor::Yellow)  => t.ansi[11],
+                            Color::Named(NamedColor::Blue)    => t.ansi[12],
+                            Color::Named(NamedColor::Magenta) => t.ansi[13],
+                            Color::Named(NamedColor::Cyan)    => t.ansi[14],
+                            Color::Named(NamedColor::White)   => t.ansi[15],
+                            _ => fg,
+                        };
+                    }
                     if cell.flags.contains(Flags::DIM) {
                         let [r, g, b, a] = fg.to_array();
                         fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);

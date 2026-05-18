@@ -35,7 +35,7 @@ impl App {
             ui.painter()
                 .rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
             egui::ScrollArea::horizontal()
-                .id_source("tab_bar_scroll")
+                .id_source(self.vp_id("tab_bar_scroll"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -263,7 +263,7 @@ impl App {
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let split_h_resp = ui.interact(
                 split_h_rect,
-                egui::Id::new("tab_split_h"),
+                self.vp_id("tab_split_h"),
                 egui::Sense::click(),
             );
             let sh_stroke = if split_h_resp.hovered() {
@@ -291,7 +291,7 @@ impl App {
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let split_v_resp = ui.interact(
                 split_v_rect,
-                egui::Id::new("tab_split_v"),
+                self.vp_id("tab_split_v"),
                 egui::Sense::click(),
             );
             let sv_stroke = if split_v_resp.hovered() {
@@ -319,7 +319,7 @@ impl App {
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let close_all_resp = ui.interact(
                 close_all_rect,
-                egui::Id::new("tab_close_all"),
+                self.vp_id("tab_close_all"),
                 egui::Sense::click(),
             );
             if close_all_resp.hovered() {
