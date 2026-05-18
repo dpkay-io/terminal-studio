@@ -380,7 +380,7 @@ impl App {
                 .pane_trees
                 .get(&root_pane_id)
                 .cloned()
-                .unwrap_or_else(|| PaneNode::Leaf {
+                .unwrap_or(PaneNode::Leaf {
                     pane_id: root_pane_id,
                     last_size: (80, 24),
                 });

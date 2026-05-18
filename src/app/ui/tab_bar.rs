@@ -50,13 +50,13 @@ impl App {
                         for (i, display) in &display_texts {
                             let i = *i;
                             let pane_id = self.pane_state.panes[i].id;
-                            let is_active = active_pane_id_snap.map_or(false, |apid| {
+                            let is_active = active_pane_id_snap.is_some_and(|apid| {
                                 pane_id == apid
                                     || self
                                         .pane_state
                                         .pane_trees
                                         .get(&pane_id)
-                                        .map_or(false, |t| t.leaf_ids().contains(&apid))
+                                        .is_some_and(|t| t.leaf_ids().contains(&apid))
                             });
                             let ws_color = ws_colors[i];
 

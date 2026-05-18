@@ -182,6 +182,7 @@ pub struct App {
     // drained at the start of each update() frame.
     file_load_results: Arc<parking_lot::Mutex<Vec<(u32, String)>>>,
     // Async md content load results from background threads.
+    #[allow(clippy::type_complexity)]
     md_load_results: Arc<parking_lot::Mutex<Vec<(PathBuf, String, Option<u64>)>>>,
 }
 
@@ -1140,7 +1141,7 @@ impl App {
         // `active_pane_id` themselves so this fallback path runs instead of the follow path.
         if let Some(pid) = self.pane_state.active_pane_id {
             let root_id = self.pane_state.root_of(pid);
-            let root_visible = root_id.map_or(false, |rid| {
+            let root_visible = root_id.is_some_and(|rid| {
                 visible_indices
                     .iter()
                     .any(|&i| self.pane_state.panes[i].id == rid)
