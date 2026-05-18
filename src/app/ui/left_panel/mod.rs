@@ -90,12 +90,7 @@ impl App {
                     let sess_rect =
                         egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, sess_h));
                     ui.allocate_ui_at_rect(sess_rect, |ui| {
-                        self.render_session_section(
-                            ctx,
-                            ui,
-                            &active_fg,
-                            &mut sess_actions,
-                        );
+                        self.render_session_section(ctx, ui, &active_fg, &mut sess_actions);
                     });
 
                     // ── Draggable divider ──────────────────────────────────────

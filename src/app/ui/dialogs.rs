@@ -154,17 +154,20 @@ impl App {
                             // Collect workspaces
                             for ws in &self.workspace_store.workspaces {
                                 let panes_in_ws: Vec<SwitcherEntry> = self
-                                    .pane_state.panes
+                                    .pane_state
+                                    .panes
                                     .iter()
                                     .filter(|p| {
-                                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                            == Some(ws.id)
+                                        Self::pane_group(
+                                            &self.session_state.sessions,
+                                            &self.workspace_store,
+                                            p,
+                                        ) == Some(ws.id)
                                     })
                                     .filter_map(|p| {
                                         let (label, cwd) = match &p.content {
                                             PaneContent::Terminal(sid) => {
-                                                let sess_entry =
-                                                    self.session_state.find(*sid)?;
+                                                let sess_entry = self.session_state.find(*sid)?;
                                                 let session = sess_entry.session.read();
                                                 let t_str = session.title();
                                                 let title = if t_str.is_empty() {
@@ -230,17 +233,21 @@ impl App {
 
                             // "Other" group (unaffiliated panes)
                             let other_panes: Vec<SwitcherEntry> = self
-                                .pane_state.panes
+                                .pane_state
+                                .panes
                                 .iter()
                                 .filter(|p| {
-                                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                        .is_none()
+                                    Self::pane_group(
+                                        &self.session_state.sessions,
+                                        &self.workspace_store,
+                                        p,
+                                    )
+                                    .is_none()
                                 })
                                 .filter_map(|p| {
                                     let (label, cwd) = match &p.content {
                                         PaneContent::Terminal(sid) => {
-                                            let sess_entry =
-                                                self.session_state.find(*sid)?;
+                                            let sess_entry = self.session_state.find(*sid)?;
                                             let session = sess_entry.session.read();
                                             let t_str = session.title();
                                             let title = if t_str.is_empty() {
@@ -293,8 +300,12 @@ impl App {
                             if !other_panes.is_empty()
                                 || (query.is_empty()
                                     && self.pane_state.panes.iter().any(|p| {
-                                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                            .is_none()
+                                        Self::pane_group(
+                                            &self.session_state.sessions,
+                                            &self.workspace_store,
+                                            p,
+                                        )
+                                        .is_none()
                                     }))
                             {
                                 groups.push(SwitcherGroup {
@@ -507,7 +518,12 @@ impl App {
 
             // Process actions
             if let Some(ws_id) = switch_to_workspace {
-                let (cols, rows) = self.pane_state.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
+                let (cols, rows) = self
+                    .pane_state
+                    .panes
+                    .first()
+                    .map(|p| p.last_size)
+                    .unwrap_or((80, 24));
                 let group = if ws_id == u64::MAX { None } else { Some(ws_id) };
                 self.switch_group(group, cols, rows);
                 close_switcher = true;
@@ -515,10 +531,15 @@ impl App {
             if let Some(pane_id) = switch_to_pane {
                 // Find which workspace this pane belongs to and switch there
                 if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pane_id) {
-                    let group = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
+                    let group =
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
                     if group != self.active_group {
-                        let (cols, rows) =
-                            self.pane_state.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
+                        let (cols, rows) = self
+                            .pane_state
+                            .panes
+                            .first()
+                            .map(|p| p.last_size)
+                            .unwrap_or((80, 24));
                         self.switch_group(group, cols, rows);
                     }
                 }
@@ -656,7 +677,10 @@ impl App {
                 cancel = true;
             }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-                && self.workspace_dialog.as_ref().is_some_and(|d| !d.name.trim().is_empty())
+                && self
+                    .workspace_dialog
+                    .as_ref()
+                    .is_some_and(|d| !d.name.trim().is_empty())
             {
                 save_it = true;
             }
@@ -672,7 +696,12 @@ impl App {
                         host_window_id: None,
                     });
                     self.workspace_store.save();
-                    let (cols, rows) = self.pane_state.panes.first().map(|p| p.last_size).unwrap_or((80, 24));
+                    let (cols, rows) = self
+                        .pane_state
+                        .panes
+                        .first()
+                        .map(|p| p.last_size)
+                        .unwrap_or((80, 24));
                     self.switch_group(Some(id), cols, rows);
                 }
             } else if cancel {
@@ -846,8 +875,16 @@ impl App {
                 cancel = true;
             }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-                let in_confirm = self.workspace_edit_dialog.as_ref().is_some_and(|d| d.confirm_delete);
-                if !in_confirm && self.workspace_edit_dialog.as_ref().is_some_and(|d| !d.name.trim().is_empty()) {
+                let in_confirm = self
+                    .workspace_edit_dialog
+                    .as_ref()
+                    .is_some_and(|d| d.confirm_delete);
+                if !in_confirm
+                    && self
+                        .workspace_edit_dialog
+                        .as_ref()
+                        .is_some_and(|d| !d.name.trim().is_empty())
+                {
                     save_it = true;
                 }
             }
@@ -932,16 +969,23 @@ impl App {
                                     .unwrap_or_else(|| "Unknown".to_string()),
                             };
                             let cnt = self
-                                .pane_state.panes
+                                .pane_state
+                                .panes
                                 .iter()
                                 .filter(|p| {
-                                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                        == ws_filter
+                                    Self::pane_group(
+                                        &self.session_state.sessions,
+                                        &self.workspace_store,
+                                        p,
+                                    ) == ws_filter
                                 })
                                 .count();
                             (format!("Close \"{}\" Sessions", filter_name), cnt)
                         } else {
-                            ("Close All Sessions".to_string(), self.pane_state.panes.len())
+                            (
+                                "Close All Sessions".to_string(),
+                                self.pane_state.panes.len(),
+                            )
                         };
                         ui.label(
                             egui::RichText::new(&title)
@@ -962,8 +1006,7 @@ impl App {
                         {
                             cancel = true;
                         }
-                        if ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
                         {
                             do_close = true;
                         }
@@ -993,10 +1036,12 @@ impl App {
 
             let pane_ids_to_close: Vec<u32> = if let Some(ws_filter) = self.session_workspace_filter
             {
-                self.pane_state.panes
+                self.pane_state
+                    .panes
                     .iter()
                     .filter(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == ws_filter
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
+                            == ws_filter
                     })
                     .map(|p| p.id)
                     .collect()
@@ -1005,7 +1050,8 @@ impl App {
             };
 
             let session_ids: Vec<u32> = self
-                .pane_state.panes
+                .pane_state
+                .panes
                 .iter()
                 .filter(|p| pane_ids_to_close.contains(&p.id))
                 .filter_map(|p| match &p.content {
@@ -1014,12 +1060,15 @@ impl App {
                 })
                 .collect();
 
-            self.pane_state.panes.retain(|p| !pane_ids_to_close.contains(&p.id));
+            self.pane_state
+                .panes
+                .retain(|p| !pane_ids_to_close.contains(&p.id));
             for pid in &pane_ids_to_close {
                 self.pane_state.pane_trees.remove(pid);
             }
             if self
-                .pane_state.active_pane_id
+                .pane_state
+                .active_pane_id
                 .is_some_and(|id| pane_ids_to_close.contains(&id))
             {
                 self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
@@ -1030,7 +1079,8 @@ impl App {
             }
 
             self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
-                self.pane_state.panes
+                self.pane_state
+                    .panes
                     .iter()
                     .find(|p| p.id == apid)
                     .and_then(|p| match &p.content {

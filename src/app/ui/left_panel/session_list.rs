@@ -1,7 +1,7 @@
-use super::SessionListActions;
 use super::super::super::pane::PaneContent;
 use super::super::super::title::effective_title;
 use super::super::super::App;
+use super::SessionListActions;
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
 use crate::pty::foreground::ForegroundProcess;
 use crate::theme;
@@ -55,7 +55,8 @@ impl App {
                 egui::Id::new("global_search_input"),
             );
             if sb.response.changed() {
-                self.global_search_debouncer.update(&self.global_search_query);
+                self.global_search_debouncer
+                    .update(&self.global_search_query);
                 self.global_search_selected = 0;
             }
             if sb.escaped {
@@ -122,96 +123,84 @@ impl App {
                         .strong()
                         .size(theme::HEADER_FONT_SZ),
                 );
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        ui.menu_button(
-                            egui::RichText::new("+ New \u{25be}")
-                                .size(theme::HEADER_FONT_SZ),
-                            |ui| {
-                                for shell in shells {
-                                    if ui.button(shell.display_name()).clicked() {
-                                        actions.spawn_new_session = Some(shell.clone());
-                                        ui.close_menu();
-                                    }
-                                }
-                                ui.separator();
-                                if shells.len() == 1 {
-                                    if ui.button("Open Folder\u{2026}").clicked() {
-                                        if let Some(path) =
-                                            rfd::FileDialog::new().pick_folder()
-                                        {
-                                            actions.spawn_new_session_cwd =
-                                                Some((shells[0].clone(), path));
-                                        }
-                                        ui.close_menu();
-                                    }
-                                } else {
-                                    ui.menu_button("Open Folder\u{2026}", |ui| {
-                                        for shell in shells {
-                                            if ui
-                                                .button(shell.display_name())
-                                                .clicked()
-                                            {
-                                                if let Some(path) =
-                                                    rfd::FileDialog::new()
-                                                        .pick_folder()
-                                                {
-                                                    actions.spawn_new_session_cwd =
-                                                        Some((shell.clone(), path));
-                                                }
-                                                ui.close_menu();
-                                            }
-                                        }
-                                    });
-                                }
-                            },
-                        )
-                        .response
-                        .on_hover_text("New terminal (Ctrl+Shift+T)");
-                        {
-                            let visible_count = if let Some(ws_filter) = self.session_workspace_filter {
-                                self.pane_state.panes.iter().filter(|p| {
-                                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == ws_filter
-                                }).count()
-                            } else {
-                                self.pane_state.panes.len()
-                            };
-                            if visible_count > 1 {
-                                let btn_label = if self.session_workspace_filter.is_some() {
-                                    "Close Shown"
-                                } else {
-                                    "Close All"
-                                };
-                                if ui
-                                    .button(
-                                        egui::RichText::new(btn_label)
-                                            .size(theme::HEADER_FONT_SZ),
-                                    )
-                                    .on_hover_text("Close all visible sessions")
-                                    .clicked()
-                                {
-                                    self.show_close_all_confirm = true;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(
+                        egui::RichText::new("+ New \u{25be}").size(theme::HEADER_FONT_SZ),
+                        |ui| {
+                            for shell in shells {
+                                if ui.button(shell.display_name()).clicked() {
+                                    actions.spawn_new_session = Some(shell.clone());
+                                    ui.close_menu();
                                 }
                             }
-                        }
-                        if let Some(ref fp) = active_fg {
+                            ui.separator();
+                            if shells.len() == 1 {
+                                if ui.button("Open Folder\u{2026}").clicked() {
+                                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                        actions.spawn_new_session_cwd =
+                                            Some((shells[0].clone(), path));
+                                    }
+                                    ui.close_menu();
+                                }
+                            } else {
+                                ui.menu_button("Open Folder\u{2026}", |ui| {
+                                    for shell in shells {
+                                        if ui.button(shell.display_name()).clicked() {
+                                            if let Some(path) = rfd::FileDialog::new().pick_folder()
+                                            {
+                                                actions.spawn_new_session_cwd =
+                                                    Some((shell.clone(), path));
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                    )
+                    .response
+                    .on_hover_text("New terminal (Ctrl+Shift+T)");
+                    {
+                        let visible_count = if let Some(ws_filter) = self.session_workspace_filter {
+                            self.pane_state
+                                .panes
+                                .iter()
+                                .filter(|p| {
+                                    Self::pane_group(
+                                        &self.session_state.sessions,
+                                        &self.workspace_store,
+                                        p,
+                                    ) == ws_filter
+                                })
+                                .count()
+                        } else {
+                            self.pane_state.panes.len()
+                        };
+                        if visible_count > 1 {
+                            let btn_label = if self.session_workspace_filter.is_some() {
+                                "Close Shown"
+                            } else {
+                                "Close All"
+                            };
                             if ui
-                                .button(
-                                    egui::RichText::new("Duplicate")
-                                        .size(theme::HEADER_FONT_SZ),
-                                )
-                                .on_hover_text(format!(
-                                    "Duplicate: {} (Ctrl+Shift+K)",
-                                    fp.name
-                                ))
+                                .button(egui::RichText::new(btn_label).size(theme::HEADER_FONT_SZ))
+                                .on_hover_text("Close all visible sessions")
                                 .clicked()
                             {
-                                actions.duplicate_session = true;
+                                self.show_close_all_confirm = true;
                             }
                         }
-                    },
-                );
+                    }
+                    if let Some(ref fp) = active_fg {
+                        if ui
+                            .button(egui::RichText::new("Duplicate").size(theme::HEADER_FONT_SZ))
+                            .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
+                            .clicked()
+                        {
+                            actions.duplicate_session = true;
+                        }
+                    }
+                });
             },
         );
     }
@@ -243,9 +232,7 @@ impl App {
         };
         egui::ComboBox::from_id_source("ws_session_filter")
             .width(ui.available_width() - 12.0)
-            .selected_text(
-                egui::RichText::new(&selected_label).size(theme::SESSION_FONT_SZ),
-            )
+            .selected_text(egui::RichText::new(&selected_label).size(theme::SESSION_FONT_SZ))
             .show_ui(ui, |ui| {
                 for (val, name) in &ws_names {
                     let is_selected = self.session_workspace_filter == *val;
@@ -398,18 +385,11 @@ impl App {
                                     let color = if cwd.as_os_str().is_empty() {
                                         None
                                     } else {
-                                        self.workspace_store
-                                            .find_for_cwd(&cwd)
-                                            .map(|w| w.color)
+                                        self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
                                     };
                                     let fg = self.workers.foreground_worker.get(e.id);
                                     (
-                                        effective_title(
-                                            &title,
-                                            &cwd,
-                                            fg.as_ref(),
-                                            Some(&e.shell),
-                                        ),
+                                        effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell)),
                                         color,
                                         false,
                                     )
@@ -419,19 +399,14 @@ impl App {
                             }
                             PaneContent::DeferredTerminal { cwd, .. } => {
                                 let cwd_path = cwd.clone().unwrap_or_default();
-                                let mut text =
-                                    effective_title("", &cwd_path, None, None);
+                                let mut text = effective_title("", &cwd_path, None, None);
                                 if text.is_empty() {
                                     text = "(restored)".to_string();
                                 }
-                                let color = cwd
-                                    .as_ref()
-                                    .filter(|c| !c.as_os_str().is_empty())
-                                    .and_then(|c| {
-                                        self.workspace_store
-                                            .find_for_cwd(c)
-                                            .map(|w| w.color)
-                                    });
+                                let color =
+                                    cwd.as_ref().filter(|c| !c.as_os_str().is_empty()).and_then(
+                                        |c| self.workspace_store.find_for_cwd(c).map(|w| w.color),
+                                    );
                                 (text, color, true)
                             }
                             PaneContent::FileEditor(ed) => {
@@ -440,9 +415,7 @@ impl App {
                                     .file_name()
                                     .and_then(|n| n.to_str())
                                     .map(|s| s.to_string())
-                                    .unwrap_or_else(|| {
-                                        ed.path.display().to_string()
-                                    });
+                                    .unwrap_or_else(|| ed.path.display().to_string());
                                 let color = ed.workspace_id.and_then(|id| {
                                     self.workspace_store
                                         .workspaces
@@ -458,9 +431,7 @@ impl App {
                                     .file_name()
                                     .and_then(|n| n.to_str())
                                     .map(|s| format!("\u{21c4} {}", s))
-                                    .unwrap_or_else(|| {
-                                        format!("\u{21c4} {}", d.path.display())
-                                    });
+                                    .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
                                 (name, None, false)
                             }
                         };
@@ -471,11 +442,8 @@ impl App {
                         continue;
                     }
 
-                    let pane_ws = Self::pane_group(
-                        &self.session_state.sessions,
-                        &self.workspace_store,
-                        pane,
-                    );
+                    let pane_ws =
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
 
                     if let Some(ws_filter) = self.session_workspace_filter {
                         if pane_ws != ws_filter {
@@ -528,11 +496,7 @@ impl App {
 
                     // Draw quit button
                     if quit_resp.hovered() {
-                        painter.rect_filled(
-                            quit_rect,
-                            0.0,
-                            theme::active().danger_bg,
-                        );
+                        painter.rect_filled(quit_rect, 0.0, theme::active().danger_bg);
                     }
                     painter.text(
                         quit_rect.center(),

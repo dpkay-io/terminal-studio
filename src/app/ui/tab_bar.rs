@@ -52,13 +52,15 @@ impl App {
                             let pane_id = self.pane_state.panes[i].id;
                             let is_active = active_pane_id_snap.map_or(false, |apid| {
                                 pane_id == apid
-                                    || self.pane_state.pane_trees.get(&pane_id)
+                                    || self
+                                        .pane_state
+                                        .pane_trees
+                                        .get(&pane_id)
                                         .map_or(false, |t| t.leaf_ids().contains(&apid))
                             });
                             let ws_color = ws_colors[i];
 
-                            let (_, tab_rect) =
-                                ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
+                            let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
 
                             let hbg = theme::header_bg(ws_color, is_active);
                             let title_color = match ws_color {
@@ -108,10 +110,7 @@ impl App {
                             // Right-edge separator between tabs
                             painter.rect_filled(
                                 egui::Rect::from_min_size(
-                                    egui::pos2(
-                                        tab_rect.max.x - theme::STROKE_THIN,
-                                        tab_rect.min.y,
-                                    ),
+                                    egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
                                     egui::vec2(theme::STROKE_THIN, tab_h),
                                 ),
                                 0.0,
@@ -138,11 +137,7 @@ impl App {
                                 egui::Sense::click(),
                             );
                             if close_resp.hovered() {
-                                painter.rect_filled(
-                                    close_rect,
-                                    0.0,
-                                    theme::active().danger_bg,
-                                );
+                                painter.rect_filled(close_rect, 0.0, theme::active().danger_bg);
                             }
                             painter.text(
                                 close_rect.center(),
@@ -163,10 +158,7 @@ impl App {
                             painter
                                 .with_clip_rect(egui::Rect::from_min_max(
                                     egui::pos2(text_x, tab_rect.min.y),
-                                    egui::pos2(
-                                        close_rect.min.x - theme::SP_XS,
-                                        tab_rect.max.y,
-                                    ),
+                                    egui::pos2(close_rect.min.x - theme::SP_XS, tab_rect.max.y),
                                 ))
                                 .text(
                                     egui::pos2(text_x, tab_rect.center().y),
@@ -233,12 +225,10 @@ impl App {
                                         });
                                     }
                                     ui.label(
-                                        egui::RichText::new(
-                                            "(tab move coming in Phase D)",
-                                        )
-                                        .italics()
-                                        .size(11.0)
-                                        .color(egui::Color32::from_gray(130)),
+                                        egui::RichText::new("(tab move coming in Phase D)")
+                                            .italics()
+                                            .size(11.0)
+                                            .color(egui::Color32::from_gray(130)),
                                     );
                                 }
                             });
@@ -269,18 +259,15 @@ impl App {
             let icon_inset = 6.0_f32;
 
             // Split horizontal (side-by-side)
-            let split_h_rect = egui::Rect::from_min_size(
-                egui::pos2(x, tab_actions_rect.min.y),
-                icon_sz,
-            );
+            let split_h_rect =
+                egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let split_h_resp = ui.interact(
                 split_h_rect,
                 egui::Id::new("tab_split_h"),
                 egui::Sense::click(),
             );
             let sh_stroke = if split_h_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_h_rect, 2.0, t.surface2);
+                ui.painter().rect_filled(split_h_rect, 2.0, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -300,18 +287,15 @@ impl App {
             x += icon_sz.x;
 
             // Split vertical (top-bottom)
-            let split_v_rect = egui::Rect::from_min_size(
-                egui::pos2(x, tab_actions_rect.min.y),
-                icon_sz,
-            );
+            let split_v_rect =
+                egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let split_v_resp = ui.interact(
                 split_v_rect,
                 egui::Id::new("tab_split_v"),
                 egui::Sense::click(),
             );
             let sv_stroke = if split_v_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_v_rect, 2.0, t.surface2);
+                ui.painter().rect_filled(split_v_rect, 2.0, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -331,18 +315,15 @@ impl App {
             x += icon_sz.x;
 
             // Close all tabs in workspace
-            let close_all_rect = egui::Rect::from_min_size(
-                egui::pos2(x, tab_actions_rect.min.y),
-                icon_sz,
-            );
+            let close_all_rect =
+                egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let close_all_resp = ui.interact(
                 close_all_rect,
                 egui::Id::new("tab_close_all"),
                 egui::Sense::click(),
             );
             if close_all_resp.hovered() {
-                ui.painter()
-                    .rect_filled(close_all_rect, 2.0, t.danger_bg);
+                ui.painter().rect_filled(close_all_rect, 2.0, t.danger_bg);
             }
             ui.painter().text(
                 close_all_rect.center(),
@@ -351,10 +332,7 @@ impl App {
                 egui::FontId::proportional(12.0),
                 t.danger_fg,
             );
-            if close_all_resp
-                .on_hover_text("Close all sessions")
-                .clicked()
-            {
+            if close_all_resp.on_hover_text("Close all sessions").clicked() {
                 self.show_close_all_confirm = true;
             }
         });
@@ -369,8 +347,7 @@ impl App {
                     if tab_count > 1 {
                         let tab_bar_x = ui.min_rect().min.x;
                         let rel_x = pos.x - tab_bar_x;
-                        let target_i =
-                            ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
+                        let target_i = ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
                         let target_vis = visible_indices.get(target_i).copied();
                         let drag_vis = visible_indices.get(drag_idx).copied();
                         if let (Some(from), Some(to)) = (drag_vis, target_vis) {

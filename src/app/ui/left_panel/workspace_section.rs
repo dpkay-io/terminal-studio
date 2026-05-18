@@ -1,5 +1,5 @@
-use super::WorkspaceSectionActions;
 use super::super::super::App;
+use super::WorkspaceSectionActions;
 use crate::theme;
 use crate::workspace::WindowId;
 
@@ -34,44 +34,32 @@ impl App {
                         .strong()
                         .size(theme::HEADER_FONT_SZ),
                 );
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        let arrow = if self.workspace_panel_collapsed {
-                            "\u{25b6}"
-                        } else {
-                            "\u{25bc}"
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(arrow)
-                                        .size(theme::HEADER_FONT_SZ),
-                                )
-                                .min_size(egui::vec2(
-                                    theme::HEADER_H,
-                                    theme::HEADER_H,
-                                ))
-                                .frame(false),
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let arrow = if self.workspace_panel_collapsed {
+                        "\u{25b6}"
+                    } else {
+                        "\u{25bc}"
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(arrow).size(theme::HEADER_FONT_SZ),
                             )
-                            .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
-                            .clicked()
-                        {
-                            self.workspace_panel_collapsed =
-                                !self.workspace_panel_collapsed;
-                        }
-                    },
-                );
+                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
+                            .frame(false),
+                        )
+                        .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
+                        .clicked()
+                    {
+                        self.workspace_panel_collapsed = !self.workspace_panel_collapsed;
+                    }
+                });
             },
         );
     }
 
     /// Render the scrollable list of workspace cards and the "Other" group.
-    fn render_workspace_list(
-        &mut self,
-        ui: &mut egui::Ui,
-        actions: &mut WorkspaceSectionActions,
-    ) {
+    fn render_workspace_list(&mut self, ui: &mut egui::Ui, actions: &mut WorkspaceSectionActions) {
         let active_group_snap = self.active_group;
         let cur_win = self.current_window_id.clone();
 
@@ -87,10 +75,7 @@ impl App {
             })
             .map(|w| {
                 let in_extra = w.host_window_id.is_some()
-                    && self
-                        .extra_windows
-                        .iter()
-                        .any(|ew| ew.workspace_id == w.id)
+                    && self.extra_windows.iter().any(|ew| ew.workspace_id == w.id)
                     && cur_win.is_none();
                 (
                     w.id,
@@ -121,12 +106,7 @@ impl App {
                 }
 
                 // "Other" group
-                self.render_other_group(
-                    ui,
-                    actions,
-                    active_group_snap,
-                    &cur_win,
-                );
+                self.render_other_group(ui, actions, active_group_snap, &cur_win);
             });
     }
 
@@ -164,23 +144,16 @@ impl App {
         let stroke_val = if active {
             egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
         } else {
-            egui::Stroke::new(
-                1.0,
-                theme::from_rgb(theme::tinted(color, 0.30)),
-            )
+            egui::Stroke::new(1.0, theme::from_rgb(theme::tinted(color, 0.30)))
         };
-        let (full_rect, _) = ui.allocate_exact_size(
-            egui::vec2(full_w, theme::HEADER_H),
-            egui::Sense::hover(),
-        );
+        let (full_rect, _) =
+            ui.allocate_exact_size(egui::vec2(full_w, theme::HEADER_H), egui::Sense::hover());
         let gear_rect = egui::Rect::from_min_size(
             egui::pos2(full_rect.max.x - GEAR_W, full_rect.min.y),
             egui::vec2(GEAR_W, full_rect.height()),
         );
-        let name_rect = egui::Rect::from_min_max(
-            full_rect.min,
-            egui::pos2(gear_rect.min.x, full_rect.max.y),
-        );
+        let name_rect =
+            egui::Rect::from_min_max(full_rect.min, egui::pos2(gear_rect.min.x, full_rect.max.y));
         let name_resp = ui.interact(
             name_rect,
             egui::Id::new(("ws_name", id)),
@@ -227,11 +200,8 @@ impl App {
                     )
                 });
                 let note_x = gear_rect.left() - 4.0 - note_galley.size().x;
-                ui.painter().galley(
-                    egui::pos2(note_x, text_y),
-                    note_galley,
-                    fg,
-                );
+                ui.painter()
+                    .galley(egui::pos2(note_x, text_y), note_galley, fg);
             }
 
             let gear_fg = if gear_resp.hovered() {
@@ -265,10 +235,7 @@ impl App {
                 actions.open_workspace_id = Some(id);
                 ui.close_menu();
             }
-            if in_main
-                && !in_extra_window
-                && ui.button("Open in new window").clicked()
-            {
+            if in_main && !in_extra_window && ui.button("Open in new window").clicked() {
                 actions.new_window_workspace_id = Some(id);
                 ui.close_menu();
             }
@@ -308,10 +275,7 @@ impl App {
         };
         let other_w = ui.available_width();
         let (other_rect, other_resp) = if show_other {
-            ui.allocate_exact_size(
-                egui::vec2(other_w, 28.0),
-                egui::Sense::click(),
-            )
+            ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click())
         } else {
             (
                 egui::Rect::NOTHING,
@@ -325,8 +289,7 @@ impl App {
         if show_other && ui.is_rect_visible(other_rect) {
             let rounding = egui::Rounding::same(theme::ROUNDING);
             ui.painter().rect_filled(other_rect, rounding, other_fill);
-            ui.painter()
-                .rect_stroke(other_rect, rounding, other_stroke);
+            ui.painter().rect_stroke(other_rect, rounding, other_stroke);
 
             let other_name = if other_active {
                 "\u{25b6} Other".to_string()
@@ -334,11 +297,7 @@ impl App {
                 "Other".to_string()
             };
             let other_galley = ui.fonts(|f| {
-                f.layout_no_wrap(
-                    other_name,
-                    egui::FontId::proportional(13.0),
-                    other_fg,
-                )
+                f.layout_no_wrap(other_name, egui::FontId::proportional(13.0), other_fg)
             });
             let text_y = other_rect.center().y - other_galley.size().y / 2.0;
             ui.painter().galley(
@@ -356,11 +315,8 @@ impl App {
                     )
                 });
                 let note_x = other_rect.right() - 8.0 - note_galley.size().x;
-                ui.painter().galley(
-                    egui::pos2(note_x, text_y),
-                    note_galley,
-                    other_fg,
-                );
+                ui.painter()
+                    .galley(egui::pos2(note_x, text_y), note_galley, other_fg);
             }
         }
         if show_other && other_resp.clicked() {

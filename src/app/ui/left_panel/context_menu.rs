@@ -1,11 +1,11 @@
-use super::{SessionListActions, WorkspaceSectionActions};
 use super::super::super::pane::{PaneContent, PaneEntry};
+use super::super::super::title::shell_escape_arg;
 use super::super::super::workspace_ui::WorkspaceEditDialog;
 use super::super::super::App;
+use super::{SessionListActions, WorkspaceSectionActions};
 use crate::pane_tree::{PaneNode, RemoveResult};
-use crate::pty::foreground::ForegroundProcess;
 use crate::pty::default_shell;
-use super::super::super::title::shell_escape_arg;
+use crate::pty::foreground::ForegroundProcess;
 impl App {
     /// Process all deferred actions collected during left-panel rendering:
     /// open/edit/new-window workspace, quit pane, sidebar click, spawn, duplicate.
@@ -96,8 +96,7 @@ impl App {
         if let Some(sid) = killed_sid {
             self.session_state.remove(sid);
             if self.session_state.active_id == Some(sid) {
-                self.session_state.active_id =
-                    self.session_state.sessions.first().map(|e| e.id);
+                self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
                 self.update_is_active_flags();
             }
         }
@@ -143,8 +142,7 @@ impl App {
                 .iter()
                 .enumerate()
                 .find(|(_, ew)| {
-                    ew.workspace_id == ws_id
-                        && self.current_window_id.as_ref() != Some(&ew.id)
+                    ew.workspace_id == ws_id && self.current_window_id.as_ref() != Some(&ew.id)
                 })
                 .map(|(idx, ew)| (idx, ew.viewport_id))
         });

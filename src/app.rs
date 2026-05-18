@@ -44,9 +44,7 @@ use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
-use pane::{
-    FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, TermSelection,
-};
+use pane::{FileDiffState, FileEditorState, PaneContent, PaneEntry, RightTab, TermSelection};
 use pane_state::PaneState;
 use session_state::SessionState;
 use settings::AppSettings;
@@ -122,7 +120,6 @@ pub struct App {
     /// viewport. Used by per-window-aware code (e.g. workspace switcher filter).
     current_window_id: Option<WindowId>,
 
-
     // ── Per-frame UI caches ───────────────────────────────────────────────
     /// Cached cell dimensions for the central panel font measurement.
     /// Invalidated when font_size changes.
@@ -193,7 +190,9 @@ impl eframe::App for App {
         self.save_session();
         self.save_windows();
         for entry in &self.session_state.sessions {
-            entry.alive.store(false, std::sync::atomic::Ordering::Relaxed);
+            entry
+                .alive
+                .store(false, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -227,7 +226,8 @@ impl eframe::App for App {
         {
             let mut results = self.md_load_results.lock();
             for (path, content, ws_id) in results.drain(..) {
-                self.terminal_md_content.insert(path.clone(), (Arc::new(content), ws_id));
+                self.terminal_md_content
+                    .insert(path.clone(), (Arc::new(content), ws_id));
                 self.shown_md_tabs.insert(path.clone());
                 self.show_right_panel = true;
                 self.right_tab = RightTab::Markdown(path);
@@ -258,7 +258,8 @@ impl eframe::App for App {
         // read locks on all sessions in the steady state.
         if !self.session_state.uninit_sessions.is_empty() {
             self.session_state.uninit_sessions.retain(|&id| {
-                self.session_state.sessions
+                self.session_state
+                    .sessions
                     .iter()
                     .find(|e| e.id == id)
                     .map(|e| e.session.read().cwd.as_os_str().is_empty())
@@ -337,7 +338,8 @@ impl eframe::App for App {
             let query = self.global_search_query.clone();
             if !query.is_empty() {
                 let sessions: Vec<_> = self
-                    .session_state.sessions
+                    .session_state
+                    .sessions
                     .iter()
                     .map(|e| {
                         let title = e.session.read().title();
@@ -420,7 +422,12 @@ impl eframe::App for App {
                 let ew = &mut self.extra_windows[action.target_window_idx];
                 ew.view.active_group = action.group;
                 ew.view.active_pane_id = Some(action.pane_id);
-                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == action.pane_id) {
+                if let Some(pane) = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| p.id == action.pane_id)
+                {
                     if let PaneContent::Terminal(sid) = pane.content {
                         ew.view.active_id = Some(sid);
                     }
@@ -1061,7 +1068,8 @@ impl App {
 
         // ── Snapshot editor contents for TextEdit (must be mutable locals) ─
         let mut editor_texts: Vec<(u32, Option<String>)> = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
             .map(|p| {
                 let text = match &p.content {
@@ -1074,7 +1082,8 @@ impl App {
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
         let ws_colors: Vec<Option<[u8; 3]>> = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
             .map(|p| match &p.content {
                 PaneContent::Terminal(sid) => {
@@ -1103,7 +1112,8 @@ impl App {
 
         // ── Group membership + visible pane indices for active group ─────────
         let pane_groups: Vec<Option<u64>> = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
             .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p))
             .collect();
@@ -1113,7 +1123,10 @@ impl App {
             .enumerate()
             .filter(|(i, g)| {
                 **g == active_group_snap
-                    && self.pane_state.pane_trees.contains_key(&self.pane_state.panes[*i].id)
+                    && self
+                        .pane_state
+                        .pane_trees
+                        .contains_key(&self.pane_state.panes[*i].id)
             })
             .map(|(i, _)| i)
             .collect();
@@ -1128,7 +1141,9 @@ impl App {
         if let Some(pid) = self.pane_state.active_pane_id {
             let root_id = self.pane_state.root_of(pid);
             let root_visible = root_id.map_or(false, |rid| {
-                visible_indices.iter().any(|&i| self.pane_state.panes[i].id == rid)
+                visible_indices
+                    .iter()
+                    .any(|&i| self.pane_state.panes[i].id == rid)
             });
             if !root_visible {
                 let pane_idx = self.pane_state.panes.iter().position(|p| p.id == pid);
@@ -1137,7 +1152,9 @@ impl App {
                     self.active_group = pane_groups[idx];
                 } else {
                     // Pane was removed — fall back to first pane in the current group.
-                    self.pane_state.active_pane_id = visible_indices.first().map(|&i| self.pane_state.panes[i].id);
+                    self.pane_state.active_pane_id = visible_indices
+                        .first()
+                        .map(|&i| self.pane_state.panes[i].id);
                     if let Some(new_pid) = self.pane_state.active_pane_id {
                         if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
                             if let PaneContent::Terminal(sid) = pane.content {
@@ -2027,14 +2044,16 @@ impl App {
             if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Find the root pane that contains the active pane
                 let root_pid_opt = self
-                    .pane_state.pane_trees
+                    .pane_state
+                    .pane_trees
                     .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
                 if let Some(root_pid) = root_pid_opt {
                     // Get current size for the new pane
                     let (cols, rows) = self
-                        .pane_state.panes
+                        .pane_state
+                        .panes
                         .iter()
                         .find(|p| p.id == active_pid)
                         .map(|p| p.last_size)
@@ -2042,7 +2061,8 @@ impl App {
                     // Get cwd and shell from active session
                     let (cwd, shell) = {
                         let active_session_entry = self
-                            .pane_state.panes
+                            .pane_state
+                            .panes
                             .iter()
                             .find(|p| p.id == active_pid)
                             .and_then(|p| {
@@ -2093,7 +2113,8 @@ impl App {
             if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Find the root that contains the active pane
                 let root_pid_opt = self
-                    .pane_state.pane_trees
+                    .pane_state
+                    .pane_trees
                     .iter()
                     .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
                     .map(|(&rpid, _)| rpid);
@@ -2101,7 +2122,8 @@ impl App {
                     let is_root_itself = root_pid == active_pid;
                     // Check if tree has only one leaf (the root itself)
                     let leaf_count = self
-                        .pane_state.pane_trees
+                        .pane_state
+                        .pane_trees
                         .get(&root_pid)
                         .map(|t| t.leaf_ids().len())
                         .unwrap_or(1);
@@ -2111,38 +2133,54 @@ impl App {
                         // We set close_pane_id to None earlier so we'll handle directly:
                         if leaf_count <= 1 {
                             // Kill session if terminal
-                            if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == active_pid) {
-                                if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
+                            if let Some(pos) = self
+                                .pane_state
+                                .panes
+                                .iter()
+                                .position(|p| p.id == active_pid)
+                            {
+                                if let PaneContent::Terminal(sid) =
+                                    self.pane_state.panes[pos].content
+                                {
                                     self.session_state.remove(sid);
                                     if self.session_state.active_id == Some(sid) {
-                                        self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
+                                        self.session_state.active_id =
+                                            self.session_state.sessions.first().map(|e| e.id);
                                         self.update_is_active_flags();
                                     }
                                 }
                                 self.pane_state.panes.remove(pos);
                             }
                             self.pane_state.pane_trees.remove(&root_pid);
-                            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+                            self.pane_state.active_pane_id =
+                                self.pane_state.panes.last().map(|p| p.id);
                             self.save_session();
                         }
                     } else {
                         // Remove the leaf from the tree, collapsing the parent split
-                        let remove_result = if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                            tree.remove_pane(active_pid)
-                        } else {
-                            RemoveResult::NotFound
-                        };
+                        let remove_result =
+                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
+                                tree.remove_pane(active_pid)
+                            } else {
+                                RemoveResult::NotFound
+                            };
                         if let RemoveResult::CollapseToSibling(replacement) = remove_result {
                             if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                 *tree = replacement;
                             }
                         }
                         // Kill the session of the removed pane
-                        if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == active_pid) {
+                        if let Some(pos) = self
+                            .pane_state
+                            .panes
+                            .iter()
+                            .position(|p| p.id == active_pid)
+                        {
                             if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
                                 self.session_state.remove(sid);
                                 if self.session_state.active_id == Some(sid) {
-                                    self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
+                                    self.session_state.active_id =
+                                        self.session_state.sessions.first().map(|e| e.id);
                                     self.update_is_active_flags();
                                 }
                             }
@@ -2153,7 +2191,9 @@ impl App {
                             let leaves = tree.leaf_ids();
                             self.pane_state.active_pane_id = leaves.first().copied();
                             if let Some(new_pid) = self.pane_state.active_pane_id {
-                                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
+                                if let Some(pane) =
+                                    self.pane_state.panes.iter().find(|p| p.id == new_pid)
+                                {
                                     if let PaneContent::Terminal(sid) = pane.content {
                                         self.session_state.active_id = Some(sid);
                                         self.update_is_active_flags();
@@ -2168,15 +2208,18 @@ impl App {
 
         // 1. Divider drags → freeze manual widths on both adjacent panes
         for (left_idx, right_idx, delta_x, left_w, right_w) in divider_drags {
-            self.pane_state.panes[left_idx].manual_width = Some((left_w + delta_x).max(theme::MIN_PANE_W));
-            self.pane_state.panes[right_idx].manual_width = Some((right_w - delta_x).max(theme::MIN_PANE_W));
+            self.pane_state.panes[left_idx].manual_width =
+                Some((left_w + delta_x).max(theme::MIN_PANE_W));
+            self.pane_state.panes[right_idx].manual_width =
+                Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
         // 2. Close pane (tab-strip close — kills the entire split tree for that root)
         if let Some(pid) = close_pane_id {
             // Collect all pane IDs in this root's split tree so we can kill them all.
             let tree_ids: Vec<u32> = self
-                .pane_state.pane_trees
+                .pane_state
+                .pane_trees
                 .get(&pid)
                 .map(|t| t.leaf_ids())
                 .unwrap_or_else(|| vec![pid]);
@@ -2186,7 +2229,8 @@ impl App {
                     if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
                         self.session_state.remove(sid);
                         if self.session_state.active_id == Some(sid) {
-                            self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
+                            self.session_state.active_id =
+                                self.session_state.sessions.first().map(|e| e.id);
                             self.update_is_active_flags();
                         }
                     }
@@ -2198,7 +2242,8 @@ impl App {
             // Remove the root's tree entry.
             self.pane_state.pane_trees.remove(&pid);
             if self
-                .pane_state.active_pane_id
+                .pane_state
+                .active_pane_id
                 .map(|ap| tree_ids.contains(&ap))
                 .unwrap_or(false)
             {
@@ -2230,12 +2275,14 @@ impl App {
                     if let PaneContent::Terminal(sid) = removed.content {
                         self.session_state.remove(sid);
                         if self.session_state.active_id == Some(sid) {
-                            self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
+                            self.session_state.active_id =
+                                self.session_state.sessions.first().map(|e| e.id);
                             self.update_is_active_flags();
                         }
                     }
                     if self.pane_state.active_pane_id == Some(removed.id) {
-                        self.pane_state.active_pane_id = self.pane_state.panes.first().map(|p| p.id);
+                        self.pane_state.active_pane_id =
+                            self.pane_state.panes.first().map(|p| p.id);
                     }
                     break; // recompute visible_indices next frame
                 }
@@ -2316,7 +2363,12 @@ impl App {
         }
 
         for toggle_id in &editor_preview_toggles {
-            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *toggle_id) {
+            if let Some(p) = self
+                .pane_state
+                .panes
+                .iter_mut()
+                .find(|p| p.id == *toggle_id)
+            {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     ed.show_preview = !ed.show_preview;
                     self.md_prefer_preview = ed.show_preview;
@@ -2363,7 +2415,8 @@ impl App {
                 self.scroll_accum.remove(&sid);
                 // Update pane's recorded size
                 if let Some(pane) = self
-                    .pane_state.panes
+                    .pane_state
+                    .panes
                     .iter_mut()
                     .find(|p| matches!(p.content, PaneContent::Terminal(s) if s == sid))
                 {
@@ -2385,7 +2438,8 @@ impl App {
         // 9. File opened from right panel → add FileEditor pane (or focus existing)
         if let Some(path) = pending_open_editor {
             let existing_id = self
-                .pane_state.panes
+                .pane_state
+                .panes
                 .iter()
                 .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
                 .map(|p| p.id);
@@ -2431,7 +2485,8 @@ impl App {
         // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
         if let Some(path) = open_md_in_editor {
             let existing_id = self
-                .pane_state.panes
+                .pane_state
+                .panes
                 .iter()
                 .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
                 .map(|p| p.id);
@@ -2478,7 +2533,8 @@ impl App {
             if let Some(cwd) = self.active_cwd() {
                 let full_path = cwd.join(&rel_path);
                 let existing_id = self
-                    .pane_state.panes
+                    .pane_state
+                    .panes
                     .iter()
                     .find(|p| matches!(&p.content, PaneContent::FileDiff(d) if d.path == full_path))
                     .map(|p| p.id);
@@ -2503,10 +2559,8 @@ impl App {
                             last_size: (0, 0),
                         },
                     );
-                    self.pending_diff_panes
-                        .insert(full_path, pane_id);
-                    self.workers.git_worker
-                        .enqueue_diff(&cwd, rel_path);
+                    self.pending_diff_panes.insert(full_path, pane_id);
+                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
                     self.activate_pane(pane_id);
                 }
             }

@@ -17,10 +17,10 @@ use alacritty_terminal::grid::Dimensions;
 use super::multi_window::{ExtraWindow, SavedExtraWindow, WindowView};
 use super::pane::{FileEditorState, PaneContent, PaneEntry, RightTab, SessionEntry};
 use super::pane_state::PaneState;
-use super::session_state::SessionState;
 use super::persistence::{
     session_data_path, AppSession, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,
 };
+use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
 use super::title::shell_escape_arg;
 use super::watcher::WatchState;
@@ -143,12 +143,16 @@ impl App {
             session_search_active: false,
             dir_search_query: String::new(),
             dir_search_active: false,
-            dir_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(150)),
+            dir_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(
+                150,
+            )),
             md_prefer_preview: false,
             term_search: crate::search::SearchState::new(),
             show_global_search: false,
             global_search_query: String::new(),
-            global_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(200)),
+            global_search_debouncer: crate::app::ui::debounce::Debouncer::new(
+                Duration::from_millis(200),
+            ),
             global_search_selected: 0,
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
@@ -338,9 +342,13 @@ impl App {
         let mut view = WindowView::new_for_workspace(ws_id);
         view.session_workspace_filter = Some(Some(ws_id));
         let initial_pane = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
-            .find(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == Some(ws_id))
+            .find(|p| {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
+                    == Some(ws_id)
+            })
             .map(|p| p.id);
         view.active_pane_id = initial_pane;
         if let Some(pid) = initial_pane {
@@ -373,7 +381,10 @@ impl App {
     pub(super) fn swap_view(&mut self, view: &mut WindowView) {
         use std::mem::swap;
         swap(&mut self.active_group, &mut view.active_group);
-        swap(&mut self.pane_state.active_pane_id, &mut view.active_pane_id);
+        swap(
+            &mut self.pane_state.active_pane_id,
+            &mut view.active_pane_id,
+        );
         swap(&mut self.session_state.active_id, &mut view.active_id);
         swap(&mut self.last_pane_per_group, &mut view.last_pane_per_group);
         swap(&mut self.last_focused_sid, &mut view.last_focused_sid);
@@ -525,9 +536,12 @@ impl App {
         self.active_group = group;
 
         let panes_in_group: Vec<u32> = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
-            .filter(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == group)
+            .filter(|p| {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == group
+            })
             .map(|p| p.id)
             .collect();
 
@@ -553,7 +567,8 @@ impl App {
         if let Some(sid) = self.spawn_session(&default_shell(), cols, rows, cwd) {
             self.session_state.active_id = Some(sid);
             if !self
-                .pane_state.panes
+                .pane_state
+                .panes
                 .iter()
                 .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid))
             {
@@ -626,20 +641,23 @@ impl App {
         };
 
         let session_id_to_index: HashMap<u32, usize> = self
-            .session_state.sessions
+            .session_state
+            .sessions
             .iter()
             .enumerate()
             .map(|(i, e)| (e.id, i))
             .collect();
         let pane_id_to_index: HashMap<u32, usize> = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
             .enumerate()
             .map(|(i, p)| (p.id, i))
             .collect();
 
         let sessions = self
-            .session_state.sessions
+            .session_state
+            .sessions
             .iter()
             .map(|e| {
                 let cwd = e.session.read().cwd.clone();
@@ -661,7 +679,8 @@ impl App {
             .collect();
 
         let panes = self
-            .pane_state.panes
+            .pane_state
+            .panes
             .iter()
             .filter_map(|p| {
                 let content = match &p.content {
@@ -691,10 +710,12 @@ impl App {
             .collect();
 
         let active_pane_index = self
-            .pane_state.active_pane_id
+            .pane_state
+            .active_pane_id
             .and_then(|pid| pane_id_to_index.get(&pid).copied());
         let active_session_index = self
-            .session_state.active_id
+            .session_state
+            .active_id
             .and_then(|sid| session_id_to_index.get(&sid).copied());
         let last_pane_per_group = self
             .last_pane_per_group
@@ -890,7 +911,8 @@ impl App {
     pub(super) fn track_active_pane_group(&mut self) {
         if let Some(pid) = self.pane_state.active_pane_id {
             if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
-                let group = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
+                let group =
+                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
                 if group == self.active_group {
                     self.last_pane_per_group.insert(self.active_group, pid);
                 }
@@ -984,7 +1006,8 @@ impl App {
         fg: egui::Color32,
     ) {
         let stats = self
-            .workers.sys_monitor
+            .workers
+            .sys_monitor
             .as_ref()
             .map(|m| m.stats())
             .unwrap_or_default();

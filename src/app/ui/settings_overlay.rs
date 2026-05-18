@@ -293,10 +293,7 @@ impl App {
                                                 );
                                             }
                                             UpdateStatus::RestartRequired => {
-                                                if ui
-                                                    .button("Restart to finish update")
-                                                    .clicked()
-                                                {
+                                                if ui.button("Restart to finish update").clicked() {
                                                     crate::updater::restart_app();
                                                 }
                                             }

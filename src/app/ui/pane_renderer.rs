@@ -53,21 +53,19 @@ pub(in crate::app) fn render_node(
             // Track width for resize
             rctx.pane_widths_snap.push((pane_id, rect.width()));
 
-            ui.allocate_ui_at_rect(rect, |ui| {
-                match &pane.content {
-                    PaneContent::Terminal(sid) => {
-                        render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
-                    }
-                    PaneContent::DeferredTerminal { .. } => {
-                        ui.painter()
-                            .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                    }
-                    PaneContent::FileEditor(ed) => {
-                        render_file_editor_leaf(ui, ed, pane_id, rctx);
-                    }
-                    PaneContent::FileDiff(d) => {
-                        render_file_diff_leaf(ui, d, pane_id);
-                    }
+            ui.allocate_ui_at_rect(rect, |ui| match &pane.content {
+                PaneContent::Terminal(sid) => {
+                    render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
+                }
+                PaneContent::DeferredTerminal { .. } => {
+                    ui.painter()
+                        .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+                }
+                PaneContent::FileEditor(ed) => {
+                    render_file_editor_leaf(ui, ed, pane_id, rctx);
+                }
+                PaneContent::FileDiff(d) => {
+                    render_file_diff_leaf(ui, d, pane_id);
                 }
             });
 
@@ -152,14 +150,14 @@ fn render_terminal_leaf(
     if let Some(idx) = rctx.sessions.iter().position(|e| e.id == sid) {
         let session = Arc::clone(&rctx.sessions[idx].session);
         let sel_range = if rctx.term_selection_sid == Some(sid) {
-            rctx.term_selection.as_ref().map(|s| {
-                crate::renderer::terminal_pass::SelectionRange {
+            rctx.term_selection
+                .as_ref()
+                .map(|s| crate::renderer::terminal_pass::SelectionRange {
                     start_col: s.start_col,
                     start_row: s.start_row,
                     end_col: s.end_col,
                     end_row: s.end_row,
-                }
-            })
+                })
         } else {
             None
         };
@@ -185,8 +183,7 @@ fn render_terminal_leaf(
         // trampling intentional focus on widgets like the notes TextEdit or
         // the workspace search box.
         if !dialog_open {
-            let other_focused = ui
-                .memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
+            let other_focused = ui.memory(|m| m.focused().map(|id| id != this_id).unwrap_or(false));
             if !other_focused {
                 ui.memory_mut(|m| m.request_focus(this_id));
             }
@@ -230,12 +227,10 @@ fn render_file_editor_leaf(
                 };
                 if ui
                     .add(
-                        egui::Button::new(
-                            egui::RichText::new("Raw").size(11.0).color(raw_color),
-                        )
-                        .fill(raw_bg)
-                        .rounding(egui::Rounding::same(theme::ROUNDING))
-                        .min_size(egui::vec2(56.0, 20.0)),
+                        egui::Button::new(egui::RichText::new("Raw").size(11.0).color(raw_color))
+                            .fill(raw_bg)
+                            .rounding(egui::Rounding::same(theme::ROUNDING))
+                            .min_size(egui::vec2(56.0, 20.0)),
                     )
                     .clicked()
                     && previewing
@@ -272,11 +267,7 @@ fn render_file_editor_leaf(
                         });
                 }
             }
-        } else if let Some(et) = rctx
-            .editor_texts
-            .iter_mut()
-            .find(|(id, _)| *id == pane_id)
-        {
+        } else if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
             if let Some(ref mut text) = et.1 {
                 egui::ScrollArea::both()
                     .id_source(("editor_scroll", pane_id))
@@ -314,11 +305,8 @@ fn render_file_editor_leaf(
                                     egui::Sense::hover(),
                                 )
                                 .0;
-                            ui.painter().rect_filled(
-                                sep_rect,
-                                0.0,
-                                theme::active().surface1,
-                            );
+                            ui.painter()
+                                .rect_filled(sep_rect, 0.0, theme::active().surface1);
                             ui.add_space(theme::SP_SM);
                             // Editor
                             ui.add(
@@ -337,11 +325,7 @@ fn render_file_editor_leaf(
     }
 }
 
-fn render_file_diff_leaf(
-    ui: &mut egui::Ui,
-    d: &super::super::pane::FileDiffState,
-    pane_id: u32,
-) {
+fn render_file_diff_leaf(ui: &mut egui::Ui, d: &super::super::pane::FileDiffState, pane_id: u32) {
     ui.painter()
         .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
     ui.horizontal(|ui| {
