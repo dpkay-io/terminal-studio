@@ -158,11 +158,8 @@ impl App {
                     {
                         let hint_text = "Ctrl+Shift+Space";
                         let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
-                        let hint_galley = painter.layout_no_wrap(
-                            hint_text.to_string(),
-                            hint_font.clone(),
-                            tb_fg,
-                        );
+                        let hint_galley =
+                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
                             0.0
                         } else {
@@ -173,11 +170,8 @@ impl App {
                             egui::pos2(r.min.x + 72.0 + mac_btn_w, r.min.y),
                             egui::vec2(total_w, r.height()),
                         );
-                        let sw_resp = ui.interact(
-                            sw_tbr,
-                            self.vp_id("tb_switcher"),
-                            egui::Sense::click(),
-                        );
+                        let sw_resp =
+                            ui.interact(sw_tbr, self.vp_id("tb_switcher"), egui::Sense::click());
                         let sw_bg = if self.show_quick_switcher {
                             theme::active().surface2
                         } else if sw_resp.hovered() {
@@ -186,10 +180,8 @@ impl App {
                             egui::Color32::TRANSPARENT
                         };
                         painter.rect_filled(sw_tbr, 4.0, sw_bg);
-                        let icon_center = egui::pos2(
-                            sw_tbr.min.x + mac_btn_w * 0.5,
-                            sw_tbr.center().y,
-                        );
+                        let icon_center =
+                            egui::pos2(sw_tbr.min.x + mac_btn_w * 0.5, sw_tbr.center().y);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
@@ -474,11 +466,8 @@ impl App {
                     {
                         let hint_text = "Ctrl+Shift+Space";
                         let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
-                        let hint_galley = painter.layout_no_wrap(
-                            hint_text.to_string(),
-                            hint_font.clone(),
-                            tb_fg,
-                        );
+                        let hint_galley =
+                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
                             0.0
                         } else {
@@ -491,11 +480,7 @@ impl App {
                             egui::pos2(sw_x, r.min.y),
                             egui::vec2(total_w, r.height()),
                         );
-                        let resp = ui.interact(
-                            br,
-                            self.vp_id("tb_switcher"),
-                            egui::Sense::click(),
-                        );
+                        let resp = ui.interact(br, self.vp_id("tb_switcher"), egui::Sense::click());
                         let bg = if self.show_quick_switcher {
                             theme::active().surface2
                         } else if resp.hovered() {
@@ -504,8 +489,7 @@ impl App {
                             egui::Color32::TRANSPARENT
                         };
                         painter.rect_filled(br, 4.0, bg);
-                        let icon_center =
-                            egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
+                        let icon_center = egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,

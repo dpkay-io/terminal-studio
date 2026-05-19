@@ -376,97 +376,96 @@ impl App {
             .show(ui, |ui| {
                 let matcher = SkimMatcherV2::default();
                 for pane in self.pane_state.panes.iter() {
-                    let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) =
-                        match &pane.content {
-                            PaneContent::Terminal(sid) => {
-                                if let Some(e) = self.session_state.find(*sid) {
-                                    let (title, cwd) = {
-                                        let s = e.session.read();
-                                        (s.title(), s.cwd.clone())
-                                    };
-                                    let ws = if cwd.as_os_str().is_empty() {
-                                        None
-                                    } else {
-                                        self.workspace_store.find_for_cwd(&cwd)
-                                    };
-                                    let color = ws.map(|w| w.color);
-                                    let ws_name =
-                                        ws.map(|w| w.name.as_str());
-                                    let fg = self.workers.foreground_worker.get(e.id);
-                                    (
-                                        effective_title(
-                                            &title,
-                                            &cwd,
-                                            fg.as_ref(),
-                                            Some(&e.shell),
-                                            ws_name,
-                                        ),
-                                        color,
-                                        false,
-                                    )
-                                } else {
-                                    ("(missing)".to_string(), None, true)
-                                }
-                            }
-                            PaneContent::DeferredTerminal {
-                                cwd, saved_title, ..
-                            } => {
-                                let cwd_path = cwd.clone().unwrap_or_default();
-                                let ws = if cwd_path.as_os_str().is_empty() {
+                    let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane
+                        .content
+                    {
+                        PaneContent::Terminal(sid) => {
+                            if let Some(e) = self.session_state.find(*sid) {
+                                let (title, cwd) = {
+                                    let s = e.session.read();
+                                    (s.title(), s.cwd.clone())
+                                };
+                                let ws = if cwd.as_os_str().is_empty() {
                                     None
                                 } else {
-                                    self.workspace_store.find_for_cwd(&cwd_path)
+                                    self.workspace_store.find_for_cwd(&cwd)
                                 };
                                 let color = ws.map(|w| w.color);
                                 let ws_name = ws.map(|w| w.name.as_str());
-                                let mut text = if let Some(t) =
-                                    saved_title.as_deref().filter(|s| !s.is_empty())
-                                {
+                                let fg = self.workers.foreground_worker.get(e.id);
+                                (
+                                    effective_title(
+                                        &title,
+                                        &cwd,
+                                        fg.as_ref(),
+                                        Some(&e.shell),
+                                        ws_name,
+                                    ),
+                                    color,
+                                    false,
+                                )
+                            } else {
+                                ("(missing)".to_string(), None, true)
+                            }
+                        }
+                        PaneContent::DeferredTerminal {
+                            cwd, saved_title, ..
+                        } => {
+                            let cwd_path = cwd.clone().unwrap_or_default();
+                            let ws = if cwd_path.as_os_str().is_empty() {
+                                None
+                            } else {
+                                self.workspace_store.find_for_cwd(&cwd_path)
+                            };
+                            let color = ws.map(|w| w.color);
+                            let ws_name = ws.map(|w| w.name.as_str());
+                            let mut text =
+                                if let Some(t) = saved_title.as_deref().filter(|s| !s.is_empty()) {
                                     t.to_string()
                                 } else {
                                     effective_title("", &cwd_path, None, None, ws_name)
                                 };
-                                if text.is_empty() {
-                                    text = "(restored)".to_string();
-                                }
-                                (text, color, true)
+                            if text.is_empty() {
+                                text = "(restored)".to_string();
                             }
-                            PaneContent::FileEditor(ed) => {
-                                let text = ed
-                                    .path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .map(|s| s.to_string())
-                                    .unwrap_or_else(|| ed.path.display().to_string());
-                                let color = ed.workspace_id.and_then(|id| {
-                                    self.workspace_store
-                                        .workspaces
-                                        .iter()
-                                        .find(|w| w.id == id)
-                                        .map(|w| w.color)
-                                });
-                                (text, color, false)
-                            }
-                            PaneContent::FileDiff(d) => {
-                                let name = d
-                                    .path
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .map(|s| format!("\u{21c4} {}", s))
-                                    .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
-                                (name, None, false)
-                            }
-                            PaneContent::NoteEditor(ne) => {
-                                let color = ne.workspace_id.and_then(|id| {
-                                    self.workspace_store
-                                        .workspaces
-                                        .iter()
-                                        .find(|w| w.id == id)
-                                        .map(|w| w.color)
-                                });
-                                ("Notes".to_string(), color, false)
-                            }
-                        };
+                            (text, color, true)
+                        }
+                        PaneContent::FileEditor(ed) => {
+                            let text = ed
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| ed.path.display().to_string());
+                            let color = ed.workspace_id.and_then(|id| {
+                                self.workspace_store
+                                    .workspaces
+                                    .iter()
+                                    .find(|w| w.id == id)
+                                    .map(|w| w.color)
+                            });
+                            (text, color, false)
+                        }
+                        PaneContent::FileDiff(d) => {
+                            let name = d
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| format!("\u{21c4} {}", s))
+                                .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
+                            (name, None, false)
+                        }
+                        PaneContent::NoteEditor(ne) => {
+                            let color = ne.workspace_id.and_then(|id| {
+                                self.workspace_store
+                                    .workspaces
+                                    .iter()
+                                    .find(|w| w.id == id)
+                                    .map(|w| w.color)
+                            });
+                            ("Notes".to_string(), color, false)
+                        }
+                    };
 
                     if !session_filter.is_empty()
                         && matcher.fuzzy_match(&label, session_filter).is_none()

@@ -123,8 +123,7 @@ impl App {
                                 egui::Key::Num9,
                             ];
                             for (i, nk) in num_keys.iter().enumerate() {
-                                if ctx
-                                    .input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, *nk))
+                                if ctx.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, *nk))
                                 {
                                     number_pressed = Some(i);
                                     break;
@@ -133,8 +132,7 @@ impl App {
                             // Also consume the text event so it doesn't go to TextEdit
                             if number_pressed.is_some() {
                                 ctx.input_mut(|inp| {
-                                    inp.events
-                                        .retain(|e| !matches!(e, egui::Event::Text(_)));
+                                    inp.events.retain(|e| !matches!(e, egui::Event::Text(_)));
                                 });
                             }
                         }
@@ -173,8 +171,7 @@ impl App {
                                 egui::Key::Z,
                             ];
                             for (i, lk) in letter_keys.iter().enumerate() {
-                                if ctx
-                                    .input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, *lk))
+                                if ctx.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, *lk))
                                 {
                                     letter_pressed = Some(i as u8);
                                     break;
@@ -182,8 +179,7 @@ impl App {
                             }
                             if letter_pressed.is_some() {
                                 ctx.input_mut(|inp| {
-                                    inp.events
-                                        .retain(|e| !matches!(e, egui::Event::Text(_)));
+                                    inp.events.retain(|e| !matches!(e, egui::Event::Text(_)));
                                 });
                             }
                         }
@@ -195,8 +191,7 @@ impl App {
                             });
                             if pressed {
                                 ctx.input_mut(|inp| {
-                                    inp.events
-                                        .retain(|e| !matches!(e, egui::Event::Text(_)));
+                                    inp.events.retain(|e| !matches!(e, egui::Event::Text(_)));
                                 });
                             }
                             pressed
@@ -210,9 +205,8 @@ impl App {
                         }
 
                         // Enter key
-                        let enter = ctx.input_mut(|i| {
-                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
-                        });
+                        let enter = ctx
+                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
 
                         // ── Header ───────────────────────────────────────
                         ui.horizontal(|ui| {
@@ -275,9 +269,7 @@ impl App {
                                         .color(t.base)
                                         .background_color(t.overlay0),
                                 );
-                                ui.label(
-                                    egui::RichText::new(desc).size(11.0).color(t.subtext0),
-                                );
+                                ui.label(egui::RichText::new(desc).size(11.0).color(t.subtext0));
                                 ui.add_space(theme::SP_LG);
                             };
                             if let Some(ws_idx) = self.quick_switcher_selected_ws {
@@ -457,10 +449,10 @@ impl App {
                                 }
 
                                 let num_cols = groups.len();
-                                let available_w = dialog_w - 40.0
+                                let available_w = dialog_w
+                                    - 40.0
                                     - (num_cols.saturating_sub(1) as f32 * theme::SP_SM);
-                                let col_width =
-                                    (available_w / num_cols as f32).clamp(160.0, 240.0);
+                                let col_width = (available_w / num_cols as f32).clamp(160.0, 240.0);
 
                                 ui.horizontal_top(|ui| {
                                     for (ws_number, group) in (1u8..).zip(groups.iter()) {
@@ -473,8 +465,10 @@ impl App {
                                             ui.set_max_width(col_width);
 
                                             // ── Workspace header ─────────────
-                                            let header_bg_rgb =
-                                                theme::tinted(group.color, if is_selected { 0.75 } else { 0.55 });
+                                            let header_bg_rgb = theme::tinted(
+                                                group.color,
+                                                if is_selected { 0.75 } else { 0.55 },
+                                            );
                                             let header_fg = theme::text_on(header_bg_rgb);
 
                                             let hdr_resp = egui::Frame::none()
@@ -484,13 +478,16 @@ impl App {
                                                 .show(ui, |ui| {
                                                     ui.horizontal(|ui| {
                                                         ui.label(
-                                                            egui::RichText::new(format!(" {} ", ws_number))
-                                                                .size(11.0)
-                                                                .strong()
-                                                                .color(header_fg)
-                                                                .background_color(
-                                                                    egui::Color32::from_black_alpha(40),
-                                                                ),
+                                                            egui::RichText::new(format!(
+                                                                " {} ",
+                                                                ws_number
+                                                            ))
+                                                            .size(11.0)
+                                                            .strong()
+                                                            .color(header_fg)
+                                                            .background_color(
+                                                                egui::Color32::from_black_alpha(40),
+                                                            ),
                                                         );
                                                         ui.label(
                                                             egui::RichText::new(&group.name)
@@ -539,7 +536,8 @@ impl App {
                                                             };
                                                             ui.label(
                                                                 egui::RichText::new(format!(
-                                                                    " {} ", letter
+                                                                    " {} ",
+                                                                    letter
                                                                 ))
                                                                 .size(11.0)
                                                                 .strong()
@@ -548,15 +546,19 @@ impl App {
                                                             );
                                                             ui.vertical(|ui| {
                                                                 ui.label(
-                                                                    egui::RichText::new(&entry.label)
-                                                                        .size(12.0)
-                                                                        .color(t.text),
+                                                                    egui::RichText::new(
+                                                                        &entry.label,
+                                                                    )
+                                                                    .size(12.0)
+                                                                    .color(t.text),
                                                                 );
                                                                 if !entry.cwd.is_empty() {
                                                                     ui.label(
-                                                                        egui::RichText::new(&entry.cwd)
-                                                                            .size(10.0)
-                                                                            .color(t.overlay0),
+                                                                        egui::RichText::new(
+                                                                            &entry.cwd,
+                                                                        )
+                                                                        .size(10.0)
+                                                                        .color(t.overlay0),
                                                                     );
                                                                 }
                                                             });

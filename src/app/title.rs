@@ -187,10 +187,7 @@ mod tests {
             name: "htop".to_string(),
             cmdline: vec!["htop".to_string()],
         };
-        assert_eq!(
-            effective_title("bash", cwd, Some(&fg), None, None),
-            "htop"
-        );
+        assert_eq!(effective_title("bash", cwd, Some(&fg), None, None), "htop");
     }
 
     #[test]

@@ -190,19 +190,15 @@ fn render_pane_context_menu(
     } else {
         t.surface1
     };
-    ui.painter()
-        .rect_filled(btn_rect, theme::ROUNDING, btn_bg);
+    ui.painter().rect_filled(btn_rect, theme::ROUNDING, btn_bg);
 
     // Three vertical dots
     let center = btn_rect.center();
     let dot_r = 1.5;
     let dot_gap = 4.5;
     for i in [-1.0_f32, 0.0, 1.0] {
-        ui.painter().circle_filled(
-            egui::pos2(center.x, center.y + i * dot_gap),
-            dot_r,
-            t.text,
-        );
+        ui.painter()
+            .circle_filled(egui::pos2(center.x, center.y + i * dot_gap), dot_r, t.text);
     }
 
     if btn_resp.clicked() {

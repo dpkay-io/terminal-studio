@@ -582,7 +582,12 @@ impl App {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            if let Some(ws) = self.workspace_store.workspaces.iter_mut().find(|w| w.id == ws_id) {
+            if let Some(ws) = self
+                .workspace_store
+                .workspaces
+                .iter_mut()
+                .find(|w| w.id == ws_id)
+            {
                 ws.last_activated = now;
             }
             self.workspace_store.save();

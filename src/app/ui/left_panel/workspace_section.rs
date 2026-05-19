@@ -139,13 +139,7 @@ impl App {
                 ui.spacing_mut().item_spacing.y = theme::SP_SM;
 
                 // "Other" group at the top
-                self.render_other_group(
-                    ui,
-                    actions,
-                    active_group_snap,
-                    &cur_win,
-                    has_active_other,
-                );
+                self.render_other_group(ui, actions, active_group_snap, &cur_win, has_active_other);
 
                 for card in &workspaces {
                     self.render_workspace_card(ui, actions, card, active_group_snap, &cur_win);
@@ -219,10 +213,8 @@ impl App {
 
             // Active session indicator: colored bar on left edge
             if data.has_active_session {
-                let bar = egui::Rect::from_min_size(
-                    full_rect.min,
-                    egui::vec2(3.0, full_rect.height()),
-                );
+                let bar =
+                    egui::Rect::from_min_size(full_rect.min, egui::vec2(3.0, full_rect.height()));
                 let left_rounding = egui::Rounding {
                     nw: theme::ROUNDING,
                     sw: theme::ROUNDING,
@@ -270,8 +262,7 @@ impl App {
                     )
                 });
                 let note_x = gear_rect.left() - 4.0 - note_galley.size().x;
-                let note_y =
-                    full_rect.min.y + (theme::HEADER_H - note_galley.size().y) / 2.0;
+                let note_y = full_rect.min.y + (theme::HEADER_H - note_galley.size().y) / 2.0;
                 ui.painter()
                     .galley(egui::pos2(note_x, note_y), note_galley, fg);
             }
@@ -394,10 +385,8 @@ impl App {
 
             // Active session indicator bar
             if has_active_session {
-                let bar = egui::Rect::from_min_size(
-                    other_rect.min,
-                    egui::vec2(3.0, other_rect.height()),
-                );
+                let bar =
+                    egui::Rect::from_min_size(other_rect.min, egui::vec2(3.0, other_rect.height()));
                 let left_rounding = egui::Rounding {
                     nw: theme::ROUNDING,
                     sw: theme::ROUNDING,

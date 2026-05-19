@@ -23,7 +23,6 @@ mod git_diff;
 #[allow(dead_code)]
 mod git_worker;
 mod input;
-mod workspace_git_worker;
 mod markdown;
 mod multi_window;
 mod pane;
@@ -36,6 +35,7 @@ mod title;
 mod ui;
 mod watcher;
 mod worker_manager;
+mod workspace_git_worker;
 mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
@@ -204,7 +204,9 @@ impl eframe::App for App {
     /// gets everything.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.raw_intercepted_keys.clear();
-        let active_is_editor = self.pane_state.active_pane_id
+        let active_is_editor = self
+            .pane_state
+            .active_pane_id
             .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
             .map(|p| matches!(p.content, PaneContent::FileEditor(_)))
             .unwrap_or(false);
@@ -2338,17 +2340,14 @@ impl App {
                             .map(|t| t.leaf_ids().len())
                             .unwrap_or(1);
                         if leaf_count > 1 {
-                            let remove_result = if let Some(tree) =
-                                self.pane_state.pane_trees.get_mut(&root_pid)
-                            {
-                                tree.remove_pane(pid)
-                            } else {
-                                RemoveResult::NotFound
-                            };
+                            let remove_result =
+                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
+                                    tree.remove_pane(pid)
+                                } else {
+                                    RemoveResult::NotFound
+                                };
                             if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                                if let Some(tree) =
-                                    self.pane_state.pane_trees.get_mut(&root_pid)
-                                {
+                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                     *tree = replacement;
                                 }
                             }
@@ -2367,9 +2366,7 @@ impl App {
                                 },
                             );
                             self.pane_state.active_pane_id = Some(pid);
-                            if let Some(pane) =
-                                self.pane_state.panes.iter().find(|p| p.id == pid)
-                            {
+                            if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
                                 if let PaneContent::Terminal(sid) = pane.content {
                                     self.session_state.active_id = Some(sid);
                                     self.update_is_active_flags();
@@ -2408,17 +2405,14 @@ impl App {
                                 self.pane_state.panes.last().map(|p| p.id);
                             self.save_session();
                         } else {
-                            let remove_result = if let Some(tree) =
-                                self.pane_state.pane_trees.get_mut(&root_pid)
-                            {
-                                tree.remove_pane(pid)
-                            } else {
-                                RemoveResult::NotFound
-                            };
+                            let remove_result =
+                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
+                                    tree.remove_pane(pid)
+                                } else {
+                                    RemoveResult::NotFound
+                                };
                             if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                                if let Some(tree) =
-                                    self.pane_state.pane_trees.get_mut(&root_pid)
-                                {
+                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                     *tree = replacement;
                                 }
                             }
@@ -2454,8 +2448,7 @@ impl App {
                         }
                     }
                 }
-                PaneContextAction::SplitHorizontal(pid)
-                | PaneContextAction::SplitVertical(pid) => {
+                PaneContextAction::SplitHorizontal(pid) | PaneContextAction::SplitVertical(pid) => {
                     let dir = if matches!(action, PaneContextAction::SplitHorizontal(_)) {
                         SplitDir::Horizontal
                     } else {
@@ -2486,14 +2479,11 @@ impl App {
                             let cwd = entry
                                 .map(|e| e.session.read().cwd.clone())
                                 .filter(|p| !p.as_os_str().is_empty());
-                            let shell = entry
-                                .map(|e| e.shell.clone())
-                                .unwrap_or_else(default_shell);
+                            let shell =
+                                entry.map(|e| e.shell.clone()).unwrap_or_else(default_shell);
                             (cwd, shell)
                         };
-                        if let Some(new_sid) =
-                            self.spawn_session_no_pane(&shell, cols, rows, cwd)
-                        {
+                        if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
                             let new_pane_id = self.pane_state.next_pane_id;
                             self.pane_state.next_pane_id += 1;
                             let split_id = self.pane_state.next_split_id;
@@ -2504,9 +2494,7 @@ impl App {
                                 manual_width: None,
                                 last_size: (cols, rows),
                             });
-                            if let Some(tree) =
-                                self.pane_state.pane_trees.get_mut(&root_pid)
-                            {
+                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                 tree.split_pane(pid, new_pane_id, split_id, dir);
                             }
                             self.pane_state.active_pane_id = Some(new_pane_id);
