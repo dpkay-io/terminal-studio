@@ -401,7 +401,7 @@ impl App {
                         }
 
                         // Sort by last_activated descending (most recent first)
-                        groups.sort_by(|a, b| b.last_activated.cmp(&a.last_activated));
+                        groups.sort_by_key(|b| std::cmp::Reverse(b.last_activated));
 
                         // ── Process number key → select workspace column ─
                         if let Some(idx) = number_pressed {

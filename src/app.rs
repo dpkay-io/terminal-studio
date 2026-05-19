@@ -1442,7 +1442,7 @@ impl App {
                                     .and_then(|m| m.modified())
                                     .ok()
                                     .and_then(|t| t.elapsed().ok())
-                                    .map_or(false, |age| age.as_secs() < 10);
+                                    .is_some_and(|age| age.as_secs() < 10);
                                 if !is_recent {
                                     continue;
                                 }
@@ -1795,7 +1795,7 @@ impl App {
                 }
 
                 let mut events = ctx.input(|inp| inp.events.clone());
-                events.extend(self.raw_intercepted_keys.drain(..));
+                events.append(&mut self.raw_intercepted_keys);
                 for event in &events {
                     match event {
                         egui::Event::Text(text) => {
