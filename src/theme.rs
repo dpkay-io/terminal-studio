@@ -431,22 +431,47 @@ pub fn tinted(c: [u8; 3], factor: f32) -> [u8; 3] {
     ]
 }
 
-pub fn text_on(bg: [u8; 3]) -> Color32 {
-    let [r, g, b] = bg;
-    let to_lin = |c: u8| -> f32 {
-        let f = c as f32 / 255.0;
+fn relative_luminance(c: [u8; 3]) -> f32 {
+    let to_lin = |v: u8| -> f32 {
+        let f = v as f32 / 255.0;
         if f <= 0.04045 {
             f / 12.92
         } else {
             ((f + 0.055) / 1.055).powf(2.4)
         }
     };
-    let lum = 0.2126 * to_lin(r) + 0.7152 * to_lin(g) + 0.0722 * to_lin(b);
-    if lum < 0.179 {
+    0.2126 * to_lin(c[0]) + 0.7152 * to_lin(c[1]) + 0.0722 * to_lin(c[2])
+}
+
+pub fn text_on(bg: [u8; 3]) -> Color32 {
+    if relative_luminance(bg) < 0.179 {
         active().text
     } else {
         Color32::BLACK
     }
+}
+
+/// Lightens `fg` toward white until it has WCAG AA contrast (4.5:1) against `bg`.
+pub fn ensure_readable(fg: [u8; 3], bg: [u8; 3]) -> Color32 {
+    let bg_lum = relative_luminance(bg);
+    let mut cur = fg;
+    for _ in 0..20 {
+        let fg_lum = relative_luminance(cur);
+        let (lighter, darker) = if fg_lum > bg_lum {
+            (fg_lum, bg_lum)
+        } else {
+            (bg_lum, fg_lum)
+        };
+        if (lighter + 0.05) / (darker + 0.05) >= 4.5 {
+            return from_rgb(cur);
+        }
+        cur = [
+            (cur[0] as u16 + (255 - cur[0] as u16) / 3) as u8,
+            (cur[1] as u16 + (255 - cur[1] as u16) / 3) as u8,
+            (cur[2] as u16 + (255 - cur[2] as u16) / 3) as u8,
+        ];
+    }
+    from_rgb(cur)
 }
 
 pub fn header_bg(ws_color: Option<[u8; 3]>, is_active: bool) -> Color32 {
@@ -1158,6 +1183,38 @@ mod tests {
     fn test_text_on_light_bg_returns_black() {
         let color = text_on([240, 240, 240]);
         assert_eq!(color, Color32::BLACK);
+    }
+
+    #[test]
+    fn test_ensure_readable_already_bright() {
+        set_theme(ThemeId::CatppuccinMocha);
+        let bright_green = [100, 255, 100];
+        let dark_bg = [24, 24, 37]; // mantle
+        let color = ensure_readable(bright_green, dark_bg);
+        assert_eq!(color, from_rgb(bright_green));
+    }
+
+    #[test]
+    fn test_ensure_readable_lightens_dark_text() {
+        set_theme(ThemeId::CatppuccinMocha);
+        let dark_blue = [20, 20, 80];
+        let dark_bg = [24, 24, 37]; // mantle
+        let color = ensure_readable(dark_blue, dark_bg);
+        assert_ne!(color, from_rgb(dark_blue));
+        // Result should be lighter (higher channel values)
+        let [r, g, b, _] = color.to_array();
+        assert!(r > dark_blue[0] || g > dark_blue[1] || b > dark_blue[2]);
+    }
+
+    #[test]
+    fn test_ensure_readable_preserves_hue() {
+        set_theme(ThemeId::CatppuccinMocha);
+        let dark_red = [60, 10, 10];
+        let dark_bg = [24, 24, 37];
+        let color = ensure_readable(dark_red, dark_bg);
+        let [r, g, b, _] = color.to_array();
+        // Red channel should still dominate
+        assert!(r > g && r > b);
     }
 
     #[test]

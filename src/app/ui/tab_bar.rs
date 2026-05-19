@@ -384,13 +384,38 @@ impl App {
                         let cwd = s.cwd.clone();
                         drop(s);
                         let fg = self.workers.foreground_worker.get(e.id);
-                        effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell))
+                        let ws_name = if cwd.as_os_str().is_empty() {
+                            None
+                        } else {
+                            self.workspace_store
+                                .find_for_cwd(&cwd)
+                                .map(|w| w.name.clone())
+                        };
+                        effective_title(
+                            &title,
+                            &cwd,
+                            fg.as_ref(),
+                            Some(&e.shell),
+                            ws_name.as_deref(),
+                        )
                     })
                     .unwrap_or_else(|| format!("Terminal {sid}"))
             }
-            PaneContent::DeferredTerminal { cwd, .. } => {
+            PaneContent::DeferredTerminal {
+                cwd, saved_title, ..
+            } => {
+                if let Some(t) = saved_title.as_deref().filter(|s| !s.is_empty()) {
+                    return t.to_string();
+                }
                 let cwd_path = cwd.clone().unwrap_or_default();
-                effective_title("", &cwd_path, None, None)
+                let ws_name = if cwd_path.as_os_str().is_empty() {
+                    None
+                } else {
+                    self.workspace_store
+                        .find_for_cwd(&cwd_path)
+                        .map(|w| w.name.clone())
+                };
+                effective_title("", &cwd_path, None, None, ws_name.as_deref())
             }
             PaneContent::FileEditor(ed) => {
                 let fname = ed

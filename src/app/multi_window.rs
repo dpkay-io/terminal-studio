@@ -30,6 +30,8 @@ pub(super) struct WindowView {
     pub(super) show_shortcut_help: bool,
     pub(super) show_quick_switcher: bool,
     pub(super) quick_switcher_query: String,
+    pub(super) quick_switcher_selected_ws: Option<usize>,
+    pub(super) quick_switcher_search_active: bool,
 
     pub(super) workspace_dialog: Option<WorkspaceDialog>,
     pub(super) workspace_edit_dialog: Option<WorkspaceEditDialog>,
@@ -60,6 +62,8 @@ impl WindowView {
             show_shortcut_help: false,
             show_quick_switcher: false,
             quick_switcher_query: String::new(),
+            quick_switcher_selected_ws: None,
+            quick_switcher_search_active: false,
             workspace_dialog: None,
             workspace_edit_dialog: None,
             active_term_geo: None,

@@ -145,6 +145,10 @@ impl Session {
         }
     }
 
+    pub fn set_title(&self, title: String) {
+        *self.title.lock() = title;
+    }
+
     pub fn title(&self) -> String {
         self.title.lock().clone()
     }

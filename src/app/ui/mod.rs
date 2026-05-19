@@ -2,6 +2,7 @@ pub(crate) mod debounce;
 mod dialogs;
 mod left_panel;
 mod pane_renderer;
+pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
 mod tab_bar;

@@ -7,6 +7,8 @@ pub(super) struct SavedSession {
     pub(super) cwd: PathBuf,
     #[serde(default)]
     pub(super) command: Option<String>,
+    #[serde(default)]
+    pub(super) title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -18,6 +20,8 @@ pub(super) enum SavedPaneContent {
         cwd: PathBuf,
         #[serde(default)]
         command: Option<String>,
+        #[serde(default)]
+        title: Option<String>,
     },
     FileEditor {
         path: PathBuf,
@@ -88,11 +92,13 @@ mod tests {
         let original = SavedSession {
             cwd: PathBuf::from("/tmp/mydir"),
             command: Some("ls -la".into()),
+            title: Some("my session".into()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedSession = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.cwd, original.cwd);
         assert_eq!(restored.command, original.command);
+        assert_eq!(restored.title, original.title);
     }
 
     #[test]
@@ -101,6 +107,7 @@ mod tests {
         let s: SavedSession = serde_json::from_str(json).unwrap();
         assert_eq!(s.cwd, PathBuf::from("/home/user"));
         assert_eq!(s.command, None);
+        assert_eq!(s.title, None);
     }
 
     #[test]
@@ -119,13 +126,19 @@ mod tests {
         let original = SavedPaneContent::DeferredTerminal {
             cwd: PathBuf::from("/usr/local"),
             command: Some("bash".into()),
+            title: Some("my terminal".into()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
         match restored {
-            SavedPaneContent::DeferredTerminal { cwd, command } => {
+            SavedPaneContent::DeferredTerminal {
+                cwd,
+                command,
+                title,
+            } => {
                 assert_eq!(cwd, PathBuf::from("/usr/local"));
                 assert_eq!(command, Some("bash".into()));
+                assert_eq!(title, Some("my terminal".into()));
             }
             _ => panic!("expected DeferredTerminal variant"),
         }
@@ -179,10 +192,12 @@ mod tests {
                 SavedSession {
                     cwd: PathBuf::from("/home/user"),
                     command: None,
+                    title: None,
                 },
                 SavedSession {
                     cwd: PathBuf::from("/tmp"),
                     command: Some("vim".into()),
+                    title: Some("vim session".into()),
                 },
             ],
             panes: vec![

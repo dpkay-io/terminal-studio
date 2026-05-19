@@ -384,14 +384,23 @@ impl App {
                                         let s = e.session.read();
                                         (s.title(), s.cwd.clone())
                                     };
-                                    let color = if cwd.as_os_str().is_empty() {
+                                    let ws = if cwd.as_os_str().is_empty() {
                                         None
                                     } else {
-                                        self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
+                                        self.workspace_store.find_for_cwd(&cwd)
                                     };
+                                    let color = ws.map(|w| w.color);
+                                    let ws_name =
+                                        ws.map(|w| w.name.as_str());
                                     let fg = self.workers.foreground_worker.get(e.id);
                                     (
-                                        effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell)),
+                                        effective_title(
+                                            &title,
+                                            &cwd,
+                                            fg.as_ref(),
+                                            Some(&e.shell),
+                                            ws_name,
+                                        ),
                                         color,
                                         false,
                                     )
@@ -399,16 +408,27 @@ impl App {
                                     ("(missing)".to_string(), None, true)
                                 }
                             }
-                            PaneContent::DeferredTerminal { cwd, .. } => {
+                            PaneContent::DeferredTerminal {
+                                cwd, saved_title, ..
+                            } => {
                                 let cwd_path = cwd.clone().unwrap_or_default();
-                                let mut text = effective_title("", &cwd_path, None, None);
+                                let ws = if cwd_path.as_os_str().is_empty() {
+                                    None
+                                } else {
+                                    self.workspace_store.find_for_cwd(&cwd_path)
+                                };
+                                let color = ws.map(|w| w.color);
+                                let ws_name = ws.map(|w| w.name.as_str());
+                                let mut text = if let Some(t) =
+                                    saved_title.as_deref().filter(|s| !s.is_empty())
+                                {
+                                    t.to_string()
+                                } else {
+                                    effective_title("", &cwd_path, None, None, ws_name)
+                                };
                                 if text.is_empty() {
                                     text = "(restored)".to_string();
                                 }
-                                let color =
-                                    cwd.as_ref().filter(|c| !c.as_os_str().is_empty()).and_then(
-                                        |c| self.workspace_store.find_for_cwd(c).map(|w| w.color),
-                                    );
                                 (text, color, true)
                             }
                             PaneContent::FileEditor(ed) => {

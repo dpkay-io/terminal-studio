@@ -23,6 +23,7 @@ mod git_diff;
 #[allow(dead_code)]
 mod git_worker;
 mod input;
+mod workspace_git_worker;
 mod markdown;
 mod multi_window;
 mod pane;
@@ -85,6 +86,8 @@ pub struct App {
     show_shortcut_help: bool,
     show_quick_switcher: bool,
     quick_switcher_query: String,
+    quick_switcher_selected_ws: Option<usize>,
+    quick_switcher_search_active: bool,
     shortcut_registry: ShortcutRegistry,
     settings: AppSettings,
 
@@ -113,6 +116,10 @@ pub struct App {
     term_selection: Option<TermSelection>,
     term_selecting: bool,
     term_selection_sid: Option<u32>,
+
+    // Key events stripped from raw_input by raw_input_hook (Tab, arrows, Escape).
+    // Stored here so the terminal input routing can still send them to the PTY.
+    raw_intercepted_keys: Vec<egui::Event>,
 
     // ── Multi-window support ──────────────────────────────────────────────
     /// Extra OS windows opened via "Open in new window" on a workspace.
@@ -190,6 +197,49 @@ pub struct App {
 }
 
 impl eframe::App for App {
+    /// Strip all navigation keys from raw input before egui's begin_frame
+    /// can use them for focus traversal. egui's Focus::begin_frame reads
+    /// Tab, Shift+Tab, arrows, and Escape from RawInput to move focus
+    /// between widgets — we must remove them at the source so the terminal
+    /// gets everything.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.raw_intercepted_keys.clear();
+        let active_is_editor = self.pane_state.active_pane_id
+            .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+            .map(|p| matches!(p.content, PaneContent::FileEditor(_)))
+            .unwrap_or(false);
+        let any_overlay = self.workspace_dialog.is_some()
+            || self.workspace_edit_dialog.is_some()
+            || self.show_settings
+            || self.show_shortcut_help
+            || self.show_quick_switcher
+            || self.term_search.active
+            || self.show_global_search
+            || self.session_search_active
+            || self.dir_search_active;
+        if active_is_editor || any_overlay {
+            return;
+        }
+        let intercepted = &mut self.raw_intercepted_keys;
+        raw_input.events.retain(|event| {
+            if let egui::Event::Key { key, .. } = event {
+                if matches!(
+                    key,
+                    egui::Key::Tab
+                        | egui::Key::ArrowUp
+                        | egui::Key::ArrowDown
+                        | egui::Key::ArrowLeft
+                        | egui::Key::ArrowRight
+                        | egui::Key::Escape
+                ) {
+                    intercepted.push(event.clone());
+                    return false;
+                }
+            }
+            true
+        });
+    }
+
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_session();
         self.save_windows();
@@ -741,12 +791,13 @@ impl App {
                                                     self.workspace_store.find_for_cwd(cwd)
                                                 {
                                                     let c = ws.color;
+                                                    let panel_bg = theme::active().mantle_rgb;
                                                     ui.label(
                                                         egui::RichText::new(&ws.name)
                                                             .strong()
                                                             .size(theme::CWD_FONT_SZ)
-                                                            .color(egui::Color32::from_rgb(
-                                                                c[0], c[1], c[2],
+                                                            .color(theme::ensure_readable(
+                                                                c, panel_bg,
                                                             )),
                                                     );
                                                     ui.label(
@@ -1240,6 +1291,8 @@ impl App {
         let mut close_split_pane: bool = false;
         // Phase D: split divider ratio changes (split_id, new_ratio)
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
+        // Phase D: pane context menu actions (3-dot menu on split panes)
+        let mut pane_context_actions: Vec<ui::PaneContextAction> = vec![];
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -1338,6 +1391,7 @@ impl App {
                     &mut editor_preview_toggles,
                     &mut pane_widths_snap,
                     &mut split_ratio_changes,
+                    &mut pane_context_actions,
                 );
 
             // ── URL detection + search overlay ────────────────────────────
@@ -1376,18 +1430,30 @@ impl App {
                         if !cwd.as_os_str().is_empty() {
                             self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
                             for md in &self.detected_md_paths {
-                                if !self.auto_opened_md.contains(&md.path) {
-                                    self.auto_opened_md.insert(md.path.clone());
-                                    let path = md.path.clone();
-                                    let ws_id = self.active_group;
-                                    let results = Arc::clone(&self.md_load_results);
-                                    let ctx_clone = ctx.clone();
-                                    std::thread::spawn(move || {
-                                        let content = std::fs::read_to_string(&path).unwrap_or_default();
-                                        results.lock().push((path, content, ws_id));
-                                        ctx_clone.request_repaint();
-                                    });
+                                if self.auto_opened_md.contains(&md.path) {
+                                    continue;
                                 }
+                                self.auto_opened_md.insert(md.path.clone());
+                                // Only auto-open files modified within the last 10 seconds
+                                // (i.e., freshly created by an AI tool, not old files listed by `ls`)
+                                let is_recent = std::fs::metadata(&md.path)
+                                    .and_then(|m| m.modified())
+                                    .ok()
+                                    .and_then(|t| t.elapsed().ok())
+                                    .map_or(false, |age| age.as_secs() < 10);
+                                if !is_recent {
+                                    continue;
+                                }
+                                let path = md.path.clone();
+                                let ws_id = self.active_group;
+                                let results = Arc::clone(&self.md_load_results);
+                                let ctx_clone = ctx.clone();
+                                std::thread::spawn(move || {
+                                    let content = std::fs::read_to_string(&path).unwrap_or_default();
+                                    results.lock().push((path, content, ws_id));
+                                    ctx_clone.request_repaint();
+                                });
+                                break; // limit to 1 auto-open per detection pass
                             }
                         } else {
                             self.detected_md_paths.clear();
@@ -1659,6 +1725,8 @@ impl App {
                         self.show_quick_switcher = !self.show_quick_switcher;
                         if !self.show_quick_switcher {
                             self.quick_switcher_query.clear();
+                            self.quick_switcher_selected_ws = None;
+                            self.quick_switcher_search_active = false;
                         }
                     }
                     Some(AppAction::OpenSettings) => {
@@ -1699,28 +1767,6 @@ impl App {
                 }
             }
 
-            // Tab must be consumed from egui *outside* the any_other_widget_focused guard.
-            // If Tab cycles egui focus away, the guard becomes true and the consume never
-            // runs — a permanent deadlock. Consuming unconditionally here prevents egui from
-            // ever using Tab for focus traversal while a terminal pane is active.
-            if !active_is_editor && !modal_open {
-                let (tab_fwd, tab_rev) = ctx.input_mut(|i| (
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
-                    i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
-                ));
-                log::debug!("Tab consume: fwd={tab_fwd} rev={tab_rev}");
-                if tab_fwd || tab_rev {
-                    if let Some(sid) = active_session_id {
-                        self.scroll_accum.remove(&sid);
-                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                            let bytes = if tab_fwd { b"\t".to_vec() } else { b"\x1b[Z".to_vec() };
-                            let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes);
-                        }
-                    }
-                }
-            }
-
             if !active_is_editor && !any_other_widget_focused && !modal_open {
 
                 // Focus-in / focus-out events (?1004h)
@@ -1746,7 +1792,8 @@ impl App {
                     self.last_focused_sid = active_session_id;
                 }
 
-                let events = ctx.input(|inp| inp.events.clone());
+                let mut events = ctx.input(|inp| inp.events.clone());
+                events.extend(self.raw_intercepted_keys.drain(..));
                 for event in &events {
                     match event {
                         egui::Event::Text(text) => {
@@ -1980,6 +2027,7 @@ impl App {
                                         }
                                     } else if *button == egui::PointerButton::Primary {
                                         if let Some(geo) = &self.active_term_geo {
+                                            if geo.rect.contains(*pos) {
                                             let clamped = egui::pos2(
                                                 pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
                                                 pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
@@ -2003,6 +2051,7 @@ impl App {
                                                         }
                                                     }
                                                 }
+                                            }
                                             }
                                         }
                                     }
@@ -2276,6 +2325,200 @@ impl App {
             }
         }
 
+        // Phase D-3: Handle pane context menu actions (3-dot menu on split panes)
+        for action in pane_context_actions {
+            use ui::PaneContextAction;
+            match action {
+                PaneContextAction::MoveToTab(pid) => {
+                    if let Some(root_pid) = self.pane_state.root_of(pid) {
+                        let leaf_count = self
+                            .pane_state
+                            .pane_trees
+                            .get(&root_pid)
+                            .map(|t| t.leaf_ids().len())
+                            .unwrap_or(1);
+                        if leaf_count > 1 {
+                            let remove_result = if let Some(tree) =
+                                self.pane_state.pane_trees.get_mut(&root_pid)
+                            {
+                                tree.remove_pane(pid)
+                            } else {
+                                RemoveResult::NotFound
+                            };
+                            if let RemoveResult::CollapseToSibling(replacement) = remove_result {
+                                if let Some(tree) =
+                                    self.pane_state.pane_trees.get_mut(&root_pid)
+                                {
+                                    *tree = replacement;
+                                }
+                            }
+                            let last_size = self
+                                .pane_state
+                                .panes
+                                .iter()
+                                .find(|p| p.id == pid)
+                                .map(|p| p.last_size)
+                                .unwrap_or((80, 24));
+                            self.pane_state.pane_trees.insert(
+                                pid,
+                                PaneNode::Leaf {
+                                    pane_id: pid,
+                                    last_size,
+                                },
+                            );
+                            self.pane_state.active_pane_id = Some(pid);
+                            if let Some(pane) =
+                                self.pane_state.panes.iter().find(|p| p.id == pid)
+                            {
+                                if let PaneContent::Terminal(sid) = pane.content {
+                                    self.session_state.active_id = Some(sid);
+                                    self.update_is_active_flags();
+                                }
+                            }
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+                PaneContextAction::Close(pid) => {
+                    if let Some(root_pid) = self.pane_state.root_of(pid) {
+                        let leaf_count = self
+                            .pane_state
+                            .pane_trees
+                            .get(&root_pid)
+                            .map(|t| t.leaf_ids().len())
+                            .unwrap_or(1);
+                        if leaf_count <= 1 {
+                            if let Some(pos) =
+                                self.pane_state.panes.iter().position(|p| p.id == pid)
+                            {
+                                if let PaneContent::Terminal(sid) =
+                                    self.pane_state.panes[pos].content
+                                {
+                                    self.session_state.remove(sid);
+                                    if self.session_state.active_id == Some(sid) {
+                                        self.session_state.active_id =
+                                            self.session_state.sessions.first().map(|e| e.id);
+                                        self.update_is_active_flags();
+                                    }
+                                }
+                                self.pane_state.panes.remove(pos);
+                            }
+                            self.pane_state.pane_trees.remove(&root_pid);
+                            self.pane_state.active_pane_id =
+                                self.pane_state.panes.last().map(|p| p.id);
+                            self.save_session();
+                        } else {
+                            let remove_result = if let Some(tree) =
+                                self.pane_state.pane_trees.get_mut(&root_pid)
+                            {
+                                tree.remove_pane(pid)
+                            } else {
+                                RemoveResult::NotFound
+                            };
+                            if let RemoveResult::CollapseToSibling(replacement) = remove_result {
+                                if let Some(tree) =
+                                    self.pane_state.pane_trees.get_mut(&root_pid)
+                                {
+                                    *tree = replacement;
+                                }
+                            }
+                            if let Some(pos) =
+                                self.pane_state.panes.iter().position(|p| p.id == pid)
+                            {
+                                if let PaneContent::Terminal(sid) =
+                                    self.pane_state.panes[pos].content
+                                {
+                                    self.session_state.remove(sid);
+                                    if self.session_state.active_id == Some(sid) {
+                                        self.session_state.active_id =
+                                            self.session_state.sessions.first().map(|e| e.id);
+                                        self.update_is_active_flags();
+                                    }
+                                }
+                                self.pane_state.panes.remove(pos);
+                            }
+                            if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
+                                let leaves = tree.leaf_ids();
+                                self.pane_state.active_pane_id = leaves.first().copied();
+                                if let Some(new_pid) = self.pane_state.active_pane_id {
+                                    if let Some(pane) =
+                                        self.pane_state.panes.iter().find(|p| p.id == new_pid)
+                                    {
+                                        if let PaneContent::Terminal(sid) = pane.content {
+                                            self.session_state.active_id = Some(sid);
+                                            self.update_is_active_flags();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                PaneContextAction::SplitHorizontal(pid)
+                | PaneContextAction::SplitVertical(pid) => {
+                    let dir = if matches!(action, PaneContextAction::SplitHorizontal(_)) {
+                        SplitDir::Horizontal
+                    } else {
+                        SplitDir::Vertical
+                    };
+                    if let Some(root_pid) = self.pane_state.root_of(pid) {
+                        let (cols, rows) = self
+                            .pane_state
+                            .panes
+                            .iter()
+                            .find(|p| p.id == pid)
+                            .map(|p| p.last_size)
+                            .unwrap_or((80, 24));
+                        let (cwd, shell) = {
+                            let entry = self
+                                .pane_state
+                                .panes
+                                .iter()
+                                .find(|p| p.id == pid)
+                                .and_then(|p| {
+                                    if let PaneContent::Terminal(sid) = &p.content {
+                                        Some(*sid)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .and_then(|sid| self.session_state.find(sid));
+                            let cwd = entry
+                                .map(|e| e.session.read().cwd.clone())
+                                .filter(|p| !p.as_os_str().is_empty());
+                            let shell = entry
+                                .map(|e| e.shell.clone())
+                                .unwrap_or_else(default_shell);
+                            (cwd, shell)
+                        };
+                        if let Some(new_sid) =
+                            self.spawn_session_no_pane(&shell, cols, rows, cwd)
+                        {
+                            let new_pane_id = self.pane_state.next_pane_id;
+                            self.pane_state.next_pane_id += 1;
+                            let split_id = self.pane_state.next_split_id;
+                            self.pane_state.next_split_id += 1;
+                            self.pane_state.panes.push(PaneEntry {
+                                id: new_pane_id,
+                                content: PaneContent::Terminal(new_sid),
+                                manual_width: None,
+                                last_size: (cols, rows),
+                            });
+                            if let Some(tree) =
+                                self.pane_state.pane_trees.get_mut(&root_pid)
+                            {
+                                tree.split_pane(pid, new_pane_id, split_id, dir);
+                            }
+                            self.pane_state.active_pane_id = Some(new_pane_id);
+                            self.session_state.active_id = Some(new_sid);
+                            self.update_is_active_flags();
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Divider drags → freeze manual widths on both adjacent panes
         for (left_idx, right_idx, delta_x, left_w, right_w) in divider_drags {
             self.pane_state.panes[left_idx].manual_width =
@@ -2373,20 +2616,25 @@ impl App {
                     &self.pane_state.panes[pane_idx].content,
                     PaneContent::DeferredTerminal { .. }
                 ) {
-                    let (cwd, pending_command) = if let PaneContent::DeferredTerminal {
-                        cwd,
-                        pending_command,
-                    } = &self.pane_state.panes[pane_idx].content
-                    {
-                        (cwd.clone(), pending_command.clone())
-                    } else {
-                        unreachable!()
-                    };
+                    let (cwd, pending_command, saved_title) =
+                        if let PaneContent::DeferredTerminal {
+                            cwd,
+                            pending_command,
+                            saved_title,
+                        } = &self.pane_state.panes[pane_idx].content
+                        {
+                            (cwd.clone(), pending_command.clone(), saved_title.clone())
+                        } else {
+                            unreachable!()
+                        };
                     let shell = self.configured_shell();
                     if let Some(sid) = self.spawn_session_no_pane(&shell, 80, 24, cwd) {
-                        if let Some(cmd) = pending_command {
-                            if let Some(entry) = self.session_state.find_mut(sid) {
+                        if let Some(entry) = self.session_state.find_mut(sid) {
+                            if let Some(cmd) = pending_command {
                                 entry.pending_command = Some(cmd);
+                            }
+                            if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
+                                entry.session.read().set_title(t);
                             }
                         }
                         self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
@@ -2748,6 +2996,7 @@ impl App {
                 content: PaneContent::DeferredTerminal {
                     cwd: Some(dir_path),
                     pending_command: None,
+                    saved_title: None,
                 },
                 manual_width: None,
                 last_size: (0, 0),

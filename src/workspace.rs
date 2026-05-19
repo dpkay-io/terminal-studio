@@ -16,6 +16,9 @@ pub struct Workspace {
     /// `None` means it lives in the main window.
     #[serde(default)]
     pub host_window_id: Option<WindowId>,
+    /// Epoch-millis timestamp of last activation (for switcher sort order).
+    #[serde(default)]
+    pub last_activated: u64,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -181,6 +184,7 @@ mod tests {
                 path: PathBuf::from(path),
                 color: [0, 0, 0],
                 host_window_id: None,
+                last_activated: 0,
             })
             .collect();
         WorkspaceStore { workspaces }

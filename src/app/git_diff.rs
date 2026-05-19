@@ -65,13 +65,14 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
 
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("Staged")
+                egui::RichText::new(format!("Staged ({})", staged.len()))
                     .strong()
                     .size(theme::STATUS_FONT_SZ)
                     .color(theme::active().git_added),
             );
             if !staged.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(theme::SP_MD);
                     if ui
                         .add(
                             egui::Button::new(
@@ -101,16 +102,20 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
         } else {
             for entry in &staged {
                 let resp = ui.horizontal(|ui| {
-                    let btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("\u{2212}")
-                                .monospace()
-                                .size(14.0)
-                                .color(theme::active().git_removed),
-                        )
-                        .frame(false),
+                    let (badge_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        badge_rect,
+                        theme::ROUNDING,
+                        entry.color.gamma_multiply(0.25),
                     );
-                    let unstage_clicked = btn.on_hover_text("Unstage").clicked();
+                    ui.painter().text(
+                        badge_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        entry.tag,
+                        egui::FontId::monospace(10.0),
+                        entry.color,
+                    );
                     let label_resp = ui
                         .add(
                             egui::Label::new(
@@ -128,26 +133,22 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         open_diff_file = Some(entry.path.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(theme::BAR_PAD_X);
-                        let (badge_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
-                        ui.painter().rect_filled(
-                            badge_rect,
-                            theme::ROUNDING,
-                            entry.color.gamma_multiply(0.25),
+                        ui.add_space(theme::SP_MD);
+                        let btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("\u{2212}")
+                                    .monospace()
+                                    .size(14.0)
+                                    .color(theme::active().git_removed),
+                            )
+                            .frame(false),
                         );
-                        ui.painter().text(
-                            badge_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            entry.tag,
-                            egui::FontId::monospace(10.0),
-                            entry.color,
-                        );
-                    });
-                    if unstage_clicked {
-                        return Some(entry.path.clone());
-                    }
-                    None
+                        if btn.on_hover_text("Unstage").clicked() {
+                            return Some(entry.path.clone());
+                        }
+                        None
+                    })
+                    .inner
                 });
                 if let Some(path) = resp.inner {
                     action = Some(GitStageAction::Unstage(path));
@@ -161,11 +162,12 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
         if !unstaged.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("Changes")
+                    egui::RichText::new(format!("Changes ({})", unstaged.len()))
                         .strong()
                         .size(theme::STATUS_FONT_SZ),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(theme::SP_MD);
                     if ui
                         .add(
                             egui::Button::new(
@@ -186,16 +188,20 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
             ui.add_space(theme::SP_SM);
             for entry in &unstaged {
                 let resp = ui.horizontal(|ui| {
-                    let btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("+")
-                                .monospace()
-                                .size(14.0)
-                                .color(theme::active().git_added),
-                        )
-                        .frame(false),
+                    let (badge_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+                    ui.painter().rect_filled(
+                        badge_rect,
+                        theme::ROUNDING,
+                        entry.color.gamma_multiply(0.25),
                     );
-                    let stage_clicked = btn.on_hover_text("Stage").clicked();
+                    ui.painter().text(
+                        badge_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        entry.tag,
+                        egui::FontId::monospace(10.0),
+                        entry.color,
+                    );
                     let label_resp = ui
                         .add(
                             egui::Label::new(
@@ -213,26 +219,22 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         open_diff_file = Some(entry.path.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(theme::BAR_PAD_X);
-                        let (badge_rect, _) =
-                            ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
-                        ui.painter().rect_filled(
-                            badge_rect,
-                            theme::ROUNDING,
-                            entry.color.gamma_multiply(0.25),
+                        ui.add_space(theme::SP_MD);
+                        let btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("+")
+                                    .monospace()
+                                    .size(14.0)
+                                    .color(theme::active().git_added),
+                            )
+                            .frame(false),
                         );
-                        ui.painter().text(
-                            badge_rect.center(),
-                            egui::Align2::CENTER_CENTER,
-                            entry.tag,
-                            egui::FontId::monospace(10.0),
-                            entry.color,
-                        );
-                    });
-                    if stage_clicked {
-                        return Some(entry.path.clone());
-                    }
-                    None
+                        if btn.on_hover_text("Stage").clicked() {
+                            return Some(entry.path.clone());
+                        }
+                        None
+                    })
+                    .inner
                 });
                 if let Some(path) = resp.inner {
                     action = Some(GitStageAction::Stage(path));

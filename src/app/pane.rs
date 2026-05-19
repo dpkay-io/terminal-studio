@@ -62,6 +62,7 @@ pub(super) enum PaneContent {
     DeferredTerminal {
         cwd: Option<PathBuf>,
         pending_command: Option<String>,
+        saved_title: Option<String>,
     },
     FileEditor(FileEditorState),
     FileDiff(FileDiffState),
@@ -162,6 +163,7 @@ mod tests {
         let deferred = PaneContent::DeferredTerminal {
             cwd: Some(PathBuf::from("/home")),
             pending_command: Some("ls".to_string()),
+            saved_title: None,
         };
         let editor = PaneContent::FileEditor(FileEditorState {
             path: PathBuf::from("test.txt"),

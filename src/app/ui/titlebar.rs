@@ -67,12 +67,15 @@ impl App {
                 let r = ui.max_rect();
                 let painter = ui.painter().clone();
 
-                // Drag the whole bar to move the window
-                if ui
-                    .interact(r, self.vp_id("tb_drag"), egui::Sense::drag())
-                    .dragged()
-                {
+                // Drag the whole bar to move the window; double-click to maximize/restore
+                let drag_resp =
+                    ui.interact(r, self.vp_id("tb_drag"), egui::Sense::click_and_drag());
+                if drag_resp.dragged() {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if drag_resp.double_clicked() {
+                    let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
                 }
 
                 // ── macOS: traffic lights on the left ──────────────────────
@@ -151,6 +154,70 @@ impl App {
                     }
                     left_resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
 
+                    // Switcher button (after left toggle)
+                    {
+                        let hint_text = "Ctrl+Shift+Space";
+                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_galley = painter.layout_no_wrap(
+                            hint_text.to_string(),
+                            hint_font.clone(),
+                            tb_fg,
+                        );
+                        let hint_w = if self.show_quick_switcher {
+                            0.0
+                        } else {
+                            hint_galley.size().x + 6.0
+                        };
+                        let total_w = mac_btn_w + hint_w;
+                        let sw_tbr = egui::Rect::from_min_size(
+                            egui::pos2(r.min.x + 72.0 + mac_btn_w, r.min.y),
+                            egui::vec2(total_w, r.height()),
+                        );
+                        let sw_resp = ui.interact(
+                            sw_tbr,
+                            self.vp_id("tb_switcher"),
+                            egui::Sense::click(),
+                        );
+                        let sw_bg = if self.show_quick_switcher {
+                            theme::active().surface2
+                        } else if sw_resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(sw_tbr, 4.0, sw_bg);
+                        let icon_center = egui::pos2(
+                            sw_tbr.min.x + mac_btn_w * 0.5,
+                            sw_tbr.center().y,
+                        );
+                        painter.text(
+                            icon_center,
+                            egui::Align2::CENTER_CENTER,
+                            "\u{21C6}",
+                            egui::FontId::proportional(mac_icon_sz),
+                            tb_fg,
+                        );
+                        if !self.show_quick_switcher {
+                            let hint_x = sw_tbr.min.x + mac_btn_w + 2.0;
+                            painter.text(
+                                egui::pos2(hint_x, sw_tbr.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                hint_text,
+                                hint_font,
+                                theme::active().subtext0,
+                            );
+                        }
+                        if sw_resp.clicked() {
+                            self.show_quick_switcher = !self.show_quick_switcher;
+                            if !self.show_quick_switcher {
+                                self.quick_switcher_query.clear();
+                                self.quick_switcher_selected_ws = None;
+                                self.quick_switcher_search_active = false;
+                            }
+                        }
+                        sw_resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
+                    }
+
                     // Gear / Settings (rightmost on macOS)
                     let gear_mac_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.max.x - mac_btn_w, r.min.y),
@@ -176,6 +243,39 @@ impl App {
                     }
                     gear_mac_resp.on_hover_text("Settings (Ctrl+Shift+,)");
 
+                    // Right panel toggle (macOS) — just before settings
+                    let mac_right_toggle_x = r.max.x - mac_btn_w * 2.0;
+                    {
+                        let right_tbr = egui::Rect::from_min_size(
+                            egui::pos2(mac_right_toggle_x, r.min.y),
+                            egui::vec2(mac_btn_w, r.height()),
+                        );
+                        let right_resp = ui.interact(
+                            right_tbr,
+                            self.vp_id("tb_right_toggle"),
+                            egui::Sense::click(),
+                        );
+                        let right_bg = if self.show_right_panel {
+                            theme::active().surface2
+                        } else if right_resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(right_tbr, 0.0, right_bg);
+                        painter.text(
+                            right_tbr.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "⊞",
+                            egui::FontId::proportional(mac_icon_sz),
+                            tb_fg,
+                        );
+                        if right_resp.clicked() {
+                            self.show_right_panel = !self.show_right_panel;
+                        }
+                        right_resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+                    }
+
                     // Keyboard shortcuts button (macOS) with hint label
                     let mac_kb_btn_x;
                     {
@@ -189,7 +289,7 @@ impl App {
                             hint_galley.size().x + 6.0
                         };
                         let total_w = mac_btn_w + hint_w;
-                        let kb_x = r.max.x - mac_btn_w - total_w;
+                        let kb_x = mac_right_toggle_x - total_w;
                         mac_kb_btn_x = kb_x;
                         let kb_tbr = egui::Rect::from_min_size(
                             egui::pos2(kb_x, r.min.y),
@@ -228,43 +328,13 @@ impl App {
                         kb_resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
                     }
 
-                    // Right panel toggle (macOS)
-                    let right_tbr = egui::Rect::from_min_size(
-                        egui::pos2(mac_kb_btn_x - mac_btn_w, r.min.y),
-                        egui::vec2(mac_btn_w, r.height()),
-                    );
-                    let right_resp = ui.interact(
-                        right_tbr,
-                        self.vp_id("tb_right_toggle"),
-                        egui::Sense::click(),
-                    );
-                    let right_bg = if self.show_right_panel {
-                        theme::active().surface2
-                    } else if right_resp.hovered() {
-                        theme::active().surface1
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    painter.rect_filled(right_tbr, 0.0, right_bg);
-                    painter.text(
-                        right_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "⊞",
-                        egui::FontId::proportional(mac_icon_sz),
-                        tb_fg,
-                    );
-                    if right_resp.clicked() {
-                        self.show_right_panel = !self.show_right_panel;
-                    }
-                    right_resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
-
-                    // System monitor widget (before right toggle on macOS)
+                    // System monitor widget — before keyboard shortcuts
                     let sysmon_w = if self.settings.show_sys_monitor {
                         theme::SYSMON_W
                     } else {
                         0.0
                     };
-                    let sysmon_mac_x = r.max.x - mac_btn_w * 3.0 - sysmon_w;
+                    let sysmon_mac_x = mac_kb_btn_x - sysmon_w;
                     if self.settings.show_sys_monitor {
                         let sr = egui::Rect::from_min_size(
                             egui::pos2(sysmon_mac_x, r.min.y),
@@ -399,6 +469,71 @@ impl App {
                         resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
                     }
 
+                    // Switcher button (after left toggle)
+                    let switcher_end_x;
+                    {
+                        let hint_text = "Ctrl+Shift+Space";
+                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_galley = painter.layout_no_wrap(
+                            hint_text.to_string(),
+                            hint_font.clone(),
+                            tb_fg,
+                        );
+                        let hint_w = if self.show_quick_switcher {
+                            0.0
+                        } else {
+                            hint_galley.size().x + 6.0
+                        };
+                        let total_w = btn_w + hint_w;
+                        let sw_x = r.min.x + btn_w;
+                        switcher_end_x = sw_x + total_w;
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(sw_x, r.min.y),
+                            egui::vec2(total_w, r.height()),
+                        );
+                        let resp = ui.interact(
+                            br,
+                            self.vp_id("tb_switcher"),
+                            egui::Sense::click(),
+                        );
+                        let bg = if self.show_quick_switcher {
+                            theme::active().surface2
+                        } else if resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 4.0, bg);
+                        let icon_center =
+                            egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
+                        painter.text(
+                            icon_center,
+                            egui::Align2::CENTER_CENTER,
+                            "\u{21C6}",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if !self.show_quick_switcher {
+                            let hint_x = br.min.x + btn_w + 2.0;
+                            painter.text(
+                                egui::pos2(hint_x, br.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                hint_text,
+                                hint_font,
+                                theme::active().subtext0,
+                            );
+                        }
+                        if resp.clicked() {
+                            self.show_quick_switcher = !self.show_quick_switcher;
+                            if !self.show_quick_switcher {
+                                self.quick_switcher_query.clear();
+                                self.quick_switcher_selected_ws = None;
+                                self.quick_switcher_search_active = false;
+                            }
+                        }
+                        resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
+                    }
+
                     // Gear / Settings button — just before window controls
                     {
                         let gear_x = r.max.x - btn_w * (btns.len() as f32 + 1.0);
@@ -426,6 +561,36 @@ impl App {
                         resp.on_hover_text("Settings (Ctrl+Shift+,)");
                     }
 
+                    // Right panel toggle — just before settings
+                    let right_toggle_x = r.max.x - btn_w * (btns.len() as f32 + 2.0);
+                    {
+                        let br = egui::Rect::from_min_size(
+                            egui::pos2(right_toggle_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let resp =
+                            ui.interact(br, self.vp_id("tb_right_toggle"), egui::Sense::click());
+                        let bg = if self.show_right_panel {
+                            theme::active().surface2
+                        } else if resp.hovered() {
+                            theme::active().surface1
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        painter.rect_filled(br, 0.0, bg);
+                        painter.text(
+                            br.center(),
+                            egui::Align2::CENTER_CENTER,
+                            "⊞",
+                            egui::FontId::proportional(icon_sz),
+                            tb_fg,
+                        );
+                        if resp.clicked() {
+                            self.show_right_panel = !self.show_right_panel;
+                        }
+                        resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+                    }
+
                     // Keyboard shortcuts button with hint label
                     let kb_btn_x;
                     {
@@ -439,7 +604,7 @@ impl App {
                             hint_galley.size().x + 6.0
                         };
                         let total_w = btn_w + hint_w;
-                        let kb_x = r.max.x - btn_w * (btns.len() as f32 + 1.0) - total_w;
+                        let kb_x = right_toggle_x - total_w;
                         kb_btn_x = kb_x;
                         let br = egui::Rect::from_min_size(
                             egui::pos2(kb_x, r.min.y),
@@ -477,43 +642,13 @@ impl App {
                         resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
                     }
 
-                    // Right panel toggle — after keyboard shortcuts button
-                    let right_toggle_x = kb_btn_x - btn_w;
-                    {
-                        let br = egui::Rect::from_min_size(
-                            egui::pos2(right_toggle_x, r.min.y),
-                            egui::vec2(btn_w, r.height()),
-                        );
-                        let resp =
-                            ui.interact(br, self.vp_id("tb_right_toggle"), egui::Sense::click());
-                        let bg = if self.show_right_panel {
-                            theme::active().surface2
-                        } else if resp.hovered() {
-                            theme::active().surface1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "⊞",
-                            egui::FontId::proportional(icon_sz),
-                            tb_fg,
-                        );
-                        if resp.clicked() {
-                            self.show_right_panel = !self.show_right_panel;
-                        }
-                        resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
-                    }
-
-                    // System monitor widget — before right toggle
+                    // System monitor widget — before keyboard shortcuts
                     let sysmon_w = if self.settings.show_sys_monitor {
                         theme::SYSMON_W
                     } else {
                         0.0
                     };
-                    let sysmon_x = right_toggle_x - sysmon_w;
+                    let sysmon_x = kb_btn_x - sysmon_w;
                     if self.settings.show_sys_monitor {
                         let sr = egui::Rect::from_min_size(
                             egui::pos2(sysmon_x, r.min.y),
@@ -616,8 +751,8 @@ impl App {
                             }
                         }
                     }
-                    // Title between left toggle and update button (or sys monitor)
-                    let clip_min_x = r.min.x + btn_w + theme::TITLEBAR_ICON_GAP;
+                    // Title between switcher button and update button (or sys monitor)
+                    let clip_min_x = switcher_end_x + theme::TITLEBAR_ICON_GAP;
                     let clip_max_x = update_btn_end_x - theme::TITLEBAR_ICON_GAP;
                     let clip_rect = egui::Rect::from_min_max(
                         egui::pos2(clip_min_x, r.min.y),

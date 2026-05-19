@@ -24,7 +24,7 @@ use super::persistence::{
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
-use super::title::shell_escape_arg;
+use super::title::{effective_title, shell_escape_arg};
 use super::watcher::WatchState;
 use super::App;
 
@@ -134,6 +134,8 @@ impl App {
             show_shortcut_help: false,
             show_quick_switcher: false,
             quick_switcher_query: String::new(),
+            quick_switcher_selected_ws: None,
+            quick_switcher_search_active: false,
             shortcut_registry: ShortcutRegistry::new(),
             settings: loaded_settings,
             active_term_geo: None,
@@ -144,6 +146,9 @@ impl App {
             workers: super::worker_manager::WorkerManager {
                 foreground_worker: ForegroundWorker::spawn(),
                 git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
+                workspace_git_worker: super::workspace_git_worker::WorkspaceGitWorker::spawn(
+                    ctx.clone(),
+                ),
                 search_worker: crate::search_worker::SearchWorker::spawn(ctx.clone()),
                 file_search_worker: crate::file_search_worker::FileSearchWorker::spawn(ctx.clone()),
                 sys_monitor: if show_sys_monitor {
@@ -160,6 +165,7 @@ impl App {
             term_selection: None,
             term_selecting: false,
             term_selection_sid: None,
+            raw_intercepted_keys: Vec::new(),
             extra_windows: Vec::new(),
             next_window_id: 1,
             current_window_id: None,
@@ -440,6 +446,14 @@ impl App {
             &mut self.quick_switcher_query,
             &mut view.quick_switcher_query,
         );
+        swap(
+            &mut self.quick_switcher_selected_ws,
+            &mut view.quick_switcher_selected_ws,
+        );
+        swap(
+            &mut self.quick_switcher_search_active,
+            &mut view.quick_switcher_search_active,
+        );
         swap(&mut self.workspace_dialog, &mut view.workspace_dialog);
         swap(
             &mut self.workspace_edit_dialog,
@@ -562,6 +576,17 @@ impl App {
 
     pub(super) fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
         self.active_group = group;
+
+        if let Some(ws_id) = group {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            if let Some(ws) = self.workspace_store.workspaces.iter_mut().find(|w| w.id == ws_id) {
+                ws.last_activated = now;
+            }
+            self.workspace_store.save();
+        }
 
         let panes_in_group: Vec<u32> = self
             .pane_state
@@ -688,7 +713,10 @@ impl App {
             .sessions
             .iter()
             .map(|e| {
-                let cwd = e.session.read().cwd.clone();
+                let s = e.session.read();
+                let cwd = s.cwd.clone();
+                let title_raw = s.title();
+                drop(s);
                 let command = self.workers.foreground_worker.get(e.id).map(|fp| {
                     let parts: Vec<String> =
                         fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
@@ -702,7 +730,26 @@ impl App {
                         joined
                     }
                 });
-                SavedSession { cwd, command }
+                let fg = self.workers.foreground_worker.get(e.id);
+                let ws_name = if cwd.as_os_str().is_empty() {
+                    None
+                } else {
+                    self.workspace_store
+                        .find_for_cwd(&cwd)
+                        .map(|w| w.name.clone())
+                };
+                let title = Some(effective_title(
+                    &title_raw,
+                    &cwd,
+                    fg.as_ref(),
+                    Some(&e.shell),
+                    ws_name.as_deref(),
+                ));
+                SavedSession {
+                    cwd,
+                    command,
+                    title,
+                }
             })
             .collect();
 
@@ -718,9 +765,11 @@ impl App {
                     PaneContent::DeferredTerminal {
                         cwd,
                         pending_command,
+                        saved_title,
                     } => SavedPaneContent::DeferredTerminal {
                         cwd: cwd.clone().unwrap_or_default(),
                         command: pending_command.clone(),
+                        title: saved_title.clone(),
                     },
                     PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
                         path: ed.path.clone(),
@@ -821,9 +870,12 @@ impl App {
                     Some(s.cwd.clone())
                 };
                 if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
-                    if let Some(cmd) = s.command.clone() {
-                        if let Some(entry) = self.session_state.find_mut(sid) {
+                    if let Some(entry) = self.session_state.find_mut(sid) {
+                        if let Some(cmd) = s.command.clone() {
                             entry.pending_command = Some(cmd);
+                        }
+                        if let Some(t) = s.title.as_ref().filter(|t| !t.is_empty()) {
+                            entry.session.read().set_title(t.clone());
                         }
                     }
                     eagerly_spawned.insert(active_idx, sid);
@@ -838,33 +890,36 @@ impl App {
                     if let Some(&sid) = eagerly_spawned.get(session_index) {
                         PaneContent::Terminal(sid)
                     } else {
-                        let cwd = state.sessions.get(*session_index).and_then(|s| {
+                        let saved = state.sessions.get(*session_index);
+                        let cwd = saved.and_then(|s| {
                             if s.cwd.as_os_str().is_empty() {
                                 None
                             } else {
                                 Some(s.cwd.clone())
                             }
                         });
-                        let pending_command = state
-                            .sessions
-                            .get(*session_index)
-                            .and_then(|s| s.command.clone());
+                        let pending_command = saved.and_then(|s| s.command.clone());
+                        let saved_title = saved.and_then(|s| s.title.clone());
                         PaneContent::DeferredTerminal {
                             cwd,
                             pending_command,
+                            saved_title,
                         }
                     }
                 }
-                SavedPaneContent::DeferredTerminal { cwd, command } => {
-                    PaneContent::DeferredTerminal {
-                        cwd: if cwd.as_os_str().is_empty() {
-                            None
-                        } else {
-                            Some(cwd.clone())
-                        },
-                        pending_command: command.clone(),
-                    }
-                }
+                SavedPaneContent::DeferredTerminal {
+                    cwd,
+                    command,
+                    title,
+                } => PaneContent::DeferredTerminal {
+                    cwd: if cwd.as_os_str().is_empty() {
+                        None
+                    } else {
+                        Some(cwd.clone())
+                    },
+                    pending_command: command.clone(),
+                    saved_title: title.clone(),
+                },
                 SavedPaneContent::FileEditor {
                     path,
                     content,

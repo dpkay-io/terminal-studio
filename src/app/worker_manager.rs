@@ -3,6 +3,7 @@ use crate::sys_monitor::SysMonitor;
 use crate::updater::UpdateChecker;
 
 use super::git_worker::GitWorker;
+use super::workspace_git_worker::WorkspaceGitWorker;
 
 /// Holds background-worker and thread state extracted from `App`.
 ///
@@ -13,6 +14,8 @@ pub(super) struct WorkerManager {
     pub(super) foreground_worker: ForegroundWorker,
     /// Background worker for git status/diff and directory listing.
     pub(super) git_worker: GitWorker,
+    /// Background worker for workspace git branch/diff info (lazy, 15 s TTL).
+    pub(super) workspace_git_worker: WorkspaceGitWorker,
     /// Global search across all sessions (Ctrl+Shift+N).
     pub(super) search_worker: crate::search_worker::SearchWorker,
     /// Background file search worker for directory panel.

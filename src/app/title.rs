@@ -43,6 +43,7 @@ pub(super) fn effective_title(
     cwd: &std::path::Path,
     fg: Option<&ForegroundProcess>,
     shell: Option<&ShellKind>,
+    workspace_name: Option<&str>,
 ) -> String {
     if let Some(fp) = fg {
         let name = fp.name.strip_suffix(".exe").unwrap_or(&fp.name);
@@ -73,6 +74,10 @@ pub(super) fn effective_title(
 
     if !is_shell_default {
         return display_title(title);
+    }
+
+    if let Some(ws) = workspace_name.filter(|s| !s.is_empty()) {
+        return ws.to_string();
     }
 
     if let Some(dir) = cwd
@@ -118,20 +123,23 @@ mod tests {
     #[test]
     fn effective_title_shell_default_uses_cwd() {
         let cwd = Path::new("/home/user/myproject");
-        assert_eq!(effective_title("bash", cwd, None, None), "myproject");
-        assert_eq!(effective_title("Session 1", cwd, None, None), "myproject");
+        assert_eq!(effective_title("bash", cwd, None, None, None), "myproject");
         assert_eq!(
-            effective_title("PowerShell.exe", cwd, None, None),
+            effective_title("Session 1", cwd, None, None, None),
             "myproject"
         );
-        assert_eq!(effective_title("", cwd, None, None), "myproject");
+        assert_eq!(
+            effective_title("PowerShell.exe", cwd, None, None, None),
+            "myproject"
+        );
+        assert_eq!(effective_title("", cwd, None, None, None), "myproject");
     }
 
     #[test]
     fn effective_title_real_title_uses_display_title() {
         let cwd = Path::new("/home/user/myproject");
         assert_eq!(
-            effective_title("vim README.md", cwd, None, None),
+            effective_title("vim README.md", cwd, None, None, None),
             "vim README.md"
         );
     }
@@ -140,7 +148,7 @@ mod tests {
     fn effective_title_real_title_strips_path() {
         let cwd = Path::new("/home/user");
         assert_eq!(
-            effective_title("/home/user/projects/src", cwd, None, None),
+            effective_title("/home/user/projects/src", cwd, None, None, None),
             "src"
         );
     }
@@ -148,14 +156,14 @@ mod tests {
     #[test]
     fn effective_title_empty_cwd_falls_back_to_title() {
         let cwd = Path::new("");
-        let result = effective_title("Session 1", cwd, None, None);
+        let result = effective_title("Session 1", cwd, None, None, None);
         assert_eq!(result, "Session 1");
     }
 
     #[test]
     fn effective_title_empty_cwd_falls_back_to_shell_name() {
         let cwd = Path::new("");
-        let result = effective_title("", cwd, None, Some(&ShellKind::PowerShell));
+        let result = effective_title("", cwd, None, Some(&ShellKind::PowerShell), None);
         assert_eq!(result, "PowerShell");
     }
 
@@ -167,7 +175,7 @@ mod tests {
             cmdline: vec!["vim".to_string(), "README.md".to_string()],
         };
         assert_eq!(
-            effective_title("bash", cwd, Some(&fg), None),
+            effective_title("bash", cwd, Some(&fg), None, None),
             "vim README.md"
         );
     }
@@ -179,7 +187,10 @@ mod tests {
             name: "htop".to_string(),
             cmdline: vec!["htop".to_string()],
         };
-        assert_eq!(effective_title("bash", cwd, Some(&fg), None), "htop");
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None, None),
+            "htop"
+        );
     }
 
     #[test]
@@ -190,7 +201,7 @@ mod tests {
             cmdline: vec!["node.exe".to_string(), "server.js".to_string()],
         };
         assert_eq!(
-            effective_title("bash", cwd, Some(&fg), None),
+            effective_title("bash", cwd, Some(&fg), None, None),
             "node server.js"
         );
     }
@@ -206,8 +217,48 @@ mod tests {
             ],
         };
         assert_eq!(
-            effective_title("bash", cwd, Some(&fg), None),
+            effective_title("bash", cwd, Some(&fg), None, None),
             "vim README.md"
+        );
+    }
+
+    #[test]
+    fn effective_title_workspace_name_overrides_cwd() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(
+            effective_title("bash", cwd, None, None, Some("My Project")),
+            "My Project"
+        );
+    }
+
+    #[test]
+    fn effective_title_workspace_name_ignored_when_real_title() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(
+            effective_title("vim README.md", cwd, None, None, Some("My Project")),
+            "vim README.md"
+        );
+    }
+
+    #[test]
+    fn effective_title_workspace_name_ignored_when_foreground() {
+        let cwd = Path::new("/home/user/myproject");
+        let fg = ForegroundProcess {
+            name: "cargo".to_string(),
+            cmdline: vec!["cargo".to_string(), "build".to_string()],
+        };
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None, Some("My Project")),
+            "cargo build"
+        );
+    }
+
+    #[test]
+    fn effective_title_empty_workspace_name_falls_through_to_cwd() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(
+            effective_title("bash", cwd, None, None, Some("")),
+            "myproject"
         );
     }
 }

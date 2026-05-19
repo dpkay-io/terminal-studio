@@ -9,6 +9,14 @@ use crate::pane_tree::{split_rect, PaneNode, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::theme;
 
+/// Actions emitted by the 3-dot context menu on split panes.
+pub(in crate::app) enum PaneContextAction {
+    MoveToTab(u32),
+    Close(u32),
+    SplitHorizontal(u32),
+    SplitVertical(u32),
+}
+
 /// Mutable context threaded through the recursive pane-tree renderer.
 ///
 /// This struct exists so we can pass references to output accumulators and
@@ -26,6 +34,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub editor_preview_toggles: &'a mut Vec<u32>,
     pub pane_widths_snap: &'a mut Vec<(u32, f32)>,
     pub split_ratio_changes: &'a mut Vec<(u32, f32)>,
+    pub pane_context_actions: &'a mut Vec<PaneContextAction>,
     pub term_selection: &'a Option<TermSelection>,
     pub term_selection_sid: Option<u32>,
     pub workspace_dialog_open: bool,
@@ -95,6 +104,11 @@ pub(in crate::app) fn render_node(
                     }
                 }
             }
+
+            // 3-dot context menu for split panes (visible on hover)
+            if rctx.has_splits {
+                render_pane_context_menu(ui, pane_id, rect, rctx);
+            }
         }
         PaneNode::Split {
             split_id,
@@ -139,6 +153,99 @@ pub(in crate::app) fn render_node(
             }
         }
     }
+}
+
+// ── Pane context menu (3-dot) ────────────────────────────────────────────────
+
+fn render_pane_context_menu(
+    ui: &mut egui::Ui,
+    pane_id: u32,
+    rect: egui::Rect,
+    rctx: &mut RenderCtx<'_>,
+) {
+    let popup_id = egui::Id::new(("pane_ctx_menu", pane_id));
+    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+
+    let pane_hovered = ui.ctx().input(|i| {
+        i.pointer
+            .latest_pos()
+            .map(|p| rect.contains(p))
+            .unwrap_or(false)
+    });
+
+    if !pane_hovered && !popup_open {
+        return;
+    }
+
+    let t = theme::active();
+    let btn_size = egui::vec2(22.0, 22.0);
+    let btn_pos = egui::pos2(rect.max.x - btn_size.x - 6.0, rect.min.y + 6.0);
+    let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+
+    let btn_id = egui::Id::new(("pane_menu_btn", pane_id));
+    let btn_resp = ui.interact(btn_rect, btn_id, egui::Sense::click());
+
+    let btn_bg = if popup_open || btn_resp.hovered() {
+        t.surface2
+    } else {
+        t.surface1
+    };
+    ui.painter()
+        .rect_filled(btn_rect, theme::ROUNDING, btn_bg);
+
+    // Three vertical dots
+    let center = btn_rect.center();
+    let dot_r = 1.5;
+    let dot_gap = 4.5;
+    for i in [-1.0_f32, 0.0, 1.0] {
+        ui.painter().circle_filled(
+            egui::pos2(center.x, center.y + i * dot_gap),
+            dot_r,
+            t.text,
+        );
+    }
+
+    if btn_resp.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+
+    egui::containers::popup::popup_below_widget(
+        ui,
+        popup_id,
+        &btn_resp,
+        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(160.0);
+
+            if ui.button("Move to tab").clicked() {
+                rctx.pane_context_actions
+                    .push(PaneContextAction::MoveToTab(pane_id));
+                ui.memory_mut(|m| m.close_popup());
+            }
+
+            ui.separator();
+
+            if ui.button("Split horizontal").clicked() {
+                rctx.pane_context_actions
+                    .push(PaneContextAction::SplitHorizontal(pane_id));
+                ui.memory_mut(|m| m.close_popup());
+            }
+
+            if ui.button("Split vertical").clicked() {
+                rctx.pane_context_actions
+                    .push(PaneContextAction::SplitVertical(pane_id));
+                ui.memory_mut(|m| m.close_popup());
+            }
+
+            ui.separator();
+
+            if ui.button("Close pane").clicked() {
+                rctx.pane_context_actions
+                    .push(PaneContextAction::Close(pane_id));
+                ui.memory_mut(|m| m.close_popup());
+            }
+        },
+    );
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -428,6 +535,7 @@ impl App {
         editor_preview_toggles: &mut Vec<u32>,
         pane_widths_snap: &mut Vec<(u32, f32)>,
         split_ratio_changes: &mut Vec<(u32, f32)>,
+        pane_context_actions: &mut Vec<PaneContextAction>,
     ) {
         let root_pane_id = active_pane_id_snap.and_then(|apid| {
             if self.pane_state.pane_trees.contains_key(&apid) {
@@ -464,6 +572,7 @@ impl App {
                 editor_preview_toggles,
                 pane_widths_snap,
                 split_ratio_changes,
+                pane_context_actions,
                 term_selection: &self.term_selection,
                 term_selection_sid: self.term_selection_sid,
                 workspace_dialog_open: self.workspace_dialog.is_some(),
