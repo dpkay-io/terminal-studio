@@ -323,7 +323,10 @@ impl App {
                 }
                 ui.close_menu();
             }
-            if in_main && data.extra_window_viewport.is_none() && ui.button("Open in new window").clicked() {
+            if in_main
+                && data.extra_window_viewport.is_none()
+                && ui.button("Open in new window").clicked()
+            {
                 actions.new_window_workspace_id = Some(data.id);
                 ui.close_menu();
             }
