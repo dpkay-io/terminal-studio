@@ -23,6 +23,7 @@ pub(in crate::app) struct WorkspaceSectionActions {
     pub open_workspace_id: Option<u64>,
     pub edit_workspace_id: Option<u64>,
     pub new_window_workspace_id: Option<u64>,
+    pub focus_extra_window_viewport: Option<egui::ViewportId>,
 }
 
 impl App {
@@ -57,6 +58,7 @@ impl App {
             open_workspace_id: self.deferred_open_workspace.take(),
             edit_workspace_id: None,
             new_window_workspace_id: None,
+            focus_extra_window_viewport: None,
         };
 
         if self.show_left_panel {

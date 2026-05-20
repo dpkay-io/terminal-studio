@@ -10,7 +10,7 @@ struct WorkspaceCardData {
     name: String,
     color: [u8; 3],
     has_note: bool,
-    in_extra_window: bool,
+    extra_window_viewport: Option<egui::ViewportId>,
     has_active_session: bool,
     git_branch: String,
     git_diff_count: usize,
@@ -111,15 +111,20 @@ impl App {
             })
             .map(|w| {
                 let git_info = self.workers.workspace_git_worker.get(w.id);
-                let in_extra = w.host_window_id.is_some()
-                    && self.extra_windows.iter().any(|ew| ew.workspace_id == w.id)
-                    && cur_win.is_none();
+                let extra_vp = if w.host_window_id.is_some() && cur_win.is_none() {
+                    self.extra_windows
+                        .iter()
+                        .find(|ew| ew.workspace_id == w.id)
+                        .map(|ew| ew.viewport_id)
+                } else {
+                    None
+                };
                 WorkspaceCardData {
                     id: w.id,
                     name: w.name.clone(),
                     color: w.color,
                     has_note: !self.note_store.get(Some(w.id)).is_empty(),
-                    in_extra_window: in_extra,
+                    extra_window_viewport: extra_vp,
                     has_active_session: active_ws_ids.contains(&w.id),
                     git_branch: git_info
                         .as_ref()
@@ -164,19 +169,9 @@ impl App {
             theme::HEADER_H
         };
 
-        let tint_factor = if data.in_extra_window {
-            0.20
-        } else if active {
-            0.65
-        } else {
-            0.45
-        };
+        let tint_factor = if active { 0.65 } else { 0.45 };
         let fill = theme::from_rgb(theme::tinted(data.color, tint_factor));
-        let fg = if data.in_extra_window {
-            theme::active().overlay0
-        } else {
-            theme::text_on(theme::tinted(data.color, tint_factor))
-        };
+        let fg = theme::text_on(theme::tinted(data.color, tint_factor));
 
         const GEAR_W: f32 = 26.0;
         let full_w = ui.available_width();
@@ -226,9 +221,7 @@ impl App {
             }
 
             // Name text
-            let name_str = if data.in_extra_window {
-                format!("\u{2192} {} (other window)", data.name)
-            } else if active {
+            let name_str = if active {
                 format!("\u{25b6} {}", data.name)
             } else {
                 data.name.clone()
@@ -310,23 +303,27 @@ impl App {
         }
 
         name_resp.clone().on_hover_text(&data.name);
-        if name_resp.clicked() && !data.in_extra_window {
-            actions.open_workspace_id = Some(data.id);
+        if name_resp.clicked() {
+            if let Some(vp) = data.extra_window_viewport {
+                actions.focus_extra_window_viewport = Some(vp);
+            } else {
+                actions.open_workspace_id = Some(data.id);
+            }
         }
         if gear_resp.clicked() {
             actions.edit_workspace_id = Some(data.id);
         }
         let in_main = cur_win.is_none();
         name_resp.context_menu(|ui| {
-            let enabled = !data.in_extra_window;
-            if ui
-                .add_enabled(enabled, egui::Button::new("Open workspace"))
-                .clicked()
-            {
-                actions.open_workspace_id = Some(data.id);
+            if ui.button("Open workspace").clicked() {
+                if let Some(vp) = data.extra_window_viewport {
+                    actions.focus_extra_window_viewport = Some(vp);
+                } else {
+                    actions.open_workspace_id = Some(data.id);
+                }
                 ui.close_menu();
             }
-            if in_main && !data.in_extra_window && ui.button("Open in new window").clicked() {
+            if in_main && data.extra_window_viewport.is_none() && ui.button("Open in new window").clicked() {
                 actions.new_window_workspace_id = Some(data.id);
                 ui.close_menu();
             }

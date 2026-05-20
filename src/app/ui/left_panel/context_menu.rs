@@ -55,6 +55,10 @@ impl App {
         if let Some(ws_id) = actions.new_window_workspace_id {
             self.open_workspace_in_new_window(ctx, ws_id);
         }
+
+        if let Some(vp) = actions.focus_extra_window_viewport {
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Focus);
+        }
     }
 
     /// Handle closing a pane from the sidebar quit button.
