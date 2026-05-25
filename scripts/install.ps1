@@ -11,6 +11,7 @@ $url = "https://github.com/$repo/releases/latest/download/$asset"
 
 Write-Host "Downloading Terminal Studio..."
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+$ProgressPreference = 'SilentlyContinue'
 Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
 Write-Host "Installed to $dest"
 

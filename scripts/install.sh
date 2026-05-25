@@ -11,10 +11,28 @@ arch=$(uname -m)
 
 case "$os" in
   linux)
-    asset="terminal-studio-linux"
+    case "$arch" in
+      x86_64|amd64) asset="terminal-studio-linux" ;;
+      *)
+        echo "Unsupported architecture: $arch. Pre-built Linux binaries are x86-64 only." >&2
+        echo "Build from source: https://github.com/$REPO" >&2
+        exit 1
+        ;;
+    esac
     ;;
   darwin)
-    asset="terminal-studio-macos-arm"
+    case "$arch" in
+      arm64) asset="terminal-studio-macos-arm" ;;
+      x86_64)
+        printf 'Note: No native Intel macOS binary. Installing ARM binary (requires Rosetta 2).\n'
+        asset="terminal-studio-macos-arm"
+        ;;
+      *)
+        echo "Unsupported architecture: $arch." >&2
+        echo "Build from source: https://github.com/$REPO" >&2
+        exit 1
+        ;;
+    esac
     ;;
   *)
     echo "Unsupported OS: $os. Build from source: https://github.com/$REPO" >&2
@@ -31,7 +49,7 @@ chmod +x "$INSTALL_DIR/terminal-studio"
 
 printf 'Installed to %s/terminal-studio\n' "$INSTALL_DIR"
 
-case ":$PATH:" in
+case ":${PATH:-}:" in
   *":$INSTALL_DIR:"*) ;;
   *)
     printf '\nNote: %s is not in your PATH. Add it with:\n' "$INSTALL_DIR"

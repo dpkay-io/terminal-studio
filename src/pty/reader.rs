@@ -54,11 +54,22 @@ impl CwdPerformer {
             return;
         };
 
-        let path_str = if uri.starts_with("file:///") {
-            uri.trim_start_matches("file:///")
-        } else if uri.starts_with("file://") {
-            let rest = uri.trim_start_matches("file://");
-            rest.find('/').map(|i| &rest[i..]).unwrap_or(rest)
+        let path_str = if let Some(after_scheme) = uri.strip_prefix("file://") {
+            if after_scheme.strip_prefix('/').is_some() {
+                // file:///path — on Unix the slash is part of the absolute path;
+                // on Windows skip it to reach the drive letter.
+                if cfg!(target_os = "windows") {
+                    &after_scheme[1..]
+                } else {
+                    after_scheme
+                }
+            } else {
+                // file://hostname/path — skip hostname
+                after_scheme
+                    .find('/')
+                    .map(|i| &after_scheme[i..])
+                    .unwrap_or(after_scheme)
+            }
         } else {
             return;
         };
@@ -198,7 +209,7 @@ mod tests {
         if cfg!(target_os = "windows") {
             assert_eq!(cwd, &PathBuf::from("C:\\Users\\test"));
         } else {
-            assert_eq!(cwd, &PathBuf::from("C:/Users/test"));
+            assert_eq!(cwd, &PathBuf::from("/C:/Users/test"));
         }
     }
 

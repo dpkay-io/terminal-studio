@@ -83,6 +83,8 @@ sudo apt install pkg-config libxkbcommon-dev libwayland-dev
 sudo apt install libx11-dev libxcb1-dev
 ```
 
+> **Locale note:** If your `LANG` is set to a bare locale without a UTF-8 codeset (e.g. `en_IN` instead of `en_IN.UTF-8`), you may see a flood of `xkbcommon: ERROR` messages about Compose file parsing at startup. The app still works — only Compose/dead-key input is affected. Fix by setting `LANG=en_IN.UTF-8` (or your locale's `.UTF-8` variant) in `/etc/default/locale` or `~/.profile`.
+
 **macOS**
 
 ```sh

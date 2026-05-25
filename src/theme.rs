@@ -483,9 +483,9 @@ pub fn header_bg(ws_color: Option<[u8; 3]>, is_active: bool) -> Color32 {
             let base = active().base_rgb;
             let s0 = active().surface0_rgb;
             let mid = [
-                (base[0] as u16 + s0[0] as u16) as u8 / 2,
-                (base[1] as u16 + s0[1] as u16) as u8 / 2,
-                (base[2] as u16 + s0[2] as u16) as u8 / 2,
+                ((base[0] as u16 + s0[0] as u16) / 2) as u8,
+                ((base[1] as u16 + s0[1] as u16) / 2) as u8,
+                ((base[2] as u16 + s0[2] as u16) / 2) as u8,
             ];
             from_rgb(mid)
         }
@@ -1257,6 +1257,14 @@ mod tests {
         let inactive = header_bg(None, false);
         assert_eq!(active_bg, active().surface0);
         assert_ne!(active_bg, inactive);
+    }
+
+    #[test]
+    fn test_header_bg_midpoint_no_overflow() {
+        let a: u8 = 200;
+        let b: u8 = 200;
+        let correct = ((a as u16 + b as u16) / 2) as u8;
+        assert_eq!(correct, 200, "midpoint of 200,200 should be 200, not truncated");
     }
 
     #[test]

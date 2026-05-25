@@ -1,6 +1,7 @@
 pub mod foreground;
 pub mod foreground_worker;
 pub mod reader;
+pub mod shell_integration;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
@@ -294,14 +295,21 @@ impl SessionManager {
             }
             ShellKind::Zsh => {
                 let mut cmd = CommandBuilder::new("zsh");
-                // zsh uses precmd; PROMPT_COMMAND works as a compat shim in many setups.
-                cmd.env(
-                    "PROMPT_COMMAND",
-                    r#"printf '\e]7;file://%s%s\a' "$HOST" "$PWD""#,
-                );
+                if let Some(zdotdir) = shell_integration::ensure_zsh_integration() {
+                    let orig = std::env::var("ZDOTDIR").unwrap_or_default();
+                    cmd.env("_TS_ORIG_ZDOTDIR", orig);
+                    cmd.env("ZDOTDIR", zdotdir);
+                }
                 cmd
             }
-            ShellKind::Fish => CommandBuilder::new("fish"),
+            ShellKind::Fish => {
+                let mut cmd = CommandBuilder::new("fish");
+                cmd.args([
+                    "--init-command",
+                    r"function __ts_osc7 --on-event fish_prompt; printf '\e]7;file://%s%s\a' $hostname $PWD; end",
+                ]);
+                cmd
+            }
         }
     }
 }
