@@ -181,6 +181,12 @@ pub struct Theme {
     pub md_code_border: Color32,
     pub md_bullet: Color32,
     pub md_blockquote: Color32,
+    pub md_inline_code: Color32,
+    pub md_inline_code_bg: Color32,
+    pub md_link: Color32,
+    pub md_table_border: Color32,
+    pub md_table_header_bg: Color32,
+    pub md_table_row_alt_bg: Color32,
 
     // Terminal
     pub ansi: [Color32; 16],
@@ -322,6 +328,12 @@ impl ThemeDef {
             md_code_border: c(self.surface1),
             md_bullet: c(md_bullet),
             md_blockquote: c(blend(self.subtext0, self.blue, 0.3)),
+            md_inline_code: c(self.teal),
+            md_inline_code_bg: c(blend(self.base, self.surface0, 0.6)),
+            md_link: c(self.blue),
+            md_table_border: c(self.surface1),
+            md_table_header_bg: c(blend(self.base, self.surface0, 0.7)),
+            md_table_row_alt_bg: c(blend(self.base, self.surface0, 0.3)),
 
             ansi: ansi_c32,
             cursor_color,
@@ -509,24 +521,168 @@ pub fn short_path(p: &std::path::Path) -> String {
 }
 
 pub fn render_inline(ui: &mut egui::Ui, line: &str) {
-    let parts: Vec<&str> = line.split("**").collect();
-    if parts.len() < 3 {
-        ui.label(line);
-        return;
+    let spans = parse_inline_spans(line);
+    if spans.len() == 1 {
+        if let InlineSpan::Text(t) = &spans[0] {
+            ui.label(t.as_str());
+            return;
+        }
     }
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        for (i, part) in parts.iter().enumerate() {
-            if part.is_empty() {
-                continue;
-            }
-            if i % 2 == 1 {
-                ui.label(egui::RichText::new(*part).strong());
-            } else {
-                ui.label(*part);
-            }
+        for span in &spans {
+            render_span(ui, span);
         }
     });
+}
+
+enum InlineSpan {
+    Text(String),
+    Bold(String),
+    Italic(String),
+    BoldItalic(String),
+    Code(String),
+    Link { text: String, url: String },
+}
+
+fn render_span(ui: &mut egui::Ui, span: &InlineSpan) {
+    let th = active();
+    match span {
+        InlineSpan::Text(t) => {
+            ui.label(t.as_str());
+        }
+        InlineSpan::Bold(t) => {
+            ui.label(egui::RichText::new(t.as_str()).strong());
+        }
+        InlineSpan::Italic(t) => {
+            ui.label(egui::RichText::new(t.as_str()).italics());
+        }
+        InlineSpan::BoldItalic(t) => {
+            ui.label(egui::RichText::new(t.as_str()).strong().italics());
+        }
+        InlineSpan::Code(t) => {
+            egui::Frame::none()
+                .fill(th.md_inline_code_bg)
+                .rounding(egui::Rounding::same(2.0))
+                .inner_margin(egui::Margin::symmetric(3.0, 0.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new(t.as_str())
+                            .monospace()
+                            .size(12.0)
+                            .color(th.md_inline_code),
+                    );
+                });
+        }
+        InlineSpan::Link { text, url } => {
+            if ui
+                .add(
+                    egui::Label::new(egui::RichText::new(text.as_str()).color(th.md_link))
+                        .sense(egui::Sense::click()),
+                )
+                .on_hover_text(url.as_str())
+                .clicked()
+            {
+                let _ = open::that(url);
+            }
+        }
+    }
+}
+
+fn parse_inline_spans(input: &str) -> Vec<InlineSpan> {
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut plain = String::new();
+
+    while pos < len {
+        // Inline code: `...`
+        if bytes[pos] == b'`' {
+            if let Some(end) = input[pos + 1..].find('`') {
+                if !plain.is_empty() {
+                    spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                }
+                spans.push(InlineSpan::Code(input[pos + 1..pos + 1 + end].to_string()));
+                pos = pos + 1 + end + 1;
+                continue;
+            }
+        }
+
+        // Link: [text](url)
+        if bytes[pos] == b'[' {
+            if let Some(close_bracket) = input[pos + 1..].find(']') {
+                let text_end = pos + 1 + close_bracket;
+                if text_end + 1 < len && bytes[text_end + 1] == b'(' {
+                    if let Some(close_paren) = input[text_end + 2..].find(')') {
+                        let link_text = &input[pos + 1..text_end];
+                        let url = &input[text_end + 2..text_end + 2 + close_paren];
+                        if !plain.is_empty() {
+                            spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                        }
+                        spans.push(InlineSpan::Link {
+                            text: link_text.to_string(),
+                            url: url.to_string(),
+                        });
+                        pos = text_end + 2 + close_paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Bold+italic: ***...***, or bold: **...**, or italic: *...*
+        if bytes[pos] == b'*' {
+            // ***bold italic***
+            if pos + 2 < len && bytes[pos + 1] == b'*' && bytes[pos + 2] == b'*' {
+                if let Some(end) = input[pos + 3..].find("***") {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::BoldItalic(
+                        input[pos + 3..pos + 3 + end].to_string(),
+                    ));
+                    pos = pos + 3 + end + 3;
+                    continue;
+                }
+            }
+            // **bold**
+            if pos + 1 < len && bytes[pos + 1] == b'*' {
+                if let Some(end) = input[pos + 2..].find("**") {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::Bold(input[pos + 2..pos + 2 + end].to_string()));
+                    pos = pos + 2 + end + 2;
+                    continue;
+                }
+            }
+            // *italic*
+            if let Some(end) = input[pos + 1..].find('*') {
+                if end > 0 {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::Italic(
+                        input[pos + 1..pos + 1 + end].to_string(),
+                    ));
+                    pos = pos + 1 + end + 1;
+                    continue;
+                }
+            }
+        }
+
+        plain.push(input[pos..].chars().next().unwrap());
+        pos += input[pos..].chars().next().unwrap().len_utf8();
+    }
+
+    if !plain.is_empty() {
+        spans.push(InlineSpan::Text(plain));
+    }
+    if spans.is_empty() {
+        spans.push(InlineSpan::Text(String::new()));
+    }
+    spans
 }
 
 // ── Theme definitions ────────────────────────────────────────────────────────
@@ -1264,7 +1420,10 @@ mod tests {
         let a: u8 = 200;
         let b: u8 = 200;
         let correct = ((a as u16 + b as u16) / 2) as u8;
-        assert_eq!(correct, 200, "midpoint of 200,200 should be 200, not truncated");
+        assert_eq!(
+            correct, 200,
+            "midpoint of 200,200 should be 200, not truncated"
+        );
     }
 
     #[test]

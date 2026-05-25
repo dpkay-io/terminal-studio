@@ -64,7 +64,6 @@ struct CellInfo {
     fg: egui::Color32,
     bg: egui::Color32,
     bold: bool,
-    italic: bool,
     underline: bool,
     strike: bool,
     wide: bool,
@@ -76,7 +75,6 @@ impl CellInfo {
         fg: egui::Color32::TRANSPARENT,
         bg: egui::Color32::TRANSPARENT,
         bold: false,
-        italic: false,
         underline: false,
         strike: false,
         wide: false,
@@ -182,7 +180,6 @@ impl TerminalView {
                         fg,
                         bg: resolve_color(eff_bg, false, t),
                         bold: cell.flags.contains(Flags::BOLD),
-                        italic: cell.flags.contains(Flags::ITALIC),
                         underline: cell.flags.contains(Flags::UNDERLINE),
                         strike: cell.flags.contains(Flags::STRIKEOUT),
                         wide: cell.flags.contains(Flags::WIDE_CHAR),
@@ -212,7 +209,11 @@ impl TerminalView {
         let (cols, display_offset, history, cursor) = snapshot;
 
         // ── Paint phase: no lock held. Reads from the thread-local buffer. ─
-        let mut text_buf = String::with_capacity(cols + 1);
+        //
+        // Each character is rendered at its exact grid position
+        // (col * cell_width) to prevent cumulative glyph-advance drift
+        // that occurs when rendering multi-character strings.
+        let base_font = FontId::monospace(font_size);
 
         RENDER_BUF.with(|buf| {
             let buf = buf.borrow();
@@ -224,36 +225,16 @@ impl TerminalView {
                     break;
                 }
 
+                // ── Background runs ────────────────────────────────────────────
                 let mut bg_run_start = 0usize;
                 let mut bg_run_color = egui::Color32::TRANSPARENT;
 
-                let mut span_start = 0usize;
-                let mut span_fg = egui::Color32::TRANSPARENT;
-                let mut span_underline = false;
-                let mut span_strike = false;
-                let mut span_bold = false;
-                let mut span_italic = false;
-
                 for col in 0..=cols {
-                    let is_end = col == cols;
-
-                    let (new_bg, cell_fg, cell_ul, cell_st, cell_bold, cell_italic, cell_char) =
-                        if !is_end {
-                            let c = buf[row_off + col];
-                            (c.bg, c.fg, c.underline, c.strike, c.bold, c.italic, c.ch)
-                        } else {
-                            (
-                                egui::Color32::TRANSPARENT,
-                                egui::Color32::TRANSPARENT,
-                                false,
-                                false,
-                                false,
-                                false,
-                                ' ',
-                            )
-                        };
-
-                    // ── BG flush ────────────────────────────────────────────────────
+                    let new_bg = if col < cols {
+                        buf[row_off + col].bg
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
                     if new_bg != bg_run_color {
                         if bg_run_color != egui::Color32::TRANSPARENT && bg_run_start < col {
                             painter.rect_filled(
@@ -271,64 +252,87 @@ impl TerminalView {
                         bg_run_start = col;
                         bg_run_color = new_bg;
                     }
+                }
 
-                    // ── FG flush ────────────────────────────────────────────────────
-                    let fg_changed = is_end
-                        || cell_fg != span_fg
-                        || cell_ul != span_underline
-                        || cell_st != span_strike
-                        || cell_bold != span_bold
-                        || cell_italic != span_italic;
-
-                    if fg_changed {
-                        if !text_buf.is_empty() {
-                            let visible = text_buf.trim_end_matches(' ');
-                            if !visible.is_empty() {
-                                let span_font = if span_bold {
-                                    FontId::monospace(font_size + 0.5)
-                                } else {
-                                    FontId::monospace(font_size)
-                                };
-                                painter.text(
-                                    egui::pos2(rect.min.x + span_start as f32 * cell_width, y),
-                                    egui::Align2::LEFT_TOP,
-                                    visible,
-                                    span_font,
-                                    span_fg,
-                                );
-                            }
-                            if span_underline && col > span_start {
-                                let uy = y + cell_height - 1.5;
-                                painter.line_segment(
-                                    [
-                                        egui::pos2(rect.min.x + span_start as f32 * cell_width, uy),
-                                        egui::pos2(rect.min.x + col as f32 * cell_width, uy),
-                                    ],
-                                    egui::Stroke::new(1.0, span_fg),
-                                );
-                            }
-                            if span_strike && col > span_start {
-                                let sy = y + cell_height * 0.5;
-                                painter.line_segment(
-                                    [
-                                        egui::pos2(rect.min.x + span_start as f32 * cell_width, sy),
-                                        egui::pos2(rect.min.x + col as f32 * cell_width, sy),
-                                    ],
-                                    egui::Stroke::new(1.0, span_fg),
-                                );
-                            }
-                            text_buf.clear();
-                        }
-                        span_start = col;
-                        span_fg = cell_fg;
-                        span_underline = cell_ul;
-                        span_strike = cell_st;
-                        span_bold = cell_bold;
-                        span_italic = cell_italic;
+                // ── Per-cell character rendering ───────────────────────────────
+                for col in 0..cols {
+                    let c = buf[row_off + col];
+                    if c.ch == ' ' {
+                        continue;
                     }
+                    let x = rect.min.x + col as f32 * cell_width;
+                    let pos = egui::pos2(x, y);
+                    painter.text(
+                        pos,
+                        egui::Align2::LEFT_TOP,
+                        c.ch,
+                        base_font.clone(),
+                        c.fg,
+                    );
+                    if c.bold {
+                        painter.text(
+                            egui::pos2(x + 0.5, y),
+                            egui::Align2::LEFT_TOP,
+                            c.ch,
+                            base_font.clone(),
+                            c.fg,
+                        );
+                    }
+                }
 
-                    if !is_end {
-                        text_buf.push(cell_char);
+                // ── Underline runs ─────────────────────────────────────────────
+                let mut ul_start: Option<(usize, egui::Color32)> = None;
+                for col in 0..=cols {
+                    let (is_ul, fg) = if col < cols {
+                        let c = buf[row_off + col];
+                        (c.underline, c.fg)
+                    } else {
+                        (false, egui::Color32::TRANSPARENT)
+                    };
+                    match ul_start {
+                        Some((start, color)) if !is_ul || fg != color => {
+                            let uy = y + cell_height - 1.5;
+                            painter.line_segment(
+                                [
+                                    egui::pos2(rect.min.x + start as f32 * cell_width, uy),
+                                    egui::pos2(rect.min.x + col as f32 * cell_width, uy),
+                                ],
+                                egui::Stroke::new(1.0, color),
+                            );
+                            ul_start = if is_ul { Some((col, fg)) } else { None };
+                        }
+                        None if is_ul => {
+                            ul_start = Some((col, fg));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // ── Strikethrough runs ─────────────────────────────────────────
+                let mut st_start: Option<(usize, egui::Color32)> = None;
+                for col in 0..=cols {
+                    let (is_st, fg) = if col < cols {
+                        let c = buf[row_off + col];
+                        (c.strike, c.fg)
+                    } else {
+                        (false, egui::Color32::TRANSPARENT)
+                    };
+                    match st_start {
+                        Some((start, color)) if !is_st || fg != color => {
+                            let sy = y + cell_height * 0.5;
+                            painter.line_segment(
+                                [
+                                    egui::pos2(rect.min.x + start as f32 * cell_width, sy),
+                                    egui::pos2(rect.min.x + col as f32 * cell_width, sy),
+                                ],
+                                egui::Stroke::new(1.0, color),
+                            );
+                            st_start = if is_st { Some((col, fg)) } else { None };
+                        }
+                        None if is_st => {
+                            st_start = Some((col, fg));
+                        }
+                        _ => {}
                     }
                 }
             }

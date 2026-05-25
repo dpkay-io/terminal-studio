@@ -3,14 +3,13 @@ use std::collections::HashSet;
 use super::super::super::App;
 use super::WorkspaceSectionActions;
 use crate::theme;
-use crate::workspace::WindowId;
 
 struct WorkspaceCardData {
     id: u64,
     name: String,
     color: [u8; 3],
     has_note: bool,
-    extra_window_viewport: Option<egui::ViewportId>,
+    other_window_viewport: Option<egui::ViewportId>,
     has_active_session: bool,
     git_branch: String,
     git_diff_count: usize,
@@ -77,7 +76,6 @@ impl App {
     /// Render the scrollable list of workspace cards and the "Other" group.
     fn render_workspace_list(&mut self, ui: &mut egui::Ui, actions: &mut WorkspaceSectionActions) {
         let active_group_snap = self.active_group;
-        let cur_win = self.current_window_id.clone();
 
         // Which workspaces have panes open across any window
         let active_ws_ids: HashSet<u64> = self
@@ -99,23 +97,26 @@ impl App {
                 .request_if_stale(w.id, &w.path);
         }
 
-        // Build snapshot with git info and active status
+        // Build snapshot with git info and active status — show all workspaces in every window
+        let cur_win = &self.current_window_id;
         let mut workspaces: Vec<WorkspaceCardData> = self
             .workspace_store
             .workspaces
             .iter()
-            .filter(|w| match (&cur_win, &w.host_window_id) {
-                (None, _) => true,
-                (Some(this), Some(host)) => this == host,
-                (Some(_), None) => false,
-            })
             .map(|w| {
                 let git_info = self.workers.workspace_git_worker.get(w.id);
-                let extra_vp = if w.host_window_id.is_some() && cur_win.is_none() {
-                    self.extra_windows
-                        .iter()
-                        .find(|ew| ew.workspace_id == w.id)
-                        .map(|ew| ew.viewport_id)
+                let other_vp = if let Some(ew) = self
+                    .extra_windows
+                    .iter()
+                    .find(|ew| ew.workspace_id == w.id)
+                {
+                    if cur_win.as_ref() == Some(&ew.id) {
+                        None
+                    } else {
+                        Some(ew.viewport_id)
+                    }
+                } else if cur_win.is_some() {
+                    Some(egui::ViewportId::ROOT)
                 } else {
                     None
                 };
@@ -124,7 +125,7 @@ impl App {
                     name: w.name.clone(),
                     color: w.color,
                     has_note: !self.note_store.get(Some(w.id)).is_empty(),
-                    extra_window_viewport: extra_vp,
+                    other_window_viewport: other_vp,
                     has_active_session: active_ws_ids.contains(&w.id),
                     git_branch: git_info
                         .as_ref()
@@ -135,8 +136,12 @@ impl App {
             })
             .collect();
 
-        // Sort: case-insensitive alphabetical (digits/symbols naturally precede letters)
-        workspaces.sort_by_key(|a| a.name.to_lowercase());
+        // Sort: opened workspaces first, then alphabetical within each group
+        workspaces.sort_by(|a, b| {
+            b.has_active_session
+                .cmp(&a.has_active_session)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
 
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
@@ -144,10 +149,10 @@ impl App {
                 ui.spacing_mut().item_spacing.y = theme::SP_SM;
 
                 // "Other" group at the top
-                self.render_other_group(ui, actions, active_group_snap, &cur_win, has_active_other);
+                self.render_other_group(ui, actions, active_group_snap, has_active_other);
 
                 for card in &workspaces {
-                    self.render_workspace_card(ui, actions, card, active_group_snap, &cur_win);
+                    self.render_workspace_card(ui, actions, card, active_group_snap);
                 }
             });
     }
@@ -159,7 +164,6 @@ impl App {
         actions: &mut WorkspaceSectionActions,
         data: &WorkspaceCardData,
         active_group_snap: Option<u64>,
-        cur_win: &Option<WindowId>,
     ) {
         let active = active_group_snap == Some(data.id);
         let has_git_row = !data.git_branch.is_empty() || data.git_diff_count > 0;
@@ -304,7 +308,7 @@ impl App {
 
         name_resp.clone().on_hover_text(&data.name);
         if name_resp.clicked() {
-            if let Some(vp) = data.extra_window_viewport {
+            if let Some(vp) = data.other_window_viewport {
                 actions.focus_extra_window_viewport = Some(vp);
             } else {
                 actions.open_workspace_id = Some(data.id);
@@ -313,22 +317,25 @@ impl App {
         if gear_resp.clicked() {
             actions.edit_workspace_id = Some(data.id);
         }
-        let in_main = cur_win.is_none();
         name_resp.context_menu(|ui| {
-            if ui.button("Open workspace").clicked() {
-                if let Some(vp) = data.extra_window_viewport {
+            if let Some(vp) = data.other_window_viewport {
+                if ui.button("Focus window").clicked() {
                     actions.focus_extra_window_viewport = Some(vp);
-                } else {
-                    actions.open_workspace_id = Some(data.id);
+                    ui.close_menu();
                 }
-                ui.close_menu();
-            }
-            if in_main
-                && data.extra_window_viewport.is_none()
-                && ui.button("Open in new window").clicked()
-            {
-                actions.new_window_workspace_id = Some(data.id);
-                ui.close_menu();
+                if ui.button("Open here").clicked() {
+                    actions.open_workspace_id = Some(data.id);
+                    ui.close_menu();
+                }
+            } else {
+                if ui.button("Open workspace").clicked() {
+                    actions.open_workspace_id = Some(data.id);
+                    ui.close_menu();
+                }
+                if ui.button("Open in new window").clicked() {
+                    actions.new_window_workspace_id = Some(data.id);
+                    ui.close_menu();
+                }
             }
             ui.separator();
             if ui.button("Edit workspace\u{2026}").clicked() {
@@ -344,10 +351,8 @@ impl App {
         ui: &mut egui::Ui,
         actions: &mut WorkspaceSectionActions,
         active_group_snap: Option<u64>,
-        cur_win: &Option<WindowId>,
         has_active_session: bool,
     ) {
-        let show_other = cur_win.is_none();
         let other_active = active_group_snap.is_none();
         let other_has_note = !self.note_store.get(None).is_empty();
         let other_fill = if other_active {
@@ -366,24 +371,13 @@ impl App {
             egui::Stroke::new(theme::STROKE_THIN, theme::active().overlay0)
         };
         let other_w = ui.available_width();
-        let (other_rect, other_resp) = if show_other {
-            ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click())
-        } else {
-            (
-                egui::Rect::NOTHING,
-                ui.interact(
-                    egui::Rect::NOTHING,
-                    self.vp_id("other_skip"),
-                    egui::Sense::hover(),
-                ),
-            )
-        };
-        if show_other && ui.is_rect_visible(other_rect) {
+        let (other_rect, other_resp) =
+            ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click());
+        if ui.is_rect_visible(other_rect) {
             let rounding = egui::Rounding::same(theme::ROUNDING);
             ui.painter().rect_filled(other_rect, rounding, other_fill);
             ui.painter().rect_stroke(other_rect, rounding, other_stroke);
 
-            // Active session indicator bar
             if has_active_session {
                 let bar =
                     egui::Rect::from_min_size(other_rect.min, egui::vec2(3.0, other_rect.height()));
@@ -425,8 +419,8 @@ impl App {
                     .galley(egui::pos2(note_x, text_y), note_galley, other_fg);
             }
         }
-        if show_other && other_resp.clicked() {
-            actions.open_workspace_id = Some(u64::MAX); // sentinel for "Other"
+        if other_resp.clicked() {
+            actions.open_workspace_id = Some(u64::MAX);
         }
     }
 }

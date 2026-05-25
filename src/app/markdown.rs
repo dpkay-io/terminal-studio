@@ -1,61 +1,95 @@
 pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
     use crate::theme;
-    let mut in_code = false;
-    let mut code_buf: Vec<&str> = Vec::new();
 
-    for line in content.lines() {
+    let lines: Vec<&str> = content.lines().collect();
+    let len = lines.len();
+    let mut i = 0;
+
+    while i < len {
+        let line = lines[i];
+
+        // Fenced code block
         if line.starts_with("```") {
-            if in_code {
-                in_code = false;
-                egui::Frame::none()
-                    .fill(theme::active().md_code_bg)
-                    .stroke(egui::Stroke::new(
-                        theme::STROKE_THIN,
-                        theme::active().md_code_border,
-                    ))
-                    .inner_margin(egui::Margin::symmetric(theme::SP_MD, theme::BAR_PAD_X))
-                    .rounding(egui::Rounding::same(theme::ROUNDING))
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        for code_line in &code_buf {
-                            ui.label(
-                                egui::RichText::new(*code_line)
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(theme::active().md_code),
-                            );
-                        }
-                    });
-                code_buf.clear();
-                ui.add_space(theme::SP_SM);
-            } else {
-                in_code = true;
-                ui.add_space(theme::SP_SM);
+            i += 1;
+            let mut code_buf: Vec<&str> = Vec::new();
+            while i < len && !lines[i].starts_with("```") {
+                code_buf.push(lines[i]);
+                i += 1;
             }
-            continue;
-        }
-        if in_code {
-            code_buf.push(line);
+            if i < len {
+                i += 1; // skip closing ```
+            }
+            ui.add_space(theme::SP_SM);
+            egui::Frame::none()
+                .fill(theme::active().md_code_bg)
+                .stroke(egui::Stroke::new(
+                    theme::STROKE_THIN,
+                    theme::active().md_code_border,
+                ))
+                .inner_margin(egui::Margin::symmetric(theme::SP_MD, theme::BAR_PAD_X))
+                .rounding(egui::Rounding::same(theme::ROUNDING))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    for code_line in &code_buf {
+                        ui.label(
+                            egui::RichText::new(*code_line)
+                                .monospace()
+                                .size(12.0)
+                                .color(theme::active().md_code),
+                        );
+                    }
+                });
+            ui.add_space(theme::SP_SM);
             continue;
         }
 
-        if let Some(t) = line.strip_prefix("# ") {
+        // Table: detect pipe-delimited lines
+        if is_table_row(line) && i + 1 < len && is_separator_row(lines[i + 1]) {
+            let mut table_rows: Vec<Vec<&str>> = Vec::new();
+            table_rows.push(parse_table_cells(line));
+            i += 2; // skip header + separator
+            while i < len && is_table_row(lines[i]) {
+                table_rows.push(parse_table_cells(lines[i]));
+                i += 1;
+            }
+            render_table(ui, &table_rows);
             ui.add_space(theme::SP_SM);
-            ui.label(egui::RichText::new(t).size(22.0).strong());
-            ui.add_space(theme::SP_XS);
+            continue;
+        }
+
+        // Headings
+        if let Some(t) = line.strip_prefix("#### ") {
+            ui.label(egui::RichText::new(t).size(13.0).strong());
+        } else if let Some(t) = line.strip_prefix("### ") {
+            ui.label(egui::RichText::new(t).size(theme::DIALOG_TITLE_SZ).strong());
         } else if let Some(t) = line.strip_prefix("## ") {
             ui.add_space(theme::SP_SM);
             ui.label(egui::RichText::new(t).size(18.0).strong());
-        } else if let Some(t) = line.strip_prefix("### ") {
-            ui.label(egui::RichText::new(t).size(theme::DIALOG_TITLE_SZ).strong());
-        } else if let Some(t) = line.strip_prefix("#### ") {
-            ui.label(egui::RichText::new(t).size(13.0).strong());
-        } else if let Some(t) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+        } else if let Some(t) = line.strip_prefix("# ") {
+            ui.add_space(theme::SP_SM);
+            ui.label(egui::RichText::new(t).size(22.0).strong());
+            ui.add_space(theme::SP_XS);
+        }
+        // Unordered list
+        else if let Some(rest) = strip_list_prefix(line) {
+            let indent = leading_spaces(line) / 2;
             ui.horizontal(|ui| {
+                ui.add_space(indent as f32 * theme::SP_XL);
                 ui.label(egui::RichText::new("•").color(theme::active().md_bullet));
-                theme::render_inline(ui, t);
+                theme::render_inline(ui, rest);
             });
-        } else if let Some(t) = line.strip_prefix("> ") {
+        }
+        // Ordered list: digits followed by . or )
+        else if let Some((num, rest)) = strip_ordered_prefix(line) {
+            let indent = leading_spaces(line) / 2;
+            ui.horizontal(|ui| {
+                ui.add_space(indent as f32 * theme::SP_XL);
+                ui.label(egui::RichText::new(format!("{}.", num)).color(theme::active().md_bullet));
+                theme::render_inline(ui, rest);
+            });
+        }
+        // Blockquote
+        else if let Some(t) = line.strip_prefix("> ") {
             ui.horizontal(|ui| {
                 let bar_h = ui.text_style_height(&egui::TextStyle::Body);
                 let (bar_rect, _) = ui.allocate_exact_size(
@@ -71,12 +105,192 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                         .color(theme::active().md_blockquote),
                 );
             });
-        } else if line.starts_with("---") && line.chars().all(|c| c == '-') {
+        }
+        // Horizontal rule
+        else if line.starts_with("---") && line.chars().all(|c| c == '-') {
             ui.separator();
-        } else if line.is_empty() {
+        }
+        // Empty line
+        else if line.is_empty() {
             ui.add_space(theme::SP_SM);
-        } else {
+        }
+        // Normal paragraph
+        else {
             theme::render_inline(ui, line);
         }
+
+        i += 1;
+    }
+}
+
+fn leading_spaces(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+fn strip_list_prefix(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start_matches(' ');
+    trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+}
+
+fn strip_ordered_prefix(line: &str) -> Option<(&str, &str)> {
+    let trimmed = line.trim_start_matches(' ');
+    let dot = trimmed.find(". ").or_else(|| trimmed.find(") "));
+    if let Some(pos) = dot {
+        let prefix = &trimmed[..pos];
+        if !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit()) {
+            let sep_char = trimmed.as_bytes()[pos];
+            let rest = &trimmed[pos + 2..];
+            if sep_char == b'.' || sep_char == b')' {
+                return Some((prefix, rest));
+            }
+        }
+    }
+    None
+}
+
+fn is_table_row(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|') && t.ends_with('|') && t.len() > 2
+}
+
+fn is_separator_row(line: &str) -> bool {
+    let t = line.trim();
+    if !t.starts_with('|') || !t.ends_with('|') {
+        return false;
+    }
+    t[1..t.len() - 1].split('|').all(|cell| {
+        let c = cell.trim();
+        !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
+    })
+}
+
+fn parse_table_cells(line: &str) -> Vec<&str> {
+    let t = line.trim();
+    let inner = if t.starts_with('|') && t.ends_with('|') {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    };
+    inner.split('|').map(|s| s.trim()).collect()
+}
+
+fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
+    use crate::theme;
+
+    if rows.is_empty() {
+        return;
+    }
+
+    let th = theme::active();
+    let col_count = rows[0].len();
+
+    ui.add_space(theme::SP_SM);
+    egui::Frame::none()
+        .stroke(egui::Stroke::new(theme::STROKE_THIN, th.md_table_border))
+        .rounding(egui::Rounding::same(theme::ROUNDING))
+        .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            egui::Grid::new(ui.next_auto_id())
+                .num_columns(col_count)
+                .min_col_width(40.0)
+                .spacing(egui::vec2(0.0, 0.0))
+                .show(ui, |ui| {
+                    for (row_idx, row) in rows.iter().enumerate() {
+                        let is_header = row_idx == 0;
+                        for (col_idx, cell) in row.iter().enumerate() {
+                            let bg = if is_header {
+                                th.md_table_header_bg
+                            } else if row_idx % 2 == 0 {
+                                th.md_table_row_alt_bg
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+
+                            let mut frame =
+                                egui::Frame::none()
+                                    .fill(bg)
+                                    .inner_margin(egui::Margin::symmetric(
+                                        theme::SP_MD,
+                                        theme::SP_XS + 1.0,
+                                    ));
+
+                            if col_idx < col_count.saturating_sub(1) {
+                                frame = frame.stroke(egui::Stroke::new(
+                                    theme::STROKE_THIN,
+                                    th.md_table_border.linear_multiply(0.5),
+                                ));
+                            }
+
+                            frame.show(ui, |ui| {
+                                if is_header {
+                                    ui.label(egui::RichText::new(*cell).strong().size(12.5));
+                                } else {
+                                    theme::render_inline(ui, cell);
+                                }
+                            });
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_table_row_valid() {
+        assert!(is_table_row("| a | b | c |"));
+        assert!(is_table_row("|a|b|"));
+        assert!(!is_table_row("no pipes here"));
+        assert!(is_table_row("| |"));
+        assert!(!is_table_row("||")); // len == 2
+    }
+
+    #[test]
+    fn is_separator_row_valid() {
+        assert!(is_separator_row("|---|---|"));
+        assert!(is_separator_row("| --- | :---: | ---: |"));
+        assert!(!is_separator_row("| abc | def |"));
+        assert!(!is_separator_row("not a separator"));
+    }
+
+    #[test]
+    fn parse_table_cells_basic() {
+        let cells = parse_table_cells("| foo | bar | baz |");
+        assert_eq!(cells, vec!["foo", "bar", "baz"]);
+    }
+
+    #[test]
+    fn parse_table_cells_trimmed() {
+        let cells = parse_table_cells("|  a  |b|  c  |");
+        assert_eq!(cells, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn strip_list_prefix_basic() {
+        assert_eq!(strip_list_prefix("- item"), Some("item"));
+        assert_eq!(strip_list_prefix("* item"), Some("item"));
+        assert_eq!(strip_list_prefix("  - nested"), Some("nested"));
+        assert_eq!(strip_list_prefix("no list"), None);
+    }
+
+    #[test]
+    fn strip_ordered_prefix_basic() {
+        assert_eq!(strip_ordered_prefix("1. first"), Some(("1", "first")));
+        assert_eq!(strip_ordered_prefix("12. twelfth"), Some(("12", "twelfth")));
+        assert_eq!(strip_ordered_prefix("1) paren"), Some(("1", "paren")));
+        assert_eq!(strip_ordered_prefix("not a list"), None);
+        assert_eq!(strip_ordered_prefix("abc. nope"), None);
+    }
+
+    #[test]
+    fn leading_spaces_count() {
+        assert_eq!(leading_spaces("hello"), 0);
+        assert_eq!(leading_spaces("  hello"), 2);
+        assert_eq!(leading_spaces("    hello"), 4);
     }
 }

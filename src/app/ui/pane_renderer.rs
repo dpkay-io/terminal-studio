@@ -95,11 +95,12 @@ pub(in crate::app) fn render_node(
                 if let Some(pos) = ui.ctx().input(|inp| inp.pointer.interact_pos()) {
                     if rect.contains(pos) {
                         *rctx.clicked_pane_id = Some(pane_id);
-                        // Release focus from any other widget (e.g. the
-                        // notes TextEdit) so the terminal can take keyboard
-                        // focus on the next frame.
-                        if let Some(fid) = ui.ctx().memory(|m| m.focused()) {
-                            ui.ctx().memory_mut(|m| m.surrender_focus(fid));
+                        // Only surrender widget focus when clicking a terminal
+                        // pane — editors need their TextEdit to keep focus.
+                        if matches!(pane.content, PaneContent::Terminal(_)) {
+                            if let Some(fid) = ui.ctx().memory(|m| m.focused()) {
+                                ui.ctx().memory_mut(|m| m.surrender_focus(fid));
+                            }
                         }
                     }
                 }

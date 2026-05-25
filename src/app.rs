@@ -1305,14 +1305,7 @@ impl App {
             let (cw, ch) = match self.cached_cell_size {
                 Some((fs, w, h)) if fs == self.settings.font_size => (w, h),
                 _ => {
-                    let w = ui.fonts(|fonts| {
-                        let galley = fonts.layout_no_wrap(
-                            "MMMMMMMMMMMMMMMMMMMM".to_string(),
-                            font_id.clone(),
-                            theme::active().text,
-                        );
-                        galley.rect.width() / 20.0
-                    });
+                    let w = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
                     let h = ui.fonts(|f| f.row_height(&font_id));
                     self.cached_cell_size = Some((self.settings.font_size, w, h));
                     (w, h)
