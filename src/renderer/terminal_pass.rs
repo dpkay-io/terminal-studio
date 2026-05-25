@@ -262,13 +262,7 @@ impl TerminalView {
                     }
                     let x = rect.min.x + col as f32 * cell_width;
                     let pos = egui::pos2(x, y);
-                    painter.text(
-                        pos,
-                        egui::Align2::LEFT_TOP,
-                        c.ch,
-                        base_font.clone(),
-                        c.fg,
-                    );
+                    painter.text(pos, egui::Align2::LEFT_TOP, c.ch, base_font.clone(), c.fg);
                     if c.bold {
                         painter.text(
                             egui::pos2(x + 0.5, y),

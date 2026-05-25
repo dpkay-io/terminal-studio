@@ -105,10 +105,8 @@ impl App {
             .iter()
             .map(|w| {
                 let git_info = self.workers.workspace_git_worker.get(w.id);
-                let other_vp = if let Some(ew) = self
-                    .extra_windows
-                    .iter()
-                    .find(|ew| ew.workspace_id == w.id)
+                let other_vp = if let Some(ew) =
+                    self.extra_windows.iter().find(|ew| ew.workspace_id == w.id)
                 {
                     if cur_win.as_ref() == Some(&ew.id) {
                         None
