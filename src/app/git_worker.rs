@@ -276,11 +276,9 @@ mod tests {
             }
         }
         assert!(result.is_some(), "git worker should have produced a result");
-        let (branch, status) = result.unwrap();
-        // We're in a git repo, so branch should be non-empty
-        assert!(!branch.is_empty(), "branch name should not be empty");
-        // status is a string (may be empty if working tree is clean)
-        let _ = status;
+        let (diff, status) = result.unwrap();
+        // diff and status may both be empty on a clean working tree
+        let _ = (diff, status);
     }
 
     #[test]
