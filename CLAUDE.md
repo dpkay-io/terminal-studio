@@ -174,3 +174,20 @@ Color32::from_rgb(30, 30, 46)
 - `pane_trees` is not serialized — split layout resets on restart
 - `grid.cursor.point.line.0` is `i32`; negative values indicate scrollback rows
 - `display_offset` is the number of scrollback lines currently shown above the viewport (0 = live view)
+
+# More Instructions for development
+- Everything should be gracefully handled 
+- Everything should be delegated to correct worker thread to keep main thread as available and snappy as possible. 
+- Every UI interaction should be optimized and be snappy and responsive always. 
+- App should never crash and everything should be caught and handled gracefully. 
+- There should not be any memory leak or missing cleanup pending. 
+- Code quality should be top notch. 
+- Everything should have its own single responsibilty code. 
+- No file should be monolith and everything should be split correctly. 
+- Code should be reused as much as possible. 
+- Code should be scalable and maintainable. 
+- Code should be optimized for performance. 
+- We should have 100% test coverage for features/code/path. 
+- Our whole end to end development stack should be 100% correct.
+- Text should be always visible even with dark background
+
