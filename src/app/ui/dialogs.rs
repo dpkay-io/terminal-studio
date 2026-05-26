@@ -341,7 +341,7 @@ impl App {
                                         pane_id: p.id,
                                         label,
                                         cwd,
-                                        is_active: self.pane_state.active_pane_id == Some(p.id),
+                                        is_active: self.is_pane_active_in_any_window(p.id),
                                     })
                                 })
                                 .collect();
@@ -380,7 +380,7 @@ impl App {
                                     pane_id: p.id,
                                     label,
                                     cwd,
-                                    is_active: self.pane_state.active_pane_id == Some(p.id),
+                                    is_active: self.is_pane_active_in_any_window(p.id),
                                 })
                             })
                             .collect();
@@ -580,31 +580,11 @@ impl App {
 
         // Process actions
         if let Some(ws_id) = switch_to_workspace {
-            let (cols, rows) = self
-                .pane_state
-                .panes
-                .first()
-                .map(|p| p.last_size)
-                .unwrap_or((80, 24));
-            let group = if ws_id == u64::MAX { None } else { Some(ws_id) };
-            self.switch_group(group, cols, rows);
+            self.navigate_to_workspace(ws_id);
             close_switcher = true;
         }
         if let Some(pane_id) = switch_to_pane {
-            if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pane_id) {
-                let group =
-                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
-                if group != self.active_group {
-                    let (cols, rows) = self
-                        .pane_state
-                        .panes
-                        .first()
-                        .map(|p| p.last_size)
-                        .unwrap_or((80, 24));
-                    self.switch_group(group, cols, rows);
-                }
-            }
-            self.activate_pane(pane_id);
+            self.navigate_to_pane(pane_id);
             close_switcher = true;
         }
         if close_switcher {
@@ -759,13 +739,7 @@ impl App {
                         last_activated: 0,
                     });
                     self.workspace_store.save();
-                    let (cols, rows) = self
-                        .pane_state
-                        .panes
-                        .first()
-                        .map(|p| p.last_size)
-                        .unwrap_or((80, 24));
-                    self.switch_group(Some(id), cols, rows);
+                    self.navigate_to_workspace(id);
                 }
             } else if cancel {
                 self.workspace_dialog = None;
@@ -954,25 +928,39 @@ impl App {
 
             if save_it {
                 if let Some(dlg) = self.workspace_edit_dialog.take() {
+                    let new_name = dlg.name.trim().to_string();
                     if let Some(ws) = self
                         .workspace_store
                         .workspaces
                         .iter_mut()
                         .find(|w| w.id == dlg.workspace_id)
                     {
-                        ws.name = dlg.name.trim().to_string();
+                        ws.name = new_name.clone();
                         ws.color = dlg.selected_color;
                     }
                     self.workspace_store.save();
+                    if let Some(ew) = self
+                        .extra_windows
+                        .iter_mut()
+                        .find(|ew| ew.workspace_id == dlg.workspace_id)
+                    {
+                        ew.title = format!("{} \u{2014} Terminal Studio", new_name);
+                    }
                 }
             } else if delete_it {
                 if let Some(dlg) = self.workspace_edit_dialog.take() {
+                    self.close_extra_window_for_workspace(dlg.workspace_id);
                     self.workspace_store
                         .workspaces
                         .retain(|w| w.id != dlg.workspace_id);
                     self.workspace_store.save();
                     if self.active_group == Some(dlg.workspace_id) {
                         self.active_group = None;
+                    }
+                    for ew in &mut self.extra_windows {
+                        if ew.view.active_group == Some(dlg.workspace_id) {
+                            ew.view.active_group = None;
+                        }
                     }
                 }
             } else if cancel {

@@ -14,7 +14,7 @@ use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 
 use alacritty_terminal::grid::Dimensions;
 
-use super::multi_window::{ExtraWindow, SavedExtraWindow, WindowView};
+use super::multi_window::{ExtraWindow, PendingWindowFocus, SavedExtraWindow, WindowView};
 use super::pane::{
     FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
 };
@@ -649,6 +649,186 @@ impl App {
             }
             self.update_is_active_flags();
         }
+    }
+
+    /// Navigate to a workspace, respecting multi-window ownership.
+    /// If the workspace is hosted in a different extra window, focuses that window.
+    /// If in an extra window and the target isn't this window's workspace, routes
+    /// to the correct window (main or another extra).
+    pub(super) fn navigate_to_workspace(&mut self, ws_id_raw: u64) {
+        let group = if ws_id_raw == u64::MAX {
+            None
+        } else {
+            Some(ws_id_raw)
+        };
+
+        if let Some(ws_id) = group {
+            if let Some((idx, viewport_id, ew_id)) = self
+                .extra_windows
+                .iter()
+                .enumerate()
+                .find(|(_, ew)| ew.workspace_id == ws_id)
+                .map(|(idx, ew)| (idx, ew.viewport_id, ew.id.clone()))
+            {
+                if self.current_window_id.as_ref() != Some(&ew_id) {
+                    let pane_id = self.extra_windows[idx].view.active_pane_id.or_else(|| {
+                        self.pane_state
+                            .panes
+                            .iter()
+                            .find(|p| {
+                                Self::pane_group(
+                                    &self.session_state.sessions,
+                                    &self.workspace_store,
+                                    p,
+                                ) == group
+                            })
+                            .map(|p| p.id)
+                    });
+                    if let Some(pid) = pane_id {
+                        self.pending_window_focus = Some(PendingWindowFocus {
+                            target_viewport_id: viewport_id,
+                            target_window_idx: Some(idx),
+                            pane_id: pid,
+                            group: Some(ws_id),
+                        });
+                    }
+                    return;
+                }
+            } else if self.current_window_id.is_some() {
+                let pane_id = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| {
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
+                            == group
+                    })
+                    .map(|p| p.id)
+                    .unwrap_or(0);
+                self.pending_window_focus = Some(PendingWindowFocus {
+                    target_viewport_id: egui::ViewportId::ROOT,
+                    target_window_idx: None,
+                    pane_id,
+                    group: Some(ws_id),
+                });
+                return;
+            }
+        } else if self.current_window_id.is_some() {
+            let pane_id = self
+                .pane_state
+                .panes
+                .iter()
+                .find(|p| {
+                    Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
+                        .is_none()
+                })
+                .map(|p| p.id)
+                .unwrap_or(0);
+            self.pending_window_focus = Some(PendingWindowFocus {
+                target_viewport_id: egui::ViewportId::ROOT,
+                target_window_idx: None,
+                pane_id,
+                group: None,
+            });
+            return;
+        }
+
+        let (cols, rows) = self
+            .pane_state
+            .panes
+            .first()
+            .map(|p| p.last_size)
+            .unwrap_or((80, 24));
+        self.switch_group(group, cols, rows);
+    }
+
+    /// Navigate to a specific pane, respecting multi-window ownership.
+    pub(super) fn navigate_to_pane(&mut self, pane_id: u32) {
+        let group = self
+            .pane_state
+            .panes
+            .iter()
+            .find(|p| p.id == pane_id)
+            .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p));
+        let Some(group) = group else { return };
+
+        if let Some(ws_id) = group {
+            if let Some((idx, viewport_id, ew_id)) = self
+                .extra_windows
+                .iter()
+                .enumerate()
+                .find(|(_, ew)| ew.workspace_id == ws_id)
+                .map(|(idx, ew)| (idx, ew.viewport_id, ew.id.clone()))
+            {
+                if self.current_window_id.as_ref() != Some(&ew_id) {
+                    self.pending_window_focus = Some(PendingWindowFocus {
+                        target_viewport_id: viewport_id,
+                        target_window_idx: Some(idx),
+                        pane_id,
+                        group: Some(ws_id),
+                    });
+                    return;
+                }
+            } else if self.current_window_id.is_some() {
+                self.pending_window_focus = Some(PendingWindowFocus {
+                    target_viewport_id: egui::ViewportId::ROOT,
+                    target_window_idx: None,
+                    pane_id,
+                    group: Some(ws_id),
+                });
+                return;
+            }
+        } else if self.current_window_id.is_some() {
+            self.pending_window_focus = Some(PendingWindowFocus {
+                target_viewport_id: egui::ViewportId::ROOT,
+                target_window_idx: None,
+                pane_id,
+                group: None,
+            });
+            return;
+        }
+
+        if group != self.active_group {
+            let (cols, rows) = self
+                .pane_state
+                .panes
+                .first()
+                .map(|p| p.last_size)
+                .unwrap_or((80, 24));
+            self.switch_group(group, cols, rows);
+        }
+        self.activate_pane(pane_id);
+    }
+
+    /// Close the extra window hosting a workspace and release ownership.
+    pub(super) fn close_extra_window_for_workspace(&mut self, ws_id: u64) {
+        if let Some(idx) = self
+            .extra_windows
+            .iter()
+            .position(|ew| ew.workspace_id == ws_id)
+        {
+            self.extra_windows.remove(idx);
+        }
+        if let Some(ws) = self
+            .workspace_store
+            .workspaces
+            .iter_mut()
+            .find(|w| w.id == ws_id)
+        {
+            ws.host_window_id = None;
+        }
+        self.workspace_store.save();
+        self.save_windows();
+    }
+
+    /// Check whether a pane is active in any window (main or extra).
+    pub(super) fn is_pane_active_in_any_window(&self, pane_id: u32) -> bool {
+        if self.pane_state.active_pane_id == Some(pane_id) {
+            return true;
+        }
+        self.extra_windows
+            .iter()
+            .any(|ew| ew.view.active_pane_id == Some(pane_id))
     }
 
     pub(super) fn spawn_session_no_pane(

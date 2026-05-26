@@ -59,6 +59,17 @@ impl App {
         if let Some(vp) = actions.focus_extra_window_viewport {
             ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Focus);
         }
+
+        if let Some(ws_id) = actions.reclaim_workspace_id {
+            self.close_extra_window_for_workspace(ws_id);
+            let (cols, rows) = self
+                .pane_state
+                .panes
+                .first()
+                .map(|p| p.last_size)
+                .unwrap_or((80, 24));
+            self.switch_group(Some(ws_id), cols, rows);
+        }
     }
 
     /// Handle closing a pane from the sidebar quit button.

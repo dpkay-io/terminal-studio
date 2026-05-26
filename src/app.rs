@@ -501,10 +501,21 @@ impl eframe::App for App {
                 None => {
                     // Target is the main window — set its state directly
                     // (at this point the main view is restored in self).
-                    self.active_group = action.group;
-                    self.activate_pane(action.pane_id);
-                    self.last_pane_per_group
-                        .insert(action.group, action.pane_id);
+                    let pane_exists = self.pane_state.panes.iter().any(|p| p.id == action.pane_id);
+                    if pane_exists {
+                        self.active_group = action.group;
+                        self.activate_pane(action.pane_id);
+                        self.last_pane_per_group
+                            .insert(action.group, action.pane_id);
+                    } else {
+                        let (cols, rows) = self
+                            .pane_state
+                            .panes
+                            .first()
+                            .map(|p| p.last_size)
+                            .unwrap_or((80, 24));
+                        self.switch_group(action.group, cols, rows);
+                    }
                     ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
                 }
                 _ => {}
@@ -1860,19 +1871,27 @@ impl App {
                                         }
                                     }
                                     AppAction::NextWorkspace => {
-                                        let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter().map(|w| w.id).collect();
-                                        if !ws_ids.is_empty() {
-                                            let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
-                                            let next = (cur + 1) % ws_ids.len();
-                                            self.deferred_open_workspace = Some(ws_ids[next]);
+                                        if self.current_window_id.is_none() {
+                                            let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter()
+                                                .filter(|w| w.host_window_id.is_none())
+                                                .map(|w| w.id).collect();
+                                            if !ws_ids.is_empty() {
+                                                let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
+                                                let next = (cur + 1) % ws_ids.len();
+                                                self.deferred_open_workspace = Some(ws_ids[next]);
+                                            }
                                         }
                                     }
                                     AppAction::PrevWorkspace => {
-                                        let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter().map(|w| w.id).collect();
-                                        if !ws_ids.is_empty() {
-                                            let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
-                                            let prev = if cur == 0 { ws_ids.len() - 1 } else { cur - 1 };
-                                            self.deferred_open_workspace = Some(ws_ids[prev]);
+                                        if self.current_window_id.is_none() {
+                                            let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter()
+                                                .filter(|w| w.host_window_id.is_none())
+                                                .map(|w| w.id).collect();
+                                            if !ws_ids.is_empty() {
+                                                let cur = self.active_group.and_then(|g| ws_ids.iter().position(|&id| id == g)).unwrap_or(0);
+                                                let prev = if cur == 0 { ws_ids.len() - 1 } else { cur - 1 };
+                                                self.deferred_open_workspace = Some(ws_ids[prev]);
+                                            }
                                         }
                                     }
                                     AppAction::RightTabDirectory => {

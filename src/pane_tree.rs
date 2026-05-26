@@ -179,7 +179,7 @@ pub fn split_rect(
     let half = theme::DIVIDER_W / 2.0;
     match dir {
         SplitDir::Horizontal => {
-            let x = rect.min.x + rect.width() * ratio;
+            let x = (rect.min.x + rect.width() * ratio).round();
             let a = egui::Rect::from_min_max(rect.min, egui::pos2(x - half, rect.max.y));
             let div = egui::Rect::from_min_max(
                 egui::pos2(x - half, rect.min.y),

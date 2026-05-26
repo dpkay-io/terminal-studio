@@ -24,6 +24,8 @@ pub(in crate::app) struct WorkspaceSectionActions {
     pub edit_workspace_id: Option<u64>,
     pub new_window_workspace_id: Option<u64>,
     pub focus_extra_window_viewport: Option<egui::ViewportId>,
+    /// Close the extra window hosting this workspace, then open it in the current window.
+    pub reclaim_workspace_id: Option<u64>,
 }
 
 impl App {
@@ -54,11 +56,15 @@ impl App {
             quit_pane_id: None,
             clicked_sidebar_pane_id: None,
         };
+        if let Some(ws_id) = self.deferred_open_workspace.take() {
+            self.navigate_to_workspace(ws_id);
+        }
         let mut ws_actions = WorkspaceSectionActions {
-            open_workspace_id: self.deferred_open_workspace.take(),
+            open_workspace_id: None,
             edit_workspace_id: None,
             new_window_workspace_id: None,
             focus_extra_window_viewport: None,
+            reclaim_workspace_id: None,
         };
 
         if self.show_left_panel {

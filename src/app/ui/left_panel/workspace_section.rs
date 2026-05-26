@@ -322,7 +322,7 @@ impl App {
                     ui.close_menu();
                 }
                 if ui.button("Open here").clicked() {
-                    actions.open_workspace_id = Some(data.id);
+                    actions.reclaim_workspace_id = Some(data.id);
                     ui.close_menu();
                 }
             } else {
