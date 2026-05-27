@@ -7,7 +7,7 @@ static MD_PATH_REGEX: OnceLock<Regex> = OnceLock::new();
 
 fn md_path_regex() -> &'static Regex {
     MD_PATH_REGEX.get_or_init(|| {
-        Regex::new(r"(?:(?:[A-Za-z]:|\.\.?)[\\/])?(?:[\w.\-]+[\\/])*[\w.\-]+\.md\b").unwrap()
+        Regex::new(r"(?:(?:[A-Za-z]:|\.\.?)?[\\/])?(?:[\w.~\-]+[\\/])*[\w.~\-]+\.md\b").unwrap()
     })
 }
 
