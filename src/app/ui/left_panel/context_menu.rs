@@ -207,7 +207,7 @@ impl App {
         _active_fg: &Option<ForegroundProcess>,
     ) {
         let spawn_with_cwd = if let Some(ref new_shell) = sess_actions.spawn_new_session {
-            let cwd = self.active_cwd().or_else(|| {
+            let cwd = self.active_pane_cwd().or_else(|| {
                 self.active_group.and_then(|gid| {
                     self.workspace_store
                         .workspaces

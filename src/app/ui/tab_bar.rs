@@ -9,6 +9,8 @@ pub(in crate::app) struct TabBarResult {
     pub close_pane_id: Option<u32>,
     pub clicked_pane_id: Option<u32>,
     pub split_request: Option<SplitDir>,
+    /// Move the given tab into a split alongside the currently active pane.
+    pub move_to_split: Option<(u32, SplitDir)>,
 }
 
 impl App {
@@ -29,6 +31,7 @@ impl App {
         let mut close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
         let mut split_request: Option<SplitDir> = None;
+        let mut move_to_split: Option<(u32, SplitDir)> = None;
 
         // ── Tab bar (horizontally scrollable) ────────────────────────
         ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
@@ -200,12 +203,30 @@ impl App {
                             }
 
                             // Right-click context menu for tab operations.
+                            let can_move_to_split = active_pane_id_snap.is_some_and(|apid| {
+                                let active_root = self.pane_state.root_of(apid);
+                                let this_root = self.pane_state.root_of(pane_id);
+                                active_root != this_root
+                            });
                             let extra_window_names: Vec<(u64, String)> = self
                                 .extra_windows
                                 .iter()
                                 .map(|w| (w.workspace_id, w.title.clone()))
                                 .collect();
                             tab_resp.context_menu(|ui| {
+                                ui.add_enabled_ui(can_move_to_split, |ui| {
+                                    if ui.button("Move to split horizontal").clicked() {
+                                        move_to_split = Some((pane_id, SplitDir::Horizontal));
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Move to split vertical").clicked() {
+                                        move_to_split = Some((pane_id, SplitDir::Vertical));
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                ui.separator();
+
                                 ui.label(
                                     egui::RichText::new("Move tab to window\u{2026}")
                                         .size(12.0)
@@ -366,6 +387,7 @@ impl App {
             close_pane_id,
             clicked_pane_id,
             split_request,
+            move_to_split,
         }
     }
 

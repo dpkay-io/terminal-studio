@@ -13,7 +13,6 @@ impl App {
         {
             let focused = ctx.input(|i| i.focused);
             if focused && !self.was_focused {
-                ctx.request_repaint();
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
             self.was_focused = focused;

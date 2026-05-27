@@ -184,8 +184,8 @@ impl App {
                             if ui
                                 .add(
                                     egui::DragValue::new(&mut sl)
-                                        .range(1000..=100000)
-                                        .speed(100.0),
+                                        .range(1_000..=1_000_000)
+                                        .speed(1000.0),
                                 )
                                 .changed()
                             {
@@ -237,6 +237,20 @@ impl App {
                                 settings_changed = true;
                             }
                         }
+                        ui.add_space(theme::SP_SM);
+
+                        // Scroll lines per tick
+                        ui.horizontal(|ui| {
+                            ui.label("Lines per scroll tick:");
+                            let mut sl = self.settings.scroll_lines;
+                            if ui
+                                .add(egui::DragValue::new(&mut sl).range(1..=20).speed(0.1))
+                                .changed()
+                            {
+                                self.settings.scroll_lines = sl;
+                                settings_changed = true;
+                            }
+                        });
                         ui.add_space(theme::SP_SM);
 
                         // Default shell
@@ -464,9 +478,14 @@ impl App {
                                                         ),
                                                         |ui| {
                                                             let label = shortcut.label();
+                                                            let shortcut_fg =
+                                                                theme::ensure_readable(
+                                                                    t.subtext0_rgb,
+                                                                    t.surface1_rgb,
+                                                                );
                                                             let badge = egui::RichText::new(&label)
                                                                 .size(11.0)
-                                                                .color(t.subtext0)
+                                                                .color(shortcut_fg)
                                                                 .background_color(t.surface1);
                                                             ui.label(badge);
                                                         },
@@ -482,10 +501,12 @@ impl App {
                                 ui.add_space(theme::SP_SM);
                                 ui.horizontal(|ui| {
                                     let t = theme::active();
+                                    let split_shortcut_fg =
+                                        theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                                     ui.label(
                                         egui::RichText::new("Alt+Arrow")
                                             .size(11.0)
-                                            .color(t.subtext0)
+                                            .color(split_shortcut_fg)
                                             .background_color(t.surface1),
                                     );
                                     ui.label(

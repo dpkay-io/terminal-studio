@@ -95,6 +95,41 @@ impl PaneNode {
         }
     }
 
+    /// Split `target_id` in `dir`, inserting an existing subtree as the second half.
+    /// Returns `true` if the leaf was found and replaced.
+    pub fn split_pane_with_node(
+        &mut self,
+        target_id: u32,
+        subtree: PaneNode,
+        split_id: u32,
+        dir: SplitDir,
+    ) -> bool {
+        match self {
+            PaneNode::Leaf { pane_id, last_size } if *pane_id == target_id => {
+                let old_leaf = PaneNode::Leaf {
+                    pane_id: *pane_id,
+                    last_size: *last_size,
+                };
+                *self = PaneNode::Split {
+                    split_id,
+                    dir,
+                    ratio: 0.5,
+                    a: Box::new(old_leaf),
+                    b: Box::new(subtree),
+                };
+                true
+            }
+            PaneNode::Split { a, b, .. } => {
+                if a.split_pane_with_node(target_id, subtree.clone(), split_id, dir) {
+                    true
+                } else {
+                    b.split_pane_with_node(target_id, subtree, split_id, dir)
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Remove a leaf from the tree, collapsing the parent split to the sibling.
     pub fn remove_pane(&mut self, target_id: u32) -> RemoveResult {
         match self {
@@ -295,6 +330,34 @@ mod tests {
         if let PaneNode::Leaf { last_size, .. } = &root {
             assert_eq!(*last_size, (40, 12));
         }
+    }
+
+    #[test]
+    fn split_pane_with_node_inserts_subtree() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        // Build a subtree with two leaves
+        let mut subtree = leaf(3);
+        subtree.split_pane(3, 4, 20, SplitDir::Vertical);
+        // Insert the subtree alongside pane 2
+        assert!(root.split_pane_with_node(2, subtree, 30, SplitDir::Vertical));
+        assert_eq!(root.leaf_ids(), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn split_pane_with_node_unknown_target() {
+        let mut root = leaf(1);
+        let subtree = leaf(2);
+        assert!(!root.split_pane_with_node(99, subtree, 10, SplitDir::Horizontal));
+        assert_eq!(root.leaf_ids(), vec![1]);
+    }
+
+    #[test]
+    fn split_pane_with_node_single_leaf_target() {
+        let mut root = leaf(1);
+        let subtree = leaf(2);
+        assert!(root.split_pane_with_node(1, subtree, 10, SplitDir::Horizontal));
+        assert_eq!(root.leaf_ids(), vec![1, 2]);
     }
 
     #[test]

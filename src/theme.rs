@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 use egui::Color32;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
@@ -443,16 +445,108 @@ pub fn tinted(c: [u8; 3], factor: f32) -> [u8; 3] {
     ]
 }
 
+static SRGB_LUT: OnceLock<[f32; 256]> = OnceLock::new();
+
+fn srgb_lut() -> &'static [f32; 256] {
+    SRGB_LUT.get_or_init(|| {
+        std::array::from_fn(|i| {
+            let f = i as f32 / 255.0;
+            if f <= 0.04045 {
+                f / 12.92
+            } else {
+                ((f + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    })
+}
+
 fn relative_luminance(c: [u8; 3]) -> f32 {
-    let to_lin = |v: u8| -> f32 {
-        let f = v as f32 / 255.0;
-        if f <= 0.04045 {
-            f / 12.92
-        } else {
-            ((f + 0.055) / 1.055).powf(2.4)
+    let lut = srgb_lut();
+    0.2126 * lut[c[0] as usize] + 0.7152 * lut[c[1] as usize] + 0.0722 * lut[c[2] as usize]
+}
+
+fn contrast_ratio(a: [u8; 3], b: [u8; 3]) -> f32 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (lighter, darker) = if la > lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+thread_local! {
+    static CONTRAST_CACHE: RefCell<HashMap<(u32, u32), Color32>> = RefCell::new(HashMap::with_capacity(256));
+}
+
+/// Clear the per-frame contrast cache. Call once at the start of each frame.
+pub fn clear_contrast_cache() {
+    CONTRAST_CACHE.with(|c| c.borrow_mut().clear());
+}
+
+/// Picks the adjustment direction (lighten or darken) that has more
+/// contrast headroom, with fallback to the opposite direction.
+/// Results are cached per (fg, bg) pair within a frame.
+pub fn ensure_term_contrast(fg: Color32, bg: Color32) -> Color32 {
+    let fg_key = u32::from_le_bytes(fg.to_array());
+    let bg_key = u32::from_le_bytes(bg.to_array());
+    let key = (fg_key, bg_key);
+
+    let cached = CONTRAST_CACHE.with(|c| c.borrow().get(&key).copied());
+    if let Some(result) = cached {
+        return result;
+    }
+
+    let result = ensure_term_contrast_inner(fg, bg);
+    CONTRAST_CACHE.with(|c| c.borrow_mut().insert(key, result));
+    result
+}
+
+fn ensure_term_contrast_inner(fg: Color32, bg: Color32) -> Color32 {
+    let fg_rgb = [fg.r(), fg.g(), fg.b()];
+    let bg_rgb = [bg.r(), bg.g(), bg.b()];
+
+    if contrast_ratio(fg_rgb, bg_rgb) >= 3.0 {
+        return fg;
+    }
+
+    let bg_lum = relative_luminance(bg_rgb);
+    let max_lighten = 1.05 / (bg_lum + 0.05);
+    let max_darken = (bg_lum + 0.05) / 0.05;
+    let lighten_first = max_lighten >= max_darken;
+
+    if let Some(c) = adjust_toward(fg_rgb, bg_rgb, lighten_first) {
+        return c;
+    }
+    if let Some(c) = adjust_toward(fg_rgb, bg_rgb, !lighten_first) {
+        return c;
+    }
+
+    if lighten_first {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
+fn adjust_toward(fg_rgb: [u8; 3], bg_rgb: [u8; 3], lighten: bool) -> Option<Color32> {
+    let mut cur = fg_rgb;
+    for _ in 0..30 {
+        if contrast_ratio(cur, bg_rgb) >= 3.0 {
+            return Some(Color32::from_rgb(cur[0], cur[1], cur[2]));
         }
-    };
-    0.2126 * to_lin(c[0]) + 0.7152 * to_lin(c[1]) + 0.0722 * to_lin(c[2])
+        if lighten {
+            cur = [
+                (cur[0] as u16 + (255 - cur[0] as u16) / 4) as u8,
+                (cur[1] as u16 + (255 - cur[1] as u16) / 4) as u8,
+                (cur[2] as u16 + (255 - cur[2] as u16) / 4) as u8,
+            ];
+        } else {
+            cur = [
+                cur[0] - cur[0] / 4,
+                cur[1] - cur[1] / 4,
+                cur[2] - cur[2] / 4,
+            ];
+        }
+    }
+    None
 }
 
 pub fn text_on(bg: [u8; 3]) -> Color32 {
@@ -463,27 +557,51 @@ pub fn text_on(bg: [u8; 3]) -> Color32 {
     }
 }
 
-/// Lightens `fg` toward white until it has WCAG AA contrast (4.5:1) against `bg`.
+/// Adjusts `fg` until it has WCAG AA contrast (4.5:1) against `bg`.
+/// Picks the direction with more contrast headroom, with fallback.
 pub fn ensure_readable(fg: [u8; 3], bg: [u8; 3]) -> Color32 {
-    let bg_lum = relative_luminance(bg);
-    let mut cur = fg;
-    for _ in 0..20 {
-        let fg_lum = relative_luminance(cur);
-        let (lighter, darker) = if fg_lum > bg_lum {
-            (fg_lum, bg_lum)
-        } else {
-            (bg_lum, fg_lum)
-        };
-        if (lighter + 0.05) / (darker + 0.05) >= 4.5 {
-            return from_rgb(cur);
-        }
-        cur = [
-            (cur[0] as u16 + (255 - cur[0] as u16) / 3) as u8,
-            (cur[1] as u16 + (255 - cur[1] as u16) / 3) as u8,
-            (cur[2] as u16 + (255 - cur[2] as u16) / 3) as u8,
-        ];
+    if contrast_ratio(fg, bg) >= 4.5 {
+        return from_rgb(fg);
     }
-    from_rgb(cur)
+    let bg_lum = relative_luminance(bg);
+    let max_lighten = 1.05 / (bg_lum + 0.05);
+    let max_darken = (bg_lum + 0.05) / 0.05;
+    let lighten_first = max_lighten >= max_darken;
+
+    let try_dir = |lighten: bool| -> Option<Color32> {
+        let mut cur = fg;
+        for _ in 0..20 {
+            if contrast_ratio(cur, bg) >= 4.5 {
+                return Some(from_rgb(cur));
+            }
+            if lighten {
+                cur = [
+                    (cur[0] as u16 + (255 - cur[0] as u16) / 3) as u8,
+                    (cur[1] as u16 + (255 - cur[1] as u16) / 3) as u8,
+                    (cur[2] as u16 + (255 - cur[2] as u16) / 3) as u8,
+                ];
+            } else {
+                cur = [
+                    cur[0] - cur[0] / 3,
+                    cur[1] - cur[1] / 3,
+                    cur[2] - cur[2] / 3,
+                ];
+            }
+        }
+        None
+    };
+
+    if let Some(c) = try_dir(lighten_first) {
+        return c;
+    }
+    if let Some(c) = try_dir(!lighten_first) {
+        return c;
+    }
+    if lighten_first {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
 }
 
 pub fn header_bg(ws_color: Option<[u8; 3]>, is_active: bool) -> Color32 {
@@ -1446,5 +1564,112 @@ mod tests {
             assert_ne!(t.base, Color32::TRANSPARENT);
         }
         set_theme(ThemeId::CatppuccinMocha);
+    }
+
+    #[test]
+    fn test_contrast_ratio_same_color_is_one() {
+        let c = [100, 150, 200];
+        let ratio = contrast_ratio(c, c);
+        assert!((ratio - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_contrast_ratio_black_white() {
+        let ratio = contrast_ratio([0, 0, 0], [255, 255, 255]);
+        assert!(
+            ratio > 20.0,
+            "black/white contrast should be ~21:1, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn test_ensure_term_contrast_same_color_adjusts() {
+        set_theme(ThemeId::CatppuccinMocha);
+        let green = Color32::from_rgb(166, 227, 161);
+        let result = ensure_term_contrast(green, green);
+        assert_ne!(result, green, "same fg/bg must be adjusted");
+        let r = contrast_ratio(
+            [result.r(), result.g(), result.b()],
+            [green.r(), green.g(), green.b()],
+        );
+        assert!(r >= 3.0, "adjusted contrast should be >= 3:1, got {r}");
+    }
+
+    #[test]
+    fn test_ensure_term_contrast_good_contrast_unchanged() {
+        let white = Color32::from_rgb(255, 255, 255);
+        let black = Color32::from_rgb(0, 0, 0);
+        assert_eq!(ensure_term_contrast(white, black), white);
+    }
+
+    #[test]
+    fn test_ensure_term_contrast_dark_fg_on_dark_bg() {
+        let dark_fg = Color32::from_rgb(30, 30, 46);
+        let dark_bg = Color32::from_rgb(30, 30, 46);
+        let result = ensure_term_contrast(dark_fg, dark_bg);
+        let r = contrast_ratio(
+            [result.r(), result.g(), result.b()],
+            [dark_bg.r(), dark_bg.g(), dark_bg.b()],
+        );
+        assert!(r >= 3.0, "contrast on dark bg should be >= 3:1, got {r}");
+    }
+
+    #[test]
+    fn test_ensure_term_contrast_light_fg_on_light_bg() {
+        let light_fg = Color32::from_rgb(240, 240, 240);
+        let light_bg = Color32::from_rgb(239, 241, 245);
+        let result = ensure_term_contrast(light_fg, light_bg);
+        let r = contrast_ratio(
+            [result.r(), result.g(), result.b()],
+            [light_bg.r(), light_bg.g(), light_bg.b()],
+        );
+        assert!(r >= 3.0, "contrast on light bg should be >= 3:1, got {r}");
+    }
+
+    #[test]
+    fn test_ensure_term_contrast_all_themes_ansi_on_same() {
+        for &id in ThemeId::ALL {
+            set_theme(id);
+            let t = active();
+            for i in 0..16 {
+                let fg = t.ansi[i];
+                let result = ensure_term_contrast(fg, fg);
+                let r = contrast_ratio(
+                    [result.r(), result.g(), result.b()],
+                    [fg.r(), fg.g(), fg.b()],
+                );
+                assert!(
+                    r >= 3.0,
+                    "theme {:?} ansi[{i}] on itself: contrast {r} < 3.0",
+                    id
+                );
+            }
+        }
+        set_theme(ThemeId::CatppuccinMocha);
+    }
+
+    #[test]
+    fn test_ensure_readable_light_theme() {
+        set_theme(ThemeId::CatppuccinLatte);
+        let t = active();
+        let light_fg = [220, 220, 220];
+        let light_bg = t.base_rgb;
+        let result = ensure_readable(light_fg, light_bg);
+        let r = contrast_ratio([result.r(), result.g(), result.b()], light_bg);
+        assert!(
+            r >= 4.5,
+            "ensure_readable on light bg should reach 4.5:1, got {r}"
+        );
+        set_theme(ThemeId::CatppuccinMocha);
+    }
+
+    #[test]
+    fn test_srgb_lut_boundaries() {
+        let lut = srgb_lut();
+        assert!((lut[0] - 0.0).abs() < 0.001);
+        assert!((lut[255] - 1.0).abs() < 0.001);
+        for i in 1..256 {
+            assert!(lut[i] >= lut[i - 1], "LUT must be monotonic at index {i}");
+        }
     }
 }

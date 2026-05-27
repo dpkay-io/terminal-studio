@@ -96,7 +96,7 @@ fn poll_loop(
             s.net_tx_per_sec = tx_per_sec;
         }
 
-        ctx.request_repaint();
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
         if !sleep_interruptible(interval, &alive) {
             break;
         }

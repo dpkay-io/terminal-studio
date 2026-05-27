@@ -66,6 +66,15 @@ impl ShellKind {
 }
 
 fn find_in_path(name: &str) -> bool {
+    #[cfg(not(target_os = "windows"))]
+    {
+        // Fast check: shells are almost always in /usr/bin or /bin.
+        for dir in &["/usr/bin", "/bin", "/usr/local/bin"] {
+            if std::path::Path::new(dir).join(name).exists() {
+                return true;
+            }
+        }
+    }
     let sep = if cfg!(target_os = "windows") {
         ';'
     } else {

@@ -312,6 +312,49 @@ impl App {
         }
     }
 
+    /// Derive CWD from the active pane, regardless of its content type.
+    pub(super) fn active_pane_cwd(&self) -> Option<PathBuf> {
+        let pane = self
+            .pane_state
+            .active_pane_id
+            .and_then(|id| self.pane_state.find(id))?;
+        match &pane.content {
+            PaneContent::Terminal(sid) => self
+                .session_state
+                .sessions
+                .iter()
+                .find(|e| e.id == *sid)
+                .and_then(|e| {
+                    let cwd = e.session.read().cwd.clone();
+                    if cwd.as_os_str().is_empty() {
+                        None
+                    } else {
+                        Some(cwd)
+                    }
+                }),
+            PaneContent::DeferredTerminal { cwd, .. } => cwd.clone(),
+            PaneContent::FileEditor(ed) => self
+                .workspace_path(ed.workspace_id)
+                .or_else(|| ed.path.parent().map(|p| p.to_path_buf())),
+            PaneContent::FileDiff(d) => {
+                let ws = self.workspace_store.find_for_cwd(&d.path);
+                ws.map(|w| w.path.clone())
+                    .or_else(|| d.path.parent().map(|p| p.to_path_buf()))
+            }
+            PaneContent::NoteEditor(ne) => self.workspace_path(ne.workspace_id),
+        }
+    }
+
+    fn workspace_path(&self, ws_id: Option<u64>) -> Option<PathBuf> {
+        ws_id.and_then(|wid| {
+            self.workspace_store
+                .workspaces
+                .iter()
+                .find(|w| w.id == wid)
+                .map(|w| w.path.clone())
+        })
+    }
+
     pub(super) fn pane_group(
         sessions: &[SessionEntry],
         ws_store: &WorkspaceStore,

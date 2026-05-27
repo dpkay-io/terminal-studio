@@ -48,7 +48,7 @@ RUST_LOG=debug cargo run # enable debug logging
 - `EventProxy` implements `alacritty_terminal::event::EventListener`; handles `Title`, `PtyWrite`, `CursorBlinkingChange`
 - `TermSize` implements `alacritty_terminal::grid::Dimensions` — wraps `(cols: usize, lines: usize)`
 - OSC 7 (CWD) extracted by a tee `vte 0.13` parser (`CwdPerformer` in `reader.rs`) run on the raw byte stream before alacritty processes it
-- Scrollback: alacritty's built-in scrollback, max **10 000 lines** (set via `Config::default()` in `Session::new`)
+- Scrollback: alacritty's built-in scrollback, default **100 000 lines** (configurable up to 1M in settings; set via `Config::scrolling_history` in `Session::new`)
 
 **Threading model:**
 - UI runs on the main thread
@@ -84,7 +84,7 @@ RUST_LOG=debug cargo run # enable debug logging
 ## Terminal Emulator Details
 
 - Parser: `alacritty_terminal 0.26` internal parser (vte 0.15); OSC 7 tee-parsed by `vte 0.13` in reader thread
-- Scrollback: 10 000 lines max (alacritty default; to change: pass custom `Config` in `Session::new`)
+- Scrollback: 100 000 lines default (configurable up to 1M in settings UI; uses `Config::scrolling_history`)
 - OSC 7 → set `cwd` + `prompt_ready`; OSC 0/2 → set `title` (via `EventProxy::send_event(Event::Title(...))`)
 - Mouse events: SGR format (`?1006`) when `TermMode::SGR_MOUSE`; coordinates are 1-based
 - Scrolling: `term.scroll_display(Scroll::Delta(n))` / `Scroll::Bottom`; `display_offset()` drives the renderer

@@ -27,7 +27,7 @@ impl WatchState {
         let watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
             if let Ok(event) = res {
                 ev.lock().push(event);
-                ctx.request_repaint_after(Duration::from_millis(16));
+                ctx.request_repaint_after(Duration::from_millis(100));
             }
         })
         .ok()?;
@@ -46,7 +46,13 @@ impl WatchState {
         let current: HashSet<PathBuf> = sessions
             .iter()
             .map(|e| e.session.read().cwd.clone())
-            .filter(|p| !p.as_os_str().is_empty() && p.is_dir())
+            .filter(|p| {
+                if p.as_os_str().is_empty() {
+                    return false;
+                }
+                // Skip the is_dir() syscall for paths we already watch.
+                self.watched.contains(p) || p.is_dir()
+            })
             .collect();
 
         let to_remove: Vec<PathBuf> = self
@@ -115,10 +121,15 @@ impl WatchState {
             std::mem::take(&mut *g)
         };
 
+        if events.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
         let now = Instant::now();
         let debounce = Duration::from_millis(500);
         let mut created_md: Vec<PathBuf> = Vec::new();
         let mut removed_md: Vec<PathBuf> = Vec::new();
+        let mut dirs_needing_refresh: HashSet<PathBuf> = HashSet::new();
 
         for event in events {
             for path in &event.paths {
@@ -139,7 +150,7 @@ impl WatchState {
                             data.md_files.insert(path.clone(), Arc::new(content));
                             created_md.push(path.clone());
                         }
-                        data.dir_entries = Arc::new(list_dir_entries(&dir));
+                        dirs_needing_refresh.insert(dir.clone());
                         if data.is_git {
                             data.git_refresh_at.get_or_insert(now + debounce);
                         }
@@ -157,13 +168,20 @@ impl WatchState {
                         if data.md_files.remove(path).is_some() {
                             removed_md.push(path.clone());
                         }
-                        data.dir_entries = Arc::new(list_dir_entries(&dir));
+                        dirs_needing_refresh.insert(dir.clone());
                         if data.is_git {
                             data.git_refresh_at.get_or_insert(now + debounce);
                         }
                     }
                     _ => {}
                 }
+            }
+        }
+
+        // Batch dir refreshes — one scan per dir instead of one per event.
+        for dir in dirs_needing_refresh {
+            if let Some(data) = self.dir_data.get_mut(&dir) {
+                data.dir_entries = Arc::new(list_dir_entries(&dir));
             }
         }
 

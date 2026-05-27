@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.7.2"
+version = "0.7.3"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"
@@ -63,6 +63,9 @@ arboard = "3"
 
 # Base64 decoding (OSC 52 payloads)
 base64 = "0.22"
+
+# Syntax highlighting (Sublime Text grammars, pure-Rust regex backend)
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "regex-fancy", "plist-load"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [

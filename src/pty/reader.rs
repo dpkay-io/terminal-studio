@@ -154,11 +154,11 @@ pub fn reader_thread(
             pos = end;
         }
 
-        // ── Repaint ──────────────────────────────────────────────────────────
+        // ── Repaint — single request per read(), not per chunk ─────────────
         let repaint_ms = if is_active.load(Ordering::Relaxed) {
-            16
+            8
         } else {
-            50
+            100
         };
         ctx.request_repaint_after(std::time::Duration::from_millis(repaint_ms));
     }

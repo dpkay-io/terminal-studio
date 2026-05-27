@@ -157,6 +157,14 @@ impl TerminalView {
                     let hidden = cell.flags.contains(Flags::HIDDEN);
                     let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
                     let ch = if hidden || spacer { ' ' } else { cell.c };
+
+                    let resolved_bg = resolve_color(eff_bg, false, t);
+                    let visible_bg = if resolved_bg == egui::Color32::TRANSPARENT {
+                        t.bg_term
+                    } else {
+                        resolved_bg
+                    };
+
                     let mut fg = resolve_color(eff_fg, true, t);
                     if cell.flags.contains(Flags::BOLD) {
                         fg = match eff_fg {
@@ -172,13 +180,20 @@ impl TerminalView {
                         };
                     }
                     if cell.flags.contains(Flags::DIM) {
-                        let [r, g, b, a] = fg.to_array();
-                        fg = egui::Color32::from_rgba_unmultiplied(r, g, b, a / 2);
+                        let [fr, fgc, fb, _] = fg.to_array();
+                        let [br, bgc, bb, _] = visible_bg.to_array();
+                        fg = egui::Color32::from_rgb(
+                            ((fr as u16 + br as u16) / 2) as u8,
+                            ((fgc as u16 + bgc as u16) / 2) as u8,
+                            ((fb as u16 + bb as u16) / 2) as u8,
+                        );
                     }
+                    fg = theme::ensure_term_contrast(fg, visible_bg);
+
                     buf.push(CellInfo {
                         ch,
                         fg,
-                        bg: resolve_color(eff_bg, false, t),
+                        bg: resolved_bg,
                         bold: cell.flags.contains(Flags::BOLD),
                         underline: cell.flags.contains(Flags::UNDERLINE),
                         strike: cell.flags.contains(Flags::STRIKEOUT),

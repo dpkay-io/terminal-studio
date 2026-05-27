@@ -66,13 +66,8 @@ impl EventListener for EventProxy {
                 let _ = self.pty_tx.try_send(s.into_bytes());
             }
             Event::MouseCursorDirty | Event::CursorBlinkingChange => {
-                // Coalesce: schedule a repaint at the next ~60 Hz tick rather
-                // than firing one immediately on every event. alacritty emits
-                // these frequently during fast cursor motion / blinks, and a
-                // direct `request_repaint()` per event causes the UI thread
-                // to wake up far more often than the human eye can see.
                 self.ctx
-                    .request_repaint_after(std::time::Duration::from_millis(16));
+                    .request_repaint_after(std::time::Duration::from_millis(50));
             }
             _ => {}
         }
@@ -128,7 +123,7 @@ impl Session {
         let ctx = Context::default();
         let proxy = EventProxy::new(id, title.clone(), ctx, tx);
         let config = Config {
-            scrolling_history: 10_000,
+            scrolling_history: 100_000,
             ..Config::default()
         };
         let size = TermSize {

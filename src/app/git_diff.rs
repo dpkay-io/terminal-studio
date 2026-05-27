@@ -104,17 +104,18 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                 let resp = ui.horizontal(|ui| {
                     let (badge_rect, _) =
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
-                    ui.painter().rect_filled(
-                        badge_rect,
-                        theme::ROUNDING,
-                        entry.color.gamma_multiply(0.25),
-                    );
+                    let badge_bg = entry.color.gamma_multiply(0.25);
+                    ui.painter()
+                        .rect_filled(badge_rect, theme::ROUNDING, badge_bg);
+                    let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
+                    let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
+                    let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
                     ui.painter().text(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
                         egui::FontId::monospace(10.0),
-                        entry.color,
+                        badge_fg,
                     );
                     let label_resp = ui
                         .add(
@@ -190,17 +191,18 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                 let resp = ui.horizontal(|ui| {
                     let (badge_rect, _) =
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
-                    ui.painter().rect_filled(
-                        badge_rect,
-                        theme::ROUNDING,
-                        entry.color.gamma_multiply(0.25),
-                    );
+                    let badge_bg = entry.color.gamma_multiply(0.25);
+                    ui.painter()
+                        .rect_filled(badge_rect, theme::ROUNDING, badge_bg);
+                    let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
+                    let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
+                    let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
                     ui.painter().text(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
                         egui::FontId::monospace(10.0),
-                        entry.color,
+                        badge_fg,
                     );
                     let label_resp = ui
                         .add(

@@ -39,15 +39,10 @@ pub(super) struct DirData {
 }
 
 impl DirData {
+    /// Non-blocking constructor. Checks for `.git` existence (file or dir)
+    /// instead of spawning `git rev-parse` which can block for 50-200ms.
     pub(super) fn new(path: &Path) -> Self {
-        let is_git = std::process::Command::new("git")
-            .args(["rev-parse", "--is-inside-work-tree"])
-            .current_dir(path)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+        let is_git = path.join(".git").exists();
         DirData {
             is_git,
             git_diff: String::new(),

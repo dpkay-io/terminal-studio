@@ -10,6 +10,7 @@ mod search;
 mod search_worker;
 mod shortcuts;
 mod single_instance;
+mod syntax;
 mod sys_monitor;
 mod terminal;
 mod theme;

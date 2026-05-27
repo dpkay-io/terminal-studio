@@ -253,9 +253,17 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Cursor blink is shared across all windows — toggle once per frame.
+        theme::clear_contrast_cache();
+
+        // Cursor blink — only schedule repaint when a terminal pane is focused.
         {
-            if self.settings.cursor_blink {
+            let has_active_terminal = self
+                .pane_state
+                .active_pane_id
+                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                .map(|p| matches!(p.content, PaneContent::Terminal(_)))
+                .unwrap_or(false);
+            if self.settings.cursor_blink && has_active_terminal {
                 if self.cursor_blink_last.elapsed() >= Duration::from_millis(500) {
                     self.cursor_blink_on = !self.cursor_blink_on;
                     self.cursor_blink_last = Instant::now();
@@ -303,8 +311,7 @@ impl eframe::App for App {
                     #[cfg(not(target_os = "windows"))]
                     let _ = entry.pty_tx.try_send(format!("{}\n", cmd).into_bytes());
                 } else {
-                    // Keep repainting until the prompt arrives.
-                    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
                 }
             }
         }
@@ -322,17 +329,17 @@ impl eframe::App for App {
                     .unwrap_or(false)
             });
             if !self.session_state.uninit_sessions.is_empty() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(50));
+                ctx.request_repaint_after(std::time::Duration::from_millis(150));
             }
         }
 
         // ── Sync watchers + process FS events ──────────────────────────────
         if let Some(ws) = &mut self.watch_state {
-            // Resync when sessions are added/removed or after 1s to catch CWD changes.
+            // Resync when sessions are added/removed or every 3s to catch CWD changes.
             let session_count = self.session_state.sessions.len();
             let now = Instant::now();
             if session_count != ws.last_session_count
-                || now.duration_since(ws.last_sync) >= Duration::from_secs(1)
+                || now.duration_since(ws.last_sync) >= Duration::from_secs(3)
             {
                 ws.sync(&self.session_state.sessions);
                 ws.last_sync = now;
@@ -407,7 +414,7 @@ impl eframe::App for App {
                 self.workers.search_worker.cancel();
             }
         } else if self.global_search_debouncer.pending() {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
 
         // ── Render the main window ────────────────────────────────────────
@@ -794,7 +801,9 @@ impl App {
                         egui::ScrollArea::vertical()
                             .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
+                                let w = ui.available_width();
+                                ui.set_min_width(w);
+                                ui.set_max_width(w);
                                 match &active_tab {
                                     RightTab::Directory => {
                                         if let Some(cwd) = active_cwd.as_ref() {
@@ -1306,6 +1315,8 @@ impl App {
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
         // Phase D: pane context menu actions (3-dot menu on split panes)
         let mut pane_context_actions: Vec<ui::PaneContextAction> = vec![];
+        // Phase D: move existing tab into split alongside active pane
+        let mut move_to_split: Option<(u32, SplitDir)> = None;
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -1385,6 +1396,9 @@ impl App {
                 if tab_result.split_request.is_some() {
                     split_request = tab_result.split_request;
                 }
+                if tab_result.move_to_split.is_some() {
+                    move_to_split = tab_result.move_to_split;
+                }
 
                 // ── Active tab content (full-size, split-aware) ──────────────
                 self.render_pane_content(
@@ -1433,36 +1447,30 @@ impl App {
                         }
                         drop(session);
                         self.detected_urls = crate::url_detector::detect_urls(&lines);
-                        if !cwd.as_os_str().is_empty() {
-                            self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
-                            for md in &self.detected_md_paths {
-                                if self.auto_opened_md.contains(&md.path) {
-                                    continue;
-                                }
-                                self.auto_opened_md.insert(md.path.clone());
-                                // Only auto-open files modified within the last 10 seconds
-                                // (i.e., freshly created by an AI tool, not old files listed by `ls`)
-                                let is_recent = std::fs::metadata(&md.path)
-                                    .and_then(|m| m.modified())
-                                    .ok()
-                                    .and_then(|t| t.elapsed().ok())
-                                    .is_some_and(|age| age.as_secs() < 10);
-                                if !is_recent {
-                                    continue;
-                                }
-                                let path = md.path.clone();
-                                let ws_id = self.active_group;
-                                let results = Arc::clone(&self.md_load_results);
-                                let ctx_clone = ctx.clone();
-                                std::thread::spawn(move || {
-                                    let content = std::fs::read_to_string(&path).unwrap_or_default();
-                                    results.lock().push((path, content, ws_id));
-                                    ctx_clone.request_repaint();
-                                });
-                                break; // limit to 1 auto-open per detection pass
+                        self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
+                        for md in &self.detected_md_paths {
+                            if self.auto_opened_md.contains(&md.path) {
+                                continue;
                             }
-                        } else {
-                            self.detected_md_paths.clear();
+                            let is_recent = std::fs::metadata(&md.path)
+                                .and_then(|m| m.modified())
+                                .ok()
+                                .and_then(|t| t.elapsed().ok())
+                                .is_some_and(|age| age.as_secs() < 10);
+                            if !is_recent {
+                                continue;
+                            }
+                            self.auto_opened_md.insert(md.path.clone());
+                            let path = md.path.clone();
+                            let ws_id = self.active_group;
+                            let results = Arc::clone(&self.md_load_results);
+                            let ctx_clone = ctx.clone();
+                            std::thread::spawn(move || {
+                                let content = std::fs::read_to_string(&path).unwrap_or_default();
+                                results.lock().push((path, content, ws_id));
+                                ctx_clone.request_repaint();
+                            });
+                            break;
                         }
                     }
 
@@ -2126,9 +2134,10 @@ impl App {
                                             let visible_rows = geo
                                                 .map(|g| g.rect.height() / g.cell_h)
                                                 .unwrap_or(24.0);
+                                            let multiplier = self.settings.scroll_lines.max(1) as f32;
                                             let delta_lines = match unit {
-                                                egui::MouseWheelUnit::Point => delta.y / cell_h,
-                                                egui::MouseWheelUnit::Line  => delta.y,
+                                                egui::MouseWheelUnit::Point => delta.y / cell_h * multiplier,
+                                                egui::MouseWheelUnit::Line  => delta.y * multiplier,
                                                 egui::MouseWheelUnit::Page  => delta.y * visible_rows,
                                             };
                                             let accum = self.scroll_accum.entry(sid).or_insert(0.0);
@@ -2154,6 +2163,45 @@ impl App {
                             }
                         }
                         _ => {}
+                    }
+                }
+
+                // ── File drag-and-drop → paste shell-quoted paths ──────────
+                let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+                if !dropped.is_empty() {
+                    if let Some(sid) = active_session_id {
+                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                            let paths: Vec<String> = dropped
+                                .iter()
+                                .filter_map(|f| f.path.as_ref())
+                                .map(|p| input::shell_quote_path(p))
+                                .collect();
+                            if !paths.is_empty() {
+                                let text = paths.join(" ");
+                                self.session_state.sessions[idx]
+                                    .session
+                                    .write()
+                                    .term
+                                    .scroll_display(Scroll::Bottom);
+                                let bp = self.session_state.sessions[idx]
+                                    .session
+                                    .read()
+                                    .term
+                                    .mode()
+                                    .contains(TermMode::BRACKETED_PASTE);
+                                let data = if bp {
+                                    let mut v = b"\x1b[200~".to_vec();
+                                    v.extend_from_slice(text.as_bytes());
+                                    v.extend_from_slice(b"\x1b[201~");
+                                    v
+                                } else {
+                                    text.as_bytes().to_vec()
+                                };
+                                let _ = self.session_state.sessions[idx]
+                                    .pty_tx
+                                    .try_send(data);
+                            }
+                        }
                     }
                 }
             }
@@ -2236,6 +2284,58 @@ impl App {
                         self.session_state.active_id = Some(new_sid);
                         self.update_is_active_flags();
                         ctx.request_repaint();
+                    }
+                }
+            }
+        }
+
+        // Phase D-1b: Handle "Move to split" — move an existing tab into split alongside active pane
+        if let Some((source_root_pid, dir)) = move_to_split {
+            if let Some(active_pid) = self.pane_state.active_pane_id {
+                let active_root = self.pane_state.root_of(active_pid);
+                // Only proceed if source and target are different root panes
+                if active_root.is_some_and(|ar| ar != source_root_pid) {
+                    let active_root_pid = active_root.unwrap();
+                    // Take the source tab's subtree out of pane_trees
+                    if let Some(source_tree) = self.pane_state.pane_trees.remove(&source_root_pid) {
+                        let split_id = self.pane_state.next_split_id;
+                        self.pane_state.next_split_id += 1;
+                        // Insert the source subtree alongside the active pane in the target tree
+                        if let Some(target_tree) =
+                            self.pane_state.pane_trees.get_mut(&active_root_pid)
+                        {
+                            if !target_tree.split_pane_with_node(
+                                active_pid,
+                                source_tree.clone(),
+                                split_id,
+                                dir,
+                            ) {
+                                // Revert if insertion failed
+                                self.pane_state
+                                    .pane_trees
+                                    .insert(source_root_pid, source_tree);
+                            } else {
+                                // Focus the first leaf of the moved subtree
+                                let moved_leaves = source_tree.leaf_ids();
+                                if let Some(&first) = moved_leaves.first() {
+                                    self.pane_state.active_pane_id = Some(first);
+                                    if let Some(pane) =
+                                        self.pane_state.panes.iter().find(|p| p.id == first)
+                                    {
+                                        if let PaneContent::Terminal(sid) = pane.content {
+                                            self.session_state.active_id = Some(sid);
+                                            self.update_is_active_flags();
+                                        }
+                                    }
+                                }
+                                ctx.request_repaint();
+                            }
+                        } else {
+                            // Target tree disappeared — revert
+                            self.pane_state
+                                .pane_trees
+                                .insert(source_root_pid, source_tree);
+                        }
                     }
                 }
             }

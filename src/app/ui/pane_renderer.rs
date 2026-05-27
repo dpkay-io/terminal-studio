@@ -7,6 +7,7 @@ use super::super::settings::CursorStyle;
 use super::super::App;
 use crate::pane_tree::{split_rect, PaneNode, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
+use crate::syntax;
 use crate::theme;
 
 /// Actions emitted by the 3-dot context menu on split panes.
@@ -402,22 +403,22 @@ fn render_file_editor_leaf(
             }
         } else if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
             if let Some(ref mut text) = et.1 {
+                let maybe_syntax = syntax::find_syntax_for_file(&ed.path);
+
                 egui::ScrollArea::both()
                     .id_source(("editor_scroll", pane_id))
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         let line_count = text.lines().count().max(1);
                         let digits = ((line_count as f64).log10().floor() as usize) + 1;
-                        let char_w = 7.5_f32; // approx monospace char width at default size
+                        let char_w = 7.5_f32;
                         let gutter_w = (digits as f32 + 1.5) * char_w;
                         let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
                         ui.horizontal_top(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
-                            // Line number gutter
                             ui.vertical(|ui| {
                                 ui.set_min_width(gutter_w);
-                                // Pad top to match TextEdit internal padding
                                 ui.add_space(2.0);
                                 for n in 1..=line_count {
                                     let num_str = format!("{:>width$}", n, width = digits);
@@ -431,7 +432,6 @@ fn render_file_editor_leaf(
                                     );
                                 }
                             });
-                            // Separator line
                             let sep_rect = ui
                                 .allocate_exact_size(
                                     egui::vec2(1.0, line_h * line_count as f32 + 4.0),
@@ -441,13 +441,27 @@ fn render_file_editor_leaf(
                             ui.painter()
                                 .rect_filled(sep_rect, 0.0, theme::active().surface1);
                             ui.add_space(theme::SP_SM);
-                            // Editor
-                            ui.add(
-                                egui::TextEdit::multiline(text)
-                                    .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY)
-                                    .frame(false),
-                            );
+
+                            if let Some(syn) = maybe_syntax {
+                                let mut layouter = |ui: &egui::Ui, s: &str, wrap_width: f32| {
+                                    let job = syntax::highlight_layout_job(ui, s, syn, wrap_width);
+                                    ui.fonts(|f| f.layout_job(job))
+                                };
+                                ui.add(
+                                    egui::TextEdit::multiline(text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(f32::INFINITY)
+                                        .frame(false)
+                                        .layouter(&mut layouter),
+                                );
+                            } else {
+                                ui.add(
+                                    egui::TextEdit::multiline(text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(f32::INFINITY)
+                                        .frame(false),
+                                );
+                            }
                         });
                     });
             }
@@ -580,6 +594,35 @@ impl App {
                 has_splits,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
+        }
+
+        // ── File drag hover overlay ────────────────────────────────────────
+        let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        if hovering_files {
+            let t = theme::active();
+            let painter = ui.painter();
+            painter.rect_filled(
+                content_rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(
+                    t.surface0.r(),
+                    t.surface0.g(),
+                    t.surface0.b(),
+                    180,
+                ),
+            );
+            painter.rect_stroke(
+                content_rect.shrink(2.0),
+                4.0,
+                egui::Stroke::new(2.0, t.blue),
+            );
+            painter.text(
+                content_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop file(s) to paste path",
+                egui::FontId::proportional(16.0),
+                t.text,
+            );
         }
     }
 }

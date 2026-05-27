@@ -134,6 +134,62 @@ pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> 
     })
 }
 
+pub(super) fn shell_quote_path(path: &std::path::Path) -> String {
+    let s = path.to_string_lossy();
+
+    #[cfg(target_os = "windows")]
+    {
+        let needs_quoting = s.contains(' ')
+            || s.contains('&')
+            || s.contains('(')
+            || s.contains(')')
+            || s.contains('^')
+            || s.contains('|');
+        if needs_quoting {
+            format!("\"{}\"", s.replace('"', "\\\""))
+        } else {
+            s.into_owned()
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let needs_quoting = s.chars().any(|c| {
+            matches!(
+                c,
+                ' ' | '\t'
+                    | '!'
+                    | '"'
+                    | '#'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | ';'
+                    | '<'
+                    | '>'
+                    | '?'
+                    | '['
+                    | '\\'
+                    | ']'
+                    | '^'
+                    | '`'
+                    | '{'
+                    | '|'
+                    | '}'
+                    | '~'
+            )
+        });
+        if needs_quoting {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        } else {
+            s.into_owned()
+        }
+    }
+}
+
 pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr: bool) -> Vec<u8> {
     if sgr {
         let final_char = if pressed { b'M' } else { b'm' };
@@ -364,5 +420,67 @@ mod tests {
         let bytes = mouse_event_bytes(0, 5, 10, true, false);
         // btn+32=32, col+1+32=38, row+1+32=43
         assert_eq!(bytes, vec![0x1b, b'[', b'M', 32, 38, 43]);
+    }
+
+    // ── shell_quote_path ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_quote_simple_path() {
+        use std::path::Path;
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            shell_quote_path(Path::new(r"C:\Users\test\file.txt")),
+            r"C:\Users\test\file.txt"
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            shell_quote_path(Path::new("/home/test/file.txt")),
+            "/home/test/file.txt"
+        );
+    }
+
+    #[test]
+    fn test_quote_path_with_spaces() {
+        use std::path::Path;
+        #[cfg(target_os = "windows")]
+        assert_eq!(
+            shell_quote_path(Path::new(r"C:\My Files\doc.txt")),
+            r#""C:\My Files\doc.txt""#
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            shell_quote_path(Path::new("/home/my files/doc.txt")),
+            "'/home/my files/doc.txt'"
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_quote_path_with_single_quote() {
+        use std::path::Path;
+        assert_eq!(
+            shell_quote_path(Path::new("/home/it's a file")),
+            "'/home/it'\\''s a file'"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_quote_path_with_ampersand() {
+        use std::path::Path;
+        assert_eq!(
+            shell_quote_path(Path::new(r"C:\Tom & Jerry\file.txt")),
+            r#""C:\Tom & Jerry\file.txt""#
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_quote_path_with_special_chars() {
+        use std::path::Path;
+        assert_eq!(
+            shell_quote_path(Path::new("/home/test/file (1).txt")),
+            "'/home/test/file (1).txt'"
+        );
     }
 }

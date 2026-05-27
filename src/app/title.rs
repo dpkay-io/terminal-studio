@@ -45,6 +45,25 @@ pub(super) fn effective_title(
     shell: Option<&ShellKind>,
     workspace_name: Option<&str>,
 ) -> String {
+    let t = title.trim();
+    let tl = t.to_lowercase();
+    let is_shell_default = t.is_empty()
+        || tl.starts_with("session ")
+        || tl == "powershell.exe"
+        || tl == "windows powershell"
+        || tl == "cmd.exe"
+        || tl == "bash"
+        || tl == "zsh"
+        || tl == "sh"
+        || tl == "fish";
+
+    // An application-set OSC 0/2 title is authoritative — the running program
+    // knows best what to call itself. Only fall through when the title is a
+    // generic shell default.
+    if !is_shell_default {
+        return display_title(title);
+    }
+
     if let Some(fp) = fg {
         let name = fp.name.strip_suffix(".exe").unwrap_or(&fp.name);
         if fp.cmdline.len() > 1 {
@@ -58,22 +77,6 @@ pub(super) fn effective_title(
             }
         }
         return name.to_string();
-    }
-
-    let t = title.trim();
-    let tl = t.to_lowercase();
-    let is_shell_default = t.is_empty()
-        || tl.starts_with("session ")
-        || tl == "powershell.exe"
-        || tl == "windows powershell"
-        || tl == "cmd.exe"
-        || tl == "bash"
-        || tl == "zsh"
-        || tl == "sh"
-        || tl == "fish";
-
-    if !is_shell_default {
-        return display_title(title);
     }
 
     if let Some(ws) = workspace_name.filter(|s| !s.is_empty()) {
@@ -256,6 +259,51 @@ mod tests {
         assert_eq!(
             effective_title("bash", cwd, None, None, Some("")),
             "myproject"
+        );
+    }
+
+    #[test]
+    fn effective_title_osc_title_wins_over_foreground() {
+        let cwd = Path::new("/home/user/myproject");
+        let fg = ForegroundProcess {
+            name: "claude".to_string(),
+            cmdline: vec!["claude".to_string()],
+        };
+        assert_eq!(
+            effective_title("claude ~/ws/ai-studio", cwd, Some(&fg), None, None),
+            "claude ~/ws/ai-studio"
+        );
+    }
+
+    #[test]
+    fn effective_title_osc_title_wins_over_foreground_and_workspace() {
+        let cwd = Path::new("/home/user/myproject");
+        let fg = ForegroundProcess {
+            name: "node.exe".to_string(),
+            cmdline: vec!["node.exe".to_string(), "server.js".to_string()],
+        };
+        assert_eq!(
+            effective_title(
+                "my-app dev server",
+                cwd,
+                Some(&fg),
+                None,
+                Some("My Project")
+            ),
+            "my-app dev server"
+        );
+    }
+
+    #[test]
+    fn effective_title_shell_default_still_uses_foreground() {
+        let cwd = Path::new("/home/user/myproject");
+        let fg = ForegroundProcess {
+            name: "ssh".to_string(),
+            cmdline: vec!["ssh".to_string(), "user@host".to_string()],
+        };
+        assert_eq!(
+            effective_title("bash", cwd, Some(&fg), None, None),
+            "ssh user@host"
         );
     }
 }

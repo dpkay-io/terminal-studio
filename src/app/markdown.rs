@@ -1,4 +1,5 @@
 pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
+    use crate::syntax;
     use crate::theme;
 
     let lines: Vec<&str> = content.lines().collect();
@@ -10,6 +11,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
 
         // Fenced code block
         if line.starts_with("```") {
+            let lang = line.trim_start_matches('`').trim();
             i += 1;
             let mut code_buf: Vec<&str> = Vec::new();
             while i < len && !lines[i].starts_with("```") {
@@ -17,9 +19,16 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 i += 1;
             }
             if i < len {
-                i += 1; // skip closing ```
+                i += 1;
             }
             ui.add_space(theme::SP_SM);
+            let maybe_syntax = if lang.is_empty() {
+                None
+            } else {
+                syntax::find_syntax_for_language(lang)
+            };
+            let code_text = code_buf.join("\n");
+
             egui::Frame::none()
                 .fill(theme::active().md_code_bg)
                 .stroke(egui::Stroke::new(
@@ -30,13 +39,26 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 .rounding(egui::Rounding::same(theme::ROUNDING))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    for code_line in &code_buf {
-                        ui.label(
-                            egui::RichText::new(*code_line)
-                                .monospace()
-                                .size(12.0)
-                                .color(theme::active().md_code),
+                    if let Some(syn) = maybe_syntax {
+                        let highlighted = syntax::highlighted_lines(&code_text, syn);
+                        for spans in &highlighted {
+                            let job = build_line_job(spans);
+                            ui.label(job);
+                        }
+                    } else {
+                        let th = theme::active();
+                        let code_fg = theme::ensure_readable(
+                            [th.md_code.r(), th.md_code.g(), th.md_code.b()],
+                            [th.md_code_bg.r(), th.md_code_bg.g(), th.md_code_bg.b()],
                         );
+                        for code_line in &code_buf {
+                            ui.label(
+                                egui::RichText::new(*code_line)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(code_fg),
+                            );
+                        }
                     }
                 });
             ui.add_space(theme::SP_SM);
@@ -176,6 +198,30 @@ fn parse_table_cells(line: &str) -> Vec<&str> {
     inner.split('|').map(|s| s.trim()).collect()
 }
 
+fn build_line_job(spans: &[(egui::Color32, String)]) -> egui::text::LayoutJob {
+    use crate::theme;
+    let t = theme::active();
+    let code_bg_rgb = t.md_code_bg.to_array();
+    let bg_rgb = [code_bg_rgb[0], code_bg_rgb[1], code_bg_rgb[2]];
+    let mut job = egui::text::LayoutJob::default();
+    let font = egui::FontId::monospace(12.0);
+    for (color, text) in spans {
+        let fg_rgb = [color.r(), color.g(), color.b()];
+        let safe_color = theme::ensure_readable(fg_rgb, bg_rgb);
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat::simple(font.clone(), safe_color),
+        );
+    }
+    if job.text.is_empty() {
+        let code_fg_rgb = [t.md_code.r(), t.md_code.g(), t.md_code.b()];
+        let safe_code = theme::ensure_readable(code_fg_rgb, bg_rgb);
+        job.append(" ", 0.0, egui::TextFormat::simple(font, safe_code));
+    }
+    job
+}
+
 fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
     use crate::theme;
 
@@ -185,16 +231,30 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
 
     let th = theme::active();
     let col_count = rows[0].len();
+    if col_count == 0 {
+        return;
+    }
+
+    let cell_h_padding = theme::SP_MD;
+    let border_width = theme::STROKE_THIN;
 
     ui.add_space(theme::SP_SM);
     egui::Frame::none()
-        .stroke(egui::Stroke::new(theme::STROKE_THIN, th.md_table_border))
+        .stroke(egui::Stroke::new(border_width, th.md_table_border))
         .rounding(egui::Rounding::same(theme::ROUNDING))
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
+            let total_width = ui.available_width();
+            ui.set_min_width(total_width);
+
+            let borders_width = border_width * (col_count as f32 - 1.0);
+            let padding_width = cell_h_padding * 2.0 * col_count as f32;
+            let content_width =
+                (total_width - borders_width - padding_width).max(col_count as f32 * 20.0);
+            let col_content_width = content_width / col_count as f32;
+
             egui::Grid::new(ui.next_auto_id())
                 .num_columns(col_count)
-                .min_col_width(40.0)
+                .min_col_width(0.0)
                 .spacing(egui::vec2(0.0, 0.0))
                 .show(ui, |ui| {
                     for (row_idx, row) in rows.iter().enumerate() {
@@ -212,18 +272,19 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                 egui::Frame::none()
                                     .fill(bg)
                                     .inner_margin(egui::Margin::symmetric(
-                                        theme::SP_MD,
+                                        cell_h_padding,
                                         theme::SP_XS + 1.0,
                                     ));
 
                             if col_idx < col_count.saturating_sub(1) {
                                 frame = frame.stroke(egui::Stroke::new(
-                                    theme::STROKE_THIN,
+                                    border_width,
                                     th.md_table_border.linear_multiply(0.5),
                                 ));
                             }
 
                             frame.show(ui, |ui| {
+                                ui.set_min_width(col_content_width);
                                 if is_header {
                                     ui.label(egui::RichText::new(*cell).strong().size(12.5));
                                 } else {

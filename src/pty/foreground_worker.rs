@@ -40,7 +40,7 @@ impl ForegroundWorker {
                         let result = detect_child(shell_pid);
                         cache_bg.lock().insert(sid, result);
                     }
-                    thread::sleep(Duration::from_millis(500));
+                    thread::sleep(Duration::from_millis(1000));
                 }
             })
         {

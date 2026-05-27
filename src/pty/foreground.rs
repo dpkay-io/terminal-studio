@@ -36,10 +36,11 @@ mod platform {
     ];
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        let (child_pid, name) = find_child(shell_pid)?;
-        // Try to get the full command line; fall back to exe name only.
-        let cmdline = get_cmdline(child_pid).unwrap_or_else(|| vec![name.clone()]);
-        Some(ForegroundProcess { name, cmdline })
+        let (_child_pid, name) = find_child(shell_pid)?;
+        Some(ForegroundProcess {
+            cmdline: vec![name.clone()],
+            name,
+        })
     }
 
     fn find_child(parent_pid: u32) -> Option<(u32, String)> {
@@ -77,54 +78,6 @@ mod platform {
     fn wide_to_string(buf: &[u16; 260]) -> String {
         let len = buf.iter().position(|&c| c == 0).unwrap_or(260);
         String::from_utf16_lossy(&buf[..len])
-    }
-
-    fn get_cmdline(pid: u32) -> Option<Vec<String>> {
-        // wmic is deprecated on Windows 11 22H2+ but is still present on all current
-        // systems.  This is a best-effort call: if it fails we fall back to the exe name.
-        let output = std::process::Command::new("wmic")
-            .args([
-                "process",
-                "where",
-                &format!("ProcessId={}", pid),
-                "get",
-                "CommandLine",
-                "/format:list",
-            ])
-            .output()
-            .ok()?;
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        for line in text.lines() {
-            if let Some(cmd) = line.strip_prefix("CommandLine=") {
-                let cmd = cmd.trim();
-                if !cmd.is_empty() {
-                    return Some(parse_windows_cmdline(cmd));
-                }
-            }
-        }
-        None
-    }
-
-    fn parse_windows_cmdline(s: &str) -> Vec<String> {
-        let mut args: Vec<String> = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        for c in s.chars() {
-            match c {
-                '"' => in_quotes = !in_quotes,
-                ' ' | '\t' if !in_quotes => {
-                    if !current.is_empty() {
-                        args.push(std::mem::take(&mut current));
-                    }
-                }
-                _ => current.push(c),
-            }
-        }
-        if !current.is_empty() {
-            args.push(current);
-        }
-        args
     }
 }
 

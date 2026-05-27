@@ -217,10 +217,12 @@ impl App {
                                     .color(t.text),
                             );
                             ui.add_space(theme::SP_XL);
+                            let shortcut_fg =
+                                theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                             ui.label(
                                 egui::RichText::new("Ctrl+Shift+Space")
                                     .size(11.0)
-                                    .color(t.subtext0)
+                                    .color(shortcut_fg)
                                     .background_color(t.surface1),
                             );
                             ui.with_layout(
@@ -262,11 +264,12 @@ impl App {
                         // ── Hotkey hints ─────────────────────────────────
                         ui.horizontal(|ui| {
                             let hint = |ui: &mut egui::Ui, key: &str, desc: &str| {
+                                let hint_fg = theme::ensure_readable(t.base_rgb, t.overlay0_rgb);
                                 ui.label(
                                     egui::RichText::new(key)
                                         .size(11.0)
                                         .strong()
-                                        .color(t.base)
+                                        .color(hint_fg)
                                         .background_color(t.overlay0),
                                 );
                                 ui.label(egui::RichText::new(desc).size(11.0).color(t.subtext0));
@@ -275,11 +278,12 @@ impl App {
                             if let Some(ws_idx) = self.quick_switcher_selected_ws {
                                 hint(ui, " a-z ", "select session");
                                 let badge = format!(" {} ", ws_idx + 1);
+                                let ws_badge_fg = theme::ensure_readable(t.base_rgb, t.green_rgb);
                                 ui.label(
                                     egui::RichText::new(&badge)
                                         .size(11.0)
                                         .strong()
-                                        .color(t.base)
+                                        .color(ws_badge_fg)
                                         .background_color(t.green),
                                 );
                                 ui.label(
@@ -534,6 +538,16 @@ impl App {
                                                             } else {
                                                                 t.overlay0
                                                             };
+                                                            let badge_bg_rgb = [
+                                                                badge_bg.r(),
+                                                                badge_bg.g(),
+                                                                badge_bg.b(),
+                                                            ];
+                                                            let session_badge_fg =
+                                                                theme::ensure_readable(
+                                                                    t.base_rgb,
+                                                                    badge_bg_rgb,
+                                                                );
                                                             ui.label(
                                                                 egui::RichText::new(format!(
                                                                     " {} ",
@@ -541,7 +555,7 @@ impl App {
                                                                 ))
                                                                 .size(11.0)
                                                                 .strong()
-                                                                .color(t.base)
+                                                                .color(session_badge_fg)
                                                                 .background_color(badge_bg),
                                                             );
                                                             ui.vertical(|ui| {

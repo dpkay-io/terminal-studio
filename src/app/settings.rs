@@ -24,6 +24,7 @@ pub(super) struct AppSettings {
     pub(super) cursor_style: CursorStyle,
     pub(super) cursor_blink: bool,
     pub(super) scroll_on_output: bool,
+    pub(super) scroll_lines: u32,
     pub(super) default_shell: Option<String>,
     pub(super) show_sys_monitor: bool,
 }
@@ -37,10 +38,11 @@ impl Default for AppSettings {
             last_update_check: None,
             skip_version: None,
             font_size: 14.0,
-            scrollback_lines: 10_000,
+            scrollback_lines: 100_000,
             cursor_style: CursorStyle::Block,
             cursor_blink: true,
             scroll_on_output: false,
+            scroll_lines: 3,
             default_shell: None,
             show_sys_monitor: true,
         }
@@ -134,7 +136,7 @@ mod tests {
         assert_eq!(s.last_update_check, None);
         assert_eq!(s.skip_version, None);
         assert!((s.font_size - 14.0).abs() < f32::EPSILON);
-        assert_eq!(s.scrollback_lines, 10_000);
+        assert_eq!(s.scrollback_lines, 100_000);
         assert_eq!(s.cursor_style, CursorStyle::Block);
         assert!(s.cursor_blink);
         assert!(!s.scroll_on_output);
@@ -204,7 +206,7 @@ mod tests {
         assert!((s.font_size - 16.0).abs() < f32::EPSILON);
         assert!(!s.cursor_blink);
         // Remaining fields fall back to defaults
-        assert_eq!(s.scrollback_lines, 10_000);
+        assert_eq!(s.scrollback_lines, 100_000);
         assert_eq!(s.cursor_style, CursorStyle::Block);
         assert!(s.restore_last_session);
         assert_eq!(s.theme_id, theme::ThemeId::CatppuccinMocha);
