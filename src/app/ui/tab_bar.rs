@@ -203,8 +203,8 @@ impl App {
                             }
 
                             // Right-click context menu for tab operations.
-                            let can_move_to_split = active_pane_id_snap
-                                .is_some_and(|apid| apid != pane_id);
+                            let can_move_to_split =
+                                active_pane_id_snap.is_some_and(|apid| apid != pane_id);
                             let extra_window_names: Vec<(u64, String)> = self
                                 .extra_windows
                                 .iter()

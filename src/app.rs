@@ -2301,8 +2301,7 @@ impl App {
                         let same_root = source_root_pid == active_root_pid;
                         let source_node = if same_root {
                             // Extract source leaf from the shared tree
-                            if let Some(tree) =
-                                self.pane_state.pane_trees.get_mut(&active_root_pid)
+                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&active_root_pid)
                             {
                                 match tree.remove_pane(source_pane_id) {
                                     RemoveResult::IsTarget => {
@@ -2350,9 +2349,7 @@ impl App {
                                     dir,
                                 ) {
                                     // Revert: re-insert source as its own root tab
-                                    self.pane_state
-                                        .pane_trees
-                                        .insert(source_pane_id, subtree);
+                                    self.pane_state.pane_trees.insert(source_pane_id, subtree);
                                 } else {
                                     let moved_leaves = subtree.leaf_ids();
                                     if let Some(&first) = moved_leaves.first() {
@@ -2370,9 +2367,7 @@ impl App {
                                 }
                             } else {
                                 // Target tree gone — re-insert source as its own root
-                                self.pane_state
-                                    .pane_trees
-                                    .insert(source_pane_id, subtree);
+                                self.pane_state.pane_trees.insert(source_pane_id, subtree);
                             }
                         }
                     }
