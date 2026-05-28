@@ -2290,84 +2290,97 @@ impl App {
         }
 
         // Phase D-1b: Handle "Move to split" — move an existing tab into split alongside active pane
-        if let Some((source_pane_id, dir)) = move_to_split {
+        if let Some((clicked_pane, dir)) = move_to_split {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                if source_pane_id != active_pid {
-                    let source_root = self.pane_state.root_of(source_pane_id);
-                    let active_root = self.pane_state.root_of(active_pid);
-                    if let (Some(source_root_pid), Some(active_root_pid)) =
-                        (source_root, active_root)
-                    {
-                        let same_root = source_root_pid == active_root_pid;
-                        let source_node = if same_root {
-                            // Extract source leaf from the shared tree
-                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&active_root_pid)
-                            {
-                                match tree.remove_pane(source_pane_id) {
-                                    RemoveResult::IsTarget => {
-                                        // Source was the only leaf (root itself) — shouldn't
-                                        // happen since same_root + different panes implies
-                                        // the tree has at least two leaves. Skip.
-                                        None
-                                    }
-                                    RemoveResult::CollapseToSibling(replacement) => {
-                                        let node = PaneNode::Leaf {
+                // When the user clicks split on the active tab, pick the next
+                // visible tab as the source to merge alongside it.
+                let source_pane_id = if clicked_pane == active_pid {
+                    let active_vis_pos = visible_indices
+                        .iter()
+                        .position(|&i| self.pane_state.panes[i].id == active_pid);
+                    active_vis_pos.and_then(|pos| {
+                        let next = if pos + 1 < visible_indices.len() {
+                            pos + 1
+                        } else {
+                            pos.checked_sub(1)?
+                        };
+                        Some(self.pane_state.panes[visible_indices[next]].id)
+                    })
+                } else {
+                    Some(clicked_pane)
+                };
+
+                if let Some(source_pane_id) = source_pane_id {
+                    if source_pane_id != active_pid {
+                        let source_root = self.pane_state.root_of(source_pane_id);
+                        let active_root = self.pane_state.root_of(active_pid);
+                        if let (Some(source_root_pid), Some(active_root_pid)) =
+                            (source_root, active_root)
+                        {
+                            // Remove the source from its tree (same or different root)
+                            let source_node = if source_root_pid == active_root_pid {
+                                if let Some(tree) =
+                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
+                                {
+                                    match tree.remove_pane(source_pane_id) {
+                                        RemoveResult::IsTarget => None,
+                                        RemoveResult::CollapseToSibling(replacement) => {
+                                            let node = PaneNode::Leaf {
+                                                pane_id: source_pane_id,
+                                                last_size: (80, 24),
+                                            };
+                                            *self
+                                                .pane_state
+                                                .pane_trees
+                                                .get_mut(&active_root_pid)
+                                                .unwrap() = replacement;
+                                            Some(node)
+                                        }
+                                        RemoveResult::Done => Some(PaneNode::Leaf {
                                             pane_id: source_pane_id,
                                             last_size: (80, 24),
-                                        };
-                                        *self
-                                            .pane_state
-                                            .pane_trees
-                                            .get_mut(&active_root_pid)
-                                            .unwrap() = replacement;
-                                        Some(node)
+                                        }),
+                                        RemoveResult::NotFound => None,
                                     }
-                                    RemoveResult::Done => Some(PaneNode::Leaf {
-                                        pane_id: source_pane_id,
-                                        last_size: (80, 24),
-                                    }),
-                                    RemoveResult::NotFound => None,
+                                } else {
+                                    None
                                 }
                             } else {
-                                None
-                            }
-                        } else {
-                            // Different root — take the whole source tree out
-                            self.pane_state.pane_trees.remove(&source_root_pid)
-                        };
+                                self.pane_state.pane_trees.remove(&source_root_pid)
+                            };
 
-                        if let Some(subtree) = source_node {
-                            let split_id = self.pane_state.next_split_id;
-                            self.pane_state.next_split_id += 1;
-                            if let Some(target_tree) =
-                                self.pane_state.pane_trees.get_mut(&active_root_pid)
-                            {
-                                if !target_tree.split_pane_with_node(
-                                    active_pid,
-                                    subtree.clone(),
-                                    split_id,
-                                    dir,
-                                ) {
-                                    // Revert: re-insert source as its own root tab
-                                    self.pane_state.pane_trees.insert(source_pane_id, subtree);
-                                } else {
-                                    let moved_leaves = subtree.leaf_ids();
-                                    if let Some(&first) = moved_leaves.first() {
-                                        self.pane_state.active_pane_id = Some(first);
-                                        if let Some(pane) =
-                                            self.pane_state.panes.iter().find(|p| p.id == first)
-                                        {
-                                            if let PaneContent::Terminal(sid) = pane.content {
-                                                self.session_state.active_id = Some(sid);
-                                                self.update_is_active_flags();
+                            // Insert source alongside active pane
+                            if let Some(subtree) = source_node {
+                                let split_id = self.pane_state.next_split_id;
+                                self.pane_state.next_split_id += 1;
+                                if let Some(target_tree) =
+                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
+                                {
+                                    if !target_tree.split_pane_with_node(
+                                        active_pid,
+                                        subtree.clone(),
+                                        split_id,
+                                        dir,
+                                    ) {
+                                        self.pane_state.pane_trees.insert(source_pane_id, subtree);
+                                    } else {
+                                        let moved_leaves = subtree.leaf_ids();
+                                        if let Some(&first) = moved_leaves.first() {
+                                            self.pane_state.active_pane_id = Some(first);
+                                            if let Some(pane) =
+                                                self.pane_state.panes.iter().find(|p| p.id == first)
+                                            {
+                                                if let PaneContent::Terminal(sid) = pane.content {
+                                                    self.session_state.active_id = Some(sid);
+                                                    self.update_is_active_flags();
+                                                }
                                             }
                                         }
+                                        ctx.request_repaint();
                                     }
-                                    ctx.request_repaint();
+                                } else {
+                                    self.pane_state.pane_trees.insert(source_pane_id, subtree);
                                 }
-                            } else {
-                                // Target tree gone — re-insert source as its own root
-                                self.pane_state.pane_trees.insert(source_pane_id, subtree);
                             }
                         }
                     }
