@@ -161,6 +161,13 @@ Color32::from_rgb(30, 30, 46)
 | `src/app.rs` | 8 | title formatting |
 | **Total** | **52** | |
 
+## Release Workflow
+
+- Releases are created by `.github/workflows/release.yml`, triggered on `v*` tag push
+- Builds run on 3 platforms: Windows (x86_64-pc-windows-msvc), Linux (x86_64-unknown-linux-gnu), macOS (aarch64-apple-darwin)
+- **Never create a GitHub release before all builds succeed** — the `release` job depends on `build`, and a `cleanup-on-failure` job deletes any pre-existing release if any build fails
+- To release: push a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) — do NOT create the release manually; let the workflow handle it
+
 ## Known Quirks & Gotchas
 
 - In tests, use `Session::new_for_test(id, cols, rows)` (3 args, no Context/pty_tx) — available only under `#[cfg(test)]`
