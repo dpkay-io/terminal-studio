@@ -56,6 +56,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Delete pre-existing release
+        run: gh release delete "$TAG" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -67,3 +73,15 @@ jobs:
             terminal-studio-windows.exe
             terminal-studio-linux
             terminal-studio-macos-arm
+
+  cleanup-on-failure:
+    needs: [build, release]
+    if: ${{ always() && (needs.build.result == 'failure' || needs.release.result == 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete incomplete release
+        run: gh release delete "$TAG" --yes 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
