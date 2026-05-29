@@ -316,6 +316,9 @@ impl App {
                                                         .size(12.0)
                                                         .color(theme::active().green),
                                                 );
+                                                if ui.small_button("Check again").clicked() {
+                                                    uc.trigger_check();
+                                                }
                                             }
                                             UpdateStatus::UpdateAvailable { version, .. } => {
                                                 if ui
