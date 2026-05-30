@@ -232,6 +232,9 @@ pub struct App {
 
     // Git stage-all confirm dialog state
     show_stage_all_confirm: bool,
+
+    // Position where the terminal context menu was opened (captured on right-click)
+    context_menu_pos: Option<egui::Pos2>,
 }
 
 impl eframe::App for App {
@@ -258,7 +261,12 @@ impl eframe::App for App {
             || self.session_search_active
             || self.dir_search_active
             || self.show_quit_confirm;
-        if active_is_editor || any_overlay {
+        let notes_has_focus = _ctx.memory(|m| {
+            m.focused()
+                .map(|id| id == self.vp_id("notes_textedit"))
+                .unwrap_or(false)
+        });
+        if active_is_editor || any_overlay || notes_has_focus {
             return;
         }
         let intercepted = &mut self.raw_intercepted_keys;
@@ -2273,6 +2281,7 @@ impl App {
                                     } else if *button == egui::PointerButton::Secondary && *pressed && !has_mouse {
                                         if let Some(geo) = &self.active_term_geo {
                                             if geo.rect.contains(*pos) {
+                                                self.context_menu_pos = Some(*pos);
                                                 let popup_id = egui::Id::new("term_context_menu");
                                                 ui.memory_mut(|m| m.open_popup(popup_id));
                                             }
@@ -2466,8 +2475,11 @@ impl App {
                 {
                     let popup_id = egui::Id::new("term_context_menu");
                     let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                    if !popup_open {
+                        self.context_menu_pos = None;
+                    }
                     if popup_open {
-                        if let Some(pos) = ui.input(|i| i.pointer.latest_pos()) {
+                        if let Some(pos) = self.context_menu_pos {
                             let dummy_resp = ui.interact(
                                 egui::Rect::from_center_size(pos, egui::vec2(1.0, 1.0)),
                                 popup_id.with("anchor"),

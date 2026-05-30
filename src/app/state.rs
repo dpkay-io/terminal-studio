@@ -223,6 +223,7 @@ impl App {
             show_push_dialog: false,
             push_force: false,
             show_stage_all_confirm: false,
+            context_menu_pos: None,
         };
 
         let (init_cols, init_rows) = {

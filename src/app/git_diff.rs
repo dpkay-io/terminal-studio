@@ -79,17 +79,70 @@ pub(super) fn render_git_diff(
             }
         }
 
+        // ── Committed (unpushed) section ────────────────────────────
+        if !unpushed.is_empty() {
+            let t = theme::active();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Committed ({})", unpushed.len()))
+                        .strong()
+                        .size(theme::FONT_UI_MD)
+                        .color(t.blue),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(theme::SP_4);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Push")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(t.accent_strong),
+                            )
+                            .rounding(theme::R_SM),
+                        )
+                        .on_hover_text("Push to remote")
+                        .clicked()
+                    {
+                        show_push_dialog = true;
+                    }
+                });
+            });
+            ui.add_space(theme::SP_2);
+            for (hash, msg) in unpushed {
+                ui.horizontal(|ui| {
+                    ui.set_max_width(panel_width);
+                    ui.label(
+                        egui::RichText::new(hash)
+                            .monospace()
+                            .size(theme::FONT_UI_SM)
+                            .color(t.yellow),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(msg)
+                                .size(theme::FONT_UI_SM)
+                                .color(t.text),
+                        )
+                        .truncate(),
+                    );
+                });
+            }
+            ui.add_space(theme::SP_3);
+            ui.separator();
+            ui.add_space(theme::SP_2);
+        }
+
         // ── Staged section ──────────────────────────────────────────
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!("Staged ({})", staged.len()))
-                    .strong()
-                    .size(theme::FONT_UI_MD)
-                    .color(theme::active().git_added),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(theme::SP_4);
-                if !staged.is_empty() {
+        if !staged.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Staged ({})", staged.len()))
+                        .strong()
+                        .size(theme::FONT_UI_MD)
+                        .color(theme::active().git_added),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(theme::SP_4);
                     if ui
                         .add(
                             egui::Button::new(
@@ -105,8 +158,6 @@ pub(super) fn render_git_diff(
                     {
                         action = Some(GitStageAction::UnstageAll);
                     }
-                }
-                if !staged.is_empty() {
                     let t = theme::active();
                     if ui
                         .add(
@@ -122,18 +173,9 @@ pub(super) fn render_git_diff(
                     {
                         show_commit_dialog = true;
                     }
-                }
+                });
             });
-        });
-        ui.add_space(theme::SP_2);
-        if staged.is_empty() {
-            ui.label(
-                egui::RichText::new("Nothing staged \u{2014} click + to stage a file")
-                    .italics()
-                    .size(theme::FONT_UI_SM)
-                    .color(theme::active().overlay0),
-            );
-        } else {
+            ui.add_space(theme::SP_2);
             for entry in &staged {
                 let resp = ui.horizontal(|ui| {
                     ui.set_max_width(panel_width);
@@ -152,17 +194,22 @@ pub(super) fn render_git_diff(
                         egui::FontId::monospace(10.0),
                         badge_fg,
                     );
+                    let btn_reserve = theme::SP_4 + 20.0;
+                    let label_max = (ui.available_width() - btn_reserve).max(20.0);
                     let label_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(&entry.path)
-                                    .monospace()
-                                    .size(theme::FONT_UI_MD),
+                        .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&entry.path)
+                                        .monospace()
+                                        .size(theme::FONT_UI_MD),
+                                )
+                                .truncate()
+                                .sense(egui::Sense::click()),
                             )
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Click: diff \u{00b7} Double-click: open file");
+                            .on_hover_text("Click: diff \u{00b7} Double-click: open file")
+                        })
+                        .inner;
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -190,10 +237,10 @@ pub(super) fn render_git_diff(
                     action = Some(GitStageAction::Unstage(path));
                 }
             }
+            ui.add_space(theme::SP_3);
+            ui.separator();
+            ui.add_space(theme::SP_2);
         }
-        ui.add_space(theme::SP_3);
-        ui.separator();
-        ui.add_space(theme::SP_2);
 
         // ── Changes (unstaged) section ──────────────────────────────
         if !unstaged.is_empty() {
@@ -241,17 +288,22 @@ pub(super) fn render_git_diff(
                         egui::FontId::monospace(10.0),
                         badge_fg,
                     );
+                    let btn_reserve = theme::SP_4 + 20.0;
+                    let label_max = (ui.available_width() - btn_reserve).max(20.0);
                     let label_resp = ui
-                        .add(
-                            egui::Label::new(
-                                egui::RichText::new(&entry.path)
-                                    .monospace()
-                                    .size(theme::FONT_UI_MD),
+                        .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&entry.path)
+                                        .monospace()
+                                        .size(theme::FONT_UI_MD),
+                                )
+                                .truncate()
+                                .sense(egui::Sense::click()),
                             )
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text("Click: diff \u{00b7} Double-click: open file");
+                            .on_hover_text("Click: diff \u{00b7} Double-click: open file")
+                        })
+                        .inner;
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -279,74 +331,6 @@ pub(super) fn render_git_diff(
                     action = Some(GitStageAction::Stage(path));
                 }
             }
-            ui.add_space(theme::SP_3);
-            ui.separator();
-            ui.add_space(theme::SP_2);
-        }
-
-        // ── Committed (unpushed) section ────────────────────────────
-        {
-            let t = theme::active();
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Committed ({})", unpushed.len()))
-                        .strong()
-                        .size(theme::FONT_UI_MD)
-                        .color(t.blue),
-                );
-                if !unpushed.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(theme::SP_4);
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("Push")
-                                        .size(theme::FONT_UI_SM)
-                                        .color(t.accent_strong),
-                                )
-                                .rounding(theme::R_SM),
-                            )
-                            .on_hover_text("Push to remote")
-                            .clicked()
-                        {
-                            show_push_dialog = true;
-                        }
-                    });
-                }
-            });
-            ui.add_space(theme::SP_2);
-            if unpushed.is_empty() {
-                ui.label(
-                    egui::RichText::new("Up to date with remote")
-                        .italics()
-                        .size(theme::FONT_UI_SM)
-                        .color(t.overlay0),
-                );
-            } else {
-                for (hash, msg) in unpushed {
-                    ui.horizontal(|ui| {
-                        ui.set_max_width(panel_width);
-                        ui.label(
-                            egui::RichText::new(hash)
-                                .monospace()
-                                .size(theme::FONT_UI_SM)
-                                .color(t.yellow),
-                        );
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(msg)
-                                    .size(theme::FONT_UI_SM)
-                                    .color(t.text),
-                            )
-                            .truncate(),
-                        );
-                    });
-                }
-            }
-        }
-
-        if staged.is_empty() && unstaged.is_empty() && unpushed.is_empty() {
-            ui.add_space(theme::SP_2);
         }
     }
 
