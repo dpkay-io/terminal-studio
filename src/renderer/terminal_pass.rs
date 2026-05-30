@@ -440,9 +440,9 @@ impl TerminalView {
         if history > 0 {
             let total_lines = history + visible_rows;
 
-            let bar_w_thin = 4.0_f32;
-            let bar_w_wide = 12.0_f32;
-            let hit_w = 16.0_f32;
+            let bar_w_thin = theme::SCROLLBAR_W_IDLE;
+            let bar_w_wide = theme::SCROLLBAR_W_ACTIVE;
+            let hit_w = theme::SCROLLBAR_HIT_W;
 
             let hit_rect =
                 egui::Rect::from_min_max(egui::pos2(rect.max.x - hit_w, rect.min.y), rect.max);
@@ -497,16 +497,21 @@ impl TerminalView {
                     t.scrollbar_color.r(),
                     t.scrollbar_color.g(),
                     t.scrollbar_color.b(),
-                    230,
+                    theme::ALPHA_SCROLLBAR_DRAG,
                 )
             } else if pointer_in_hit {
-                t.scrollbar_color
+                egui::Color32::from_rgba_unmultiplied(
+                    t.scrollbar_color.r(),
+                    t.scrollbar_color.g(),
+                    t.scrollbar_color.b(),
+                    theme::ALPHA_SCROLLBAR_HOVER,
+                )
             } else {
                 egui::Color32::from_rgba_unmultiplied(
                     t.scrollbar_color.r(),
                     t.scrollbar_color.g(),
                     t.scrollbar_color.b(),
-                    100,
+                    theme::ALPHA_SCROLLBAR_IDLE,
                 )
             };
 

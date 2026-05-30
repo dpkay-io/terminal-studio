@@ -42,7 +42,7 @@ impl App {
             };
             vis.panel_fill = t.bg_panel_fill;
             vis.window_fill = t.bg_term;
-            vis.window_rounding = Rounding::same(6.0);
+            vis.window_rounding = Rounding::same(theme::R_LG);
             vis.window_shadow = Shadow::NONE;
             vis.popup_shadow = Shadow::NONE;
             vis.widgets.noninteractive.bg_fill = t.surface0;
@@ -59,7 +59,7 @@ impl App {
                 &mut vis.widgets.active,
                 &mut vis.widgets.open,
             ] {
-                state.rounding = Rounding::same(4.0);
+                state.rounding = Rounding::same(theme::R_MD);
             }
             vis.override_text_color = Some(t.text);
             cc.egui_ctx.set_visuals(vis);
@@ -136,6 +136,9 @@ impl App {
             quick_switcher_query: String::new(),
             quick_switcher_selected_ws: None,
             quick_switcher_search_active: false,
+            show_command_palette: false,
+            command_palette_query: String::new(),
+            command_palette_selected: 0,
             shortcut_registry: ShortcutRegistry::new(),
             settings: loaded_settings,
             active_term_geo: None,
@@ -194,6 +197,10 @@ impl App {
             tab_drag_source: None,
             deferred_spawn: None,
             deferred_duplicate: false,
+            deferred_split: None,
+            deferred_close_pane: false,
+            tab_rename_pane_id: None,
+            tab_rename_text: String::new(),
             deferred_open_workspace: None,
             show_close_all_confirm: false,
             session_workspace_filter: None,
@@ -201,6 +208,13 @@ impl App {
             pending_diff_panes: HashMap::new(),
             file_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
             md_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
+            flash: super::feedback::FlashManager::new(),
+            last_click_time: Instant::now(),
+            last_click_cell: (0, 0),
+            click_count: 0,
+            command_start_times: HashMap::new(),
+            completed_badges: std::collections::HashSet::new(),
+            zoomed_pane_id: None,
         };
 
         let (init_cols, init_rows) = {
@@ -280,6 +294,10 @@ impl App {
             }
             Err(e) => {
                 log::error!("Failed to spawn session: {e}");
+                self.flash.trigger(
+                    super::feedback::FlashTarget::Global,
+                    super::feedback::FlashKind::Error,
+                );
                 None
             }
         }
@@ -1249,7 +1267,7 @@ impl App {
         };
         vis.panel_fill = t.bg_panel_fill;
         vis.window_fill = t.bg_term;
-        vis.window_rounding = Rounding::same(6.0);
+        vis.window_rounding = Rounding::same(theme::R_LG);
         vis.window_shadow = Shadow::NONE;
         vis.popup_shadow = Shadow::NONE;
         vis.widgets.noninteractive.bg_fill = t.surface0;
@@ -1266,7 +1284,7 @@ impl App {
             &mut vis.widgets.active,
             &mut vis.widgets.open,
         ] {
-            state.rounding = Rounding::same(4.0);
+            state.rounding = Rounding::same(theme::R_MD);
         }
         vis.override_text_color = Some(t.text);
         ctx.set_visuals(vis);
@@ -1395,12 +1413,12 @@ impl App {
                 egui::pos2(track_x, y + (row_h - bar_h) / 2.0),
                 egui::vec2(bar_w - 32.0, bar_h),
             );
-            painter.rect_filled(track, 2.0, t.surface2);
+            painter.rect_filled(track, theme::R_SM, t.surface2);
 
             let fill_w = (track.width() * (row.pct / 100.0).clamp(0.0, 1.0)).max(0.0);
             if fill_w > 0.5 {
                 let fill = egui::Rect::from_min_size(track.min, egui::vec2(fill_w, bar_h));
-                painter.rect_filled(fill, 2.0, row.color);
+                painter.rect_filled(fill, theme::R_SM, row.color);
             }
         }
 

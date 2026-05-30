@@ -78,7 +78,7 @@ impl App {
                     let panel_w = panel_rect.width();
                     let total_h = panel_rect.height();
 
-                    const DIV_H: f32 = 4.0;
+                    const DIV_H: f32 = 8.0;
                     const COLLAPSED_H: f32 = theme::HEADER_H;
 
                     // ── Height allocation ──────────────────────────────────────

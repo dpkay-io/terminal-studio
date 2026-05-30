@@ -110,6 +110,13 @@ impl App {
                                 );
                             }
 
+                            // Flash feedback overlay on tab
+                            self.flash.render_on_rect(
+                                &painter,
+                                tab_rect,
+                                crate::app::feedback::FlashTarget::Tab(pane_id),
+                            );
+
                             // Right-edge separator between tabs
                             painter.rect_filled(
                                 egui::Rect::from_min_size(
@@ -158,26 +165,86 @@ impl App {
                                 } else {
                                     0.0
                                 };
-                            painter
-                                .with_clip_rect(egui::Rect::from_min_max(
-                                    egui::pos2(text_x, tab_rect.min.y),
-                                    egui::pos2(close_rect.min.x - theme::SP_XS, tab_rect.max.y),
-                                ))
-                                .text(
-                                    egui::pos2(text_x, tab_rect.center().y),
-                                    egui::Align2::LEFT_CENTER,
-                                    display,
-                                    egui::FontId::proportional(theme::HEADER_FONT_SZ),
-                                    title_color,
+
+                            let is_renaming = self.tab_rename_pane_id == Some(pane_id);
+                            if is_renaming {
+                                let edit_rect = egui::Rect::from_min_max(
+                                    egui::pos2(text_x, tab_rect.min.y + 2.0),
+                                    egui::pos2(close_rect.min.x - theme::SP_1, tab_rect.max.y - 2.0),
                                 );
+                                let edit_id = egui::Id::new(("tab_rename_edit", pane_id));
+                                let resp = ui.allocate_ui_at_rect(edit_rect, |ui| {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.tab_rename_text)
+                                            .id(edit_id)
+                                            .desired_width(edit_rect.width())
+                                            .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                            .frame(false)
+                                            .text_color(title_color),
+                                    )
+                                }).inner;
+                                if !resp.has_focus() {
+                                    ui.memory_mut(|m| m.request_focus(edit_id));
+                                }
+                                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                if enter {
+                                    let new_title = self.tab_rename_text.trim().to_string();
+                                    if !new_title.is_empty() {
+                                        if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
+                                            if let Some(entry) = self.session_state.sessions.iter().find(|e| e.id == *sid) {
+                                                entry.session.read().set_title(new_title);
+                                            }
+                                        }
+                                    }
+                                    self.tab_rename_pane_id = None;
+                                    self.tab_rename_text.clear();
+                                } else if esc {
+                                    self.tab_rename_pane_id = None;
+                                    self.tab_rename_text.clear();
+                                }
+                            } else {
+                                painter
+                                    .with_clip_rect(egui::Rect::from_min_max(
+                                        egui::pos2(text_x, tab_rect.min.y),
+                                        egui::pos2(close_rect.min.x - theme::SP_1, tab_rect.max.y),
+                                    ))
+                                    .text(
+                                        egui::pos2(text_x, tab_rect.center().y),
+                                        egui::Align2::LEFT_CENTER,
+                                        display,
+                                        egui::FontId::proportional(theme::FONT_UI_MD),
+                                        title_color,
+                                    );
+                            }
+
+                            // Completed process badge (green dot)
+                            if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
+                                if self.completed_badges.contains(sid) {
+                                    let dot_r = 3.5;
+                                    let dot_pos = egui::pos2(
+                                        text_x - theme::SP_1 - dot_r,
+                                        tab_rect.center().y,
+                                    );
+                                    painter.circle_filled(dot_pos, dot_r, theme::active().green);
+                                }
+                            }
 
                             if close_resp
                                 .on_hover_text("Close tab (Ctrl+Shift+W)")
                                 .clicked()
                             {
                                 close_pane_id = Some(pane_id);
+                            } else if tab_resp.double_clicked() && !is_renaming {
+                                self.tab_rename_pane_id = Some(pane_id);
+                                self.tab_rename_text = display.clone();
+                                clicked_pane_id = Some(pane_id);
                             } else if tab_resp.clicked() {
                                 clicked_pane_id = Some(pane_id);
+                                // Clear badge when tab is clicked
+                                if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
+                                    self.completed_badges.remove(sid);
+                                }
                             }
 
                             // Tab drag-to-reorder
@@ -210,6 +277,12 @@ impl App {
                                 .map(|w| (w.workspace_id, w.title.clone()))
                                 .collect();
                             tab_resp.context_menu(|ui| {
+                                if ui.button("Rename tab").clicked() {
+                                    self.tab_rename_pane_id = Some(pane_id);
+                                    self.tab_rename_text = display.clone();
+                                    ui.close_menu();
+                                }
+                                ui.separator();
                                 ui.add_enabled_ui(can_move_to_split, |ui| {
                                     if ui.button("Move to split horizontal").clicked() {
                                         move_to_split = Some((pane_id, SplitDir::Horizontal));
@@ -223,17 +296,18 @@ impl App {
 
                                 ui.separator();
 
+                                let t = theme::active();
                                 ui.label(
                                     egui::RichText::new("Move tab to window\u{2026}")
-                                        .size(12.0)
-                                        .color(egui::Color32::from_gray(180)),
+                                        .size(theme::FONT_UI_MD)
+                                        .color(t.fg_secondary),
                                 );
                                 ui.separator();
                                 if extra_window_names.is_empty() {
                                     ui.label(
                                         egui::RichText::new("No other windows")
                                             .italics()
-                                            .color(egui::Color32::from_gray(140)),
+                                            .color(t.fg_muted),
                                     );
                                 } else {
                                     for (_, win_title) in &extra_window_names {
@@ -244,8 +318,8 @@ impl App {
                                     ui.label(
                                         egui::RichText::new("(tab move coming in Phase D)")
                                             .italics()
-                                            .size(11.0)
-                                            .color(egui::Color32::from_gray(130)),
+                                            .size(theme::FONT_UI_SM)
+                                            .color(t.fg_muted),
                                     );
                                 }
                             });
@@ -284,7 +358,7 @@ impl App {
                 egui::Sense::click(),
             );
             let sh_stroke = if split_h_resp.hovered() {
-                ui.painter().rect_filled(split_h_rect, 2.0, t.surface2);
+                ui.painter().rect_filled(split_h_rect, theme::R_SM, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -301,7 +375,7 @@ impl App {
             {
                 split_request = Some(SplitDir::Horizontal);
             }
-            x += icon_sz.x;
+            x += icon_sz.x + theme::TAB_ACTION_GAP;
 
             // Split vertical (top-bottom)
             let split_v_rect =
@@ -312,7 +386,7 @@ impl App {
                 egui::Sense::click(),
             );
             let sv_stroke = if split_v_resp.hovered() {
-                ui.painter().rect_filled(split_v_rect, 2.0, t.surface2);
+                ui.painter().rect_filled(split_v_rect, theme::R_SM, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -329,7 +403,7 @@ impl App {
             {
                 split_request = Some(SplitDir::Vertical);
             }
-            x += icon_sz.x;
+            x += icon_sz.x + theme::TAB_ACTION_GAP;
 
             // Close all tabs in workspace
             let close_all_rect =
@@ -340,7 +414,7 @@ impl App {
                 egui::Sense::click(),
             );
             if close_all_resp.hovered() {
-                ui.painter().rect_filled(close_all_rect, 2.0, t.danger_bg);
+                ui.painter().rect_filled(close_all_rect, theme::R_SM, t.danger_bg);
             }
             ui.painter().text(
                 close_all_rect.center(),

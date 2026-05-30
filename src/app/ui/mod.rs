@@ -1,3 +1,4 @@
+mod command_palette;
 pub(crate) mod debounce;
 mod dialogs;
 mod left_panel;
@@ -5,5 +6,6 @@ mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
+pub(super) mod status_bar;
 mod tab_bar;
 mod titlebar;

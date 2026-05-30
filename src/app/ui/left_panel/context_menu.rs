@@ -265,6 +265,10 @@ impl App {
                     },
                 );
                 self.activate_pane(pane_id);
+                self.flash.trigger(
+                    crate::app::feedback::FlashTarget::Tab(pane_id),
+                    crate::app::feedback::FlashKind::Success,
+                );
             }
         }
     }
@@ -355,6 +359,10 @@ impl App {
                     },
                 );
                 self.activate_pane(pane_id);
+                self.flash.trigger(
+                    crate::app::feedback::FlashTarget::Tab(pane_id),
+                    crate::app::feedback::FlashKind::Success,
+                );
             }
             if let Some(cmd) = cmd_to_run {
                 if let Some(entry) = self.session_state.find_mut(new_id) {

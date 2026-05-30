@@ -41,11 +41,11 @@ fn search_bar_inner(
     let mut inner_resp: Option<egui::Response> = None;
 
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(icon).size(12.0));
+        ui.label(egui::RichText::new(icon).size(theme::FONT_UI_MD));
         let te = egui::TextEdit::singleline(query)
             .desired_width(ui.available_width() - theme::BTN_W)
             .hint_text(hint)
-            .font(egui::FontId::proportional(theme::SESSION_FONT_SZ))
+            .font(egui::FontId::proportional(theme::FONT_UI_MD))
             .id(id);
         let r = ui.add(te);
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {

@@ -119,12 +119,12 @@ pub(super) fn render_dir_tree(
             egui::RichText::new("(empty directory)")
                 .italics()
                 .color(theme::active().overlay0)
-                .size(12.0),
+                .size(theme::FONT_UI_MD),
         );
         return;
     }
 
-    ui.spacing_mut().item_spacing.y = theme::SP_XS;
+    ui.spacing_mut().item_spacing.y = theme::SP_1;
 
     for entry in entries {
         if entry.is_dir {
@@ -140,7 +140,7 @@ pub(super) fn render_dir_tree(
                     egui::Label::new(
                         egui::RichText::new(format!("{} {}", chevron, &entry.name))
                             .color(theme::active().fg_dir_entry)
-                            .size(theme::BROWSER_ROW_H),
+                            .size(theme::FONT_UI_MD),
                     )
                     .truncate()
                     .sense(egui::Sense::click()),
@@ -172,7 +172,7 @@ pub(super) fn render_dir_tree(
                     egui::Label::new(
                         egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
                             .color(color)
-                            .size(theme::BROWSER_ROW_H),
+                            .size(theme::FONT_UI_MD),
                     )
                     .truncate()
                     .sense(egui::Sense::click()),
@@ -228,7 +228,7 @@ pub(super) fn render_flat_file_list(
             egui::RichText::new("No matching files")
                 .italics()
                 .color(theme::active().overlay0)
-                .size(12.0),
+                .size(theme::FONT_UI_MD),
         );
         return;
     }
@@ -253,7 +253,7 @@ pub(super) fn render_flat_file_list(
                 egui::Label::new(
                     egui::RichText::new(format!("{} {}", file_icon(ext), &display))
                         .color(color)
-                        .size(theme::BROWSER_ROW_H),
+                        .size(theme::FONT_UI_MD),
                 )
                 .truncate()
                 .sense(egui::Sense::click()),

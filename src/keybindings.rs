@@ -306,7 +306,7 @@ impl KeybindingsConfig {
                     alt: false,
                     key: egui::Key::P,
                 },
-                AppAction::FocusFileSearch,
+                AppAction::CommandPalette,
             ),
             (
                 Shortcut {
@@ -343,6 +343,15 @@ impl KeybindingsConfig {
                     key: egui::Key::N,
                 },
                 AppAction::SearchAllSessions,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::Z,
+                },
+                AppAction::ZoomPane,
             ),
         ];
 

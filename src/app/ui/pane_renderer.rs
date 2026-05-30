@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::super::feedback;
 use super::super::file_browser;
 use super::super::markdown::render_markdown;
 use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
@@ -44,6 +45,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub font_size: f32,
     pub cursor_style: CursorStyle,
     pub has_splits: bool,
+    pub flash: &'a crate::app::feedback::FlashManager,
 }
 
 /// Recursively render a pane tree node into the given rect.
@@ -84,9 +86,16 @@ pub(in crate::app) fn render_node(
 
             // Focus border for split panes
             if is_focused && rctx.has_splits {
-                let stroke = egui::Stroke::new(1.5, theme::active().blue);
+                let stroke = egui::Stroke::new(1.5, theme::active().accent);
                 ui.painter().rect_stroke(rect, 0.0, stroke);
             }
+
+            // Flash feedback overlay
+            rctx.flash.render_on_rect(
+                ui.painter(),
+                rect,
+                crate::app::feedback::FlashTarget::Pane(pane_id),
+            );
 
             // Click to focus pane
             if ui
@@ -137,11 +146,17 @@ pub(in crate::app) fn render_node(
             // Handle drag to resize
             if div_resp.dragged() {
                 let delta = div_resp.drag_delta();
-                let movement = match dir {
-                    SplitDir::Horizontal => delta.x / rect.width(),
-                    SplitDir::Vertical => delta.y / rect.height(),
+                let (extent, movement) = match dir {
+                    SplitDir::Horizontal => (rect.width(), delta.x / rect.width()),
+                    SplitDir::Vertical => (rect.height(), delta.y / rect.height()),
                 };
-                let new_ratio = (*ratio + movement).clamp(0.1, 0.9);
+                let min_pane = theme::MIN_PANE_W;
+                let min_ratio = if extent > 0.0 {
+                    (min_pane / extent).clamp(0.1, 0.4)
+                } else {
+                    0.1
+                };
+                let new_ratio = (*ratio + movement).clamp(min_ratio, 1.0 - min_ratio);
                 rctx.split_ratio_changes.push((*split_id, new_ratio));
             }
 
@@ -181,7 +196,8 @@ fn render_pane_context_menu(
 
     let t = theme::active();
     let btn_size = egui::vec2(22.0, 22.0);
-    let btn_pos = egui::pos2(rect.max.x - btn_size.x - 6.0, rect.min.y + 6.0);
+    let sb_inset = theme::SCROLLBAR_HIT_W + 4.0;
+    let btn_pos = egui::pos2(rect.max.x - btn_size.x - sb_inset, rect.min.y + 6.0);
     let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
 
     let btn_id = egui::Id::new(("pane_menu_btn", pane_id));
@@ -192,7 +208,7 @@ fn render_pane_context_menu(
     } else {
         t.surface1
     };
-    ui.painter().rect_filled(btn_rect, theme::ROUNDING, btn_bg);
+    ui.painter().rect_filled(btn_rect, theme::R_MD, btn_bg);
 
     // Three vertical dots
     let center = btn_rect.center();
@@ -337,7 +353,7 @@ fn render_file_editor_leaf(
         ui.centered_and_justified(|ui| {
             ui.label(
                 egui::RichText::new("Binary file — cannot display as text")
-                    .size(16.0)
+                    .size(theme::FONT_STATUS)
                     .color(theme::active().overlay0),
             );
         });
@@ -361,9 +377,9 @@ fn render_file_editor_leaf(
                 };
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("Raw").size(11.0).color(raw_color))
+                        egui::Button::new(egui::RichText::new("Raw").size(theme::FONT_UI_SM).color(raw_color))
                             .fill(raw_bg)
-                            .rounding(egui::Rounding::same(theme::ROUNDING))
+                            .rounding(egui::Rounding::same(theme::R_MD))
                             .min_size(egui::vec2(56.0, 20.0)),
                     )
                     .clicked()
@@ -371,15 +387,16 @@ fn render_file_editor_leaf(
                 {
                     rctx.editor_preview_toggles.push(pane_id);
                 }
+                ui.add_space(theme::SP_1);
                 if ui
                     .add(
                         egui::Button::new(
                             egui::RichText::new("Preview")
-                                .size(11.0)
+                                .size(theme::FONT_UI_SM)
                                 .color(preview_color),
                         )
                         .fill(preview_bg)
-                        .rounding(egui::Rounding::same(theme::ROUNDING))
+                        .rounding(egui::Rounding::same(theme::R_MD))
                         .min_size(egui::vec2(56.0, 20.0)),
                     )
                     .clicked()
@@ -440,7 +457,7 @@ fn render_file_editor_leaf(
                                 .0;
                             ui.painter()
                                 .rect_filled(sep_rect, 0.0, theme::active().surface1);
-                            ui.add_space(theme::SP_SM);
+                            ui.add_space(theme::SP_2);
 
                             if let Some(syn) = maybe_syntax {
                                 let mut layouter = |ui: &egui::Ui, s: &str, wrap_width: f32| {
@@ -486,7 +503,7 @@ fn render_note_editor_leaf(
         None => "General Notes",
     };
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).strong().size(13.0).color(t.text));
+        ui.label(egui::RichText::new(label).strong().size(theme::FONT_UI_LG).color(t.text));
     });
     ui.separator();
 
@@ -515,7 +532,7 @@ fn render_file_diff_leaf(ui: &mut egui::Ui, d: &super::super::pane::FileDiffStat
         ui.label(
             egui::RichText::new(format!("\u{21c4} {}", d.path.display()))
                 .strong()
-                .size(13.0)
+                .size(theme::FONT_UI_LG)
                 .color(theme::active().git_filename),
         );
     });
@@ -559,17 +576,43 @@ impl App {
                 .map(|(&rpid, _)| rpid)
         });
         if let Some(root_pane_id) = root_pane_id {
-            let tree = self
-                .pane_state
-                .pane_trees
-                .get(&root_pane_id)
-                .cloned()
-                .unwrap_or(PaneNode::Leaf {
-                    pane_id: root_pane_id,
-                    last_size: (80, 24),
-                });
-
-            let has_splits = matches!(&tree, PaneNode::Split { .. });
+            let (tree, has_splits) = if let Some(zpid) = self.zoomed_pane_id {
+                let pane_exists = self.pane_state.panes.iter().any(|p| p.id == zpid);
+                if pane_exists {
+                    (
+                        PaneNode::Leaf {
+                            pane_id: zpid,
+                            last_size: (80, 24),
+                        },
+                        false,
+                    )
+                } else {
+                    self.zoomed_pane_id = None;
+                    let t = self
+                        .pane_state
+                        .pane_trees
+                        .get(&root_pane_id)
+                        .cloned()
+                        .unwrap_or(PaneNode::Leaf {
+                            pane_id: root_pane_id,
+                            last_size: (80, 24),
+                        });
+                    let s = matches!(&t, PaneNode::Split { .. });
+                    (t, s)
+                }
+            } else {
+                let t = self
+                    .pane_state
+                    .pane_trees
+                    .get(&root_pane_id)
+                    .cloned()
+                    .unwrap_or(PaneNode::Leaf {
+                        pane_id: root_pane_id,
+                        last_size: (80, 24),
+                    });
+                let s = matches!(&t, PaneNode::Split { .. });
+                (t, s)
+            };
             let mut rctx = RenderCtx {
                 sessions: &self.session_state.sessions,
                 panes: &self.pane_state.panes,
@@ -592,8 +635,16 @@ impl App {
                 font_size: self.settings.font_size,
                 cursor_style: self.settings.cursor_style,
                 has_splits,
+                flash: &self.flash,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
+
+            // Global flash overlay (rare — PTY spawn errors)
+            self.flash.render_on_rect(
+                ui.painter(),
+                content_rect,
+                feedback::FlashTarget::Global,
+            );
         }
 
         // ── File drag hover overlay ────────────────────────────────────────
@@ -603,7 +654,7 @@ impl App {
             let painter = ui.painter();
             painter.rect_filled(
                 content_rect,
-                4.0,
+                theme::R_MD,
                 egui::Color32::from_rgba_unmultiplied(
                     t.surface0.r(),
                     t.surface0.g(),

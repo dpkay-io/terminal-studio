@@ -18,6 +18,7 @@ use alacritty_terminal::{
 
 // ── Submodules ───────────────────────────────────────────────────────────────
 
+mod feedback;
 mod file_browser;
 mod git_diff;
 #[allow(dead_code)]
@@ -88,6 +89,9 @@ pub struct App {
     quick_switcher_query: String,
     quick_switcher_selected_ws: Option<usize>,
     quick_switcher_search_active: bool,
+    show_command_palette: bool,
+    command_palette_query: String,
+    command_palette_selected: usize,
     shortcut_registry: ShortcutRegistry,
     settings: AppSettings,
 
@@ -175,6 +179,10 @@ pub struct App {
     // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
     deferred_spawn: Option<ShellKind>,
     deferred_duplicate: bool,
+    deferred_split: Option<crate::pane_tree::SplitDir>,
+    deferred_close_pane: bool,
+    tab_rename_pane_id: Option<u32>,
+    tab_rename_text: String,
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
@@ -194,6 +202,22 @@ pub struct App {
     // Async md content load results from background threads.
     #[allow(clippy::type_complexity)]
     md_load_results: Arc<parking_lot::Mutex<Vec<(PathBuf, String, Option<u64>)>>>,
+
+    // Flash feedback manager for subtle UI feedback
+    flash: feedback::FlashManager,
+
+    // Multi-click tracking for double/triple-click selection
+    last_click_time: Instant,
+    last_click_cell: (u16, u16),
+    click_count: u8,
+
+    // Process completion tracking: session_id → time command started (prompt went non-ready)
+    command_start_times: HashMap<u32, Instant>,
+    // Sessions with completed long-running commands (badge shown on tab)
+    completed_badges: std::collections::HashSet<u32>,
+
+    // Pane zoom: when set, the zoomed pane fills the entire content area
+    zoomed_pane_id: Option<u32>,
 }
 
 impl eframe::App for App {
@@ -255,6 +279,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
 
+        self.flash.tick();
+        if self.flash.has_active() {
+            ctx.request_repaint();
+        }
+
         // Cursor blink — only schedule repaint when a terminal pane is focused.
         {
             let has_active_terminal = self
@@ -312,6 +341,35 @@ impl eframe::App for App {
                     let _ = entry.pty_tx.try_send(format!("{}\n", cmd).into_bytes());
                 } else {
                     ctx.request_repaint_after(std::time::Duration::from_millis(100));
+                }
+            }
+        }
+
+        // Track command start/completion for long-running process notifications.
+        for entry in &self.session_state.sessions {
+            let ready = entry.session.read().prompt_ready;
+            let sid = entry.id;
+            if ready {
+                if let Some(start) = self.command_start_times.remove(&sid) {
+                    if start.elapsed() > Duration::from_secs(5) {
+                        let is_active = self.session_state.active_id == Some(sid);
+                        if !is_active {
+                            self.completed_badges.insert(sid);
+                        }
+                    }
+                }
+            } else {
+                self.command_start_times.entry(sid).or_insert_with(Instant::now);
+            }
+        }
+
+        // Check for bell events and trigger visual flash.
+        for entry in &self.session_state.sessions {
+            if entry.session.read().bell.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                if let Some(pane) = self.pane_state.panes.iter().find(|p| {
+                    matches!(&p.content, PaneContent::Terminal(sid) if *sid == entry.id)
+                }) {
+                    self.flash.trigger(feedback::FlashTarget::Pane(pane.id), feedback::FlashKind::Neutral);
                 }
             }
         }
@@ -701,7 +759,7 @@ impl App {
                     let panel_w = panel_rect.width();
                     let total_h = panel_rect.height();
 
-                    const DIV_H: f32 = 4.0;
+                    const DIV_H: f32 = 8.0;
                     const COLLAPSED_H: f32 = theme::HEADER_H;
 
                     let (content_h, notes_h) = if self.notes_panel_collapsed {
@@ -735,7 +793,7 @@ impl App {
                                                 let resp = ui.selectable_label(
                                                     active_tab == RightTab::Directory,
                                                     egui::RichText::new("Directory")
-                                                        .size(theme::HEADER_FONT_SZ),
+                                                        .size(theme::FONT_UI_MD),
                                                 );
                                                 if resp.clicked() {
                                                     new_tab = Some(RightTab::Directory);
@@ -747,7 +805,7 @@ impl App {
                                                 let resp = ui.selectable_label(
                                                     active_tab == RightTab::GitDiff,
                                                     egui::RichText::new("Git Diff")
-                                                        .size(theme::HEADER_FONT_SZ),
+                                                        .size(theme::FONT_UI_MD),
                                                 );
                                                 if resp.clicked() {
                                                     new_tab = Some(RightTab::GitDiff);
@@ -766,18 +824,19 @@ impl App {
                                                     .selectable_label(
                                                         is_active,
                                                         egui::RichText::new(&name)
-                                                            .size(theme::HEADER_FONT_SZ),
+                                                            .size(theme::FONT_UI_MD),
                                                     )
                                                     .clicked()
                                                 {
                                                     new_tab =
                                                         Some(RightTab::Markdown(path.clone()));
                                                 }
+                                                ui.add_space(theme::SP_1);
                                                 if ui
                                                     .add(
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
-                                                                .size(theme::HEADER_FONT_SZ)
+                                                                .size(theme::FONT_UI_MD)
                                                                 .color(theme::active().overlay1),
                                                         )
                                                         .frame(false)
@@ -817,21 +876,21 @@ impl App {
                                                     ui.label(
                                                         egui::RichText::new(&ws.name)
                                                             .strong()
-                                                            .size(theme::CWD_FONT_SZ)
+                                                            .size(theme::FONT_UI_SM)
                                                             .color(theme::ensure_readable(
                                                                 c, panel_bg,
                                                             )),
                                                     );
                                                     ui.label(
                                                         egui::RichText::new("›")
-                                                            .size(theme::CWD_FONT_SZ)
+                                                            .size(theme::FONT_UI_SM)
                                                             .color(theme::active().overlay0),
                                                     );
                                                 }
                                                 ui.label(
                                                     egui::RichText::new(theme::short_path(cwd))
                                                         .monospace()
-                                                        .size(theme::CWD_FONT_SZ)
+                                                        .size(theme::FONT_UI_SM)
                                                         .color(theme::active().fg_path),
                                                 )
                                                 .on_hover_text(cwd.display().to_string());
@@ -847,7 +906,7 @@ impl App {
                                                 let save_btn = ui.add_enabled(
                                                     !already_saved,
                                                     egui::Button::new(
-                                                        egui::RichText::new(btn_text).size(12.0),
+                                                        egui::RichText::new(btn_text).size(theme::FONT_UI_MD),
                                                     )
                                                     .frame(false),
                                                 );
@@ -878,7 +937,7 @@ impl App {
                                                 self.dir_search_debouncer.update(&self.dir_search_query);
                                             }
 
-                                            ui.add_space(theme::SP_SM);
+                                            ui.add_space(theme::SP_2);
 
                                             // ── Dispatch to file search worker ─────────
                                             let show_search_results = if !self.dir_search_query.is_empty()
@@ -911,7 +970,7 @@ impl App {
                                                         egui::RichText::new("Searching…")
                                                             .italics()
                                                             .color(theme::active().overlay0)
-                                                            .size(12.0),
+                                                            .size(theme::FONT_UI_MD),
                                                     );
                                                 } else {
                                                     let entries: Vec<FileEntry> = results
@@ -950,7 +1009,7 @@ impl App {
                                                 egui::RichText::new("(no active session)")
                                                     .italics()
                                                     .color(theme::active().overlay0)
-                                                    .size(12.0),
+                                                    .size(theme::FONT_UI_MD),
                                             );
                                         }
                                     }
@@ -970,7 +1029,7 @@ impl App {
                                                 .add(
                                                     egui::Button::new(
                                                         egui::RichText::new("Open in Editor")
-                                                            .size(11.0),
+                                                            .size(theme::FONT_UI_SM),
                                                     )
                                                     .rounding(3.0),
                                                 )
@@ -1067,7 +1126,7 @@ impl App {
                                 ui.label(
                                     egui::RichText::new("Notes")
                                         .strong()
-                                        .size(theme::HEADER_FONT_SZ),
+                                        .size(theme::FONT_UI_MD),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -1081,7 +1140,7 @@ impl App {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new(arrow)
-                                                        .size(theme::HEADER_FONT_SZ),
+                                                        .size(theme::FONT_UI_MD),
                                                 )
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
@@ -1099,7 +1158,7 @@ impl App {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new("\u{2197}")
-                                                        .size(theme::HEADER_FONT_SZ),
+                                                        .size(theme::FONT_UI_MD),
                                                 )
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
@@ -1309,8 +1368,8 @@ impl App {
         let equalize_widths: bool = false;
         let mut panel_w_snap: f32 = 0.0;
         // Phase D: split / close-split requests collected from key handler
-        let mut split_request: Option<SplitDir> = None;
-        let mut close_split_pane: bool = false;
+        let mut split_request: Option<SplitDir> = self.deferred_split.take();
+        let mut close_split_pane: bool = std::mem::take(&mut self.deferred_close_pane);
         // Phase D: split divider ratio changes (split_id, new_ratio)
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
         // Phase D: pane context menu actions (3-dot menu on split panes)
@@ -1354,7 +1413,7 @@ impl App {
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         egui::RichText::new("No sessions in this group.\nUse '+ New' in the Sessions panel to add one.")
-                            .color(theme::active().overlay0).size(14.0)
+                            .color(theme::active().overlay0).size(theme::FONT_TERM)
                     );
                 });
             } else {
@@ -1372,9 +1431,14 @@ impl App {
                     egui::pos2(panel_rect.min.x + tab_scroll_w, panel_rect.min.y),
                     egui::vec2(tab_actions_w, tab_h),
                 );
+                let status_h = theme::STATUS_BAR_H;
                 let content_rect = egui::Rect::from_min_size(
                     egui::pos2(panel_rect.min.x, panel_rect.min.y + tab_h),
-                    egui::vec2(panel_rect.width(), (panel_h - tab_h).max(0.0)),
+                    egui::vec2(panel_rect.width(), (panel_h - tab_h - status_h).max(0.0)),
+                );
+                let status_rect = egui::Rect::from_min_size(
+                    egui::pos2(panel_rect.min.x, content_rect.max.y),
+                    egui::vec2(panel_rect.width(), status_h),
                 );
 
                 // ── Tab bar (horizontally scrollable) + action buttons ──────
@@ -1630,8 +1694,8 @@ impl App {
                             egui::pos2(geo.rect.max.x - bar_w - 8.0, geo.rect.min.y + 8.0),
                             egui::vec2(bar_w, bar_h),
                         );
-                        ui.painter().rect_filled(bar_rect, 4.0, t.surface0);
-                        ui.painter().rect_stroke(bar_rect, 4.0, egui::Stroke::new(1.0, t.overlay0));
+                        ui.painter().rect_filled(bar_rect, theme::R_MD, t.surface0);
+                        ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
 
                         let input_rect = egui::Rect::from_min_max(
                             egui::pos2(bar_rect.min.x + 6.0, bar_rect.min.y + 4.0),
@@ -1690,6 +1754,32 @@ impl App {
                 }
             }
 
+            // ── Status bar ─────────────────────────────────────────────────
+            {
+                let sb_cwd = self.active_cwd().unwrap_or_default().to_string_lossy().to_string();
+                let (sb_branch, sb_diff) = self.active_group
+                    .and_then(|ws_id| self.workers.workspace_git_worker.get(ws_id))
+                    .map(|gi| (gi.branch.clone(), gi.diff_count))
+                    .unwrap_or_default();
+                let sb_shell = active_session_id
+                    .and_then(|sid| self.session_state.find(sid))
+                    .map(|e| e.shell.display_name().to_string())
+                    .unwrap_or_default();
+                let (sb_cols, sb_rows) = self.pane_state.active_pane_id
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .map(|p| p.last_size)
+                    .unwrap_or((0, 0));
+                ui::status_bar::render_status_bar(ui, status_rect, &ui::status_bar::StatusBarData {
+                    cwd: sb_cwd,
+                    git_branch: sb_branch,
+                    git_diff_count: sb_diff,
+                    shell_name: sb_shell,
+                    cols: sb_cols,
+                    rows: sb_rows,
+                    zoomed: self.zoomed_pane_id.is_some(),
+                });
+            }
+
             // ── Terminal input routing ─────────────────────────────────────
             let any_other_widget_focused = {
                 let term_id = self.active_term_ui_id;
@@ -1699,7 +1789,8 @@ impl App {
                 || self.workspace_edit_dialog.is_some()
                 || self.show_settings
                 || self.show_shortcut_help
-                || self.show_quick_switcher;
+                || self.show_quick_switcher
+                || self.show_command_palette;
 
             // Global shortcuts that work even when a modal/dialog is open
             {
@@ -1712,13 +1803,15 @@ impl App {
                     } else if i.consume_key(cs, egui::Key::F) {
                         Some(AppAction::FocusSessionSearch)
                     } else if i.consume_key(cs, egui::Key::P) {
-                        Some(AppAction::FocusFileSearch)
+                        Some(AppAction::CommandPalette)
                     } else if i.consume_key(cs, egui::Key::D) {
                         Some(AppAction::RightTabDirectory)
                     } else if i.consume_key(cs, egui::Key::Space) {
                         Some(AppAction::OpenQuickSwitcher)
                     } else if i.consume_key(cs, egui::Key::N) {
                         Some(AppAction::SearchAllSessions)
+                    } else if i.consume_key(cs, egui::Key::Z) {
+                        Some(AppAction::ZoomPane)
                     } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
                     } else if (self.show_shortcut_help || self.term_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
@@ -1746,6 +1839,13 @@ impl App {
                     Some(AppAction::OpenSettings) => {
                         self.show_shortcut_help = false;
                         self.show_settings = !self.show_settings;
+                    }
+                    Some(AppAction::CommandPalette) => {
+                        self.show_command_palette = !self.show_command_palette;
+                        if !self.show_command_palette {
+                            self.command_palette_query.clear();
+                            self.command_palette_selected = 0;
+                        }
                     }
                     Some(AppAction::FocusSessionSearch) => {
                         self.show_left_panel = true;
@@ -1775,6 +1875,13 @@ impl App {
                             self.global_search_debouncer.reset();
                             self.global_search_selected = 0;
                             self.workers.search_worker.cancel();
+                        }
+                    }
+                    Some(AppAction::ZoomPane) => {
+                        if self.zoomed_pane_id.is_some() {
+                            self.zoomed_pane_id = None;
+                        } else {
+                            self.zoomed_pane_id = self.pane_state.active_pane_id;
                         }
                     }
                     _ => {}
@@ -1985,6 +2092,9 @@ impl App {
                                         let text = self.extract_selected_text(idx);
                                         if !text.is_empty() {
                                             ctx.output_mut(|o| o.copied_text = text);
+                                            if let Some(pid) = self.pane_state.active_pane_id {
+                                                self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
+                                            }
                                         }
                                     }
                                     self.term_selection = None;
@@ -2015,6 +2125,9 @@ impl App {
                                         text.as_bytes().to_vec()
                                     };
                                     let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
+                                    if let Some(pid) = self.pane_state.active_pane_id {
+                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
+                                    }
                                 }
                             }
                         }
@@ -2047,6 +2160,13 @@ impl App {
                                                 let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                             }
                                         }
+                                    } else if *button == egui::PointerButton::Secondary && *pressed && !has_mouse {
+                                        if let Some(geo) = &self.active_term_geo {
+                                            if geo.rect.contains(*pos) {
+                                                let popup_id = egui::Id::new("term_context_menu");
+                                                ui.memory_mut(|m| m.open_popup(popup_id));
+                                            }
+                                        }
                                     } else if *button == egui::PointerButton::Primary {
                                         if let Some(geo) = &self.active_term_geo {
                                             if geo.rect.contains(*pos) {
@@ -2056,20 +2176,86 @@ impl App {
                                             );
                                             if let Some((col, row)) = geo.to_cell(clamped) {
                                                 if *pressed {
-                                                    self.term_selection = Some(TermSelection {
-                                                        start_col: col,
-                                                        start_row: row,
-                                                        end_col: col,
-                                                        end_row: row,
-                                                    });
-                                                    self.term_selecting = true;
-                                                    self.term_selection_sid = Some(sid);
+                                                    let now = Instant::now();
+                                                    let same_cell = self.last_click_cell == (col, row);
+                                                    let quick = now.duration_since(self.last_click_time) < Duration::from_millis(400);
+                                                    if same_cell && quick {
+                                                        self.click_count = (self.click_count + 1).min(3);
+                                                    } else {
+                                                        self.click_count = 1;
+                                                    }
+                                                    self.last_click_time = now;
+                                                    self.last_click_cell = (col, row);
+
+                                                    match self.click_count {
+                                                        2 => {
+                                                            // Double-click: select word
+                                                            let session = self.session_state.sessions[idx].session.read();
+                                                            let grid = session.term.grid();
+                                                            let display_offset = grid.display_offset();
+                                                            let grid_line = row as i32 - display_offset as i32;
+                                                            let term_cols = session.term.columns();
+                                                            let mut line_text = String::with_capacity(term_cols);
+                                                            if grid_line >= -(grid.history_size() as i32) && grid_line < session.term.screen_lines() as i32 {
+                                                                for c in 0..term_cols {
+                                                                    let cell = &grid[alacritty_terminal::index::Line(grid_line)][alacritty_terminal::index::Column(c)];
+                                                                    line_text.push(cell.c);
+                                                                }
+                                                            }
+                                                            drop(session);
+                                                            let col_usize = col as usize;
+                                                            if col_usize < line_text.len() {
+                                                                let chars: Vec<char> = line_text.chars().collect();
+                                                                let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
+                                                                let mut start = col_usize;
+                                                                let mut end = col_usize;
+                                                                while start > 0 && is_word(chars[start - 1]) { start -= 1; }
+                                                                while end + 1 < chars.len() && is_word(chars[end + 1]) { end += 1; }
+                                                                self.term_selection = Some(TermSelection {
+                                                                    start_col: start as u16,
+                                                                    start_row: row,
+                                                                    end_col: end as u16,
+                                                                    end_row: row,
+                                                                });
+                                                                self.term_selecting = false;
+                                                                self.term_selection_sid = Some(sid);
+                                                            }
+                                                        }
+                                                        3 => {
+                                                            // Triple-click: select line
+                                                            let cols = {
+                                                                let session = self.session_state.sessions[idx].session.read();
+                                                                session.term.columns() as u16
+                                                            };
+                                                            self.term_selection = Some(TermSelection {
+                                                                start_col: 0,
+                                                                start_row: row,
+                                                                end_col: cols.saturating_sub(1),
+                                                                end_row: row,
+                                                            });
+                                                            self.term_selecting = false;
+                                                            self.term_selection_sid = Some(sid);
+                                                        }
+                                                        _ => {
+                                                            // Single-click: start selection
+                                                            self.term_selection = Some(TermSelection {
+                                                                start_col: col,
+                                                                start_row: row,
+                                                                end_col: col,
+                                                                end_row: row,
+                                                            });
+                                                            self.term_selecting = true;
+                                                            self.term_selection_sid = Some(sid);
+                                                        }
+                                                    }
                                                 } else {
                                                     self.term_selecting = false;
-                                                    if let Some(sel) = &self.term_selection {
-                                                        if sel.start_col == sel.end_col && sel.start_row == sel.end_row {
-                                                            self.term_selection = None;
-                                                            self.term_selection_sid = None;
+                                                    if self.click_count <= 1 {
+                                                        if let Some(sel) = &self.term_selection {
+                                                            if sel.start_col == sel.end_col && sel.start_row == sel.end_row {
+                                                                self.term_selection = None;
+                                                                self.term_selection_sid = None;
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -2163,6 +2349,96 @@ impl App {
                             }
                         }
                         _ => {}
+                    }
+                }
+
+                // ── Terminal right-click context menu ─────────────────────
+                {
+                    let popup_id = egui::Id::new("term_context_menu");
+                    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                    if popup_open {
+                        if let Some(pos) = ui.input(|i| i.pointer.latest_pos()) {
+                            let dummy_resp = ui.interact(
+                                egui::Rect::from_center_size(pos, egui::vec2(1.0, 1.0)),
+                                popup_id.with("anchor"),
+                                egui::Sense::hover(),
+                            );
+                            egui::containers::popup::popup_below_widget(
+                                ui,
+                                popup_id,
+                                &dummy_resp,
+                                egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
+                                |ui| {
+                                    ui.set_min_width(140.0);
+                                    let has_selection = self.term_selection.is_some();
+
+                                    if ui.add_enabled(has_selection, egui::Button::new("Copy").min_size(egui::vec2(0.0, 22.0))).clicked() {
+                                        if let Some(sid) = active_session_id {
+                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                                let text = self.extract_selected_text(idx);
+                                                if !text.is_empty() {
+                                                    ui.output_mut(|o| o.copied_text = text);
+                                                }
+                                            }
+                                        }
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                    if ui.button("Paste").clicked() {
+                                        if let Some(sid) = active_session_id {
+                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                                if let Some(clip) = ui.input(|i| i.events.iter().find_map(|e| {
+                                                    if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }
+                                                })) {
+                                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(clip.into_bytes());
+                                                } else {
+                                                    let mut ctx2 = arboard::Clipboard::new();
+                                                    if let Ok(ref mut cb) = ctx2 {
+                                                        if let Ok(text) = cb.get_text() {
+                                                            let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
+                                                            let data = if bp {
+                                                                let mut v = b"\x1b[200~".to_vec();
+                                                                v.extend_from_slice(text.as_bytes());
+                                                                v.extend_from_slice(b"\x1b[201~");
+                                                                v
+                                                            } else {
+                                                                text.into_bytes()
+                                                            };
+                                                            let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                    ui.separator();
+                                    if ui.button("Search (Ctrl+F)").clicked() {
+                                        self.term_search.active = true;
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                    if ui.button("Select All").clicked() {
+                                        if let Some(geo) = &self.active_term_geo {
+                                            if let Some(sid) = active_session_id {
+                                                if let Some(entry) = self.session_state.find(sid) {
+                                                    let session = entry.session.read();
+                                                    let visible_rows = (geo.rect.height() / geo.cell_h) as u16;
+                                                    let cols = session.term.columns() as u16;
+                                                    drop(session);
+                                                    self.term_selection = Some(TermSelection {
+                                                        start_col: 0,
+                                                        start_row: 0,
+                                                        end_col: cols.saturating_sub(1),
+                                                        end_row: visible_rows.saturating_sub(1),
+                                                    });
+                                                    self.term_selection_sid = Some(sid);
+                                                }
+                                            }
+                                        }
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                },
+                            );
+                        }
                     }
                 }
 
@@ -2283,6 +2559,7 @@ impl App {
                         self.pane_state.active_pane_id = Some(new_pane_id);
                         self.session_state.active_id = Some(new_sid);
                         self.update_is_active_flags();
+                        self.flash.trigger(feedback::FlashTarget::Pane(new_pane_id), feedback::FlashKind::Success);
                         ctx.request_repaint();
                     }
                 }
@@ -2434,6 +2711,9 @@ impl App {
                             self.pane_state.pane_trees.remove(&root_pid);
                             self.pane_state.active_pane_id =
                                 self.pane_state.panes.last().map(|p| p.id);
+                            if self.zoomed_pane_id == Some(active_pid) {
+                                self.zoomed_pane_id = None;
+                            }
                             self.save_session();
                         }
                     } else {
@@ -2465,6 +2745,9 @@ impl App {
                                 }
                             }
                             self.pane_state.panes.remove(pos);
+                        }
+                        if self.zoomed_pane_id == Some(active_pid) {
+                            self.zoomed_pane_id = None;
                         }
                         // Focus sibling — pick the first leaf of the root tree
                         if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
@@ -2708,6 +2991,13 @@ impl App {
                 .unwrap_or(false)
             {
                 self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+            }
+            if self
+                .zoomed_pane_id
+                .map(|zp| tree_ids.contains(&zp))
+                .unwrap_or(false)
+            {
+                self.zoomed_pane_id = None;
             }
             self.save_session();
         }
@@ -3161,6 +3451,7 @@ impl App {
         self.render_settings_overlay(ctx);
 
         self.render_quick_switcher(ctx);
+        self.render_command_palette(ctx);
 
         self.render_workspace_save_dialog(ctx);
 

@@ -1,6 +1,7 @@
 mod tests;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
 use alacritty_terminal::{
@@ -38,6 +39,7 @@ pub struct EventProxy {
     title: Arc<Mutex<String>>,
     pub ctx: Context,
     pub pty_tx: mpsc::SyncSender<Vec<u8>>,
+    bell: Arc<AtomicBool>,
 }
 
 impl EventProxy {
@@ -46,12 +48,14 @@ impl EventProxy {
         title: Arc<Mutex<String>>,
         ctx: Context,
         pty_tx: mpsc::SyncSender<Vec<u8>>,
+        bell: Arc<AtomicBool>,
     ) -> Self {
         EventProxy {
             id,
             title,
             ctx,
             pty_tx,
+            bell,
         }
     }
 }
@@ -64,6 +68,10 @@ impl EventListener for EventProxy {
             }
             Event::PtyWrite(s) => {
                 let _ = self.pty_tx.try_send(s.into_bytes());
+            }
+            Event::Bell => {
+                self.bell.store(true, Ordering::Relaxed);
+                self.ctx.request_repaint();
             }
             Event::MouseCursorDirty | Event::CursorBlinkingChange => {
                 self.ctx
@@ -82,6 +90,7 @@ pub struct Session {
     pub cwd: PathBuf,
     pub prompt_ready: bool,
     title: Arc<Mutex<String>>,
+    pub bell: Arc<AtomicBool>,
 }
 
 impl Session {
@@ -95,7 +104,8 @@ impl Session {
         scrollback_lines: usize,
     ) -> Self {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
-        let proxy = EventProxy::new(id, title.clone(), ctx, pty_tx);
+        let bell = Arc::new(AtomicBool::new(false));
+        let proxy = EventProxy::new(id, title.clone(), ctx, pty_tx, bell.clone());
         let config = Config {
             scrolling_history: scrollback_lines,
             ..Config::default()
@@ -111,6 +121,7 @@ impl Session {
             cwd: cwd.unwrap_or_default(),
             prompt_ready: false,
             title,
+            bell,
         }
     }
 
@@ -119,9 +130,10 @@ impl Session {
     #[cfg(test)]
     pub fn new_for_test(id: u32, cols: u16, rows: u16) -> Self {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
+        let bell = Arc::new(AtomicBool::new(false));
         let (tx, _rx) = mpsc::sync_channel(64);
         let ctx = Context::default();
-        let proxy = EventProxy::new(id, title.clone(), ctx, tx);
+        let proxy = EventProxy::new(id, title.clone(), ctx, tx, bell.clone());
         let config = Config {
             scrolling_history: 100_000,
             ..Config::default()
@@ -137,6 +149,7 @@ impl Session {
             cwd: PathBuf::new(),
             prompt_ready: false,
             title,
+            bell,
         }
     }
 

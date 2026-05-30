@@ -107,7 +107,7 @@ impl App {
                         let fill = if hover_any {
                             color
                         } else {
-                            egui::Color32::from_gray(80)
+                            theme::active().overlay0
                         };
                         painter.circle_filled(pos, 6.0, fill);
                         if resp.clicked() {
@@ -156,7 +156,7 @@ impl App {
                     // Switcher button (after left toggle)
                     {
                         let hint_text = "Ctrl+Shift+Space";
-                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
@@ -178,7 +178,7 @@ impl App {
                         } else {
                             egui::Color32::TRANSPARENT
                         };
-                        painter.rect_filled(sw_tbr, 4.0, sw_bg);
+                        painter.rect_filled(sw_tbr, theme::R_MD, sw_bg);
                         let icon_center =
                             egui::pos2(sw_tbr.min.x + mac_btn_w * 0.5, sw_tbr.center().y);
                         painter.text(
@@ -271,7 +271,7 @@ impl App {
                     let mac_kb_btn_x;
                     {
                         let hint_text = "Ctrl+Shift+/";
-                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_shortcut_help {
@@ -293,7 +293,7 @@ impl App {
                         } else {
                             egui::Color32::TRANSPARENT
                         };
-                        painter.rect_filled(kb_tbr, 4.0, bg);
+                        painter.rect_filled(kb_tbr, theme::R_MD, bg);
                         let icon_center =
                             egui::pos2(kb_tbr.max.x - mac_btn_w * 0.5, kb_tbr.center().y);
                         painter.text(
@@ -352,20 +352,21 @@ impl App {
                             let update_x =
                                 sysmon_mac_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
                             let br = egui::Rect::from_min_size(
-                                egui::pos2(update_x, r.min.y + theme::SP_SM),
-                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
+                                egui::pos2(update_x, r.min.y + theme::SP_2),
+                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_4),
                             );
                             let resp =
                                 ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
-                            painter.rect_filled(br, 4.0, bg);
+                            let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
+                            painter.rect_filled(br, theme::R_MD, bg);
                             painter.text(
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
                                 egui::FontId::proportional(11.0),
-                                egui::Color32::WHITE,
+                                update_btn_fg,
                             );
                             if resp.clicked() {
                                 match &update_state.status {
@@ -464,7 +465,7 @@ impl App {
                     let switcher_end_x;
                     {
                         let hint_text = "Ctrl+Shift+Space";
-                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
@@ -487,7 +488,7 @@ impl App {
                         } else {
                             egui::Color32::TRANSPARENT
                         };
-                        painter.rect_filled(br, 4.0, bg);
+                        painter.rect_filled(br, theme::R_MD, bg);
                         let icon_center = egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
                         painter.text(
                             icon_center,
@@ -578,7 +579,7 @@ impl App {
                     let kb_btn_x;
                     {
                         let hint_text = "Ctrl+Shift+/";
-                        let hint_font = egui::FontId::proportional(theme::SHORTCUT_HINT_SZ);
+                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_shortcut_help {
@@ -600,7 +601,7 @@ impl App {
                         } else {
                             egui::Color32::TRANSPARENT
                         };
-                        painter.rect_filled(br, 4.0, bg);
+                        painter.rect_filled(br, theme::R_MD, bg);
                         let icon_center = egui::pos2(br.max.x - btn_w * 0.5, br.center().y);
                         painter.text(
                             icon_center,
@@ -659,20 +660,21 @@ impl App {
                             let update_x =
                                 sysmon_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
                             let br = egui::Rect::from_min_size(
-                                egui::pos2(update_x, r.min.y + theme::SP_SM),
-                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_MD),
+                                egui::pos2(update_x, r.min.y + theme::SP_2),
+                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_4),
                             );
                             let resp =
                                 ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
-                            painter.rect_filled(br, 4.0, bg);
+                            let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
+                            painter.rect_filled(br, theme::R_MD, bg);
                             painter.text(
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
                                 egui::FontId::proportional(11.0),
-                                egui::Color32::WHITE,
+                                update_btn_fg,
                             );
                             if resp.clicked() {
                                 match &update_state.status {
@@ -708,7 +710,7 @@ impl App {
                         };
                         painter.rect_filled(br, 0.0, bg);
                         let fg = if resp.hovered() && is_danger {
-                            egui::Color32::WHITE
+                            theme::active().danger_fg
                         } else {
                             tb_fg
                         };

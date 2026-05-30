@@ -47,7 +47,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(format!("Workspaces ({})", ws_count))
                         .strong()
-                        .size(theme::HEADER_FONT_SZ),
+                        .size(theme::FONT_UI_MD),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let arrow = if self.workspace_panel_collapsed {
@@ -58,7 +58,7 @@ impl App {
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new(arrow).size(theme::HEADER_FONT_SZ),
+                                egui::RichText::new(arrow).size(theme::FONT_UI_MD),
                             )
                             .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
                             .frame(false),
@@ -144,7 +144,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = theme::SP_SM;
+                ui.spacing_mut().item_spacing.y = theme::SP_2;
 
                 // "Other" group at the top
                 self.render_other_group(ui, actions, active_group_snap, has_active_other);
@@ -176,6 +176,7 @@ impl App {
         let fg = theme::text_on(theme::tinted(data.color, tint_factor));
 
         const GEAR_W: f32 = 26.0;
+        const SB_PAD: f32 = 14.0;
         let full_w = ui.available_width();
         let stroke_val = if active {
             egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
@@ -185,7 +186,7 @@ impl App {
         let (full_rect, _) =
             ui.allocate_exact_size(egui::vec2(full_w, card_h), egui::Sense::hover());
         let gear_rect = egui::Rect::from_min_size(
-            egui::pos2(full_rect.max.x - GEAR_W, full_rect.min.y),
+            egui::pos2(full_rect.max.x - GEAR_W - SB_PAD, full_rect.min.y),
             egui::vec2(GEAR_W, theme::HEADER_H),
         );
         let name_rect = egui::Rect::from_min_max(
@@ -204,7 +205,7 @@ impl App {
         );
 
         if ui.is_rect_visible(full_rect) {
-            let rounding = egui::Rounding::same(theme::ROUNDING);
+            let rounding = egui::Rounding::same(theme::R_MD);
             ui.painter().rect_filled(full_rect, rounding, fill);
             ui.painter().rect_stroke(full_rect, rounding, stroke_val);
 
@@ -213,8 +214,8 @@ impl App {
                 let bar =
                     egui::Rect::from_min_size(full_rect.min, egui::vec2(3.0, full_rect.height()));
                 let left_rounding = egui::Rounding {
-                    nw: theme::ROUNDING,
-                    sw: theme::ROUNDING,
+                    nw: theme::R_MD,
+                    sw: theme::R_MD,
                     ne: 0.0,
                     se: 0.0,
                 };
@@ -231,7 +232,7 @@ impl App {
             let name_galley = ui.fonts(|f| {
                 f.layout_no_wrap(
                     name_str,
-                    egui::FontId::proportional(theme::SESSION_FONT_SZ),
+                    egui::FontId::proportional(theme::FONT_UI_MD),
                     fg,
                 )
             });
@@ -242,7 +243,7 @@ impl App {
                 full_rect.center().y - name_h / 2.0
             };
             ui.painter().with_clip_rect(name_rect).galley(
-                egui::pos2(full_rect.left() + theme::BAR_PAD_X, name_y),
+                egui::pos2(full_rect.left() + theme::SP_3, name_y),
                 name_galley,
                 fg,
             );
@@ -297,7 +298,7 @@ impl App {
                 });
                 let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
                 ui.painter().with_clip_rect(full_rect).galley(
-                    egui::pos2(full_rect.left() + theme::BAR_PAD_X, git_y),
+                    egui::pos2(full_rect.left() + theme::SP_3, git_y),
                     git_galley,
                     git_fg,
                 );
@@ -372,7 +373,7 @@ impl App {
         let (other_rect, other_resp) =
             ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click());
         if ui.is_rect_visible(other_rect) {
-            let rounding = egui::Rounding::same(theme::ROUNDING);
+            let rounding = egui::Rounding::same(theme::R_MD);
             ui.painter().rect_filled(other_rect, rounding, other_fill);
             ui.painter().rect_stroke(other_rect, rounding, other_stroke);
 
@@ -380,8 +381,8 @@ impl App {
                 let bar =
                     egui::Rect::from_min_size(other_rect.min, egui::vec2(3.0, other_rect.height()));
                 let left_rounding = egui::Rounding {
-                    nw: theme::ROUNDING,
-                    sw: theme::ROUNDING,
+                    nw: theme::R_MD,
+                    sw: theme::R_MD,
                     ne: 0.0,
                     se: 0.0,
                 };

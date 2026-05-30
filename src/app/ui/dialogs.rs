@@ -74,22 +74,22 @@ impl App {
                 ui.painter().rect_filled(
                     screen_rect,
                     0.0,
-                    egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                 );
                 if resp.clicked() {
                     close_switcher = true;
                 }
             });
 
-        let dialog_w = (screen_rect.width() * 0.95).max(600.0);
-        let dialog_h = (screen_rect.height() * 0.95).max(400.0);
+        let dialog_w = (screen_rect.width() * 0.95).min(screen_rect.width() - 20.0).max(400.0);
+        let dialog_h = (screen_rect.height() * 0.95).min(screen_rect.height() - 20.0).max(300.0);
 
         egui::Area::new(self.vp_id("quick_switcher_dialog"))
             .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::same(theme::SP_XL))
+                    .inner_margin(egui::Margin::same(theme::SP_6))
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w);
                         ui.set_min_height(dialog_h);
@@ -213,15 +213,15 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Quick Switcher")
                                     .strong()
-                                    .size(theme::DIALOG_TITLE_SZ)
+                                    .size(theme::FONT_UI_LG)
                                     .color(t.text),
                             );
-                            ui.add_space(theme::SP_XL);
+                            ui.add_space(theme::SP_6);
                             let shortcut_fg =
                                 theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                             ui.label(
                                 egui::RichText::new("Ctrl+Shift+Space")
-                                    .size(11.0)
+                                    .size(theme::FONT_UI_SM)
                                     .color(shortcut_fg)
                                     .background_color(t.surface1),
                             );
@@ -232,7 +232,7 @@ impl App {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("×")
-                                                    .size(theme::DIALOG_CLOSE_SZ),
+                                                    .size(theme::FONT_UI_LG),
                                             )
                                             .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
                                         )
@@ -243,7 +243,7 @@ impl App {
                                 },
                             );
                         });
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         // ── Search input (only visible/focused in search mode) ───
                         if self.quick_switcher_search_active {
@@ -258,7 +258,7 @@ impl App {
                             if !search_resp.has_focus() {
                                 search_resp.request_focus();
                             }
-                            ui.add_space(theme::SP_SM);
+                            ui.add_space(theme::SP_2);
                         }
 
                         // ── Hotkey hints ─────────────────────────────────
@@ -267,13 +267,13 @@ impl App {
                                 let hint_fg = theme::ensure_readable(t.base_rgb, t.overlay0_rgb);
                                 ui.label(
                                     egui::RichText::new(key)
-                                        .size(11.0)
+                                        .size(theme::FONT_UI_SM)
                                         .strong()
                                         .color(hint_fg)
                                         .background_color(t.overlay0),
                                 );
-                                ui.label(egui::RichText::new(desc).size(11.0).color(t.subtext0));
-                                ui.add_space(theme::SP_LG);
+                                ui.label(egui::RichText::new(desc).size(theme::FONT_UI_SM).color(t.subtext0));
+                                ui.add_space(theme::SP_5);
                             };
                             if let Some(ws_idx) = self.quick_switcher_selected_ws {
                                 hint(ui, " a-z ", "select session");
@@ -281,15 +281,15 @@ impl App {
                                 let ws_badge_fg = theme::ensure_readable(t.base_rgb, t.green_rgb);
                                 ui.label(
                                     egui::RichText::new(&badge)
-                                        .size(11.0)
+                                        .size(theme::FONT_UI_SM)
                                         .strong()
                                         .color(ws_badge_fg)
                                         .background_color(t.green),
                                 );
                                 ui.label(
-                                    egui::RichText::new("selected").size(11.0).color(t.subtext0),
+                                    egui::RichText::new("selected").size(theme::FONT_UI_SM).color(t.subtext0),
                                 );
-                                ui.add_space(theme::SP_LG);
+                                ui.add_space(theme::SP_5);
                             } else {
                                 hint(ui, " 1-9 ", "select workspace");
                             }
@@ -298,9 +298,9 @@ impl App {
                             hint(ui, " Esc ", "close");
                         });
 
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
                         ui.separator();
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         // ── Build data: groups with sessions only ────────
                         let matcher = SkimMatcherV2::default();
@@ -435,7 +435,7 @@ impl App {
                         }
 
                         // ── Render columns ───────────────────────────────
-                        let scroll_h = dialog_h - 120.0;
+                        let scroll_h = (dialog_h - 120.0).max(60.0);
                         egui::ScrollArea::horizontal()
                             .min_scrolled_height(scroll_h)
                             .max_height(scroll_h)
@@ -445,7 +445,7 @@ impl App {
                                     ui.centered_and_justified(|ui| {
                                         ui.label(
                                             egui::RichText::new("No active sessions")
-                                                .size(14.0)
+                                                .size(theme::FONT_TERM)
                                                 .color(t.overlay0),
                                         );
                                     });
@@ -455,7 +455,7 @@ impl App {
                                 let num_cols = groups.len();
                                 let available_w = dialog_w
                                     - 40.0
-                                    - (num_cols.saturating_sub(1) as f32 * theme::SP_SM);
+                                    - (num_cols.saturating_sub(1) as f32 * theme::SP_2);
                                 let col_width = (available_w / num_cols as f32).clamp(160.0, 240.0);
 
                                 ui.horizontal_top(|ui| {
@@ -477,7 +477,7 @@ impl App {
 
                                             let hdr_resp = egui::Frame::none()
                                                 .fill(theme::from_rgb(header_bg_rgb))
-                                                .rounding(theme::ROUNDING)
+                                                .rounding(theme::R_MD)
                                                 .inner_margin(egui::Margin::symmetric(6.0, 4.0))
                                                 .show(ui, |ui| {
                                                     ui.horizontal(|ui| {
@@ -486,7 +486,7 @@ impl App {
                                                                 " {} ",
                                                                 ws_number
                                                             ))
-                                                            .size(11.0)
+                                                            .size(theme::FONT_UI_SM)
                                                             .strong()
                                                             .color(header_fg)
                                                             .background_color(
@@ -496,7 +496,7 @@ impl App {
                                                         ui.label(
                                                             egui::RichText::new(&group.name)
                                                                 .strong()
-                                                                .size(13.0)
+                                                                .size(theme::FONT_UI_LG)
                                                                 .color(header_fg),
                                                         );
                                                     });
@@ -529,7 +529,7 @@ impl App {
 
                                                 let resp = egui::Frame::none()
                                                     .fill(fill)
-                                                    .rounding(theme::ROUNDING)
+                                                    .rounding(theme::R_MD)
                                                     .inner_margin(egui::Margin::symmetric(6.0, 3.0))
                                                     .show(ui, |ui| {
                                                         ui.horizontal(|ui| {
@@ -553,7 +553,7 @@ impl App {
                                                                     " {} ",
                                                                     letter
                                                                 ))
-                                                                .size(11.0)
+                                                                .size(theme::FONT_UI_SM)
                                                                 .strong()
                                                                 .color(session_badge_fg)
                                                                 .background_color(badge_bg),
@@ -563,7 +563,7 @@ impl App {
                                                                     egui::RichText::new(
                                                                         &entry.label,
                                                                     )
-                                                                    .size(12.0)
+                                                                    .size(theme::FONT_UI_MD)
                                                                     .color(t.text),
                                                                 );
                                                                 if !entry.cwd.is_empty() {
@@ -571,7 +571,7 @@ impl App {
                                                                         egui::RichText::new(
                                                                             &entry.cwd,
                                                                         )
-                                                                        .size(10.0)
+                                                                        .size(theme::FONT_UI_XS)
                                                                         .color(t.overlay0),
                                                                     );
                                                                 }
@@ -624,12 +624,13 @@ impl App {
                     ui.painter().rect_filled(
                         screen_rect,
                         0.0,
-                        egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                        egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                     );
                 });
 
+            let ws_dialog_h = 280.0_f32;
             egui::Area::new(self.vp_id("ws_dialog"))
-                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
+                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, (ws_dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     egui::Frame::window(&ctx.style()).show(ui, |ui| {
@@ -638,9 +639,9 @@ impl App {
                         ui.label(
                             egui::RichText::new("Save Workspace")
                                 .strong()
-                                .size(theme::DIALOG_TITLE_SZ),
+                                .size(theme::FONT_UI_LG),
                         );
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         if let Some(dlg) = &mut self.workspace_dialog {
                             ui.label("Name");
@@ -653,39 +654,40 @@ impl App {
                                 name_resp.request_focus();
                                 dlg.focus_requested = true;
                             }
-                            ui.add_space(theme::SP_MD);
+                            ui.add_space(theme::SP_4);
 
                             ui.label(
                                 egui::RichText::new(theme::short_path(&dlg.path))
                                     .monospace()
-                                    .size(11.0)
+                                    .size(theme::FONT_UI_SM)
                                     .color(theme::active().fg_path),
                             )
                             .on_hover_text(dlg.path.display().to_string());
-                            ui.add_space(theme::SP_MD);
+                            ui.add_space(theme::SP_4);
 
                             ui.label("Color");
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing =
-                                    egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
+                                    egui::vec2(theme::SP_4, theme::SP_4);
                                 for &preset in PRESET_COLORS {
                                     let selected =
                                         dlg.selected_color == preset && !dlg.show_custom_picker;
+                                    let t = theme::active();
                                     let swatch = egui::Button::new("")
                                         .fill(theme::from_rgb(preset))
                                         .stroke(if selected {
                                             egui::Stroke::new(
                                                 theme::STROKE_BOLD,
-                                                egui::Color32::WHITE,
+                                                t.text,
                                             )
                                         } else {
                                             egui::Stroke::new(
                                                 theme::STROKE_THIN,
-                                                egui::Color32::from_gray(60),
+                                                t.overlay0,
                                             )
                                         })
                                         .min_size(egui::vec2(24.0, 24.0))
-                                        .rounding(theme::ROUNDING);
+                                        .rounding(theme::R_MD);
                                     if ui.add(swatch).clicked() {
                                         dlg.selected_color = preset;
                                         dlg.show_custom_picker = false;
@@ -712,7 +714,7 @@ impl App {
                                 }
                             });
 
-                            ui.add_space(theme::SP_LG);
+                            ui.add_space(theme::SP_5);
                             ui.horizontal(|ui| {
                                 let can_save = !dlg.name.trim().is_empty();
                                 if ui
@@ -777,12 +779,13 @@ impl App {
                     ui.painter().rect_filled(
                         screen_rect,
                         0.0,
-                        egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                        egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                     );
                 });
 
+            let ws_edit_dialog_h = 280.0_f32;
             egui::Area::new(self.vp_id("ws_edit_dialog"))
-                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 140.0))
+                .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, (ws_edit_dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)))
                 .order(egui::Order::Tooltip)
                 .show(ctx, |ui| {
                     egui::Frame::window(&ctx.style()).show(ui, |ui| {
@@ -791,9 +794,9 @@ impl App {
                         ui.label(
                             egui::RichText::new("Workspace Settings")
                                 .strong()
-                                .size(theme::DIALOG_TITLE_SZ),
+                                .size(theme::FONT_UI_LG),
                         );
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         if let Some(dlg) = &mut self.workspace_edit_dialog {
                             ui.label("Name");
@@ -806,13 +809,14 @@ impl App {
                                 name_resp.request_focus();
                                 dlg.focus_requested = true;
                             }
-                            ui.add_space(theme::SP_MD);
+                            ui.add_space(theme::SP_4);
 
                             ui.label("Color");
                             ui.horizontal_wrapped(|ui| {
                                 ui.spacing_mut().item_spacing =
-                                    egui::vec2(theme::BAR_PAD_X, theme::BAR_PAD_X);
+                                    egui::vec2(theme::SP_4, theme::SP_4);
                                 for &preset in PRESET_COLORS {
+                                    let t = theme::active();
                                     let selected =
                                         dlg.selected_color == preset && !dlg.show_custom_picker;
                                     let swatch = egui::Button::new("")
@@ -820,16 +824,16 @@ impl App {
                                         .stroke(if selected {
                                             egui::Stroke::new(
                                                 theme::STROKE_BOLD,
-                                                egui::Color32::WHITE,
+                                                t.text,
                                             )
                                         } else {
                                             egui::Stroke::new(
                                                 theme::STROKE_THIN,
-                                                egui::Color32::from_gray(60),
+                                                t.overlay0,
                                             )
                                         })
                                         .min_size(egui::vec2(24.0, 24.0))
-                                        .rounding(theme::ROUNDING);
+                                        .rounding(theme::R_MD);
                                     if ui.add(swatch).clicked() {
                                         dlg.selected_color = preset;
                                         dlg.show_custom_picker = false;
@@ -856,24 +860,25 @@ impl App {
                                 }
                             });
 
-                            ui.add_space(theme::SP_LG);
+                            ui.add_space(theme::SP_5);
                             ui.separator();
-                            ui.add_space(theme::SP_MD);
+                            ui.add_space(theme::SP_4);
 
                             if dlg.confirm_delete {
                                 ui.colored_label(
-                                    egui::Color32::from_rgb(220, 70, 70),
+                                    theme::active().error,
                                     "Are you sure? This cannot be undone.",
                                 );
-                                ui.add_space(theme::SP_MD);
+                                ui.add_space(theme::SP_4);
                                 ui.horizontal(|ui| {
+                                    let t = theme::active();
                                     if ui
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("Delete Workspace")
-                                                    .color(egui::Color32::WHITE),
+                                                    .color(t.danger_fg),
                                             )
-                                            .fill(egui::Color32::from_rgb(180, 40, 40)),
+                                            .fill(t.danger_bg),
                                         )
                                         .clicked()
                                     {
@@ -902,12 +907,12 @@ impl App {
                                                 .add(
                                                     egui::Button::new(
                                                         egui::RichText::new("Delete").color(
-                                                            egui::Color32::from_rgb(220, 80, 80),
+                                                            theme::active().error,
                                                         ),
                                                     )
                                                     .stroke(egui::Stroke::new(
                                                         1.0,
-                                                        egui::Color32::from_rgb(220, 80, 80),
+                                                        theme::active().error,
                                                     )),
                                                 )
                                                 .clicked()
@@ -1005,19 +1010,20 @@ impl App {
                 ui.painter().rect_filled(
                     screen_rect,
                     0.0,
-                    egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                 );
                 if resp.clicked() {
                     cancel = true;
                 }
             });
 
+        let close_all_h = 120.0_f32;
         egui::Area::new(self.vp_id("close_all_dialog"))
-            .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, 60.0))
+            .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, (close_all_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::same(theme::SP_XL))
+                    .inner_margin(egui::Margin::same(theme::SP_6))
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w);
 
@@ -1055,16 +1061,16 @@ impl App {
                         ui.label(
                             egui::RichText::new(&title)
                                 .strong()
-                                .size(theme::DIALOG_TITLE_SZ),
+                                .size(theme::FONT_UI_LG),
                         );
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         ui.label(format!(
                             "This will close {} session{}. Are you sure?",
                             count,
                             if count == 1 { "" } else { "s" }
                         ));
-                        ui.add_space(theme::SP_LG);
+                        ui.add_space(theme::SP_5);
 
                         if ctx
                             .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
@@ -1077,13 +1083,14 @@ impl App {
                         }
 
                         ui.horizontal(|ui| {
+                            let t = theme::active();
                             if ui
                                 .add(
                                     egui::Button::new(
                                         egui::RichText::new("Close All")
-                                            .color(egui::Color32::WHITE),
+                                            .color(t.danger_fg),
                                     )
-                                    .fill(egui::Color32::from_rgb(180, 40, 40)),
+                                    .fill(t.danger_bg),
                                 )
                                 .clicked()
                             {

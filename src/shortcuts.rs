@@ -60,6 +60,12 @@ pub enum AppAction {
 
     // Global search across all sessions
     SearchAllSessions,
+
+    // Pane zoom
+    ZoomPane,
+
+    // Command palette
+    CommandPalette,
 }
 
 impl AppAction {
@@ -97,6 +103,8 @@ impl AppAction {
             Self::OpenQuickSwitcher => "open_quick_switcher",
             Self::SearchTerminal => "search_terminal",
             Self::SearchAllSessions => "search_all_sessions",
+            Self::ZoomPane => "zoom_pane",
+            Self::CommandPalette => "command_palette",
         }
     }
 
@@ -134,6 +142,8 @@ impl AppAction {
             "open_quick_switcher" => Some(Self::OpenQuickSwitcher),
             "search_terminal" => Some(Self::SearchTerminal),
             "search_all_sessions" => Some(Self::SearchAllSessions),
+            "zoom_pane" => Some(Self::ZoomPane),
+            "command_palette" => Some(Self::CommandPalette),
             _ => None,
         }
     }
@@ -172,6 +182,8 @@ impl AppAction {
             Self::OpenQuickSwitcher => "Quick switcher",
             Self::SearchTerminal => "Search terminal",
             Self::SearchAllSessions => "Search all sessions",
+            Self::ZoomPane => "Zoom pane",
+            Self::CommandPalette => "Command palette",
         }
     }
 
@@ -264,6 +276,7 @@ pub fn key_name(key: egui::Key) -> &'static str {
         egui::Key::P => "P",
         egui::Key::T => "T",
         egui::Key::W => "W",
+        egui::Key::Z => "Z",
         egui::Key::Space => "Space",
         _ => "?",
     }
@@ -334,6 +347,13 @@ impl ShortcutRegistry {
         ShortcutRegistry { bindings, labels }
     }
 
+    pub fn find_shortcut(&self, action: AppAction) -> Option<&Shortcut> {
+        self.bindings
+            .iter()
+            .find(|(_, a)| *a == action)
+            .map(|(s, _)| s)
+    }
+
     fn default_bindings() -> Vec<(Shortcut, AppAction)> {
         vec![
             // Panel navigation
@@ -374,7 +394,7 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::C), AppAction::CopySelection),
             // Search
             (Shortcut::cs(egui::Key::F), AppAction::FocusSessionSearch),
-            (Shortcut::cs(egui::Key::P), AppAction::FocusFileSearch),
+            (Shortcut::cs(egui::Key::P), AppAction::CommandPalette),
             // Help
             (
                 Shortcut::cs(egui::Key::Slash),
@@ -394,6 +414,8 @@ impl ShortcutRegistry {
             ),
             // Global search across all sessions
             (Shortcut::cs(egui::Key::N), AppAction::SearchAllSessions),
+            // Pane zoom
+            (Shortcut::cs(egui::Key::Z), AppAction::ZoomPane),
         ]
     }
 
@@ -437,6 +459,7 @@ impl ShortcutRegistry {
                         Shortcut::cs(egui::Key::Backslash),
                     ),
                     (AppAction::SplitVertical, Shortcut::cs(egui::Key::Minus)),
+                    (AppAction::ZoomPane, Shortcut::cs(egui::Key::Z)),
                 ],
             },
             ShortcutGroup {
@@ -463,7 +486,6 @@ impl ShortcutRegistry {
                 name: "Search",
                 entries: vec![
                     (AppAction::FocusSessionSearch, Shortcut::cs(egui::Key::F)),
-                    (AppAction::FocusFileSearch, Shortcut::cs(egui::Key::P)),
                     (AppAction::RightTabDirectory, Shortcut::cs(egui::Key::D)),
                     (
                         AppAction::SearchTerminal,
@@ -479,10 +501,13 @@ impl ShortcutRegistry {
             },
             ShortcutGroup {
                 name: "Help",
-                entries: vec![(
-                    AppAction::ToggleShortcutHelp,
-                    Shortcut::cs(egui::Key::Slash),
-                )],
+                entries: vec![
+                    (
+                        AppAction::ToggleShortcutHelp,
+                        Shortcut::cs(egui::Key::Slash),
+                    ),
+                    (AppAction::CommandPalette, Shortcut::cs(egui::Key::P)),
+                ],
             },
         ]
     }
@@ -560,7 +585,6 @@ mod tests {
             AppAction::ToggleNotes,
             AppAction::DuplicateSession,
             AppAction::FocusSessionSearch,
-            AppAction::FocusFileSearch,
             AppAction::ToggleShortcutHelp,
             AppAction::OpenQuickSwitcher,
             AppAction::SearchTerminal,

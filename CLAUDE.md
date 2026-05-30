@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (52 tests as of Phase E)
+cargo test               # all unit tests (261 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -18,7 +18,8 @@ RUST_LOG=debug cargo run # enable debug logging
 |------|---------------|
 | `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false; calls `SingleInstanceGuard::try_acquire()` |
 | `src/app.rs` | `App` struct; ALL UI logic, state management, persistence |
-| `src/theme.rs` | Catppuccin Mocha palette, semantic color aliases, layout constants, helper fns |
+| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
+| `src/app/feedback.rs` | `FlashManager`: subtle UI flash feedback system (copy, paste, errors) with auto-fade |
 | `src/terminal/mod.rs` | `Session` struct wrapping `Term<EventProxy>`; `EventProxy` (`EventListener` impl); `TermSize` (`Dimensions` impl) |
 | `src/terminal/tests.rs` | 11 terminal emulator tests using `alacritty_terminal` APIs |
 | `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; each session gets a dedicated pty-writer-N thread |
@@ -127,7 +128,15 @@ Color32::from_rgb(30, 30, 46)
 // ...
 ```
 
-**Theme constants:** All colors live in `theme.rs`. Semantic aliases (e.g. `CURSOR_COLOR`, `SELECTION_BG`) wrap the raw Catppuccin palette values.
+**Design language tokens (all in `theme.rs`):**
+- Spacing: `SP_0` (0) through `SP_6` (16) — use these, never hardcode pixel values
+- Radii: `R_NONE` (0), `R_SM` (2), `R_MD` (4), `R_LG` (6)
+- Typography: `FONT_HEADING_1` (22), `FONT_HEADING_2` (18), `FONT_STATUS` (16), `FONT_TERM` (14), `FONT_UI_LG` (13), `FONT_UI_MD` (12), `FONT_UI_SM` (11), `FONT_UI_XS` (10)
+- Alpha: `ALPHA_CURSOR`, `ALPHA_SELECTION`, `ALPHA_OVERLAY_DIM`, `ALPHA_SCROLLBAR_*`, `ALPHA_FLASH`
+- Blend factors: `BLEND_SUBTLE` (0.15), `BLEND_LIGHT` (0.30), `BLEND_MEDIUM` (0.50), `BLEND_STRONG` (0.75)
+- Icons: `ICON_SM` (10), `ICON_MD` (14), `ICON_LG` (18), `ICON_STROKE`, `ICON_PAD`
+- Semantic colors on `Theme`: `accent`, `accent_muted`, `accent_strong`, `success`, `warning`, `error`, `flash_bg`, `flash_success_bg`, `flash_error_bg`
+- Flash feedback: use `FlashManager` in `app/feedback.rs` — call `flash.trigger(target, kind)`, render via `flash.render_on_rect()`
 
 ## Common Editing Tasks
 
@@ -157,9 +166,10 @@ Color32::from_rgb(30, 30, 46)
 | `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC 0/2 title, cursor movement, bracketed paste, mouse click/SGR, cursor visibility, bold SGR |
 | `src/pane_tree.rs` | 13 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, update_size, split_rect geometry |
 | `src/workspace.rs` | 11 | store CRUD, find_for_cwd, find_for_path, note store |
-| `src/theme.rs` | 9 | color roundtrip, tinted, short_path, header_bg, text contrast |
+| `src/theme.rs` | 22 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast, ensure_readable |
+| `src/app/feedback.rs` | 6 | trigger/tick, flash expiry, alpha decay, duplicate replacement, color generation, multi-target independence |
 | `src/app.rs` | 8 | title formatting |
-| **Total** | **52** | |
+| **Total** | **261** | |
 
 ## Release Workflow
 

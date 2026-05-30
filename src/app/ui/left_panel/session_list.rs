@@ -43,7 +43,7 @@ impl App {
             if sb.escaped {
                 self.session_search_query.clear();
             }
-            ui.add_space(theme::SP_XS);
+            ui.add_space(theme::SP_1);
         }
 
         // ── Global search bar (search across all sessions) ──────────
@@ -87,12 +87,12 @@ impl App {
                 if !status.is_empty() {
                     ui.label(
                         egui::RichText::new(&status)
-                            .size(10.0)
+                            .size(theme::FONT_UI_XS)
                             .color(theme::active().subtext0),
                     );
                 }
             }
-            ui.add_space(theme::SP_XS);
+            ui.add_space(theme::SP_1);
         }
 
         let session_filter = self.session_search_query.clone();
@@ -123,11 +123,11 @@ impl App {
                 ui.label(
                     egui::RichText::new("Sessions")
                         .strong()
-                        .size(theme::HEADER_FONT_SZ),
+                        .size(theme::FONT_UI_MD),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.menu_button(
-                        egui::RichText::new("+ New \u{25be}").size(theme::HEADER_FONT_SZ),
+                        egui::RichText::new("+ New \u{25be}").size(theme::FONT_UI_MD),
                         |ui| {
                             for shell in shells {
                                 if ui.button(shell.display_name()).clicked() {
@@ -185,7 +185,7 @@ impl App {
                                 "Close All"
                             };
                             if ui
-                                .button(egui::RichText::new(btn_label).size(theme::HEADER_FONT_SZ))
+                                .button(egui::RichText::new(btn_label).size(theme::FONT_UI_MD))
                                 .on_hover_text("Close all visible sessions")
                                 .clicked()
                             {
@@ -195,7 +195,7 @@ impl App {
                     }
                     if let Some(ref fp) = active_fg {
                         if ui
-                            .button(egui::RichText::new("Duplicate").size(theme::HEADER_FONT_SZ))
+                            .button(egui::RichText::new("Duplicate").size(theme::FONT_UI_MD))
                             .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
                             .clicked()
                         {
@@ -234,7 +234,7 @@ impl App {
         };
         egui::ComboBox::from_id_source(self.vp_id("ws_session_filter"))
             .width(ui.available_width() - 12.0)
-            .selected_text(egui::RichText::new(&selected_label).size(theme::SESSION_FONT_SZ))
+            .selected_text(egui::RichText::new(&selected_label).size(theme::FONT_UI_MD))
             .show_ui(ui, |ui| {
                 for (val, name) in &ws_names {
                     let is_selected = self.session_workspace_filter == *val;
@@ -243,7 +243,7 @@ impl App {
                     }
                 }
             });
-        ui.add_space(theme::SP_XS);
+        ui.add_space(theme::SP_1);
     }
 
     /// Render the global search results list with keyboard navigation.
@@ -298,15 +298,15 @@ impl App {
                     if current_session != Some(m.session_id) {
                         current_session = Some(m.session_id);
                         if i > 0 {
-                            ui.add_space(theme::SP_SM);
+                            ui.add_space(theme::SP_2);
                         }
                         ui.label(
                             egui::RichText::new(&m.session_title)
-                                .size(11.0)
+                                .size(theme::FONT_UI_SM)
                                 .strong()
                                 .color(t.blue),
                         );
-                        ui.add_space(theme::SP_XS);
+                        ui.add_space(theme::SP_1);
                     }
 
                     let selected = i == self.global_search_selected;
@@ -324,7 +324,7 @@ impl App {
 
                     if selected || resp.hovered() {
                         let hover_bg = if selected { bg } else { t.bg_row_hover };
-                        painter.rect_filled(row_rect, 2.0, hover_bg);
+                        painter.rect_filled(row_rect, theme::R_SM, hover_bg);
                     }
 
                     let text = &m.line_text;
@@ -507,9 +507,10 @@ impl App {
                     );
                     let row_rect = resp.rect;
 
-                    // Quit button — always reserved at right edge
+                    // Quit button — inset from right edge to avoid scrollbar overlap
+                    let sb_pad = 14.0_f32;
                     let quit_rect = egui::Rect::from_min_size(
-                        egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
+                        egui::pos2(row_rect.max.x - theme::BTN_W - sb_pad, row_rect.min.y),
                         egui::vec2(theme::BTN_W, row_rect.height()),
                     );
                     let quit_resp = ui.interact(
@@ -565,9 +566,9 @@ impl App {
                     // Title text clipped to leave room for quit button + window icon
                     let text_x = row_rect.min.x
                         + if ws_color.is_some() {
-                            theme::WS_BORDER_W + theme::BAR_PAD_X
+                            theme::WS_BORDER_W + theme::SP_3
                         } else {
-                            theme::BAR_PAD_X
+                            theme::SP_3
                         };
                     let clip_max = quit_rect.min.x - win_icon_w - 3.0;
                     let text_color = if dimmed {
@@ -586,7 +587,7 @@ impl App {
                             egui::pos2(text_x, row_rect.center().y),
                             egui::Align2::LEFT_CENTER,
                             &label,
-                            egui::FontId::proportional(theme::SESSION_FONT_SZ),
+                            egui::FontId::proportional(theme::FONT_UI_MD),
                             text_color,
                         );
 

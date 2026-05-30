@@ -67,18 +67,18 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
             ui.label(
                 egui::RichText::new(format!("Staged ({})", staged.len()))
                     .strong()
-                    .size(theme::STATUS_FONT_SZ)
+                    .size(theme::FONT_UI_MD)
                     .color(theme::active().git_added),
             );
             if !staged.is_empty() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(theme::SP_MD);
+                    ui.add_space(theme::SP_4);
                     if ui
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("\u{2212}")
                                     .monospace()
-                                    .size(14.0)
+                                    .size(theme::FONT_TERM)
                                     .color(theme::active().git_removed),
                             )
                             .frame(false),
@@ -91,12 +91,12 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                 });
             }
         });
-        ui.add_space(theme::SP_SM);
+        ui.add_space(theme::SP_2);
         if staged.is_empty() {
             ui.label(
                 egui::RichText::new("Nothing staged — click + to stage a file")
                     .italics()
-                    .size(11.0)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().overlay0),
             );
         } else {
@@ -106,7 +106,7 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
                     let badge_bg = entry.color.gamma_multiply(0.25);
                     ui.painter()
-                        .rect_filled(badge_rect, theme::ROUNDING, badge_bg);
+                        .rect_filled(badge_rect, theme::R_MD, badge_bg);
                     let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
                     let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
                     let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
@@ -122,7 +122,7 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                             egui::Label::new(
                                 egui::RichText::new(&entry.path)
                                     .monospace()
-                                    .size(theme::STATUS_FONT_SZ),
+                                    .size(theme::FONT_UI_MD),
                             )
                             .truncate()
                             .sense(egui::Sense::click()),
@@ -134,12 +134,12 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         open_diff_file = Some(entry.path.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
                         let btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("\u{2212}")
                                     .monospace()
-                                    .size(14.0)
+                                    .size(theme::FONT_TERM)
                                     .color(theme::active().git_removed),
                             )
                             .frame(false),
@@ -156,25 +156,25 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                 }
             }
         }
-        ui.add_space(theme::BAR_PAD_X);
+        ui.add_space(theme::SP_3);
         ui.separator();
-        ui.add_space(theme::SP_SM);
+        ui.add_space(theme::SP_2);
 
         if !unstaged.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("Changes ({})", unstaged.len()))
                         .strong()
-                        .size(theme::STATUS_FONT_SZ),
+                        .size(theme::FONT_UI_MD),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(theme::SP_MD);
+                    ui.add_space(theme::SP_4);
                     if ui
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("+")
                                     .monospace()
-                                    .size(14.0)
+                                    .size(theme::FONT_TERM)
                                     .color(theme::active().git_added),
                             )
                             .frame(false),
@@ -186,14 +186,14 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                     }
                 });
             });
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
             for entry in &unstaged {
                 let resp = ui.horizontal(|ui| {
                     let (badge_rect, _) =
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
                     let badge_bg = entry.color.gamma_multiply(0.25);
                     ui.painter()
-                        .rect_filled(badge_rect, theme::ROUNDING, badge_bg);
+                        .rect_filled(badge_rect, theme::R_MD, badge_bg);
                     let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
                     let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
                     let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
@@ -209,7 +209,7 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                             egui::Label::new(
                                 egui::RichText::new(&entry.path)
                                     .monospace()
-                                    .size(theme::STATUS_FONT_SZ),
+                                    .size(theme::FONT_UI_MD),
                             )
                             .truncate()
                             .sense(egui::Sense::click()),
@@ -221,12 +221,12 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                         open_diff_file = Some(entry.path.clone());
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
                         let btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("+")
                                     .monospace()
-                                    .size(14.0)
+                                    .size(theme::FONT_TERM)
                                     .color(theme::active().git_added),
                             )
                             .frame(false),
@@ -242,29 +242,29 @@ pub(super) fn render_git_diff(ui: &mut egui::Ui, diff: &str, status: &str) -> Gi
                     action = Some(GitStageAction::Stage(path));
                 }
             }
-            ui.add_space(theme::BAR_PAD_X);
+            ui.add_space(theme::SP_3);
             ui.separator();
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
         }
 
         if staged.is_empty() && unstaged.is_empty() {
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
         }
     }
 
     let _ = diff;
     if status.is_empty() {
-        ui.add_space(theme::SP_MD);
+        ui.add_space(theme::SP_4);
         ui.vertical_centered(|ui| {
             ui.label(
                 egui::RichText::new("No changes")
                     .italics()
                     .color(theme::active().overlay0)
-                    .size(13.0),
+                    .size(theme::FONT_UI_LG),
             );
             ui.label(
                 egui::RichText::new("Working tree is clean")
-                    .size(11.0)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().overlay0),
             );
         });
@@ -288,25 +288,25 @@ pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
             ui.label(
                 egui::RichText::new(line)
                     .monospace()
-                    .size(theme::DIFF_FONT_SZ)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().git_hunk),
             );
         } else if line.starts_with('+') {
             ui.label(
                 egui::RichText::new(line)
                     .monospace()
-                    .size(theme::DIFF_FONT_SZ)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().git_added),
             );
         } else if line.starts_with('-') {
             ui.label(
                 egui::RichText::new(line)
                     .monospace()
-                    .size(theme::DIFF_FONT_SZ)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().git_removed),
             );
         } else if line.starts_with("diff --git ") {
-            ui.add_space(theme::BAR_PAD_X);
+            ui.add_space(theme::SP_3);
             let fname = line
                 .strip_prefix("diff --git ")
                 .and_then(|s| s.split(" b/").last())
@@ -315,7 +315,7 @@ pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
                 egui::RichText::new(fname)
                     .strong()
                     .color(theme::active().git_filename)
-                    .size(13.0),
+                    .size(theme::FONT_UI_LG),
             );
         } else if line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ")
         {
@@ -324,7 +324,7 @@ pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
             ui.label(
                 egui::RichText::new(line)
                     .monospace()
-                    .size(theme::DIFF_FONT_SZ)
+                    .size(theme::FONT_UI_SM)
                     .color(theme::active().subtext0),
             );
         }

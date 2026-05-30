@@ -21,7 +21,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
             if i < len {
                 i += 1;
             }
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
             let maybe_syntax = if lang.is_empty() {
                 None
             } else {
@@ -35,8 +35,8 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                     theme::STROKE_THIN,
                     theme::active().md_code_border,
                 ))
-                .inner_margin(egui::Margin::symmetric(theme::SP_MD, theme::BAR_PAD_X))
-                .rounding(egui::Rounding::same(theme::ROUNDING))
+                .inner_margin(egui::Margin::symmetric(theme::SP_4, theme::SP_3))
+                .rounding(egui::Rounding::same(theme::R_MD))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     if let Some(syn) = maybe_syntax {
@@ -55,13 +55,13 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                             ui.label(
                                 egui::RichText::new(*code_line)
                                     .monospace()
-                                    .size(12.0)
+                                    .size(theme::FONT_UI_MD)
                                     .color(code_fg),
                             );
                         }
                     }
                 });
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
             continue;
         }
 
@@ -75,28 +75,28 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 i += 1;
             }
             render_table(ui, &table_rows);
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
             continue;
         }
 
         // Headings
         if let Some(t) = line.strip_prefix("#### ") {
-            ui.label(egui::RichText::new(t).size(13.0).strong());
+            ui.label(egui::RichText::new(t).size(theme::FONT_UI_LG).strong());
         } else if let Some(t) = line.strip_prefix("### ") {
-            ui.label(egui::RichText::new(t).size(theme::DIALOG_TITLE_SZ).strong());
+            ui.label(egui::RichText::new(t).size(theme::FONT_UI_LG).strong());
         } else if let Some(t) = line.strip_prefix("## ") {
-            ui.add_space(theme::SP_SM);
-            ui.label(egui::RichText::new(t).size(18.0).strong());
+            ui.add_space(theme::SP_2);
+            ui.label(egui::RichText::new(t).size(theme::FONT_HEADING_2).strong());
         } else if let Some(t) = line.strip_prefix("# ") {
-            ui.add_space(theme::SP_SM);
-            ui.label(egui::RichText::new(t).size(22.0).strong());
-            ui.add_space(theme::SP_XS);
+            ui.add_space(theme::SP_2);
+            ui.label(egui::RichText::new(t).size(theme::FONT_HEADING_1).strong());
+            ui.add_space(theme::SP_1);
         }
         // Unordered list
         else if let Some(rest) = strip_list_prefix(line) {
             let indent = leading_spaces(line) / 2;
             ui.horizontal(|ui| {
-                ui.add_space(indent as f32 * theme::SP_XL);
+                ui.add_space(indent as f32 * theme::SP_6);
                 ui.label(egui::RichText::new("•").color(theme::active().md_bullet));
                 theme::render_inline(ui, rest);
             });
@@ -105,7 +105,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         else if let Some((num, rest)) = strip_ordered_prefix(line) {
             let indent = leading_spaces(line) / 2;
             ui.horizontal(|ui| {
-                ui.add_space(indent as f32 * theme::SP_XL);
+                ui.add_space(indent as f32 * theme::SP_6);
                 ui.label(egui::RichText::new(format!("{}.", num)).color(theme::active().md_bullet));
                 theme::render_inline(ui, rest);
             });
@@ -120,7 +120,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 );
                 ui.painter()
                     .rect_filled(bar_rect, 0.0, theme::active().overlay0);
-                ui.add_space(theme::BAR_PAD_X);
+                ui.add_space(theme::SP_3);
                 ui.label(
                     egui::RichText::new(t)
                         .italics()
@@ -134,7 +134,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         }
         // Empty line
         else if line.is_empty() {
-            ui.add_space(theme::SP_SM);
+            ui.add_space(theme::SP_2);
         }
         // Normal paragraph
         else {
@@ -235,13 +235,13 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
         return;
     }
 
-    let cell_h_padding = theme::SP_MD;
+    let cell_h_padding = theme::SP_4;
     let border_width = theme::STROKE_THIN;
 
-    ui.add_space(theme::SP_SM);
+    ui.add_space(theme::SP_2);
     egui::Frame::none()
         .stroke(egui::Stroke::new(border_width, th.md_table_border))
-        .rounding(egui::Rounding::same(theme::ROUNDING))
+        .rounding(egui::Rounding::same(theme::R_MD))
         .show(ui, |ui| {
             let total_width = ui.available_width();
             ui.set_min_width(total_width);
@@ -273,7 +273,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                     .fill(bg)
                                     .inner_margin(egui::Margin::symmetric(
                                         cell_h_padding,
-                                        theme::SP_XS + 1.0,
+                                        theme::SP_1 + 1.0,
                                     ));
 
                             if col_idx < col_count.saturating_sub(1) {
@@ -286,7 +286,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                             frame.show(ui, |ui| {
                                 ui.set_min_width(col_content_width);
                                 if is_header {
-                                    ui.label(egui::RichText::new(*cell).strong().size(12.5));
+                                    ui.label(egui::RichText::new(*cell).strong().size(theme::FONT_UI_MD));
                                 } else {
                                     theme::render_inline(ui, cell);
                                 }

@@ -10,7 +10,7 @@ impl App {
             let mut close_settings = false;
             let screen_rect = ctx.screen_rect();
             let dialog_w = (screen_rect.width() * 0.38).clamp(320.0, 520.0);
-            let dialog_h = 520.0_f32;
+            let dialog_h = (screen_rect.height() * 0.85).clamp(300.0, 520.0);
 
             egui::Area::new(self.vp_id("settings_dim"))
                 .fixed_pos(screen_rect.min)
@@ -24,7 +24,7 @@ impl App {
                     ui.painter().rect_filled(
                         screen_rect,
                         0.0,
-                        egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                        egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                     );
                     if resp.clicked() {
                         close_settings = true;
@@ -43,7 +43,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Settings")
                                     .strong()
-                                    .size(theme::DIALOG_TITLE_SZ),
+                                    .size(theme::FONT_UI_LG),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -52,7 +52,7 @@ impl App {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("×")
-                                                    .size(theme::DIALOG_CLOSE_SZ),
+                                                    .size(theme::FONT_UI_LG),
                                             )
                                             .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
                                         )
@@ -64,7 +64,11 @@ impl App {
                             );
                         });
                         ui.separator();
-                        ui.add_space(theme::SP_MD);
+
+                        egui::ScrollArea::vertical()
+                            .max_height(dialog_h - 60.0)
+                            .show(ui, |ui| {
+                        ui.add_space(theme::SP_4);
 
                         // Restore last session
                         let mut restore = self.settings.restore_last_session;
@@ -75,16 +79,16 @@ impl App {
                             self.settings.restore_last_session = restore;
                             settings_changed = true;
                         }
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
                         ui.label(
                             egui::RichText::new(
                                 "When disabled, always opens a fresh session on launch.",
                             )
-                            .size(11.0)
+                            .size(theme::FONT_UI_SM)
                             .color(theme::active().overlay0),
                         );
 
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         // Show system monitor
                         {
@@ -109,13 +113,13 @@ impl App {
                             }
                         }
 
-                        ui.add_space(theme::SP_XL);
+                        ui.add_space(theme::SP_6);
                         ui.separator();
-                        ui.add_space(theme::SP_MD);
+                        ui.add_space(theme::SP_4);
 
                         // Theme picker
-                        ui.label(egui::RichText::new("Theme").size(13.0));
-                        ui.add_space(theme::SP_SM);
+                        ui.label(egui::RichText::new("Theme").size(theme::FONT_UI_LG));
+                        ui.add_space(theme::SP_2);
                         let current = self.settings.theme_id;
                         egui::ScrollArea::vertical()
                             .max_height(160.0)
@@ -138,7 +142,7 @@ impl App {
                                                 ),
                                                 egui::vec2(sw, swatch_size.y),
                                             );
-                                            ui.painter().rect_filled(r, 2.0, color);
+                                            ui.painter().rect_filled(r, theme::R_SM, color);
                                         }
                                         let label = if is_selected {
                                             egui::RichText::new(id.name()).strong()
@@ -157,11 +161,11 @@ impl App {
                             });
 
                         // ── Terminal ──────────────────────────────────────────
-                        ui.add_space(theme::SP_XL);
+                        ui.add_space(theme::SP_6);
                         ui.separator();
-                        ui.add_space(theme::SP_MD);
-                        ui.label(egui::RichText::new("Terminal").size(13.0));
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_4);
+                        ui.label(egui::RichText::new("Terminal").size(theme::FONT_UI_LG));
+                        ui.add_space(theme::SP_2);
 
                         // Font size
                         ui.horizontal(|ui| {
@@ -175,7 +179,7 @@ impl App {
                                 settings_changed = true;
                             }
                         });
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Scrollback lines
                         ui.horizontal(|ui| {
@@ -193,7 +197,7 @@ impl App {
                                 settings_changed = true;
                             }
                         });
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Cursor style
                         ui.horizontal(|ui| {
@@ -214,7 +218,7 @@ impl App {
                                 }
                             }
                         });
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Cursor blink
                         {
@@ -224,7 +228,7 @@ impl App {
                                 settings_changed = true;
                             }
                         }
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Scroll on output
                         {
@@ -237,7 +241,7 @@ impl App {
                                 settings_changed = true;
                             }
                         }
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Scroll lines per tick
                         ui.horizontal(|ui| {
@@ -251,7 +255,7 @@ impl App {
                                 settings_changed = true;
                             }
                         });
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         // Default shell
                         {
@@ -293,11 +297,11 @@ impl App {
                         }
 
                         // ── About / Updates ───────────────────────────────────
-                        ui.add_space(theme::SP_XL);
+                        ui.add_space(theme::SP_6);
                         ui.separator();
-                        ui.add_space(theme::SP_MD);
-                        ui.label(egui::RichText::new("About").size(13.0));
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_4);
+                        ui.label(egui::RichText::new("About").size(theme::FONT_UI_LG));
+                        ui.add_space(theme::SP_2);
                         ui.horizontal(|ui| {
                             ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
                             ui.with_layout(
@@ -313,7 +317,7 @@ impl App {
                                             UpdateStatus::UpToDate => {
                                                 ui.label(
                                                     egui::RichText::new("Up to date")
-                                                        .size(12.0)
+                                                        .size(theme::FONT_UI_MD)
                                                         .color(theme::active().green),
                                                 );
                                                 if ui.small_button("Check again").clicked() {
@@ -342,7 +346,7 @@ impl App {
                                             UpdateStatus::Error(msg) => {
                                                 ui.label(
                                                     egui::RichText::new(msg)
-                                                        .size(11.0)
+                                                        .size(theme::FONT_UI_SM)
                                                         .color(theme::active().red),
                                                 );
                                                 if ui.small_button("Retry").clicked() {
@@ -361,6 +365,7 @@ impl App {
                                 },
                             );
                         });
+                            }); // end ScrollArea
                     });
                 });
 
@@ -402,7 +407,7 @@ impl App {
                     ui.painter().rect_filled(
                         screen_rect,
                         0.0,
-                        egui::Color32::from_black_alpha(theme::OVERLAY_DIM),
+                        egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                     );
                     if resp.clicked() {
                         close_help = true;
@@ -421,7 +426,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("Keyboard Shortcuts")
                                     .strong()
-                                    .size(theme::DIALOG_TITLE_SZ),
+                                    .size(theme::FONT_UI_LG),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -430,7 +435,7 @@ impl App {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("×")
-                                                    .size(theme::DIALOG_CLOSE_SZ),
+                                                    .size(theme::FONT_UI_LG),
                                             )
                                             .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
                                         )
@@ -442,7 +447,7 @@ impl App {
                             );
                         });
                         ui.separator();
-                        ui.add_space(theme::SP_SM);
+                        ui.add_space(theme::SP_2);
 
                         egui::ScrollArea::vertical()
                             .max_height(dialog_h - 60.0)
@@ -459,20 +464,20 @@ impl App {
                                             if group.entries.is_empty() {
                                                 continue;
                                             }
-                                            col.add_space(theme::BAR_PAD_X);
+                                            col.add_space(theme::SP_3);
                                             col.label(
                                                 egui::RichText::new(group.name)
                                                     .strong()
-                                                    .size(12.0)
+                                                    .size(theme::FONT_UI_MD)
                                                     .color(t.blue),
                                             );
-                                            col.add_space(theme::SP_XS);
+                                            col.add_space(theme::SP_1);
                                             for (action, shortcut) in &group.entries {
                                                 col.horizontal(|ui| {
                                                     let desc = action.description();
                                                     ui.label(
                                                         egui::RichText::new(desc)
-                                                            .size(12.0)
+                                                            .size(theme::FONT_UI_MD)
                                                             .color(t.text),
                                                     );
                                                     ui.with_layout(
@@ -487,7 +492,7 @@ impl App {
                                                                     t.surface1_rgb,
                                                                 );
                                                             let badge = egui::RichText::new(&label)
-                                                                .size(11.0)
+                                                                .size(theme::FONT_UI_SM)
                                                                 .color(shortcut_fg)
                                                                 .background_color(t.surface1);
                                                             ui.label(badge);
@@ -499,22 +504,22 @@ impl App {
                                     }
                                 });
 
-                                ui.add_space(theme::SP_MD);
+                                ui.add_space(theme::SP_4);
                                 ui.separator();
-                                ui.add_space(theme::SP_SM);
+                                ui.add_space(theme::SP_2);
                                 ui.horizontal(|ui| {
                                     let t = theme::active();
                                     let split_shortcut_fg =
                                         theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                                     ui.label(
                                         egui::RichText::new("Alt+Arrow")
-                                            .size(11.0)
+                                            .size(theme::FONT_UI_SM)
                                             .color(split_shortcut_fg)
                                             .background_color(t.surface1),
                                     );
                                     ui.label(
                                         egui::RichText::new("Move focus between split panes")
-                                            .size(11.0)
+                                            .size(theme::FONT_UI_SM)
                                             .color(t.overlay0),
                                     );
                                 });

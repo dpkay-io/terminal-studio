@@ -158,6 +158,19 @@ pub struct Theme {
     pub fg_md_file: Color32,
     pub fg_other_file: Color32,
 
+    // Accent / semantic states
+    pub accent: Color32,
+    pub accent_muted: Color32,
+    pub accent_strong: Color32,
+    pub success: Color32,
+    pub warning: Color32,
+    pub error: Color32,
+
+    // Flash feedback
+    pub flash_bg: Color32,
+    pub flash_success_bg: Color32,
+    pub flash_error_bg: Color32,
+
     // Interactive
     pub danger_bg: Color32,
     pub danger_fg: Color32,
@@ -213,15 +226,21 @@ impl ThemeDef {
             ]
         };
 
-        let bg_workspace_fill = blend(self.mantle, self.base, 0.3);
-        let bg_row_hover = blend(self.base, self.surface0, 0.5);
-        let split_hover_bg = blend(self.base, self.blue, 0.3);
-        let divider_idle = blend(self.surface0, self.surface1, 0.3);
-        let divider_active = blend(self.surface1, self.blue, 0.5);
+        let bg_workspace_fill = blend(self.mantle, self.base, BLEND_LIGHT);
+        let bg_row_hover = blend(self.base, self.surface0, BLEND_MEDIUM);
+        let split_hover_bg = blend(self.base, self.blue, BLEND_LIGHT);
+        let divider_idle = blend(self.surface0, self.surface1, BLEND_LIGHT);
+        let divider_active = blend(self.surface1, self.blue, BLEND_MEDIUM);
         let ws_div_idle = blend(self.base, self.surface0, 0.4);
-        let ws_div_active = blend(self.surface1, self.overlay0, 0.5);
-        let fg_dir_entry = blend(self.blue, self.subtext1, 0.3);
-        let md_code_bg = blend(self.base, self.surface0, 0.5);
+        let ws_div_active = blend(self.surface1, self.overlay0, BLEND_MEDIUM);
+        let fg_dir_entry = blend(self.blue, self.subtext1, BLEND_LIGHT);
+        let md_code_bg = blend(self.base, self.surface0, BLEND_MEDIUM);
+
+        let accent_muted = blend(self.base, self.blue, 0.2);
+        let accent_strong = blend(self.blue, self.text, BLEND_LIGHT);
+        let flash_bg = blend(self.base, self.blue, BLEND_SUBTLE);
+        let flash_success_bg = blend(self.base, self.green, BLEND_SUBTLE);
+        let flash_error_bg = blend(self.base, self.red, BLEND_SUBTLE);
 
         let danger_bg = if self.is_light {
             [200, 60, 60]
@@ -235,24 +254,24 @@ impl ThemeDef {
         };
 
         let cursor_color = if self.is_light {
-            Color32::from_rgba_premultiplied(40, 40, 40, 220)
+            Color32::from_rgba_premultiplied(40, 40, 40, ALPHA_CURSOR)
         } else {
-            Color32::from_rgba_premultiplied(255, 255, 255, 200)
+            Color32::from_rgba_premultiplied(255, 255, 255, ALPHA_CURSOR)
         };
         let cursor_dim_color = if self.is_light {
-            Color32::from_rgba_premultiplied(40, 40, 40, 140)
+            Color32::from_rgba_premultiplied(40, 40, 40, ALPHA_CURSOR_DIM)
         } else {
-            Color32::from_rgba_premultiplied(255, 255, 255, 160)
+            Color32::from_rgba_premultiplied(255, 255, 255, ALPHA_CURSOR_DIM)
         };
         let selection_bg_rgb = blend(self.base, self.blue, 0.55);
         let scrollbar_color = if self.is_light {
-            Color32::from_rgba_unmultiplied(80, 80, 80, 150)
+            Color32::from_rgba_unmultiplied(80, 80, 80, ALPHA_SCROLLBAR_IDLE)
         } else {
-            Color32::from_rgba_unmultiplied(180, 180, 180, 150)
+            Color32::from_rgba_unmultiplied(180, 180, 180, ALPHA_SCROLLBAR_IDLE)
         };
 
         let ansi_c32: [Color32; 16] = std::array::from_fn(|i| c(self.ansi[i]));
-        let md_bullet = blend(self.green, self.overlay0, 0.3);
+        let md_bullet = blend(self.green, self.overlay0, BLEND_LIGHT);
 
         Theme {
             id: self.id,
@@ -308,6 +327,17 @@ impl ThemeDef {
             fg_md_file: c(self.green),
             fg_other_file: c(self.subtext1),
 
+            accent: c(self.blue),
+            accent_muted: c(accent_muted),
+            accent_strong: c(accent_strong),
+            success: c(self.green),
+            warning: c(self.yellow),
+            error: c(self.red),
+
+            flash_bg: c(flash_bg),
+            flash_success_bg: c(flash_success_bg),
+            flash_error_bg: c(flash_error_bg),
+
             danger_bg: c(danger_bg),
             danger_fg: c(danger_fg),
             split_hover_bg: c(split_hover_bg),
@@ -344,7 +374,7 @@ impl ThemeDef {
                 selection_bg_rgb[0],
                 selection_bg_rgb[1],
                 selection_bg_rgb[2],
-                160,
+                ALPHA_SELECTION,
             ),
             scrollbar_color,
         }
@@ -376,39 +406,55 @@ pub fn all_themes() -> &'static [Theme] {
     themes().as_slice()
 }
 
-// ── Spacing scale ───────────────────────────────────────────────────────────
+// ── Spacing scale (4px base) ────────────────────────────────────────────────
 
-pub const SP_XS: f32 = 2.0;
-pub const SP_SM: f32 = 4.0;
-pub const SP_MD: f32 = 8.0;
-pub const SP_LG: f32 = 12.0;
-pub const SP_XL: f32 = 16.0;
+pub const SP_0: f32 = 0.0;
+pub const SP_1: f32 = 2.0;
+pub const SP_2: f32 = 4.0;
+pub const SP_3: f32 = 6.0;
+pub const SP_4: f32 = 8.0;
+pub const SP_5: f32 = 12.0;
+pub const SP_6: f32 = 16.0;
 
-// ── Layout size constants ───────────────────────────────────────────────────
+// ── Corner radii ────────────────────────────────────────────────────────────
 
-pub const TITLEBAR_H: f32 = 32.0;
+pub const R_NONE: f32 = 0.0;
+pub const R_SM: f32 = 2.0;
+pub const R_MD: f32 = 4.0;
+pub const R_LG: f32 = 6.0;
+
+// ── Layout dimensions ──────────────────────────────────────────────────────
+
+pub const TITLEBAR_H: f32 = 28.0;
 pub const TITLEBAR_BTN_W: f32 = 44.0;
 pub const TITLEBAR_ICON_GAP: f32 = 4.0;
 pub const SYSMON_W: f32 = 100.0;
 pub const UPDATE_BTN_W: f32 = 110.0;
-pub const HEADER_H: f32 = 28.0;
-pub const DIVIDER_W: f32 = 4.0;
+pub const HEADER_H: f32 = 24.0;
+pub const DIVIDER_W: f32 = 6.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const BTN_W: f32 = 24.0;
-pub const SESSION_ROW_H: f32 = 28.0;
+pub const SESSION_ROW_H: f32 = 22.0;
 pub const WS_BORDER_W: f32 = 2.0;
-pub const LEFT_SIDEBAR_W: f32 = 200.0;
-pub const BAR_PAD_X: f32 = 6.0;
-pub const ROUNDING: f32 = 4.0;
-pub const OVERLAY_DIM: u8 = 160;
+pub const LEFT_SIDEBAR_W: f32 = 180.0;
+pub const CONTEXT_BTN_SZ: f32 = 20.0;
+pub const STATUS_BAR_H: f32 = 20.0;
 
 // ── Tab bar constants ───────────────────────────────────────────────────────
 
-pub const TAB_W: f32 = 160.0;
+pub const TAB_H: f32 = 26.0;
+pub const TAB_W: f32 = 150.0;
 pub const TAB_COLOR_STRIP_W: f32 = 3.0;
 pub const TAB_ACTIVE_HIGHLIGHT_H: f32 = 2.0;
 pub const TAB_PAD_X: f32 = 6.0;
-pub const TAB_ACTIONS_W: f32 = 76.0;
+pub const TAB_ACTIONS_W: f32 = 82.0;
+pub const TAB_ACTION_GAP: f32 = 2.0;
+
+// ── Scrollbar ───────────────────────────────────────────────────────────────
+
+pub const SCROLLBAR_W_IDLE: f32 = 4.0;
+pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
+pub const SCROLLBAR_HIT_W: f32 = 16.0;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 
@@ -416,19 +462,47 @@ pub const STROKE_THIN: f32 = 1.0;
 pub const STROKE_MEDIUM: f32 = 1.5;
 pub const STROKE_BOLD: f32 = 2.0;
 
-// ── Font sizes ──────────────────────────────────────────────────────────────
+// ── Typography scale ────────────────────────────────────────────────────────
 
-pub const SESSION_FONT_SZ: f32 = 12.5;
-pub const HEADER_FONT_SZ: f32 = 12.5;
-pub const STATUS_FONT_SZ: f32 = 12.5;
-pub const DIFF_FONT_SZ: f32 = 11.0;
-pub const CWD_FONT_SZ: f32 = 11.0;
-pub const SHORTCUT_HINT_SZ: f32 = 10.0;
-pub const TERM_FONT_SZ: f32 = 14.0;
-pub const TERM_BOLD_FONT_SZ: f32 = 14.5;
-pub const BROWSER_ROW_H: f32 = 13.0;
-pub const DIALOG_TITLE_SZ: f32 = 15.0;
-pub const DIALOG_CLOSE_SZ: f32 = 16.0;
+pub const FONT_HEADING_1: f32 = 22.0;
+pub const FONT_HEADING_2: f32 = 18.0;
+pub const FONT_STATUS: f32 = 16.0;
+pub const FONT_TERM: f32 = 14.0;
+pub const FONT_TERM_BOLD: f32 = 14.0;
+pub const FONT_UI_LG: f32 = 13.0;
+pub const FONT_UI_MD: f32 = 12.0;
+pub const FONT_UI_SM: f32 = 11.0;
+pub const FONT_UI_XS: f32 = 10.0;
+
+// ── Icon metrics ────────────────────────────────────────────────────────────
+
+pub const ICON_SM: f32 = 10.0;
+pub const ICON_MD: f32 = 14.0;
+pub const ICON_LG: f32 = 18.0;
+pub const ICON_STROKE: f32 = 1.5;
+pub const ICON_PAD: f32 = 3.0;
+
+// ── Alpha constants ─────────────────────────────────────────────────────────
+
+pub const ALPHA_CURSOR: u8 = 200;
+pub const ALPHA_CURSOR_DIM: u8 = 160;
+pub const ALPHA_SELECTION: u8 = 140;
+pub const ALPHA_OVERLAY_DIM: u8 = 140;
+pub const ALPHA_SCROLLBAR_IDLE: u8 = 140;
+pub const ALPHA_SCROLLBAR_HOVER: u8 = 160;
+pub const ALPHA_SCROLLBAR_DRAG: u8 = 220;
+pub const ALPHA_FLASH: u8 = 60;
+
+// ── Blend factors ───────────────────────────────────────────────────────────
+
+pub const BLEND_SUBTLE: f32 = 0.15;
+pub const BLEND_LIGHT: f32 = 0.30;
+pub const BLEND_MEDIUM: f32 = 0.50;
+pub const BLEND_STRONG: f32 = 0.75;
+
+// ── Flash timing ────────────────────────────────────────────────────────────
+
+pub const FLASH_DURATION_MS: u64 = 150;
 
 // ── Helper functions ─────────────────────────────────────────────────────────
 
@@ -606,8 +680,8 @@ pub fn ensure_readable(fg: [u8; 3], bg: [u8; 3]) -> Color32 {
 
 pub fn header_bg(ws_color: Option<[u8; 3]>, is_active: bool) -> Color32 {
     match (ws_color, is_active) {
-        (Some(c), true) => from_rgb(tinted(c, 0.75)),
-        (Some(c), false) => from_rgb(tinted(c, 0.35)),
+        (Some(c), true) => from_rgb(tinted(c, BLEND_STRONG)),
+        (Some(c), false) => from_rgb(tinted(c, BLEND_LIGHT + 0.05)),
         (None, true) => active().surface0,
         (None, false) => {
             let base = active().base_rgb;
@@ -681,13 +755,13 @@ fn render_span(ui: &mut egui::Ui, span: &InlineSpan) {
         InlineSpan::Code(t) => {
             egui::Frame::none()
                 .fill(th.md_inline_code_bg)
-                .rounding(egui::Rounding::same(2.0))
-                .inner_margin(egui::Margin::symmetric(3.0, 0.0))
+                .rounding(egui::Rounding::same(R_SM))
+                .inner_margin(egui::Margin::symmetric(ICON_PAD, 0.0))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(t.as_str())
                             .monospace()
-                            .size(12.0)
+                            .size(FONT_UI_MD)
                             .color(th.md_inline_code),
                     );
                 });
