@@ -112,7 +112,7 @@ impl App {
                         painter.circle_filled(pos, 6.0, fill);
                         if resp.clicked() {
                             match idx {
-                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                0 => self.show_quit_confirm = true,
                                 1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
                                 _ => {
                                     let is_max =
@@ -723,7 +723,7 @@ impl App {
                         );
                         if resp.clicked() {
                             match idx {
-                                0 => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                                0 => self.show_quit_confirm = true,
                                 1 => {
                                     let is_max =
                                         ctx.input(|i| i.viewport().maximized.unwrap_or(false));

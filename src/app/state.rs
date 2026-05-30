@@ -203,6 +203,7 @@ impl App {
             tab_rename_text: String::new(),
             deferred_open_workspace: None,
             show_close_all_confirm: false,
+            show_quit_confirm: false,
             session_workspace_filter: None,
             pending_window_focus: None,
             pending_diff_panes: HashMap::new(),
@@ -215,6 +216,13 @@ impl App {
             command_start_times: HashMap::new(),
             completed_badges: std::collections::HashSet::new(),
             zoomed_pane_id: None,
+            show_commit_dialog: false,
+            commit_message: String::new(),
+            commit_amend: false,
+            commit_dialog_focus_requested: false,
+            show_push_dialog: false,
+            push_force: false,
+            show_stage_all_confirm: false,
         };
 
         let (init_cols, init_rows) = {

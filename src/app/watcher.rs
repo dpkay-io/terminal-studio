@@ -115,6 +115,12 @@ impl WatchState {
         }
     }
 
+    pub(super) fn apply_unpushed_result(&mut self, dir: &Path, commits: Vec<(String, String)>) {
+        if let Some(data) = self.dir_data.get_mut(dir) {
+            data.git_unpushed = commits;
+        }
+    }
+
     pub(super) fn process_events(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let events: Vec<Event> = {
             let mut g = self.events.lock();

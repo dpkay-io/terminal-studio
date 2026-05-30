@@ -17,12 +17,20 @@ enum Job {
     StageAll(PathBuf),
     UnstageAll(PathBuf),
     Diff { cwd: PathBuf, rel_path: String },
+    UnpushedCommits(PathBuf),
+    Commit { cwd: PathBuf, message: String, amend: bool },
+    Push { cwd: PathBuf, force: bool },
+    LastCommitMessage(PathBuf),
 }
 
 pub(super) struct WorkerResults {
     pub(super) git: HashMap<PathBuf, (String, String)>,
     pub(super) dirs: HashMap<PathBuf, Arc<Vec<FileEntry>>>,
     pub(super) diff_results: Vec<(PathBuf, String)>,
+    pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
+    pub(super) commit_result: Option<Result<PathBuf, String>>,
+    pub(super) push_result: Option<Result<PathBuf, String>>,
+    pub(super) last_commit_msg: HashMap<PathBuf, String>,
 }
 
 pub(super) struct GitWorker {
@@ -41,6 +49,10 @@ impl GitWorker {
             git: HashMap::new(),
             dirs: HashMap::new(),
             diff_results: Vec::new(),
+            unpushed: HashMap::new(),
+            commit_result: None,
+            push_result: None,
+            last_commit_msg: HashMap::new(),
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let dir_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -133,6 +145,82 @@ impl GitWorker {
                                 .diff_results
                                 .push((full_path, diff_output));
                         }
+                        Job::UnpushedCommits(cwd) => {
+                            let output = std::process::Command::new("git")
+                                .args(["log", "--oneline", "@{upstream}..HEAD"])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok();
+                            let commits: Vec<(String, String)> = output
+                                .filter(|o| o.status.success())
+                                .and_then(|o| String::from_utf8(o.stdout).ok())
+                                .map(|s| {
+                                    s.lines()
+                                        .filter_map(|line| {
+                                            let (hash, msg) = line.split_once(' ')?;
+                                            Some((hash.to_string(), msg.to_string()))
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            results_bg.lock().unpushed.insert(cwd, commits);
+                        }
+                        Job::Commit { cwd, message, amend } => {
+                            let mut args = vec!["commit".to_string()];
+                            if amend {
+                                args.push("--amend".to_string());
+                            }
+                            args.push("-m".to_string());
+                            args.push(message);
+                            let output = std::process::Command::new("git")
+                                .args(&args)
+                                .current_dir(&cwd)
+                                .output();
+                            let result = match output {
+                                Ok(o) if o.status.success() => {
+                                    let info = run_git_info(&cwd);
+                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    Ok(cwd)
+                                }
+                                Ok(o) => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                                    Err(stderr)
+                                }
+                                Err(e) => Err(e.to_string()),
+                            };
+                            results_bg.lock().commit_result = Some(result);
+                        }
+                        Job::Push { cwd, force } => {
+                            let mut args = vec!["push"];
+                            if force {
+                                args.push("--force");
+                            }
+                            let output = std::process::Command::new("git")
+                                .args(&args)
+                                .current_dir(&cwd)
+                                .output();
+                            let result = match output {
+                                Ok(o) if o.status.success() => Ok(cwd),
+                                Ok(o) => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                                    Err(stderr)
+                                }
+                                Err(e) => Err(e.to_string()),
+                            };
+                            results_bg.lock().push_result = Some(result);
+                        }
+                        Job::LastCommitMessage(cwd) => {
+                            let msg = std::process::Command::new("git")
+                                .args(["log", "-1", "--format=%B"])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok()
+                                .filter(|o| o.status.success())
+                                .and_then(|o| String::from_utf8(o.stdout).ok())
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_default();
+                            results_bg.lock().last_commit_msg.insert(cwd, msg);
+                        }
                     }
                     ctx_bg.request_repaint();
                 }
@@ -209,6 +297,45 @@ impl GitWorker {
     pub(super) fn take_diff_results(&self) -> Vec<(PathBuf, String)> {
         let mut lock = self.results.lock();
         std::mem::take(&mut lock.diff_results)
+    }
+
+    pub(super) fn enqueue_unpushed(&self, cwd: &Path) {
+        let _ = self.tx.send(Job::UnpushedCommits(cwd.to_path_buf()));
+    }
+
+    pub(super) fn take_unpushed(&self, path: &Path) -> Option<Vec<(String, String)>> {
+        self.results.lock().unpushed.remove(path)
+    }
+
+    pub(super) fn enqueue_commit(&self, cwd: &Path, message: String, amend: bool) {
+        let _ = self.tx.send(Job::Commit {
+            cwd: cwd.to_path_buf(),
+            message,
+            amend,
+        });
+    }
+
+    pub(super) fn take_commit_result(&self) -> Option<Result<PathBuf, String>> {
+        self.results.lock().commit_result.take()
+    }
+
+    pub(super) fn enqueue_push(&self, cwd: &Path, force: bool) {
+        let _ = self.tx.send(Job::Push {
+            cwd: cwd.to_path_buf(),
+            force,
+        });
+    }
+
+    pub(super) fn take_push_result(&self) -> Option<Result<PathBuf, String>> {
+        self.results.lock().push_result.take()
+    }
+
+    pub(super) fn enqueue_last_commit_msg(&self, cwd: &Path) {
+        let _ = self.tx.send(Job::LastCommitMessage(cwd.to_path_buf()));
+    }
+
+    pub(super) fn take_last_commit_msg(&self, path: &Path) -> Option<String> {
+        self.results.lock().last_commit_msg.remove(path)
     }
 }
 

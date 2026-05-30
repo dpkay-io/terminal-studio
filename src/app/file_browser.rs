@@ -33,20 +33,20 @@ pub(super) struct DirData {
     pub(super) is_git: bool,
     pub(super) git_diff: String,
     pub(super) git_status: String,
+    pub(super) git_unpushed: Vec<(String, String)>,
     pub(super) git_refresh_at: Option<Instant>,
     pub(super) md_files: HashMap<PathBuf, Arc<String>>,
     pub(super) dir_entries: Arc<Vec<FileEntry>>,
 }
 
 impl DirData {
-    /// Non-blocking constructor. Checks for `.git` existence (file or dir)
-    /// instead of spawning `git rev-parse` which can block for 50-200ms.
     pub(super) fn new(path: &Path) -> Self {
         let is_git = path.join(".git").exists();
         DirData {
             is_git,
             git_diff: String::new(),
             git_status: String::new(),
+            git_unpushed: Vec::new(),
             git_refresh_at: if is_git { Some(Instant::now()) } else { None },
             md_files: HashMap::new(),
             dir_entries: Arc::new(list_dir_entries(path)),

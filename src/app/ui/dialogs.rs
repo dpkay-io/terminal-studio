@@ -1192,4 +1192,427 @@ impl App {
             self.show_close_all_confirm = false;
         }
     }
+
+    pub(in crate::app) fn render_quit_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_quit_confirm {
+            return;
+        }
+
+        let mut do_quit = false;
+        let mut cancel = false;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = 340.0_f32;
+
+        egui::Area::new(self.vp_id("quit_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    self.vp_id("quit_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        let dialog_h = 120.0_f32;
+        egui::Area::new(self.vp_id("quit_dialog"))
+            .fixed_pos(
+                screen_rect.center()
+                    - egui::vec2(dialog_w / 2.0, (dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)),
+            )
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::same(theme::SP_6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(dialog_w);
+
+                        ui.label(
+                            egui::RichText::new("Quit Terminal Studio?")
+                                .strong()
+                                .size(theme::FONT_UI_LG),
+                        );
+                        ui.add_space(theme::SP_4);
+
+                        let session_count = self.session_state.sessions.len();
+                        ui.label(format!(
+                            "You have {} active session{}. Are you sure you want to quit?",
+                            session_count,
+                            if session_count == 1 { "" } else { "s" }
+                        ));
+                        ui.add_space(theme::SP_5);
+
+                        if ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                        }) {
+                            cancel = true;
+                        }
+                        if ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                        }) {
+                            do_quit = true;
+                        }
+
+                        ui.horizontal(|ui| {
+                            let t = theme::active();
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("Quit").color(t.danger_fg),
+                                    )
+                                    .fill(t.danger_bg),
+                                )
+                                .clicked()
+                            {
+                                do_quit = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+            });
+
+        if do_quit {
+            self.show_quit_confirm = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        } else if cancel {
+            self.show_quit_confirm = false;
+        }
+    }
+
+    pub(in crate::app) fn render_commit_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_commit_dialog {
+            return;
+        }
+
+        let mut do_commit = false;
+        let mut cancel = false;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = (screen_rect.width() * 0.4).clamp(340.0, 480.0);
+        let t = theme::active();
+
+        egui::Area::new(self.vp_id("commit_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    self.vp_id("commit_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        let dialog_h = 200.0_f32;
+        egui::Area::new(self.vp_id("commit_dialog"))
+            .fixed_pos(
+                screen_rect.center()
+                    - egui::vec2(dialog_w / 2.0, (dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)),
+            )
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::same(theme::SP_6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(dialog_w);
+
+                        ui.label(
+                            egui::RichText::new("Commit")
+                                .strong()
+                                .size(theme::FONT_UI_LG)
+                                .color(t.text),
+                        );
+                        ui.add_space(theme::SP_4);
+
+                        ui.label(
+                            egui::RichText::new("Message")
+                                .size(theme::FONT_UI_SM)
+                                .color(t.subtext0),
+                        );
+                        let msg_id = self.vp_id("commit_msg_input");
+                        let msg_resp = ui.add(
+                            egui::TextEdit::multiline(&mut self.commit_message)
+                                .id(msg_id)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(2)
+                                .hint_text("Commit message...")
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if !self.commit_dialog_focus_requested {
+                            msg_resp.request_focus();
+                            self.commit_dialog_focus_requested = true;
+                        }
+                        ui.add_space(theme::SP_3);
+
+                        let prev_amend = self.commit_amend;
+                        ui.checkbox(&mut self.commit_amend, "Amend last commit");
+                        if self.commit_amend && !prev_amend {
+                            if let Some(cwd) = self.active_cwd() {
+                                self.workers.git_worker.enqueue_last_commit_msg(&cwd);
+                            }
+                        }
+
+                        ui.add_space(theme::SP_5);
+
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                        {
+                            cancel = true;
+                        }
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
+                        {
+                            if !self.commit_message.trim().is_empty() {
+                                do_commit = true;
+                            }
+                        }
+
+                        ui.horizontal(|ui| {
+                            let can_commit = !self.commit_message.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    can_commit,
+                                    egui::Button::new(
+                                        egui::RichText::new("Commit").color(t.accent_strong),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                do_commit = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                            ui.label(
+                                egui::RichText::new("Ctrl+Enter to commit")
+                                    .size(theme::FONT_UI_XS)
+                                    .color(t.overlay0),
+                            );
+                        });
+                    });
+            });
+
+        if do_commit {
+            let message = self.commit_message.trim().to_string();
+            let amend = self.commit_amend;
+            if let Some(cwd) = self.active_cwd() {
+                self.workers.git_worker.enqueue_commit(&cwd, message, amend);
+            }
+            self.show_commit_dialog = false;
+            self.commit_message.clear();
+            self.commit_amend = false;
+            self.commit_dialog_focus_requested = false;
+        } else if cancel {
+            self.show_commit_dialog = false;
+            self.commit_message.clear();
+            self.commit_amend = false;
+            self.commit_dialog_focus_requested = false;
+        }
+    }
+
+    pub(in crate::app) fn render_push_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_push_dialog {
+            return;
+        }
+
+        let mut do_push = false;
+        let mut cancel = false;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = 340.0_f32;
+        let t = theme::active();
+
+        egui::Area::new(self.vp_id("push_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    self.vp_id("push_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        let dialog_h = 140.0_f32;
+        egui::Area::new(self.vp_id("push_dialog"))
+            .fixed_pos(
+                screen_rect.center()
+                    - egui::vec2(dialog_w / 2.0, (dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)),
+            )
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::same(theme::SP_6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(dialog_w);
+
+                        ui.label(
+                            egui::RichText::new("Push to Remote")
+                                .strong()
+                                .size(theme::FONT_UI_LG)
+                                .color(t.text),
+                        );
+                        ui.add_space(theme::SP_4);
+
+                        ui.label("Push commits to the remote branch?");
+                        ui.add_space(theme::SP_3);
+
+                        ui.checkbox(&mut self.push_force, "Force push");
+                        ui.add_space(theme::SP_5);
+
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                        {
+                            cancel = true;
+                        }
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                        {
+                            do_push = true;
+                        }
+
+                        ui.horizontal(|ui| {
+                            if self.push_force {
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new("Force Push").color(t.danger_fg),
+                                        )
+                                        .fill(t.danger_bg),
+                                    )
+                                    .clicked()
+                                {
+                                    do_push = true;
+                                }
+                            } else if ui
+                                .add(egui::Button::new(
+                                    egui::RichText::new("Push").color(t.accent_strong),
+                                ))
+                                .clicked()
+                            {
+                                do_push = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+            });
+
+        if do_push {
+            let force = self.push_force;
+            if let Some(cwd) = self.active_cwd() {
+                self.workers.git_worker.enqueue_push(&cwd, force);
+            }
+            self.show_push_dialog = false;
+            self.push_force = false;
+        } else if cancel {
+            self.show_push_dialog = false;
+            self.push_force = false;
+        }
+    }
+
+    pub(in crate::app) fn render_stage_all_confirm(&mut self, ctx: &egui::Context) {
+        if !self.show_stage_all_confirm {
+            return;
+        }
+
+        let mut do_stage = false;
+        let mut cancel = false;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = 340.0_f32;
+
+        egui::Area::new(self.vp_id("stage_all_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    self.vp_id("stage_all_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        let dialog_h = 120.0_f32;
+        egui::Area::new(self.vp_id("stage_all_dialog"))
+            .fixed_pos(
+                screen_rect.center()
+                    - egui::vec2(dialog_w / 2.0, (dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0)),
+            )
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style())
+                    .inner_margin(egui::Margin::same(theme::SP_6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(dialog_w);
+
+                        ui.label(
+                            egui::RichText::new("Stage All Changes")
+                                .strong()
+                                .size(theme::FONT_UI_LG),
+                        );
+                        ui.add_space(theme::SP_4);
+
+                        ui.label("Stage all modified and untracked files?");
+                        ui.add_space(theme::SP_5);
+
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                        {
+                            cancel = true;
+                        }
+                        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                        {
+                            do_stage = true;
+                        }
+
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(egui::Button::new("Yes"))
+                                .clicked()
+                            {
+                                do_stage = true;
+                            }
+                            if ui.button("No").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+            });
+
+        if do_stage {
+            if let Some(cwd) = self.active_cwd() {
+                self.workers.git_worker.enqueue_stage_all(&cwd);
+            }
+            self.show_stage_all_confirm = false;
+        } else if cancel {
+            self.show_stage_all_confirm = false;
+        }
+    }
 }

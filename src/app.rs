@@ -186,6 +186,7 @@ pub struct App {
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
+    show_quit_confirm: bool,
 
     // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
     session_workspace_filter: Option<Option<u64>>,
@@ -218,6 +219,19 @@ pub struct App {
 
     // Pane zoom: when set, the zoomed pane fills the entire content area
     zoomed_pane_id: Option<u32>,
+
+    // Git commit dialog state
+    show_commit_dialog: bool,
+    commit_message: String,
+    commit_amend: bool,
+    commit_dialog_focus_requested: bool,
+
+    // Git push dialog state
+    show_push_dialog: bool,
+    push_force: bool,
+
+    // Git stage-all confirm dialog state
+    show_stage_all_confirm: bool,
 }
 
 impl eframe::App for App {
@@ -232,7 +246,7 @@ impl eframe::App for App {
             .pane_state
             .active_pane_id
             .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-            .map(|p| matches!(p.content, PaneContent::FileEditor(_)))
+            .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
             .unwrap_or(false);
         let any_overlay = self.workspace_dialog.is_some()
             || self.workspace_edit_dialog.is_some()
@@ -242,7 +256,8 @@ impl eframe::App for App {
             || self.term_search.active
             || self.show_global_search
             || self.session_search_active
-            || self.dir_search_active;
+            || self.dir_search_active
+            || self.show_quit_confirm;
         if active_is_editor || any_overlay {
             return;
         }
@@ -278,6 +293,11 @@ impl eframe::App for App {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
+
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.show_quit_confirm = true;
+        }
 
         self.flash.tick();
         if self.flash.has_active() {
@@ -424,6 +444,7 @@ impl eframe::App for App {
                 .unwrap_or_default();
             for dir in &pending {
                 self.workers.git_worker.enqueue_git(dir);
+                self.workers.git_worker.enqueue_unpushed(dir);
             }
 
             let watched_dirs: Vec<PathBuf> = self
@@ -435,9 +456,21 @@ impl eframe::App for App {
                 .iter()
                 .filter_map(|d| self.workers.git_worker.take_git(d).map(|r| (d.clone(), r)))
                 .collect();
+            let completed_unpushed: Vec<(PathBuf, Vec<(String, String)>)> = watched_dirs
+                .iter()
+                .filter_map(|d| {
+                    self.workers
+                        .git_worker
+                        .take_unpushed(d)
+                        .map(|r| (d.clone(), r))
+                })
+                .collect();
             if let Some(ws) = &mut self.watch_state {
                 for (dir, (diff, status)) in completed {
                     ws.apply_git_result(&dir, diff, status);
+                }
+                for (dir, commits) in completed_unpushed {
+                    ws.apply_unpushed_result(&dir, commits);
                 }
             }
 
@@ -449,6 +482,54 @@ impl eframe::App for App {
                         if let PaneContent::FileDiff(ref mut d) = pane.content {
                             d.diff_content = diff_output;
                         }
+                    }
+                }
+            }
+
+            // Drain commit/push results and show flash feedback
+            if let Some(result) = self.workers.git_worker.take_commit_result() {
+                match result {
+                    Ok(cwd) => {
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Success,
+                        );
+                        self.workers.git_worker.enqueue_git(&cwd);
+                        self.workers.git_worker.enqueue_unpushed(&cwd);
+                    }
+                    Err(msg) => {
+                        log::error!("git commit failed: {msg}");
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Error,
+                        );
+                    }
+                }
+            }
+            if let Some(result) = self.workers.git_worker.take_push_result() {
+                match result {
+                    Ok(cwd) => {
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Success,
+                        );
+                        self.workers.git_worker.enqueue_unpushed(&cwd);
+                    }
+                    Err(msg) => {
+                        log::error!("git push failed: {msg}");
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Error,
+                        );
+                    }
+                }
+            }
+
+            // Drain last commit message result (for amend pre-fill)
+            if let Some(cwd) = self.active_cwd() {
+                if let Some(msg) = self.workers.git_worker.take_last_commit_msg(&cwd) {
+                    if self.show_commit_dialog && self.commit_amend {
+                        self.commit_message = msg;
                     }
                 }
             }
@@ -644,6 +725,7 @@ impl App {
             is_git: bool,
             git_diff: String,
             git_status: String,
+            git_unpushed: Vec<(String, String)>,
             dir_entries: Arc<Vec<FileEntry>>,
             md_paths: Vec<PathBuf>,
             md_active_content: Option<Arc<String>>,
@@ -669,6 +751,7 @@ impl App {
                         is_git: d.is_git,
                         git_diff: d.git_diff.clone(),
                         git_status: d.git_status.clone(),
+                        git_unpushed: d.git_unpushed.clone(),
                         dir_entries: Arc::clone(&d.dir_entries),
                         md_paths,
                         md_active_content,
@@ -690,6 +773,7 @@ impl App {
                         is_git: false,
                         git_diff: String::new(),
                         git_status: String::new(),
+                        git_unpushed: Vec::new(),
                         dir_entries: Arc::new(Vec::new()),
                         md_paths,
                         md_active_content,
@@ -712,6 +796,7 @@ impl App {
                     is_git: false,
                     git_diff: String::new(),
                     git_status: String::new(),
+                    git_unpushed: Vec::new(),
                     dir_entries: Arc::new(Vec::new()),
                     md_paths,
                     md_active_content,
@@ -722,6 +807,7 @@ impl App {
             is_git,
             git_diff,
             git_status,
+            git_unpushed,
             dir_entries,
             md_paths,
             md_active_content,
@@ -741,6 +827,9 @@ impl App {
         let mut git_stage_action: Option<GitStageAction> = None;
         let mut git_open_diff_file: Option<String> = None;
         let mut git_open_file: Option<String> = None;
+        let mut git_show_commit_dialog = false;
+        let mut git_show_push_dialog = false;
+        let mut git_show_stage_all_confirm = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
@@ -1014,13 +1103,22 @@ impl App {
                                         }
                                     }
                                     RightTab::GitDiff => {
-                                        let result = render_git_diff(ui, &git_diff, &git_status);
+                                        let result = render_git_diff(ui, &git_diff, &git_status, &git_unpushed);
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
                                             git_open_diff_file = result.open_diff_file;
                                         }
                                         if result.open_file.is_some() {
                                             git_open_file = result.open_file;
+                                        }
+                                        if result.show_commit_dialog {
+                                            git_show_commit_dialog = true;
+                                        }
+                                        if result.show_push_dialog {
+                                            git_show_push_dialog = true;
+                                        }
+                                        if result.show_stage_all_confirm {
+                                            git_show_stage_all_confirm = true;
                                         }
                                     }
                                     RightTab::Markdown(md_path) => {
@@ -1232,14 +1330,26 @@ impl App {
                     GitStageAction::Unstage(path) => {
                         self.workers.git_worker.enqueue_unstage(cwd, path);
                     }
-                    GitStageAction::StageAll => {
-                        self.workers.git_worker.enqueue_stage_all(cwd);
-                    }
                     GitStageAction::UnstageAll => {
                         self.workers.git_worker.enqueue_unstage_all(cwd);
                     }
                 }
             }
+        }
+
+        // Trigger git dialogs from render_git_diff result
+        if git_show_commit_dialog && !self.show_commit_dialog {
+            self.show_commit_dialog = true;
+            self.commit_message.clear();
+            self.commit_amend = false;
+            self.commit_dialog_focus_requested = false;
+        }
+        if git_show_push_dialog && !self.show_push_dialog {
+            self.show_push_dialog = true;
+            self.push_force = false;
+        }
+        if git_show_stage_all_confirm && !self.show_stage_all_confirm {
+            self.show_stage_all_confirm = true;
         }
 
         // File to open in editor (content loaded async after pane creation)
@@ -1402,7 +1512,7 @@ impl App {
             let active_pane_id_snap = self.pane_state.active_pane_id;
             let active_is_editor = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                .map(|p| matches!(p.content, PaneContent::FileEditor(_)))
+                .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
                 .unwrap_or(false);
             let active_session_id: Option<u32> = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
@@ -3458,5 +3568,9 @@ impl App {
         self.render_workspace_edit_dialog(ctx);
 
         self.render_close_all_confirm(ctx);
+        self.render_quit_confirm(ctx);
+        self.render_commit_dialog(ctx);
+        self.render_push_dialog(ctx);
+        self.render_stage_all_confirm(ctx);
     }
 }
