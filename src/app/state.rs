@@ -26,7 +26,7 @@ use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
 use super::title::{effective_title, shell_escape_arg};
 use super::watcher::WatchState;
-use super::App;
+use super::{App, CloseAllTarget};
 
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
@@ -123,10 +123,11 @@ impl App {
             last_pane_per_group: HashMap::new(),
             workspace_dialog: None,
             workspace_edit_dialog: None,
+            open_folder_dialog: None,
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
             note_store: NoteStore::load(),
-            notes_panel_ratio: 0.30,
+            notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
             show_left_panel: true,
             show_right_panel: true,
@@ -203,6 +204,7 @@ impl App {
             tab_rename_text: String::new(),
             deferred_open_workspace: None,
             show_close_all_confirm: false,
+            close_all_target: CloseAllTarget::default(),
             show_quit_confirm: false,
             session_workspace_filter: None,
             pending_window_focus: None,
@@ -222,6 +224,8 @@ impl App {
             commit_dialog_focus_requested: false,
             show_push_dialog: false,
             push_force: false,
+            push_in_progress: false,
+            push_error: None,
             show_stage_all_confirm: false,
             context_menu_pos: None,
         };

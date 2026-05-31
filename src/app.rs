@@ -56,7 +56,15 @@ use settings::AppSettings;
 
 use watcher::WatchState;
 use worker_manager::WorkerManager;
-use workspace_ui::{WorkspaceDialog, WorkspaceEditDialog};
+use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
+
+#[derive(Clone, Copy, Default)]
+enum CloseAllTarget {
+    #[default]
+    ActiveGroup,
+    Group(Option<u64>),
+    All,
+}
 
 pub struct App {
     session_manager: SessionManager,
@@ -73,6 +81,7 @@ pub struct App {
     last_pane_per_group: HashMap<Option<u64>, u32>,
     workspace_dialog: Option<WorkspaceDialog>,
     workspace_edit_dialog: Option<WorkspaceEditDialog>,
+    open_folder_dialog: Option<OpenFolderDialog>,
 
     workspace_panel_ratio: f32,
     workspace_panel_collapsed: bool,
@@ -186,6 +195,8 @@ pub struct App {
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
+    /// Which group of sessions to close when the close-all dialog is confirmed.
+    close_all_target: CloseAllTarget,
     show_quit_confirm: bool,
 
     // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
@@ -229,6 +240,8 @@ pub struct App {
     // Git push dialog state
     show_push_dialog: bool,
     push_force: bool,
+    push_in_progress: bool,
+    push_error: Option<String>,
 
     // Git stage-all confirm dialog state
     show_stage_all_confirm: bool,
@@ -253,6 +266,7 @@ impl eframe::App for App {
             .unwrap_or(false);
         let any_overlay = self.workspace_dialog.is_some()
             || self.workspace_edit_dialog.is_some()
+            || self.open_folder_dialog.is_some()
             || self.show_settings
             || self.show_shortcut_help
             || self.show_quick_switcher
@@ -515,8 +529,10 @@ impl eframe::App for App {
                 }
             }
             if let Some(result) = self.workers.git_worker.take_push_result() {
+                self.push_in_progress = false;
                 match result {
                     Ok(cwd) => {
+                        self.push_error = None;
                         self.flash.trigger(
                             feedback::FlashTarget::Global,
                             feedback::FlashKind::Success,
@@ -525,6 +541,24 @@ impl eframe::App for App {
                     }
                     Err(msg) => {
                         log::error!("git push failed: {msg}");
+                        self.push_error = Some(msg);
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Error,
+                        );
+                    }
+                }
+            }
+            if let Some(result) = self.workers.git_worker.take_gitignore_result() {
+                match result {
+                    Ok(_cwd) => {
+                        self.flash.trigger(
+                            feedback::FlashTarget::Global,
+                            feedback::FlashKind::Success,
+                        );
+                    }
+                    Err(msg) => {
+                        log::error!("gitignore update failed: {msg}");
                         self.flash.trigger(
                             feedback::FlashTarget::Global,
                             feedback::FlashKind::Error,
@@ -838,6 +872,7 @@ impl App {
         let mut git_show_commit_dialog = false;
         let mut git_show_push_dialog = false;
         let mut git_show_stage_all_confirm = false;
+        let mut git_gitignore_pattern: Option<String> = None;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
@@ -847,8 +882,8 @@ impl App {
         // ── Right panel ──────────────────────────────────────────────────────
         if self.show_right_panel {
             egui::SidePanel::right(self.vp_id("right_panel"))
-                .default_width(300.0)
-                .width_range(100.0..=600.0)
+                .default_width(theme::RIGHT_SIDEBAR_W)
+                .width_range(80.0..=400.0)
                 .resizable(true)
                 .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
@@ -1111,7 +1146,14 @@ impl App {
                                         }
                                     }
                                     RightTab::GitDiff => {
-                                        let result = render_git_diff(ui, &git_diff, &git_status, &git_unpushed);
+                                        let result = render_git_diff(
+                                            ui,
+                                            &git_diff,
+                                            &git_status,
+                                            &git_unpushed,
+                                            self.push_in_progress,
+                                            self.push_error.as_deref(),
+                                        );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
                                             git_open_diff_file = result.open_diff_file;
@@ -1127,6 +1169,9 @@ impl App {
                                         }
                                         if result.show_stage_all_confirm {
                                             git_show_stage_all_confirm = true;
+                                        }
+                                        if result.gitignore_pattern.is_some() {
+                                            git_gitignore_pattern = result.gitignore_pattern;
                                         }
                                     }
                                     RightTab::Markdown(md_path) => {
@@ -1355,9 +1400,15 @@ impl App {
         if git_show_push_dialog && !self.show_push_dialog {
             self.show_push_dialog = true;
             self.push_force = false;
+            self.push_error = None;
         }
         if git_show_stage_all_confirm && !self.show_stage_all_confirm {
             self.show_stage_all_confirm = true;
+        }
+        if let Some(pattern) = git_gitignore_pattern {
+            if let Some(cwd) = active_cwd.as_ref() {
+                self.workers.git_worker.enqueue_gitignore(cwd, pattern);
+            }
         }
 
         // File to open in editor (content loaded async after pane creation)
@@ -1874,7 +1925,10 @@ impl App {
 
             // ── Status bar ─────────────────────────────────────────────────
             {
-                let sb_cwd = self.active_cwd().unwrap_or_default().to_string_lossy().to_string();
+                let sb_cwd_path = self.active_cwd().unwrap_or_default();
+                let sb_cwd = sb_cwd_path.to_string_lossy().to_string();
+                let unsaved_folder = self.active_group.is_none()
+                    && !sb_cwd.is_empty();
                 let (sb_branch, sb_diff) = self.active_group
                     .and_then(|ws_id| self.workers.workspace_git_worker.get(ws_id))
                     .map(|gi| (gi.branch.clone(), gi.diff_count))
@@ -1887,7 +1941,7 @@ impl App {
                     .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                     .map(|p| p.last_size)
                     .unwrap_or((0, 0));
-                ui::status_bar::render_status_bar(ui, status_rect, &ui::status_bar::StatusBarData {
+                let sb_result = ui::status_bar::render_status_bar(ui, status_rect, &ui::status_bar::StatusBarData {
                     cwd: sb_cwd,
                     git_branch: sb_branch,
                     git_diff_count: sb_diff,
@@ -1895,7 +1949,11 @@ impl App {
                     cols: sb_cols,
                     rows: sb_rows,
                     zoomed: self.zoomed_pane_id.is_some(),
+                    unsaved_folder,
                 });
+                if sb_result.save_workspace_clicked && self.workspace_dialog.is_none() {
+                    self.workspace_dialog = Some(WorkspaceDialog::new(sb_cwd_path));
+                }
             }
 
             // ── Terminal input routing ─────────────────────────────────────
@@ -3113,6 +3171,17 @@ impl App {
                 .unwrap_or(false)
             {
                 self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+                self.active_group = self
+                    .pane_state
+                    .active_pane_id
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .and_then(|p| {
+                        Self::pane_group(
+                            &self.session_state.sessions,
+                            &self.workspace_store,
+                            p,
+                        )
+                    });
             }
             if self
                 .zoomed_pane_id
@@ -3578,6 +3647,8 @@ impl App {
         self.render_workspace_save_dialog(ctx);
 
         self.render_workspace_edit_dialog(ctx);
+
+        self.render_open_folder_dialog(ctx);
 
         self.render_close_all_confirm(ctx);
         self.render_quit_confirm(ctx);

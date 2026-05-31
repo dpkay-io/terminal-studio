@@ -437,6 +437,7 @@ pub const BTN_W: f32 = 24.0;
 pub const SESSION_ROW_H: f32 = 22.0;
 pub const WS_BORDER_W: f32 = 2.0;
 pub const LEFT_SIDEBAR_W: f32 = 180.0;
+pub const RIGHT_SIDEBAR_W: f32 = 180.0;
 pub const CONTEXT_BTN_SZ: f32 = 20.0;
 pub const STATUS_BAR_H: f32 = 20.0;
 

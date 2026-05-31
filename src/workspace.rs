@@ -69,6 +69,19 @@ impl WorkspaceStore {
         self.workspaces.iter().map(|w| w.id).max().unwrap_or(0) + 1
     }
 
+    pub fn is_name_taken(&self, name: &str, exclude_id: Option<u64>) -> bool {
+        self.workspaces.iter().any(|w| {
+            w.name.eq_ignore_ascii_case(name)
+                && exclude_id.map_or(true, |id| w.id != id)
+        })
+    }
+
+    pub fn is_color_taken(&self, color: [u8; 3], exclude_id: Option<u64>) -> bool {
+        self.workspaces.iter().any(|w| {
+            w.color == color && exclude_id.map_or(true, |id| w.id != id)
+        })
+    }
+
     fn data_path() -> Option<PathBuf> {
         #[cfg(target_os = "windows")]
         {
@@ -270,5 +283,42 @@ mod tests {
         assert_eq!(store.get(None), "other");
         assert_eq!(store.get(Some(1)), "ws1");
         assert_eq!(store.get(Some(2)), "ws2");
+    }
+
+    #[test]
+    fn test_is_name_taken_exact() {
+        let store = make_store(vec![("MyProject", "/a")]);
+        assert!(store.is_name_taken("MyProject", None));
+        assert!(!store.is_name_taken("Other", None));
+    }
+
+    #[test]
+    fn test_is_name_taken_case_insensitive() {
+        let store = make_store(vec![("MyProject", "/a")]);
+        assert!(store.is_name_taken("myproject", None));
+        assert!(store.is_name_taken("MYPROJECT", None));
+    }
+
+    #[test]
+    fn test_is_name_taken_excludes_self() {
+        let store = make_store(vec![("MyProject", "/a")]);
+        assert!(!store.is_name_taken("MyProject", Some(1)));
+        assert!(store.is_name_taken("MyProject", Some(99)));
+    }
+
+    #[test]
+    fn test_is_color_taken() {
+        let mut store = WorkspaceStore::default();
+        store.workspaces.push(Workspace {
+            id: 1,
+            name: "A".to_string(),
+            path: PathBuf::from("/a"),
+            color: [100, 140, 230],
+            host_window_id: None,
+            last_activated: 0,
+        });
+        assert!(store.is_color_taken([100, 140, 230], None));
+        assert!(!store.is_color_taken([0, 0, 0], None));
+        assert!(!store.is_color_taken([100, 140, 230], Some(1)));
     }
 }

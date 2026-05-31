@@ -14,6 +14,7 @@ pub(super) struct GitDiffResult {
     pub(super) show_commit_dialog: bool,
     pub(super) show_push_dialog: bool,
     pub(super) show_stage_all_confirm: bool,
+    pub(super) gitignore_pattern: Option<String>,
 }
 
 fn kind_to_tag(kind: FileChangeKind) -> &'static str {
@@ -41,6 +42,8 @@ pub(super) fn render_git_diff(
     diff: &str,
     status: &str,
     unpushed: &[(String, String)],
+    push_in_progress: bool,
+    push_error: Option<&str>,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -48,6 +51,7 @@ pub(super) fn render_git_diff(
     let mut show_commit_dialog = false;
     let mut show_push_dialog = false;
     let mut show_stage_all_confirm = false;
+    let mut gitignore_pattern: Option<String> = None;
 
     let panel_width = ui.available_width();
     ui.set_max_width(panel_width);
@@ -80,18 +84,30 @@ pub(super) fn render_git_diff(
         }
 
         // ── Committed (unpushed) section ────────────────────────────
-        if !unpushed.is_empty() {
+        if !unpushed.is_empty() || push_in_progress {
             let t = theme::active();
             ui.horizontal(|ui| {
+                let header_text = if push_in_progress && unpushed.is_empty() {
+                    "Committed".to_string()
+                } else {
+                    format!("Committed ({})", unpushed.len())
+                };
                 ui.label(
-                    egui::RichText::new(format!("Committed ({})", unpushed.len()))
+                    egui::RichText::new(header_text)
                         .strong()
                         .size(theme::FONT_UI_MD)
                         .color(t.blue),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(theme::SP_4);
-                    if ui
+                    if push_in_progress {
+                        ui.add(egui::Spinner::new().size(14.0));
+                        ui.label(
+                            egui::RichText::new("Pushing\u{2026}")
+                                .size(theme::FONT_UI_SM)
+                                .color(t.subtext0),
+                        );
+                    } else if ui
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Push")
@@ -130,6 +146,33 @@ pub(super) fn render_git_diff(
             ui.add_space(theme::SP_3);
             ui.separator();
             ui.add_space(theme::SP_2);
+        }
+
+        // ── Push error display ─────────────────────────────────────
+        if let Some(err) = push_error {
+            let t = theme::active();
+            egui::Frame::none()
+                .fill(t.error.gamma_multiply(0.15))
+                .rounding(theme::R_MD)
+                .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_2))
+                .show(ui, |ui| {
+                    ui.set_max_width(panel_width);
+                    ui.label(
+                        egui::RichText::new("Push failed")
+                            .strong()
+                            .size(theme::FONT_UI_SM)
+                            .color(t.error),
+                    );
+                    let lines: Vec<&str> = err.lines().take(5).collect();
+                    let display = lines.join("\n");
+                    ui.label(
+                        egui::RichText::new(display)
+                            .monospace()
+                            .size(theme::FONT_UI_XS)
+                            .color(t.text),
+                    );
+                });
+            ui.add_space(theme::SP_3);
         }
 
         // ── Staged section ──────────────────────────────────────────
@@ -207,7 +250,7 @@ pub(super) fn render_git_diff(
                                 .truncate()
                                 .sense(egui::Sense::click()),
                             )
-                            .on_hover_text("Click: diff \u{00b7} Double-click: open file")
+                            .on_hover_text("Right-click for options")
                         })
                         .inner;
                     if label_resp.double_clicked() {
@@ -215,6 +258,17 @@ pub(super) fn render_git_diff(
                     } else if label_resp.clicked() {
                         open_diff_file = Some(entry.path.clone());
                     }
+                    label_resp.context_menu(|ui| {
+                        file_context_menu(
+                            ui,
+                            &entry.path,
+                            true,
+                            &mut action,
+                            &mut open_diff_file,
+                            &mut open_file,
+                            &mut gitignore_pattern,
+                        );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(theme::SP_4);
                         let btn = ui.add(
@@ -301,7 +355,7 @@ pub(super) fn render_git_diff(
                                 .truncate()
                                 .sense(egui::Sense::click()),
                             )
-                            .on_hover_text("Click: diff \u{00b7} Double-click: open file")
+                            .on_hover_text("Right-click for options")
                         })
                         .inner;
                     if label_resp.double_clicked() {
@@ -309,6 +363,17 @@ pub(super) fn render_git_diff(
                     } else if label_resp.clicked() {
                         open_diff_file = Some(entry.path.clone());
                     }
+                    label_resp.context_menu(|ui| {
+                        file_context_menu(
+                            ui,
+                            &entry.path,
+                            false,
+                            &mut action,
+                            &mut open_diff_file,
+                            &mut open_file,
+                            &mut gitignore_pattern,
+                        );
+                    });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(theme::SP_4);
                         let btn = ui.add(
@@ -335,7 +400,7 @@ pub(super) fn render_git_diff(
     }
 
     let _ = diff;
-    if status.is_empty() && unpushed.is_empty() {
+    if status.is_empty() && unpushed.is_empty() && !push_in_progress && push_error.is_none() {
         ui.add_space(theme::SP_4);
         ui.vertical_centered(|ui| {
             ui.label(
@@ -359,6 +424,43 @@ pub(super) fn render_git_diff(
         show_commit_dialog,
         show_push_dialog,
         show_stage_all_confirm,
+        gitignore_pattern,
+    }
+}
+
+fn file_context_menu(
+    ui: &mut egui::Ui,
+    path: &str,
+    is_staged: bool,
+    action: &mut Option<GitStageAction>,
+    open_diff_file: &mut Option<String>,
+    open_file: &mut Option<String>,
+    gitignore_pattern: &mut Option<String>,
+) {
+    if ui.button("View diff").clicked() {
+        *open_diff_file = Some(path.to_string());
+        ui.close_menu();
+    }
+    if ui.button("Open file").clicked() {
+        *open_file = Some(path.to_string());
+        ui.close_menu();
+    }
+    ui.separator();
+    if is_staged {
+        if ui.button("Unstage").clicked() {
+            *action = Some(GitStageAction::Unstage(path.to_string()));
+            ui.close_menu();
+        }
+    } else {
+        if ui.button("Stage").clicked() {
+            *action = Some(GitStageAction::Stage(path.to_string()));
+            ui.close_menu();
+        }
+    }
+    ui.separator();
+    if ui.button("Add to .gitignore").clicked() {
+        *gitignore_pattern = Some(path.to_string());
+        ui.close_menu();
     }
 }
 

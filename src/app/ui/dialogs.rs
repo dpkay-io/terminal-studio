@@ -1,6 +1,6 @@
 use super::super::pane::{PaneContent, PaneEntry};
 use super::super::workspace_ui::PRESET_COLORS;
-use super::super::App;
+use super::super::{App, CloseAllTarget};
 use crate::pane_tree::PaneNode;
 use crate::theme;
 use crate::workspace::Workspace;
@@ -654,6 +654,20 @@ impl App {
                                 name_resp.request_focus();
                                 dlg.focus_requested = true;
                             }
+                            let ws_name_conflict = {
+                                let trimmed = dlg.name.trim();
+                                !trimmed.is_empty()
+                                    && self.workspace_store.is_name_taken(trimmed, None)
+                            };
+                            if ws_name_conflict {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "A workspace with this name already exists",
+                                    )
+                                    .size(theme::FONT_UI_XS)
+                                    .color(theme::active().error),
+                                );
+                            }
                             ui.add_space(theme::SP_4);
 
                             ui.label(
@@ -716,7 +730,13 @@ impl App {
 
                             ui.add_space(theme::SP_5);
                             ui.horizontal(|ui| {
-                                let can_save = !dlg.name.trim().is_empty();
+                                let can_save = {
+                                    let trimmed = dlg.name.trim();
+                                    !trimmed.is_empty()
+                                        && !self
+                                            .workspace_store
+                                            .is_name_taken(trimmed, None)
+                                };
                                 if ui
                                     .add_enabled(can_save, egui::Button::new("Save"))
                                     .clicked()
@@ -735,10 +755,11 @@ impl App {
                 cancel = true;
             }
             if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
-                && self
-                    .workspace_dialog
-                    .as_ref()
-                    .is_some_and(|d| !d.name.trim().is_empty())
+                && self.workspace_dialog.as_ref().is_some_and(|d| {
+                    let trimmed = d.name.trim();
+                    !trimmed.is_empty()
+                        && !self.workspace_store.is_name_taken(trimmed, None)
+                })
             {
                 save_it = true;
             }
@@ -808,6 +829,22 @@ impl App {
                             if !dlg.focus_requested {
                                 name_resp.request_focus();
                                 dlg.focus_requested = true;
+                            }
+                            let edit_name_conflict = {
+                                let trimmed = dlg.name.trim();
+                                !trimmed.is_empty()
+                                    && self
+                                        .workspace_store
+                                        .is_name_taken(trimmed, Some(dlg.workspace_id))
+                            };
+                            if edit_name_conflict {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "A workspace with this name already exists",
+                                    )
+                                    .size(theme::FONT_UI_XS)
+                                    .color(theme::active().error),
+                                );
                             }
                             ui.add_space(theme::SP_4);
 
@@ -890,7 +927,14 @@ impl App {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    let can_save = !dlg.name.trim().is_empty();
+                                    let can_save = {
+                                        let trimmed = dlg.name.trim();
+                                        !trimmed.is_empty()
+                                            && !self.workspace_store.is_name_taken(
+                                                trimmed,
+                                                Some(dlg.workspace_id),
+                                            )
+                                    };
                                     if ui
                                         .add_enabled(can_save, egui::Button::new("Save"))
                                         .clicked()
@@ -936,10 +980,13 @@ impl App {
                     .as_ref()
                     .is_some_and(|d| d.confirm_delete);
                 if !in_confirm
-                    && self
-                        .workspace_edit_dialog
-                        .as_ref()
-                        .is_some_and(|d| !d.name.trim().is_empty())
+                    && self.workspace_edit_dialog.as_ref().is_some_and(|d| {
+                        let trimmed = d.name.trim();
+                        !trimmed.is_empty()
+                            && !self
+                                .workspace_store
+                                .is_name_taken(trimmed, Some(d.workspace_id))
+                    })
                 {
                     save_it = true;
                 }
@@ -1027,36 +1074,40 @@ impl App {
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w);
 
-                        let (title, count) = if let Some(ws_filter) = self.session_workspace_filter
-                        {
-                            let filter_name = match ws_filter {
-                                None => "Other".to_string(),
-                                Some(id) => self
-                                    .workspace_store
-                                    .workspaces
-                                    .iter()
-                                    .find(|w| w.id == id)
-                                    .map(|w| w.name.clone())
-                                    .unwrap_or_else(|| "Unknown".to_string()),
-                            };
-                            let cnt = self
-                                .pane_state
-                                .panes
-                                .iter()
-                                .filter(|p| {
-                                    Self::pane_group(
-                                        &self.session_state.sessions,
-                                        &self.workspace_store,
-                                        p,
-                                    ) == ws_filter
-                                })
-                                .count();
-                            (format!("Close \"{}\" Sessions", filter_name), cnt)
-                        } else {
-                            (
+                        let (title, count) = match self.close_all_target {
+                            CloseAllTarget::All => (
                                 "Close All Sessions".to_string(),
                                 self.pane_state.panes.len(),
-                            )
+                            ),
+                            _ => {
+                                let group = match self.close_all_target {
+                                    CloseAllTarget::Group(g) => g,
+                                    _ => self.active_group,
+                                };
+                                let group_name = match group {
+                                    None => "Other".to_string(),
+                                    Some(id) => self
+                                        .workspace_store
+                                        .workspaces
+                                        .iter()
+                                        .find(|w| w.id == id)
+                                        .map(|w| w.name.clone())
+                                        .unwrap_or_else(|| "Unknown".to_string()),
+                                };
+                                let cnt = self
+                                    .pane_state
+                                    .panes
+                                    .iter()
+                                    .filter(|p| {
+                                        Self::pane_group(
+                                            &self.session_state.sessions,
+                                            &self.workspace_store,
+                                            p,
+                                        ) == group
+                                    })
+                                    .count();
+                                (format!("Close \"{}\" Sessions", group_name), cnt)
+                            }
                         };
                         ui.label(
                             egui::RichText::new(&title)
@@ -1106,19 +1157,30 @@ impl App {
         if do_close {
             self.show_close_all_confirm = false;
 
-            let pane_ids_to_close: Vec<u32> = if let Some(ws_filter) = self.session_workspace_filter
-            {
-                self.pane_state
-                    .panes
-                    .iter()
-                    .filter(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                            == ws_filter
-                    })
-                    .map(|p| p.id)
-                    .collect()
-            } else {
-                self.pane_state.panes.iter().map(|p| p.id).collect()
+            let target = std::mem::take(&mut self.close_all_target);
+
+            let pane_ids_to_close: Vec<u32> = match target {
+                CloseAllTarget::All => {
+                    self.pane_state.panes.iter().map(|p| p.id).collect()
+                }
+                _ => {
+                    let group = match target {
+                        CloseAllTarget::Group(g) => g,
+                        _ => self.active_group,
+                    };
+                    self.pane_state
+                        .panes
+                        .iter()
+                        .filter(|p| {
+                            Self::pane_group(
+                                &self.session_state.sessions,
+                                &self.workspace_store,
+                                p,
+                            ) == group
+                        })
+                        .map(|p| p.id)
+                        .collect()
+                }
             };
 
             let session_ids: Vec<u32> = self
@@ -1186,10 +1248,10 @@ impl App {
                 }
             }
 
-            self.session_workspace_filter = None;
             self.save_session();
         } else if cancel {
             self.show_close_all_confirm = false;
+            self.close_all_target = CloseAllTarget::default();
         }
     }
 
@@ -1521,6 +1583,8 @@ impl App {
         if do_push {
             let force = self.push_force;
             if let Some(cwd) = self.active_cwd() {
+                self.push_in_progress = true;
+                self.push_error = None;
                 self.workers.git_worker.enqueue_push(&cwd, force);
             }
             self.show_push_dialog = false;
@@ -1613,6 +1677,417 @@ impl App {
             self.show_stage_all_confirm = false;
         } else if cancel {
             self.show_stage_all_confirm = false;
+        }
+    }
+
+    pub(in crate::app) fn render_open_folder_dialog(&mut self, ctx: &egui::Context) {
+        if self.open_folder_dialog.is_none() {
+            return;
+        }
+
+        let mut open_it = false;
+        let mut cancel = false;
+        let mut navigate_parent: Option<u64> = None;
+        let screen_rect = ctx.screen_rect();
+        let dialog_w = (screen_rect.width() * 0.45).clamp(360.0, 520.0);
+        let t = theme::active();
+
+        // Dim background
+        egui::Area::new(self.vp_id("open_folder_dim"))
+            .fixed_pos(screen_rect.min)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                let resp = ui.interact(
+                    screen_rect,
+                    self.vp_id("open_folder_dim_click"),
+                    egui::Sense::click(),
+                );
+                ui.painter().rect_filled(
+                    screen_rect,
+                    0.0,
+                    egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                );
+                if resp.clicked() {
+                    cancel = true;
+                }
+            });
+
+        let dialog_h = 400.0_f32;
+        egui::Area::new(self.vp_id("open_folder_dialog"))
+            .fixed_pos(
+                screen_rect.center()
+                    - egui::vec2(
+                        dialog_w / 2.0,
+                        (dialog_h / 2.0).min(screen_rect.height() / 2.0 - 10.0),
+                    ),
+            )
+            .order(egui::Order::Tooltip)
+            .show(ctx, |ui| {
+                egui::Frame::window(&ctx.style()).show(ui, |ui| {
+                    ui.set_min_width(dialog_w);
+
+                    // Title
+                    let title_text = if self
+                        .open_folder_dialog
+                        .as_ref()
+                        .and_then(|d| d.existing_workspace_id)
+                        .is_some()
+                    {
+                        "Open Workspace Folder"
+                    } else {
+                        "Open Folder"
+                    };
+                    ui.label(
+                        egui::RichText::new(title_text)
+                            .strong()
+                            .size(theme::FONT_UI_LG)
+                            .color(t.text),
+                    );
+                    ui.add_space(theme::SP_4);
+
+                    if let Some(dlg) = &mut self.open_folder_dialog {
+                        // Path display
+                        ui.label(
+                            egui::RichText::new(theme::short_path(&dlg.path))
+                                .monospace()
+                                .size(theme::FONT_UI_SM)
+                                .color(t.fg_path),
+                        )
+                        .on_hover_text(dlg.path.display().to_string());
+                        ui.add_space(theme::SP_4);
+
+                        // Subdirectory warning
+                        if let Some((parent_id, ref parent_name)) = dlg.parent_workspace {
+                            let warn_text = format!(
+                                "This folder is inside workspace \"{}\"",
+                                parent_name
+                            );
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(warn_text)
+                                        .size(theme::FONT_UI_SM)
+                                        .color(t.warning),
+                                );
+                            });
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!(
+                                            "Open \"{}\" instead",
+                                            parent_name
+                                        ))
+                                        .size(theme::FONT_UI_SM),
+                                    )
+                                    .rounding(theme::R_SM),
+                                )
+                                .clicked()
+                            {
+                                navigate_parent = Some(parent_id);
+                            }
+                            ui.add_space(theme::SP_4);
+                        }
+
+                        // Terminal selection — button UI
+                        ui.label(
+                            egui::RichText::new("Terminal")
+                                .size(theme::FONT_UI_SM)
+                                .color(t.subtext0),
+                        );
+                        ui.add_space(theme::SP_1);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing =
+                                egui::vec2(theme::SP_3, theme::SP_3);
+                            for shell in &dlg.available_shells.clone() {
+                                let selected = dlg.selected_shell == *shell;
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(shell.display_name())
+                                        .size(theme::FONT_UI_MD)
+                                        .color(if selected { t.base } else { t.text }),
+                                )
+                                .fill(if selected {
+                                    t.accent
+                                } else {
+                                    t.surface1
+                                })
+                                .rounding(theme::R_MD)
+                                .min_size(egui::vec2(0.0, 28.0));
+                                if ui.add(btn).clicked() {
+                                    dlg.selected_shell = shell.clone();
+                                }
+                            }
+                        });
+                        ui.add_space(theme::SP_5);
+
+                        // Save as Workspace toggle
+                        ui.checkbox(
+                            &mut dlg.save_as_workspace,
+                            egui::RichText::new("Save as Workspace")
+                                .size(theme::FONT_UI_MD),
+                        );
+                        ui.add_space(theme::SP_3);
+
+                        // Workspace name + color (shown only when save is checked)
+                        if dlg.save_as_workspace {
+                            // Name field
+                            ui.label(
+                                egui::RichText::new("Name")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(t.subtext0),
+                            );
+                            let name_resp = ui.add(
+                                egui::TextEdit::singleline(&mut dlg.workspace_name)
+                                    .hint_text("e.g. My Project")
+                                    .desired_width(f32::INFINITY),
+                            );
+                            if !dlg.focus_requested {
+                                name_resp.request_focus();
+                                dlg.focus_requested = true;
+                            }
+
+                            // Name uniqueness validation
+                            let name_trimmed = dlg.workspace_name.trim();
+                            let name_conflict = if !name_trimmed.is_empty() {
+                                self.workspace_store.workspaces.iter().any(|w| {
+                                    w.name.eq_ignore_ascii_case(name_trimmed)
+                                        && Some(w.id) != dlg.existing_workspace_id
+                                })
+                            } else {
+                                false
+                            };
+                            if name_conflict {
+                                ui.label(
+                                    egui::RichText::new("A workspace with this name already exists")
+                                        .size(theme::FONT_UI_XS)
+                                        .color(t.error),
+                                );
+                            }
+                            ui.add_space(theme::SP_3);
+
+                            // Color picker
+                            ui.label(
+                                egui::RichText::new("Color")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(t.subtext0),
+                            );
+                            let color_conflict = self.workspace_store.workspaces.iter().any(|w| {
+                                w.color == dlg.workspace_color
+                                    && Some(w.id) != dlg.existing_workspace_id
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing =
+                                    egui::vec2(theme::SP_4, theme::SP_4);
+                                for &preset in PRESET_COLORS {
+                                    let selected = dlg.workspace_color == preset
+                                        && !dlg.show_custom_picker;
+                                    let swatch = egui::Button::new("")
+                                        .fill(theme::from_rgb(preset))
+                                        .stroke(if selected {
+                                            egui::Stroke::new(theme::STROKE_BOLD, t.text)
+                                        } else {
+                                            egui::Stroke::new(theme::STROKE_THIN, t.overlay0)
+                                        })
+                                        .min_size(egui::vec2(24.0, 24.0))
+                                        .rounding(theme::R_MD);
+                                    if ui.add(swatch).clicked() {
+                                        dlg.workspace_color = preset;
+                                        dlg.show_custom_picker = false;
+                                        dlg.custom_color = [
+                                            preset[0] as f32 / 255.0,
+                                            preset[1] as f32 / 255.0,
+                                            preset[2] as f32 / 255.0,
+                                        ];
+                                    }
+                                }
+                                let picker_resp = egui::color_picker::color_edit_button_rgb(
+                                    ui,
+                                    &mut dlg.custom_color,
+                                );
+                                if picker_resp.changed() {
+                                    dlg.show_custom_picker = true;
+                                    dlg.workspace_color = [
+                                        (dlg.custom_color[0] * 255.0) as u8,
+                                        (dlg.custom_color[1] * 255.0) as u8,
+                                        (dlg.custom_color[2] * 255.0) as u8,
+                                    ];
+                                }
+                            });
+                            if color_conflict {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "This color is already used by another workspace",
+                                    )
+                                    .size(theme::FONT_UI_XS)
+                                    .color(t.warning),
+                                );
+                            }
+                            ui.add_space(theme::SP_3);
+                        }
+
+                        ui.add_space(theme::SP_4);
+
+                        // Open / Cancel buttons
+                        ui.horizontal(|ui| {
+                            let can_open = {
+                                if dlg.save_as_workspace {
+                                    let name_trimmed = dlg.workspace_name.trim();
+                                    let name_ok = !name_trimmed.is_empty()
+                                        && !self.workspace_store.workspaces.iter().any(|w| {
+                                            w.name.eq_ignore_ascii_case(name_trimmed)
+                                                && Some(w.id) != dlg.existing_workspace_id
+                                        });
+                                    let color_ok =
+                                        !self.workspace_store.workspaces.iter().any(|w| {
+                                            w.color == dlg.workspace_color
+                                                && Some(w.id) != dlg.existing_workspace_id
+                                        });
+                                    name_ok && color_ok
+                                } else {
+                                    true
+                                }
+                            };
+
+                            if ui
+                                .add_enabled(
+                                    can_open,
+                                    egui::Button::new(
+                                        egui::RichText::new("Open")
+                                            .color(t.accent_strong),
+                                    ),
+                                )
+                                .clicked()
+                            {
+                                open_it = true;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    }
+                });
+            });
+
+        // Keyboard shortcuts
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            cancel = true;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            let can_open = self.open_folder_dialog.as_ref().is_some_and(|dlg| {
+                if dlg.save_as_workspace {
+                    let name_trimmed = dlg.workspace_name.trim();
+                    let name_ok = !name_trimmed.is_empty()
+                        && !self.workspace_store.workspaces.iter().any(|w| {
+                            w.name.eq_ignore_ascii_case(name_trimmed)
+                                && Some(w.id) != dlg.existing_workspace_id
+                        });
+                    let color_ok = !self.workspace_store.workspaces.iter().any(|w| {
+                        w.color == dlg.workspace_color
+                            && Some(w.id) != dlg.existing_workspace_id
+                    });
+                    name_ok && color_ok
+                } else {
+                    true
+                }
+            });
+            if can_open {
+                open_it = true;
+            }
+        }
+
+        if let Some(parent_id) = navigate_parent {
+            self.open_folder_dialog = None;
+            self.navigate_to_workspace(parent_id);
+        } else if open_it {
+            if let Some(dlg) = self.open_folder_dialog.take() {
+                // Save preferred shell
+                self.settings.default_shell = Some(dlg.selected_shell.display_name().to_string());
+                self.settings.save();
+
+                let ws_id = if dlg.save_as_workspace {
+                    if let Some(existing_id) = dlg.existing_workspace_id {
+                        // Update existing workspace
+                        if let Some(ws) = self
+                            .workspace_store
+                            .workspaces
+                            .iter_mut()
+                            .find(|w| w.id == existing_id)
+                        {
+                            ws.name = dlg.workspace_name.trim().to_string();
+                            ws.color = dlg.workspace_color;
+                        }
+                        self.workspace_store.save();
+                        Some(existing_id)
+                    } else {
+                        // Create new workspace
+                        let id = self.workspace_store.next_id();
+                        self.workspace_store.workspaces.push(Workspace {
+                            id,
+                            name: dlg.workspace_name.trim().to_string(),
+                            path: dlg.path.clone(),
+                            color: dlg.workspace_color,
+                            host_window_id: None,
+                            last_activated: 0,
+                        });
+                        self.workspace_store.save();
+                        Some(id)
+                    }
+                } else {
+                    None
+                };
+
+                // Spawn terminal session
+                let (cols, rows) = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| Some(p.id) == self.pane_state.active_pane_id)
+                    .map(|p| p.last_size)
+                    .unwrap_or_else(|| {
+                        self.pane_state
+                            .panes
+                            .first()
+                            .map(|p| p.last_size)
+                            .unwrap_or((80, 24))
+                    });
+                if let Some(new_id) =
+                    self.spawn_session(&dlg.selected_shell, cols, rows, Some(dlg.path))
+                {
+                    self.session_state.active_id = Some(new_id);
+                    if !self
+                        .pane_state
+                        .panes
+                        .iter()
+                        .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
+                    {
+                        let pane_id = self.pane_state.next_pane_id;
+                        self.pane_state.next_pane_id += 1;
+                        self.pane_state.panes.push(PaneEntry {
+                            id: pane_id,
+                            content: PaneContent::Terminal(new_id),
+                            manual_width: None,
+                            last_size: (cols, rows),
+                        });
+                        self.pane_state.pane_trees.insert(
+                            pane_id,
+                            PaneNode::Leaf {
+                                pane_id,
+                                last_size: (cols, rows),
+                            },
+                        );
+                        self.activate_pane(pane_id);
+                        self.flash.trigger(
+                            crate::app::feedback::FlashTarget::Tab(pane_id),
+                            crate::app::feedback::FlashKind::Success,
+                        );
+                    }
+                }
+
+                // Navigate to workspace if created/updated
+                if let Some(ws_id) = ws_id {
+                    self.navigate_to_workspace(ws_id);
+                }
+            }
+        } else if cancel {
+            self.open_folder_dialog = None;
         }
     }
 }

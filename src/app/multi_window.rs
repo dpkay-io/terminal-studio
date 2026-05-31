@@ -7,7 +7,7 @@ use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::workspace::WindowId;
 
 use super::pane::RightTab;
-use super::workspace_ui::{WorkspaceDialog, WorkspaceEditDialog};
+use super::workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
 
 pub(super) struct WindowView {
     pub(super) active_group: Option<u64>,
@@ -35,6 +35,7 @@ pub(super) struct WindowView {
 
     pub(super) workspace_dialog: Option<WorkspaceDialog>,
     pub(super) workspace_edit_dialog: Option<WorkspaceEditDialog>,
+    pub(super) open_folder_dialog: Option<OpenFolderDialog>,
 
     pub(super) active_term_geo: Option<TerminalGeometry>,
     pub(super) active_term_ui_id: Option<egui::Id>,
@@ -66,6 +67,7 @@ impl WindowView {
             quick_switcher_search_active: false,
             workspace_dialog: None,
             workspace_edit_dialog: None,
+            open_folder_dialog: None,
             active_term_geo: None,
             active_term_ui_id: None,
             was_focused: true,

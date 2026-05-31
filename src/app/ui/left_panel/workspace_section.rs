@@ -146,8 +146,9 @@ impl App {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = theme::SP_2;
 
-                // "Other" group at the top
-                self.render_other_group(ui, actions, active_group_snap, has_active_other);
+                if has_active_other {
+                    self.render_other_group(ui, actions, active_group_snap, has_active_other);
+                }
 
                 for card in &workspaces {
                     self.render_workspace_card(ui, actions, card, active_group_snap);
@@ -341,6 +342,20 @@ impl App {
                 actions.edit_workspace_id = Some(data.id);
                 ui.close_menu();
             }
+            if data.has_active_session {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Close all sessions")
+                                .color(theme::active().danger_fg),
+                        ),
+                    )
+                    .clicked()
+                {
+                    actions.close_all_workspace_id = Some(Some(data.id));
+                    ui.close_menu();
+                }
+            }
         });
     }
 
@@ -420,6 +435,22 @@ impl App {
         }
         if other_resp.clicked() {
             actions.open_workspace_id = Some(u64::MAX);
+        }
+        if has_active_session {
+            other_resp.context_menu(|ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("Close all sessions")
+                                .color(theme::active().danger_fg),
+                        ),
+                    )
+                    .clicked()
+                {
+                    actions.close_all_workspace_id = Some(None);
+                    ui.close_menu();
+                }
+            });
         }
     }
 }

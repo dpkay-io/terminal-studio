@@ -21,6 +21,7 @@ enum Job {
     Commit { cwd: PathBuf, message: String, amend: bool },
     Push { cwd: PathBuf, force: bool },
     LastCommitMessage(PathBuf),
+    Gitignore { cwd: PathBuf, pattern: String },
 }
 
 pub(super) struct WorkerResults {
@@ -31,6 +32,7 @@ pub(super) struct WorkerResults {
     pub(super) commit_result: Option<Result<PathBuf, String>>,
     pub(super) push_result: Option<Result<PathBuf, String>>,
     pub(super) last_commit_msg: HashMap<PathBuf, String>,
+    pub(super) gitignore_result: Option<Result<PathBuf, String>>,
 }
 
 pub(super) struct GitWorker {
@@ -53,6 +55,7 @@ impl GitWorker {
             commit_result: None,
             push_result: None,
             last_commit_msg: HashMap::new(),
+            gitignore_result: None,
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let dir_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -221,6 +224,30 @@ impl GitWorker {
                                 .unwrap_or_default();
                             results_bg.lock().last_commit_msg.insert(cwd, msg);
                         }
+                        Job::Gitignore { cwd, pattern } => {
+                            let gitignore_path = cwd.join(".gitignore");
+                            let result = (|| -> Result<PathBuf, String> {
+                                let mut content = std::fs::read_to_string(&gitignore_path)
+                                    .unwrap_or_default();
+                                let already_present = content
+                                    .lines()
+                                    .any(|line| line.trim() == pattern.trim());
+                                if already_present {
+                                    return Ok(cwd.clone());
+                                }
+                                if !content.is_empty() && !content.ends_with('\n') {
+                                    content.push('\n');
+                                }
+                                content.push_str(&pattern);
+                                content.push('\n');
+                                std::fs::write(&gitignore_path, &content)
+                                    .map_err(|e| e.to_string())?;
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
+                                Ok(cwd.clone())
+                            })();
+                            results_bg.lock().gitignore_result = Some(result);
+                        }
                     }
                     ctx_bg.request_repaint();
                 }
@@ -337,6 +364,17 @@ impl GitWorker {
     pub(super) fn take_last_commit_msg(&self, path: &Path) -> Option<String> {
         self.results.lock().last_commit_msg.remove(path)
     }
+
+    pub(super) fn enqueue_gitignore(&self, cwd: &Path, pattern: String) {
+        let _ = self.tx.send(Job::Gitignore {
+            cwd: cwd.to_path_buf(),
+            pattern,
+        });
+    }
+
+    pub(super) fn take_gitignore_result(&self) -> Option<Result<PathBuf, String>> {
+        self.results.lock().gitignore_result.take()
+    }
 }
 
 impl Drop for GitWorker {
@@ -406,6 +444,76 @@ mod tests {
         let (diff, status) = result.unwrap();
         // diff and status may both be empty on a clean working tree
         let _ = (diff, status);
+    }
+
+    #[test]
+    fn test_take_gitignore_result_empty() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        assert!(worker.take_gitignore_result().is_none());
+    }
+
+    #[test]
+    fn test_gitignore_creates_file() {
+        let tmp = std::env::temp_dir().join(format!("git_worker_test_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Init a git repo so run_git_info doesn't fail
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_gitignore(&tmp, "target/".to_string());
+
+        let mut result = None;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(r) = worker.take_gitignore_result() {
+                result = Some(r);
+                break;
+            }
+        }
+        assert!(result.is_some(), "gitignore job should produce a result");
+        assert!(result.unwrap().is_ok());
+        let content = std::fs::read_to_string(tmp.join(".gitignore")).unwrap();
+        assert!(content.contains("target/"));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_gitignore_no_duplicate() {
+        let tmp = std::env::temp_dir().join(format!(
+            "git_worker_dedup_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+        std::fs::write(tmp.join(".gitignore"), "target/\n").unwrap();
+
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_gitignore(&tmp, "target/".to_string());
+
+        let mut result = None;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(r) = worker.take_gitignore_result() {
+                result = Some(r);
+                break;
+            }
+        }
+        assert!(result.is_some());
+        assert!(result.unwrap().is_ok());
+        let content = std::fs::read_to_string(tmp.join(".gitignore")).unwrap();
+        assert_eq!(content.matches("target/").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

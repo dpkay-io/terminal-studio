@@ -16,6 +16,7 @@ pub(in crate::app) struct SessionListActions {
     pub duplicate_session: bool,
     pub quit_pane_id: Option<u32>,
     pub clicked_sidebar_pane_id: Option<u32>,
+    pub open_folder_path: Option<PathBuf>,
 }
 
 /// Deferred actions collected while rendering the workspace section.
@@ -26,6 +27,8 @@ pub(in crate::app) struct WorkspaceSectionActions {
     pub focus_extra_window_viewport: Option<egui::ViewportId>,
     /// Close the extra window hosting this workspace, then open it in the current window.
     pub reclaim_workspace_id: Option<u64>,
+    /// Close all sessions belonging to this workspace (with confirmation).
+    pub close_all_workspace_id: Option<Option<u64>>,
 }
 
 impl App {
@@ -55,6 +58,7 @@ impl App {
             duplicate_session: std::mem::replace(&mut self.deferred_duplicate, false),
             quit_pane_id: None,
             clicked_sidebar_pane_id: None,
+            open_folder_path: None,
         };
         if let Some(ws_id) = self.deferred_open_workspace.take() {
             self.navigate_to_workspace(ws_id);
@@ -65,6 +69,7 @@ impl App {
             new_window_workspace_id: None,
             focus_extra_window_viewport: None,
             reclaim_workspace_id: None,
+            close_all_workspace_id: None,
         };
 
         if self.show_left_panel {

@@ -10,13 +10,18 @@ pub(in crate::app) struct StatusBarData {
     pub cols: u16,
     pub rows: u16,
     pub zoomed: bool,
+    pub unsaved_folder: bool,
+}
+
+pub(in crate::app) struct StatusBarResult {
+    pub save_workspace_clicked: bool,
 }
 
 pub(in crate::app) fn render_status_bar(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     data: &StatusBarData,
-) {
+) -> StatusBarResult {
     let t = theme::active();
     let painter = ui.painter();
 
@@ -90,7 +95,7 @@ pub(in crate::app) fn render_status_bar(
     }
 
     right_parts.push((data.shell_name.clone(), fg));
-    right_parts.push((format!("{}×{}", data.cols, data.rows), t.overlay0));
+    right_parts.push((format!("{}\u{00d7}{}", data.cols, data.rows), t.overlay0));
 
     let mut rx = rect.max.x - pad;
     for (text, color) in right_parts.iter().rev() {
@@ -101,7 +106,60 @@ pub(in crate::app) fn render_status_bar(
         rx -= pad;
     }
 
+    // "Save as workspace" pill — clickable element on the right side
+    let mut save_clicked = false;
+    if data.unsaved_folder && !data.cwd.is_empty() {
+        let label = "Save as workspace";
+        let pill_font = egui::FontId::monospace(theme::FONT_UI_XS);
+        let text_size = {
+            let p = ui.painter();
+            let g = p.layout_no_wrap(label.to_string(), pill_font.clone(), t.accent);
+            g.size()
+        };
+        let pill_h = text_size.y + theme::SP_1 * 2.0;
+        let pill_w = text_size.x + theme::SP_4 * 2.0;
+
+        let pill_x = rx - pill_w - pad;
+        let pill_rect = egui::Rect::from_min_size(
+            egui::pos2(pill_x, y_center - pill_h * 0.5),
+            egui::vec2(pill_w, pill_h),
+        );
+
+        let resp = ui.allocate_rect(pill_rect, egui::Sense::click());
+        let hovered = resp.hovered();
+
+        let tint = if hovered {
+            theme::tinted(t.blue_rgb, theme::BLEND_LIGHT)
+        } else {
+            theme::tinted(t.blue_rgb, theme::BLEND_SUBTLE)
+        };
+        let bg = egui::Color32::from_rgb(tint[0], tint[1], tint[2]);
+        let p = ui.painter();
+        p.rect_filled(pill_rect, theme::R_SM, bg);
+        let text_galley = p.layout_no_wrap(label.to_string(), pill_font, t.accent);
+        p.galley(
+            egui::pos2(
+                pill_rect.min.x + theme::SP_4,
+                pill_rect.center().y - text_galley.size().y * 0.5,
+            ),
+            text_galley,
+            t.accent,
+        );
+
+        if hovered {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        if resp.clicked() {
+            save_clicked = true;
+        }
+    }
+
     ui.allocate_rect(rect, egui::Sense::hover());
+
+    StatusBarResult {
+        save_workspace_clicked: save_clicked,
+    }
 }
 
 #[cfg(test)]
@@ -118,11 +176,13 @@ mod tests {
             cols: 120,
             rows: 40,
             zoomed: false,
+            unsaved_folder: false,
         };
         assert_eq!(data.cols, 120);
         assert_eq!(data.rows, 40);
         assert_eq!(data.git_branch, "main");
         assert!(!data.zoomed);
+        assert!(!data.unsaved_folder);
     }
 
     #[test]
@@ -135,8 +195,41 @@ mod tests {
             cols: 80,
             rows: 24,
             zoomed: true,
+            unsaved_folder: false,
         };
         assert!(data.cwd.is_empty());
         assert!(data.zoomed);
+    }
+
+    #[test]
+    fn status_bar_data_unsaved_folder() {
+        let data = StatusBarData {
+            cwd: "/home/user/new-project".to_string(),
+            git_branch: String::new(),
+            git_diff_count: 0,
+            shell_name: "bash".to_string(),
+            cols: 80,
+            rows: 24,
+            zoomed: false,
+            unsaved_folder: true,
+        };
+        assert!(data.unsaved_folder);
+        assert!(!data.cwd.is_empty());
+    }
+
+    #[test]
+    fn status_bar_data_unsaved_folder_empty_cwd() {
+        let data = StatusBarData {
+            cwd: String::new(),
+            git_branch: String::new(),
+            git_diff_count: 0,
+            shell_name: "bash".to_string(),
+            cols: 80,
+            rows: 24,
+            zoomed: false,
+            unsaved_folder: true,
+        };
+        assert!(data.unsaved_folder);
+        assert!(data.cwd.is_empty());
     }
 }

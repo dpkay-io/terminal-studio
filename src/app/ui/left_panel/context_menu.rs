@@ -1,7 +1,7 @@
 use super::super::super::pane::{PaneContent, PaneEntry};
 use super::super::super::title::shell_escape_arg;
-use super::super::super::workspace_ui::WorkspaceEditDialog;
-use super::super::super::App;
+use super::super::super::workspace_ui::{OpenFolderDialog, WorkspaceEditDialog};
+use super::super::super::{App, CloseAllTarget};
 use super::{SessionListActions, WorkspaceSectionActions};
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::default_shell;
@@ -12,15 +12,28 @@ impl App {
     pub(in crate::app) fn process_left_panel_actions(
         &mut self,
         ctx: &egui::Context,
-        sess_actions: SessionListActions,
+        mut sess_actions: SessionListActions,
         ws_actions: WorkspaceSectionActions,
         active_fg: Option<ForegroundProcess>,
     ) {
         self.process_workspace_actions(ctx, &ws_actions);
         self.process_quit_pane(sess_actions.quit_pane_id);
         self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
+        self.process_open_folder(sess_actions.open_folder_path.take());
         self.process_spawn_session(&sess_actions, &active_fg);
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
+    }
+
+    fn process_open_folder(&mut self, path: Option<std::path::PathBuf>) {
+        let Some(path) = path else { return };
+        let preferred = self.configured_shell();
+        let shells = self.available_shells.clone();
+        self.open_folder_dialog = Some(OpenFolderDialog::new(
+            path,
+            preferred,
+            shells,
+            &self.workspace_store,
+        ));
     }
 
     /// Handle open-workspace, edit-workspace, and new-window-workspace actions.
@@ -69,6 +82,11 @@ impl App {
                 .map(|p| p.last_size)
                 .unwrap_or((80, 24));
             self.switch_group(Some(ws_id), cols, rows);
+        }
+
+        if let Some(group) = actions.close_all_workspace_id {
+            self.close_all_target = CloseAllTarget::Group(group);
+            self.show_close_all_confirm = true;
         }
     }
 

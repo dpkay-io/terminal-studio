@@ -405,7 +405,7 @@ impl App {
             }
             x += icon_sz.x + theme::TAB_ACTION_GAP;
 
-            // Close all tabs in workspace
+            // Close all sessions in current workspace group
             let close_all_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let close_all_resp = ui.interact(
@@ -423,7 +423,7 @@ impl App {
                 egui::FontId::proportional(12.0),
                 t.danger_fg,
             );
-            if close_all_resp.on_hover_text("Close all sessions").clicked() {
+            if close_all_resp.on_hover_text("Close all sessions in this workspace").clicked() {
                 self.show_close_all_confirm = true;
             }
         });

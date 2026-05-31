@@ -1,6 +1,6 @@
 use super::super::super::pane::PaneContent;
 use super::super::super::title::effective_title;
-use super::super::super::App;
+use super::super::super::{App, CloseAllTarget};
 use super::SessionListActions;
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
 use crate::pty::foreground::ForegroundProcess;
@@ -136,48 +136,35 @@ impl App {
                                 }
                             }
                             ui.separator();
-                            if shells.len() == 1 {
-                                if ui.button("Open Folder\u{2026}").clicked() {
-                                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                        actions.spawn_new_session_cwd =
-                                            Some((shells[0].clone(), path));
-                                    }
-                                    ui.close_menu();
+                            if ui.button("Open Folder\u{2026}").clicked() {
+                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                    actions.open_folder_path = Some(path);
                                 }
-                            } else {
-                                ui.menu_button("Open Folder\u{2026}", |ui| {
-                                    for shell in shells {
-                                        if ui.button(shell.display_name()).clicked() {
-                                            if let Some(path) = rfd::FileDialog::new().pick_folder()
-                                            {
-                                                actions.spawn_new_session_cwd =
-                                                    Some((shell.clone(), path));
-                                            }
-                                            ui.close_menu();
-                                        }
-                                    }
-                                });
+                                ui.close_menu();
                             }
                         },
                     )
                     .response
                     .on_hover_text("New terminal (Ctrl+Shift+T)");
                     {
-                        let visible_count = if let Some(ws_filter) = self.session_workspace_filter {
-                            self.pane_state
-                                .panes
-                                .iter()
-                                .filter(|p| {
-                                    Self::pane_group(
-                                        &self.session_state.sessions,
-                                        &self.workspace_store,
-                                        p,
-                                    ) == ws_filter
-                                })
-                                .count()
-                        } else {
-                            self.pane_state.panes.len()
-                        };
+                        let (target, visible_count) =
+                            if let Some(ws_filter) = self.session_workspace_filter {
+                                let cnt = self
+                                    .pane_state
+                                    .panes
+                                    .iter()
+                                    .filter(|p| {
+                                        Self::pane_group(
+                                            &self.session_state.sessions,
+                                            &self.workspace_store,
+                                            p,
+                                        ) == ws_filter
+                                    })
+                                    .count();
+                                (CloseAllTarget::Group(ws_filter), cnt)
+                            } else {
+                                (CloseAllTarget::All, self.pane_state.panes.len())
+                            };
                         if visible_count > 1 {
                             let btn_label = if self.session_workspace_filter.is_some() {
                                 "Close Shown"
@@ -189,6 +176,7 @@ impl App {
                                 .on_hover_text("Close all visible sessions")
                                 .clicked()
                             {
+                                self.close_all_target = target;
                                 self.show_close_all_confirm = true;
                             }
                         }
