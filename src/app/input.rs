@@ -144,9 +144,15 @@ pub(super) fn shell_quote_path(path: &std::path::Path) -> String {
             || s.contains('(')
             || s.contains(')')
             || s.contains('^')
-            || s.contains('|');
+            || s.contains('|')
+            || s.contains('$')
+            || s.contains('`')
+            || s.contains('{')
+            || s.contains('}')
+            || s.contains(';');
         if needs_quoting {
-            format!("\"{}\"", s.replace('"', "\\\""))
+            // Use single quotes for PowerShell safety (no variable expansion)
+            format!("'{}'", s.replace('\'', "''"))
         } else {
             s.into_owned()
         }
@@ -445,7 +451,7 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert_eq!(
             shell_quote_path(Path::new(r"C:\My Files\doc.txt")),
-            r#""C:\My Files\doc.txt""#
+            r"'C:\My Files\doc.txt'"
         );
         #[cfg(not(target_os = "windows"))]
         assert_eq!(
@@ -470,7 +476,7 @@ mod tests {
         use std::path::Path;
         assert_eq!(
             shell_quote_path(Path::new(r"C:\Tom & Jerry\file.txt")),
-            r#""C:\Tom & Jerry\file.txt""#
+            r"'C:\Tom & Jerry\file.txt'"
         );
     }
 

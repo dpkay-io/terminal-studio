@@ -222,22 +222,39 @@ impl Shortcut {
     }
 
     pub fn matches(&self, key: &egui::Key, mods: &egui::Modifiers) -> bool {
-        *key == self.key
-            && mods.ctrl == self.ctrl
-            && mods.shift == self.shift
-            && mods.alt == self.alt
+        if *key != self.key || mods.shift != self.shift || mods.alt != self.alt {
+            return false;
+        }
+        if self.ctrl {
+            // On macOS, accept both Ctrl and Cmd for app shortcuts
+            mods.ctrl || mods.mac_cmd
+        } else {
+            !mods.ctrl && !mods.mac_cmd
+        }
     }
 
     pub fn label(&self) -> String {
         let mut parts = Vec::new();
         if self.ctrl {
-            parts.push("Ctrl");
+            if cfg!(target_os = "macos") {
+                parts.push("\u{2318}");
+            } else {
+                parts.push("Ctrl");
+            }
         }
         if self.alt {
-            parts.push("Alt");
+            if cfg!(target_os = "macos") {
+                parts.push("\u{2325}");
+            } else {
+                parts.push("Alt");
+            }
         }
         if self.shift {
-            parts.push("Shift");
+            if cfg!(target_os = "macos") {
+                parts.push("\u{21E7}");
+            } else {
+                parts.push("Shift");
+            }
         }
         parts.push(key_name(self.key));
         parts.join("+")

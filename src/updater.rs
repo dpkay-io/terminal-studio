@@ -342,11 +342,14 @@ pub fn cleanup_old_binary() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    for ext in &["exe.old", "old"] {
-        let old = exe.with_extension(ext);
-        if old.exists() {
-            let _ = std::fs::remove_file(&old);
-        }
+    let ext = if cfg!(target_os = "windows") {
+        "exe.old"
+    } else {
+        "old"
+    };
+    let old = exe.with_extension(ext);
+    if old.exists() {
+        let _ = std::fs::remove_file(&old);
     }
     // Also clean up leftover .update file from interrupted downloads
     if let Some(dir) = exe.parent() {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::theme;
+use crate::util;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CursorStyle {
@@ -70,13 +71,8 @@ impl AppSettings {
         let Some(path) = settings_data_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create settings dir: {e}");
-            }
-        }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = util::atomic_write(&path, &text) {
                 log::error!("failed to save settings: {e}");
             }
         }
@@ -84,43 +80,11 @@ impl AppSettings {
 }
 
 pub(super) fn windows_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("windows.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("windows.json")
-        })
-    }
+    util::data_file("windows.json")
 }
 
 fn settings_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("settings.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("settings.json")
-        })
-    }
+    util::data_file("settings.json")
 }
 
 #[cfg(test)]

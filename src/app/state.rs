@@ -85,23 +85,64 @@ impl App {
             cc.egui_ctx.set_style(style);
         }
 
-        #[cfg(target_os = "windows")]
         {
             use egui::{FontData, FontDefinitions, FontFamily};
             let mut fonts = FontDefinitions::default();
-            let win_root =
-                std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-            let font_path = format!("{}\\Fonts\\seguisym.ttf", win_root);
-            if let Ok(data) = std::fs::read(&font_path) {
-                fonts
-                    .font_data
-                    .insert("segoe_ui_symbol".to_owned(), FontData::from_owned(data));
+            let mut loaded = false;
+
+            #[cfg(target_os = "windows")]
+            {
+                let win_root =
+                    std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+                let font_path =
+                    std::path::PathBuf::from(&win_root).join("Fonts").join("seguisym.ttf");
+                if let Ok(data) = std::fs::read(&font_path) {
+                    fonts
+                        .font_data
+                        .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
+                    loaded = true;
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            {
+                let candidates = [
+                    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+                    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+                    "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
+                    "/usr/share/fonts/TTF/NotoSansSymbols2-Regular.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+                ];
+                for path in candidates {
+                    if let Ok(data) = std::fs::read(path) {
+                        fonts
+                            .font_data
+                            .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
+                        loaded = true;
+                        break;
+                    }
+                }
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let path = "/System/Library/Fonts/Apple Symbols.ttf";
+                if let Ok(data) = std::fs::read(path) {
+                    fonts
+                        .font_data
+                        .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
+                    loaded = true;
+                }
+            }
+
+            if loaded {
                 for family in [&FontFamily::Proportional, &FontFamily::Monospace] {
                     fonts
                         .families
                         .entry(family.clone())
                         .or_default()
-                        .push("segoe_ui_symbol".to_owned());
+                        .push("symbol_fallback".to_owned());
                 }
                 cc.egui_ctx.set_fonts(fonts);
             }
@@ -548,11 +589,6 @@ impl App {
         let Some(path) = windows_data_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create windows data dir: {e}");
-            }
-        }
         let saved: Vec<SavedExtraWindow> = self
             .extra_windows
             .iter()
@@ -567,7 +603,7 @@ impl App {
             })
             .collect();
         if let Ok(text) = serde_json::to_string_pretty(&saved) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = crate::util::atomic_write(&path, &text) {
                 log::error!("failed to save windows data: {e}");
             }
         }
@@ -1090,13 +1126,8 @@ impl App {
             shown_md_tabs: self.shown_md_tabs.iter().cloned().collect(),
         };
 
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create session data dir: {e}");
-            }
-        }
         if let Ok(text) = serde_json::to_string_pretty(&state) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = crate::util::atomic_write(&path, &text) {
                 log::error!("failed to save session state: {e}");
             }
         }

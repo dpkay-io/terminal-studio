@@ -114,11 +114,18 @@ impl SingleInstanceGuard {
     #[cfg(not(target_os = "windows"))]
     fn dummy() -> Self {
         use std::fs::OpenOptions;
-        // Open /dev/null as a harmless placeholder file.
         let file = OpenOptions::new()
             .read(true)
             .open("/dev/null")
-            .expect("cannot open /dev/null");
+            .unwrap_or_else(|_| {
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(std::env::temp_dir().join(".ts-dummy-lock"))
+                    .expect("cannot create dummy lockfile")
+            });
         SingleInstanceGuard { _lockfile: file }
     }
 
@@ -134,11 +141,8 @@ impl SingleInstanceGuard {
 
     #[cfg(not(target_os = "windows"))]
     fn lockfile_path() -> std::path::PathBuf {
-        std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
-            .join(".config")
-            .join("terminal-studio")
+        crate::util::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp").join("terminal-studio"))
             .join(".singleton.lock")
     }
 }
@@ -154,8 +158,8 @@ impl Drop for SingleInstanceGuard {
     fn drop(&mut self) {
         #[cfg(target_os = "windows")]
         {
-            use windows_sys::Win32::Foundation::CloseHandle;
-            if self._mutex_handle != 0 {
+            use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+            if self._mutex_handle != 0 && self._mutex_handle != INVALID_HANDLE_VALUE {
                 unsafe { CloseHandle(self._mutex_handle) };
             }
         }

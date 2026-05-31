@@ -17,6 +17,7 @@ mod theme;
 mod ui_kit;
 mod updater;
 mod url_detector;
+pub(crate) mod util;
 mod workspace;
 
 // Generates a 32×32 "TS" icon using Catppuccin Mocha base + blue.

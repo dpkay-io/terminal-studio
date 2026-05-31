@@ -23,14 +23,18 @@ pub(super) fn display_title(title: &str) -> String {
 
 pub(super) fn shell_escape_arg(s: &str) -> String {
     let safe = !s.is_empty()
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '='));
+        && s.chars().all(|c| {
+            c.is_alphanumeric()
+                || matches!(c, '-' | '_' | '.' | '/' | ':' | '@' | '=')
+                || (cfg!(target_os = "windows") && c == '\\')
+        });
     if safe {
         return s.to_string();
     }
     #[cfg(target_os = "windows")]
     {
-        format!("\"{}\"", s.replace('"', "\"\""))
+        // Single quotes avoid PowerShell variable expansion
+        format!("'{}'", s.replace('\'', "''"))
     }
     #[cfg(not(target_os = "windows"))]
     {

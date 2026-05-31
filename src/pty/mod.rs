@@ -205,11 +205,14 @@ impl SessionManager {
 
         let reader = pty_pair.master.try_clone_reader()?;
 
-        // Create PTY writer channel
-        let (pty_tx, pty_rx) = mpsc::sync_channel::<Vec<u8>>(64);
+        // Create PTY writer channel (256 slots to avoid dropping PtyWrite responses)
+        let (pty_tx, pty_rx) = mpsc::sync_channel::<Vec<u8>>(256);
+
+        let alive = Arc::new(AtomicBool::new(true));
 
         // Spawn PTY writer thread
         let mut pty_writer = pty_pair.master.take_writer()?;
+        let alive_for_writer = Arc::clone(&alive);
         thread::Builder::new()
             .name(format!("pty-writer-{}", id))
             .spawn(move || {
@@ -220,6 +223,7 @@ impl SessionManager {
                     }
                     let _ = pty_writer.flush();
                 }
+                alive_for_writer.store(false, std::sync::atomic::Ordering::Release);
             })?;
 
         // Create session with the context and pty_tx
@@ -233,7 +237,6 @@ impl SessionManager {
             scrollback_lines,
         )));
 
-        let alive = Arc::new(AtomicBool::new(true));
         let alive_for_thread = Arc::clone(&alive);
 
         let is_active = Arc::new(AtomicBool::new(false));

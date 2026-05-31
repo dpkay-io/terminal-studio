@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::util;
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedSession {
     pub(super) cwd: PathBuf,
@@ -64,23 +66,7 @@ pub(super) struct AppSession {
 }
 
 pub(super) fn session_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("session.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("session.json")
-        })
-    }
+    util::data_file("session.json")
 }
 
 #[cfg(test)]

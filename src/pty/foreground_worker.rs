@@ -37,6 +37,9 @@ impl ForegroundWorker {
                 while alive_bg.load(Ordering::Acquire) {
                     let snapshot: Vec<(u32, u32)> = pids_bg.lock().clone();
                     for (sid, shell_pid) in snapshot {
+                        if shell_pid == u32::MAX {
+                            continue;
+                        }
                         let result = detect_child(shell_pid);
                         cache_bg.lock().insert(sid, result);
                     }
@@ -51,9 +54,12 @@ impl ForegroundWorker {
     }
 
     /// Update the set of sessions to poll.  Call whenever sessions are added or removed.
-    /// Cheap: just replaces the inner Vec under a brief lock.
+    /// Cheap: replaces the inner Vec and prunes stale cache entries.
     pub fn set_sessions(&self, sessions: Vec<(u32, u32)>) {
+        let active_ids: std::collections::HashSet<u32> =
+            sessions.iter().map(|(sid, _)| *sid).collect();
         *self.pids.lock() = sessions;
+        self.cache.lock().retain(|sid, _| active_ids.contains(sid));
     }
 
     /// Read the cached result for `session_id`.  Never blocks on OS APIs.

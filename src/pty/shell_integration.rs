@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use crate::util;
+
 const ZSH_ENV: &str = r#"# Terminal Studio — zsh shell integration
 _ts_orig_zdotdir="${_TS_ORIG_ZDOTDIR:-$HOME}"
 [[ -f "$_ts_orig_zdotdir/.zshenv" ]] && builtin source "$_ts_orig_zdotdir/.zshenv"
@@ -23,23 +25,7 @@ const ZSH_LOGIN: &str = r#"[[ -f "${_ts_orig_zdotdir:-$HOME}/.zlogin" ]] && buil
 "#;
 
 fn integration_base() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("shell-integration")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("shell-integration")
-        })
-    }
+    util::data_dir().map(|d| d.join("shell-integration"))
 }
 
 pub fn ensure_zsh_integration() -> Option<PathBuf> {

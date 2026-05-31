@@ -152,9 +152,12 @@ impl WatchState {
                 match &event.kind {
                     EventKind::Create(_) => {
                         if is_md && path.is_file() {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            data.md_files.insert(path.clone(), Arc::new(content));
-                            created_md.push(path.clone());
+                            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                            if size <= 1_048_576 {
+                                let content = std::fs::read_to_string(path).unwrap_or_default();
+                                data.md_files.insert(path.clone(), Arc::new(content));
+                                created_md.push(path.clone());
+                            }
                         }
                         dirs_needing_refresh.insert(dir.clone());
                         if data.is_git {
@@ -163,8 +166,11 @@ impl WatchState {
                     }
                     EventKind::Modify(_) => {
                         if is_md && path.is_file() && data.md_files.contains_key(path) {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            data.md_files.insert(path.clone(), Arc::new(content));
+                            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                            if size <= 1_048_576 {
+                                let content = std::fs::read_to_string(path).unwrap_or_default();
+                                data.md_files.insert(path.clone(), Arc::new(content));
+                            }
                         }
                         if data.is_git {
                             data.git_refresh_at.get_or_insert(now + debounce);

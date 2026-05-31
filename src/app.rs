@@ -2339,7 +2339,7 @@ impl App {
                                                     egui::PointerButton::Primary   => 0u8,
                                                     egui::PointerButton::Middle    => 1,
                                                     egui::PointerButton::Secondary => 2,
-                                                    _ => return,
+                                                    _ => continue,
                                                 };
                                                 let bytes = mouse_event_bytes(btn, col, row, *pressed, sgr);
                                                 let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());

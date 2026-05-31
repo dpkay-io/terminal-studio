@@ -66,8 +66,11 @@ impl EventListener for EventProxy {
             Event::Title(s) => {
                 *self.title.lock() = s;
             }
+            #[allow(clippy::collapsible_match)]
             Event::PtyWrite(s) => {
-                let _ = self.pty_tx.try_send(s.into_bytes());
+                if self.pty_tx.try_send(s.into_bytes()).is_err() {
+                    log::warn!("pty_tx full — PtyWrite response dropped for session {}", self.id);
+                }
             }
             Event::Bell => {
                 self.bell.store(true, Ordering::Relaxed);

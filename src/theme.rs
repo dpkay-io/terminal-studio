@@ -747,8 +747,9 @@ pub fn short_path(p: &std::path::Path) -> String {
     if parts.len() <= 2 {
         p.display().to_string()
     } else {
+        let sep = std::path::MAIN_SEPARATOR;
         format!(
-            "\u{2026}/{}/{}",
+            "\u{2026}{sep}{}{sep}{}",
             parts[parts.len() - 2],
             parts[parts.len() - 1]
         )

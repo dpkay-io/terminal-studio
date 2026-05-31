@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::shortcuts::{key_from_name, key_name, AppAction, Shortcut};
+use crate::util;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct KeyBinding {
@@ -42,13 +43,8 @@ impl KeybindingsConfig {
         let Some(path) = keybindings_data_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create keybindings dir: {e}");
-            }
-        }
         if let Ok(text) = serde_json::to_string_pretty(&self.bindings) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = util::atomic_write(&path, &text) {
                 log::error!("failed to save keybindings: {e}");
             }
         }
@@ -390,21 +386,5 @@ impl KeybindingsConfig {
 }
 
 fn keybindings_data_path() -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA").ok().map(|base| {
-            PathBuf::from(base)
-                .join("terminal-studio")
-                .join("keybindings.json")
-        })
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME").ok().map(|base| {
-            PathBuf::from(base)
-                .join(".config")
-                .join("terminal-studio")
-                .join("keybindings.json")
-        })
-    }
+    util::data_file("keybindings.json")
 }

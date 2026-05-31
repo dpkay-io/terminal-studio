@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::util;
+
 /// Opaque identifier for an extra OS window (viewport).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WindowId(pub u64);
@@ -41,27 +43,24 @@ impl WorkspaceStore {
         let Some(path) = Self::data_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create data dir: {e}");
-            }
-        }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = util::atomic_write(&path, &text) {
                 log::error!("failed to save data: {e}");
             }
         }
     }
 
-    pub fn find_for_path(&self, path: &PathBuf) -> Option<&Workspace> {
-        self.workspaces.iter().find(|w| &w.path == path)
+    pub fn find_for_path(&self, path: &Path) -> Option<&Workspace> {
+        self.workspaces
+            .iter()
+            .find(|w| util::paths_equal(&w.path, path))
     }
 
     /// Finds the most specific workspace whose path is a prefix of `cwd`.
     pub fn find_for_cwd(&self, cwd: &Path) -> Option<&Workspace> {
         self.workspaces
             .iter()
-            .filter(|w| cwd.starts_with(&w.path))
+            .filter(|w| util::path_starts_with(cwd, &w.path))
             .max_by_key(|w| w.path.components().count())
     }
 
@@ -83,23 +82,7 @@ impl WorkspaceStore {
     }
 
     fn data_path() -> Option<PathBuf> {
-        #[cfg(target_os = "windows")]
-        {
-            std::env::var("APPDATA").ok().map(|base| {
-                PathBuf::from(base)
-                    .join("terminal-studio")
-                    .join("workspaces.json")
-            })
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            std::env::var("HOME").ok().map(|base| {
-                PathBuf::from(base)
-                    .join(".config")
-                    .join("terminal-studio")
-                    .join("workspaces.json")
-            })
-        }
+        util::data_file("workspaces.json")
     }
 }
 
@@ -126,13 +109,8 @@ impl NoteStore {
         let Some(path) = Self::data_path() else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("failed to create data dir: {e}");
-            }
-        }
         if let Ok(text) = serde_json::to_string_pretty(self) {
-            if let Err(e) = std::fs::write(path, text) {
+            if let Err(e) = util::atomic_write(&path, &text) {
                 log::error!("failed to save data: {e}");
             }
         }
@@ -162,23 +140,7 @@ impl NoteStore {
     }
 
     fn data_path() -> Option<PathBuf> {
-        #[cfg(target_os = "windows")]
-        {
-            std::env::var("APPDATA").ok().map(|base| {
-                PathBuf::from(base)
-                    .join("terminal-studio")
-                    .join("notes.json")
-            })
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            std::env::var("HOME").ok().map(|base| {
-                PathBuf::from(base)
-                    .join(".config")
-                    .join("terminal-studio")
-                    .join("notes.json")
-            })
-        }
+        util::data_file("notes.json")
     }
 }
 
