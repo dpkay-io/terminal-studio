@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use super::super::super::App;
 use super::WorkspaceSectionActions;
 use crate::theme;
+use crate::ui_kit;
 
 struct WorkspaceCardData {
     id: u64,
@@ -14,9 +15,6 @@ struct WorkspaceCardData {
     git_branch: String,
     git_diff_count: usize,
 }
-
-const GIT_ROW_H: f32 = 14.0;
-const GIT_FONT_SZ: f32 = 10.0;
 
 impl App {
     /// Render the workspace section: header with collapse toggle, workspace
@@ -57,11 +55,9 @@ impl App {
                     };
                     if ui
                         .add(
-                            egui::Button::new(
-                                egui::RichText::new(arrow).size(theme::FONT_UI_MD),
-                            )
-                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                            .frame(false),
+                            egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_UI_MD))
+                                .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
+                                .frame(false),
                         )
                         .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
                         .clicked()
@@ -167,28 +163,37 @@ impl App {
         let active = active_group_snap == Some(data.id);
         let has_git_row = !data.git_branch.is_empty() || data.git_diff_count > 0;
         let card_h = if has_git_row {
-            theme::HEADER_H + GIT_ROW_H
+            theme::HEADER_H + theme::GIT_ROW_H
         } else {
             theme::HEADER_H
         };
 
-        let tint_factor = if active { 0.65 } else { 0.45 };
+        let tint_factor = if active {
+            theme::TINT_ACTIVE
+        } else {
+            theme::TINT_INACTIVE
+        };
         let fill = theme::from_rgb(theme::tinted(data.color, tint_factor));
         let fg = theme::text_on(theme::tinted(data.color, tint_factor));
 
-        const GEAR_W: f32 = 26.0;
         const SB_PAD: f32 = 14.0;
         let full_w = ui.available_width();
         let stroke_val = if active {
             egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
         } else {
-            egui::Stroke::new(1.0, theme::from_rgb(theme::tinted(data.color, 0.30)))
+            egui::Stroke::new(
+                1.0,
+                theme::from_rgb(theme::tinted(data.color, theme::TINT_BORDER)),
+            )
         };
         let (full_rect, _) =
             ui.allocate_exact_size(egui::vec2(full_w, card_h), egui::Sense::hover());
         let gear_rect = egui::Rect::from_min_size(
-            egui::pos2(full_rect.max.x - GEAR_W - SB_PAD, full_rect.min.y),
-            egui::vec2(GEAR_W, theme::HEADER_H),
+            egui::pos2(
+                full_rect.max.x - theme::CARD_GEAR_W - SB_PAD,
+                full_rect.min.y,
+            ),
+            egui::vec2(theme::CARD_GEAR_W, theme::HEADER_H),
         );
         let name_rect = egui::Rect::from_min_max(
             full_rect.min,
@@ -212,16 +217,13 @@ impl App {
 
             // Active session indicator: colored bar on left edge
             if data.has_active_session {
-                let bar =
-                    egui::Rect::from_min_size(full_rect.min, egui::vec2(3.0, full_rect.height()));
                 let left_rounding = egui::Rounding {
                     nw: theme::R_MD,
                     sw: theme::R_MD,
                     ne: 0.0,
                     se: 0.0,
                 };
-                ui.painter()
-                    .rect_filled(bar, left_rounding, theme::active().green);
+                ui_kit::active_bar(ui.painter(), full_rect, left_rounding);
             }
 
             // Name text
@@ -231,11 +233,7 @@ impl App {
                 data.name.clone()
             };
             let name_galley = ui.fonts(|f| {
-                f.layout_no_wrap(
-                    name_str,
-                    egui::FontId::proportional(theme::FONT_UI_MD),
-                    fg,
-                )
+                f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_UI_MD), fg)
             });
             let name_h = name_galley.size().y;
             let name_y = if has_git_row {
@@ -254,7 +252,7 @@ impl App {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(12.0),
+                        egui::FontId::proportional(theme::FONT_UI_MD),
                         fg,
                     )
                 });
@@ -277,7 +275,7 @@ impl App {
                 ),
                 egui::Align2::CENTER_CENTER,
                 "\u{2699}",
-                egui::FontId::proportional(12.0),
+                egui::FontId::proportional(theme::FONT_UI_MD),
                 gear_fg,
             );
 
@@ -293,9 +291,13 @@ impl App {
                     }
                     git_text.push_str(&format!("{} changed", data.git_diff_count));
                 }
-                let git_fg = fg.linear_multiply(0.65);
+                let git_fg = fg.linear_multiply(theme::TINT_ACTIVE);
                 let git_galley = ui.fonts(|f| {
-                    f.layout_no_wrap(git_text, egui::FontId::proportional(GIT_FONT_SZ), git_fg)
+                    f.layout_no_wrap(
+                        git_text,
+                        egui::FontId::proportional(theme::GIT_FONT_SZ),
+                        git_fg,
+                    )
                 });
                 let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
                 ui.painter().with_clip_rect(full_rect).galley(
@@ -342,19 +344,15 @@ impl App {
                 actions.edit_workspace_id = Some(data.id);
                 ui.close_menu();
             }
-            if data.has_active_session {
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Close all sessions")
-                                .color(theme::active().danger_fg),
-                        ),
-                    )
+            if data.has_active_session
+                && ui
+                    .add(egui::Button::new(
+                        egui::RichText::new("Close all sessions").color(theme::active().danger_fg),
+                    ))
                     .clicked()
-                {
-                    actions.close_all_workspace_id = Some(Some(data.id));
-                    ui.close_menu();
-                }
+            {
+                actions.close_all_workspace_id = Some(Some(data.id));
+                ui.close_menu();
             }
         });
     }
@@ -393,16 +391,13 @@ impl App {
             ui.painter().rect_stroke(other_rect, rounding, other_stroke);
 
             if has_active_session {
-                let bar =
-                    egui::Rect::from_min_size(other_rect.min, egui::vec2(3.0, other_rect.height()));
                 let left_rounding = egui::Rounding {
                     nw: theme::R_MD,
                     sw: theme::R_MD,
                     ne: 0.0,
                     se: 0.0,
                 };
-                ui.painter()
-                    .rect_filled(bar, left_rounding, theme::active().green);
+                ui_kit::active_bar(ui.painter(), other_rect, left_rounding);
             }
 
             let other_name = if other_active {
@@ -411,7 +406,11 @@ impl App {
                 "Other".to_string()
             };
             let other_galley = ui.fonts(|f| {
-                f.layout_no_wrap(other_name, egui::FontId::proportional(13.0), other_fg)
+                f.layout_no_wrap(
+                    other_name,
+                    egui::FontId::proportional(theme::FONT_UI_LG),
+                    other_fg,
+                )
             });
             let text_y = other_rect.center().y - other_galley.size().y / 2.0;
             ui.painter().galley(
@@ -424,7 +423,7 @@ impl App {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(12.0),
+                        egui::FontId::proportional(theme::FONT_UI_MD),
                         other_fg,
                     )
                 });
@@ -439,12 +438,9 @@ impl App {
         if has_active_session {
             other_resp.context_menu(|ui| {
                 if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Close all sessions")
-                                .color(theme::active().danger_fg),
-                        ),
-                    )
+                    .add(egui::Button::new(
+                        egui::RichText::new("Close all sessions").color(theme::active().danger_fg),
+                    ))
                     .clicked()
                 {
                     actions.close_all_workspace_id = Some(None);

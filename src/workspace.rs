@@ -70,16 +70,16 @@ impl WorkspaceStore {
     }
 
     pub fn is_name_taken(&self, name: &str, exclude_id: Option<u64>) -> bool {
-        self.workspaces.iter().any(|w| {
-            w.name.eq_ignore_ascii_case(name)
-                && exclude_id.map_or(true, |id| w.id != id)
-        })
+        self.workspaces
+            .iter()
+            .any(|w| w.name.eq_ignore_ascii_case(name) && exclude_id != Some(w.id))
     }
 
+    #[allow(dead_code)]
     pub fn is_color_taken(&self, color: [u8; 3], exclude_id: Option<u64>) -> bool {
-        self.workspaces.iter().any(|w| {
-            w.color == color && exclude_id.map_or(true, |id| w.id != id)
-        })
+        self.workspaces
+            .iter()
+            .any(|w| w.color == color && (exclude_id != Some(w.id)))
     }
 
     fn data_path() -> Option<PathBuf> {

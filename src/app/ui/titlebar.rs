@@ -1,6 +1,7 @@
 use super::super::pane::RightTab;
 use super::super::App;
 use crate::theme;
+use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
 
@@ -126,27 +127,21 @@ impl App {
                     }
                     // Left panel toggle (after traffic lights)
                     let mac_btn_w = 28.0_f32;
-                    let mac_icon_sz = 13.0_f32;
+                    let mac_icon_sz = theme::FONT_UI_LG;
                     let left_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.min.x + 72.0, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let left_resp =
-                        ui.interact(left_tbr, self.vp_id("tb_left_toggle"), egui::Sense::click());
-                    let left_bg = if self.show_left_panel {
-                        theme::active().surface2
-                    } else if left_resp.hovered() {
-                        theme::active().surface1
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    painter.rect_filled(left_tbr, 0.0, left_bg);
-                    painter.text(
-                        left_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
+                    let left_resp = ui_kit::icon_button(
+                        ui,
+                        self.vp_id("tb_left_toggle"),
+                        left_tbr,
                         "≡",
-                        egui::FontId::proportional(mac_icon_sz),
+                        mac_icon_sz,
                         tb_fg,
+                        ui_kit::IconButtonStyle::Toggle {
+                            active: self.show_left_panel,
+                        },
                     );
                     if left_resp.clicked() {
                         self.show_left_panel = !self.show_left_panel;
@@ -162,7 +157,7 @@ impl App {
                         let hint_w = if self.show_quick_switcher {
                             0.0
                         } else {
-                            hint_galley.size().x + 6.0
+                            hint_galley.size().x + theme::SP_3
                         };
                         let total_w = mac_btn_w + hint_w;
                         let sw_tbr = egui::Rect::from_min_size(
@@ -189,7 +184,7 @@ impl App {
                             tb_fg,
                         );
                         if !self.show_quick_switcher {
-                            let hint_x = sw_tbr.min.x + mac_btn_w + 2.0;
+                            let hint_x = sw_tbr.min.x + mac_btn_w + theme::SP_1;
                             painter.text(
                                 egui::pos2(hint_x, sw_tbr.center().y),
                                 egui::Align2::LEFT_CENTER,
@@ -214,20 +209,16 @@ impl App {
                         egui::pos2(r.max.x - mac_btn_w, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
                     );
-                    let gear_mac_resp = ui.interact(
-                        gear_mac_tbr,
+                    let gear_mac_resp = ui_kit::icon_button(
+                        ui,
                         self.vp_id("tb_settings"),
-                        egui::Sense::click(),
-                    );
-                    if gear_mac_resp.hovered() || self.show_settings {
-                        painter.rect_filled(gear_mac_tbr, 0.0, theme::active().surface1);
-                    }
-                    painter.text(
-                        gear_mac_tbr.center(),
-                        egui::Align2::CENTER_CENTER,
+                        gear_mac_tbr,
                         "⚙",
-                        egui::FontId::proportional(mac_icon_sz),
+                        mac_icon_sz,
                         tb_fg,
+                        ui_kit::IconButtonStyle::Toggle {
+                            active: self.show_settings,
+                        },
                     );
                     if gear_mac_resp.clicked() {
                         self.show_settings = !self.show_settings;
@@ -241,25 +232,16 @@ impl App {
                             egui::pos2(mac_right_toggle_x, r.min.y),
                             egui::vec2(mac_btn_w, r.height()),
                         );
-                        let right_resp = ui.interact(
-                            right_tbr,
+                        let right_resp = ui_kit::icon_button(
+                            ui,
                             self.vp_id("tb_right_toggle"),
-                            egui::Sense::click(),
-                        );
-                        let right_bg = if self.show_right_panel {
-                            theme::active().surface2
-                        } else if right_resp.hovered() {
-                            theme::active().surface1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(right_tbr, 0.0, right_bg);
-                        painter.text(
-                            right_tbr.center(),
-                            egui::Align2::CENTER_CENTER,
+                            right_tbr,
                             "⊞",
-                            egui::FontId::proportional(mac_icon_sz),
+                            mac_icon_sz,
                             tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_right_panel,
+                            },
                         );
                         if right_resp.clicked() {
                             self.show_right_panel = !self.show_right_panel;
@@ -277,7 +259,7 @@ impl App {
                         let hint_w = if self.show_shortcut_help {
                             0.0
                         } else {
-                            hint_galley.size().x + 6.0
+                            hint_galley.size().x + theme::SP_3
                         };
                         let total_w = mac_btn_w + hint_w;
                         let kb_x = mac_right_toggle_x - total_w;
@@ -304,7 +286,7 @@ impl App {
                             tb_fg,
                         );
                         if !self.show_shortcut_help {
-                            let hint_x = kb_tbr.min.x + 4.0;
+                            let hint_x = kb_tbr.min.x + theme::SP_2;
                             painter.text(
                                 egui::pos2(hint_x, kb_tbr.center().y),
                                 egui::Align2::LEFT_CENTER,
@@ -365,7 +347,7 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(11.0),
+                                egui::FontId::proportional(theme::FONT_UI_SM),
                                 update_btn_fg,
                             );
                             if resp.clicked() {
@@ -392,12 +374,16 @@ impl App {
                         let prefix_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 prefix.to_string(),
-                                egui::FontId::proportional(12.0),
+                                egui::FontId::proportional(theme::FONT_UI_MD),
                                 tb_fg.linear_multiply(0.5),
                             )
                         });
                         let name_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(ws_name, egui::FontId::proportional(13.0), tb_fg)
+                            f.layout_no_wrap(
+                                ws_name,
+                                egui::FontId::proportional(theme::FONT_UI_LG),
+                                tb_fg,
+                            )
                         });
                         let total_w = prefix_galley.size().x + name_galley.size().x;
                         let start_x = r.center().x - total_w / 2.0;
@@ -414,7 +400,7 @@ impl App {
                             r.center(),
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
-                            egui::FontId::proportional(12.0),
+                            egui::FontId::proportional(theme::FONT_UI_MD),
                             tb_fg.linear_multiply(0.6),
                         );
                     }
@@ -424,7 +410,7 @@ impl App {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let btn_w = theme::TITLEBAR_BTN_W;
-                    let icon_sz = 13.0_f32;
+                    let icon_sz = theme::FONT_UI_LG;
                     // right-to-left: close(0), maximize(1), minimize(2)
                     let btns: &[(&str, usize, bool)] = &[
                         ("×", 0, true),  // close   — danger colour on hover
@@ -438,22 +424,16 @@ impl App {
                             egui::pos2(r.min.x, r.min.y),
                             egui::vec2(btn_w, r.height()),
                         );
-                        let resp =
-                            ui.interact(br, self.vp_id("tb_left_toggle"), egui::Sense::click());
-                        let bg = if self.show_left_panel {
-                            theme::active().surface2
-                        } else if resp.hovered() {
-                            theme::active().surface1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
+                        let resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_left_toggle"),
+                            br,
                             "≡",
-                            egui::FontId::proportional(icon_sz),
+                            icon_sz,
                             tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_left_panel,
+                            },
                         );
                         if resp.clicked() {
                             self.show_left_panel = !self.show_left_panel;
@@ -471,7 +451,7 @@ impl App {
                         let hint_w = if self.show_quick_switcher {
                             0.0
                         } else {
-                            hint_galley.size().x + 6.0
+                            hint_galley.size().x + theme::SP_3
                         };
                         let total_w = btn_w + hint_w;
                         let sw_x = r.min.x + btn_w;
@@ -498,7 +478,7 @@ impl App {
                             tb_fg,
                         );
                         if !self.show_quick_switcher {
-                            let hint_x = br.min.x + btn_w + 2.0;
+                            let hint_x = br.min.x + btn_w + theme::SP_1;
                             painter.text(
                                 egui::pos2(hint_x, br.center().y),
                                 egui::Align2::LEFT_CENTER,
@@ -525,19 +505,16 @@ impl App {
                             egui::pos2(gear_x, r.min.y),
                             egui::vec2(btn_w, r.height()),
                         );
-                        let resp = ui.interact(br, self.vp_id("tb_settings"), egui::Sense::click());
-                        let bg = if resp.hovered() || self.show_settings {
-                            theme::active().surface1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
+                        let resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_settings"),
+                            br,
                             "⚙",
-                            egui::FontId::proportional(icon_sz),
+                            icon_sz,
                             tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_settings,
+                            },
                         );
                         if resp.clicked() {
                             self.show_settings = !self.show_settings;
@@ -552,22 +529,16 @@ impl App {
                             egui::pos2(right_toggle_x, r.min.y),
                             egui::vec2(btn_w, r.height()),
                         );
-                        let resp =
-                            ui.interact(br, self.vp_id("tb_right_toggle"), egui::Sense::click());
-                        let bg = if self.show_right_panel {
-                            theme::active().surface2
-                        } else if resp.hovered() {
-                            theme::active().surface1
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        painter.rect_filled(br, 0.0, bg);
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
+                        let resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_right_toggle"),
+                            br,
                             "⊞",
-                            egui::FontId::proportional(icon_sz),
+                            icon_sz,
                             tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_right_panel,
+                            },
                         );
                         if resp.clicked() {
                             self.show_right_panel = !self.show_right_panel;
@@ -585,7 +556,7 @@ impl App {
                         let hint_w = if self.show_shortcut_help {
                             0.0
                         } else {
-                            hint_galley.size().x + 6.0
+                            hint_galley.size().x + theme::SP_3
                         };
                         let total_w = btn_w + hint_w;
                         let kb_x = right_toggle_x - total_w;
@@ -611,7 +582,7 @@ impl App {
                             tb_fg,
                         );
                         if !self.show_shortcut_help {
-                            let hint_x = br.min.x + 4.0;
+                            let hint_x = br.min.x + theme::SP_2;
                             painter.text(
                                 egui::pos2(hint_x, br.center().y),
                                 egui::Align2::LEFT_CENTER,
@@ -673,7 +644,7 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(11.0),
+                                egui::FontId::proportional(theme::FONT_UI_SM),
                                 update_btn_fg,
                             );
                             if resp.clicked() {
@@ -697,29 +668,19 @@ impl App {
                             egui::pos2(x, r.min.y),
                             egui::vec2(btn_w, r.height()),
                         );
-                        let resp =
-                            ui.interact(br, self.vp_id("tb_btn").with(idx), egui::Sense::click());
-                        let bg = if resp.hovered() {
-                            if is_danger {
-                                theme::active().danger_bg
-                            } else {
-                                theme::active().surface1
-                            }
+                        let style = if is_danger {
+                            ui_kit::IconButtonStyle::Danger
                         } else {
-                            egui::Color32::TRANSPARENT
+                            ui_kit::IconButtonStyle::Default
                         };
-                        painter.rect_filled(br, 0.0, bg);
-                        let fg = if resp.hovered() && is_danger {
-                            theme::active().danger_fg
-                        } else {
-                            tb_fg
-                        };
-                        painter.text(
-                            br.center(),
-                            egui::Align2::CENTER_CENTER,
+                        let resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_btn").with(idx),
+                            br,
                             symbol,
-                            egui::FontId::proportional(12.0),
-                            fg,
+                            theme::FONT_UI_MD,
+                            tb_fg,
+                            style,
                         );
                         if resp.clicked() {
                             match idx {
@@ -754,12 +715,16 @@ impl App {
                         let prefix_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 prefix.to_string(),
-                                egui::FontId::proportional(12.0),
+                                egui::FontId::proportional(theme::FONT_UI_MD),
                                 tb_fg.linear_multiply(0.5),
                             )
                         });
                         let name_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(ws_name, egui::FontId::proportional(13.0), tb_fg)
+                            f.layout_no_wrap(
+                                ws_name,
+                                egui::FontId::proportional(theme::FONT_UI_LG),
+                                tb_fg,
+                            )
                         });
                         let total_w = prefix_galley.size().x + name_galley.size().x;
                         let start_x = r.center().x - total_w / 2.0;
@@ -776,7 +741,7 @@ impl App {
                             r.center(),
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
-                            egui::FontId::proportional(12.0),
+                            egui::FontId::proportional(theme::FONT_UI_MD),
                             tb_fg.linear_multiply(0.6),
                         );
                     }

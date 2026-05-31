@@ -474,6 +474,8 @@ pub const FONT_UI_LG: f32 = 13.0;
 pub const FONT_UI_MD: f32 = 12.0;
 pub const FONT_UI_SM: f32 = 11.0;
 pub const FONT_UI_XS: f32 = 10.0;
+pub const FONT_SYS_SM: f32 = 9.0;
+pub const FONT_SYS_XS: f32 = 8.0;
 
 // ── Icon metrics ────────────────────────────────────────────────────────────
 
@@ -504,6 +506,46 @@ pub const BLEND_STRONG: f32 = 0.75;
 // ── Flash timing ────────────────────────────────────────────────────────────
 
 pub const FLASH_DURATION_MS: u64 = 150;
+
+// ── Button sizing ──────────────────────────────────────────────────────────
+
+pub const BTN_SQ: f32 = 22.0;
+pub const BTN_H_ACTION: f32 = 28.0;
+
+// ── Dialog layout ──────────────────────────────────────────────────────────
+
+pub const DIALOG_MARGIN: f32 = SP_6;
+pub const DIALOG_ITEM_H: f32 = 24.0;
+pub const DIALOG_TOP_OFFSET: f32 = 80.0;
+
+// ── Panel divider ──────────────────────────────────────────────────────────
+
+pub const PANEL_DIV_H: f32 = 8.0;
+
+// ── Git row ────────────────────────────────────────────────────────────────
+
+pub const GIT_ROW_H: f32 = 14.0;
+pub const GIT_FONT_SZ: f32 = 10.0;
+
+// ── Workspace card ─────────────────────────────────────────────────────────
+
+pub const CARD_BAR_W: f32 = 3.0;
+pub const CARD_GEAR_W: f32 = 26.0;
+
+// ── Dot menu ───────────────────────────────────────────────────────────────
+
+pub const DOT_R: f32 = 1.5;
+pub const DOT_GAP: f32 = 4.5;
+
+// ── Icon button inset ──────────────────────────────────────────────────────
+
+pub const ICON_INSET: f32 = 6.0;
+
+// ── Tint factors ───────────────────────────────────────────────────────────
+
+pub const TINT_ACTIVE: f32 = 0.65;
+pub const TINT_INACTIVE: f32 = 0.45;
+pub const TINT_BORDER: f32 = 0.30;
 
 // ── Helper functions ─────────────────────────────────────────────────────────
 

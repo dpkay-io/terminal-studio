@@ -66,7 +66,11 @@ pub(super) fn render_git_diff(
             color: egui::Color32,
         }
 
-        let parsed = if has_status { parse_git_status(status) } else { Vec::new() };
+        let parsed = if has_status {
+            parse_git_status(status)
+        } else {
+            Vec::new()
+        };
         let mut staged: Vec<StatusEntry> = Vec::new();
         let mut unstaged: Vec<StatusEntry> = Vec::new();
 
@@ -225,8 +229,7 @@ pub(super) fn render_git_diff(
                     let (badge_rect, _) =
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
                     let badge_bg = entry.color.gamma_multiply(0.25);
-                    ui.painter()
-                        .rect_filled(badge_rect, theme::R_MD, badge_bg);
+                    ui.painter().rect_filled(badge_rect, theme::R_MD, badge_bg);
                     let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
                     let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
                     let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
@@ -234,7 +237,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(10.0),
+                        egui::FontId::monospace(theme::GIT_FONT_SZ),
                         badge_fg,
                     );
                     let btn_reserve = theme::SP_4 + 20.0;
@@ -330,8 +333,7 @@ pub(super) fn render_git_diff(
                     let (badge_rect, _) =
                         ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
                     let badge_bg = entry.color.gamma_multiply(0.25);
-                    ui.painter()
-                        .rect_filled(badge_rect, theme::R_MD, badge_bg);
+                    ui.painter().rect_filled(badge_rect, theme::R_MD, badge_bg);
                     let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
                     let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
                     let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
@@ -339,7 +341,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(10.0),
+                        egui::FontId::monospace(theme::GIT_FONT_SZ),
                         badge_fg,
                     );
                     let btn_reserve = theme::SP_4 + 20.0;

@@ -1,5 +1,6 @@
 use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
+use crate::ui_kit;
 
 use super::super::App;
 
@@ -34,8 +35,10 @@ impl App {
 
         let dialog_w = (screen_rect.width() * 0.45).clamp(320.0, 520.0);
         let dialog_h = (screen_rect.height() * 0.55).clamp(200.0, 480.0);
-        let dialog_pos =
-            egui::pos2(screen_rect.center().x - dialog_w / 2.0, screen_rect.min.y + 80.0);
+        let dialog_pos = egui::pos2(
+            screen_rect.center().x - dialog_w / 2.0,
+            screen_rect.min.y + theme::DIALOG_TOP_OFFSET,
+        );
 
         let mut action_to_run: Option<AppAction> = None;
 
@@ -62,8 +65,9 @@ impl App {
                         }
 
                         // Up/down to navigate
-                        let up = ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+                        let up = ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
+                        });
                         let down = ctx.input_mut(|i| {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
                         });
@@ -75,7 +79,7 @@ impl App {
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.command_palette_query)
                                 .id(search_id)
-                                .desired_width(dialog_w - theme::SP_4 * 2.0 - 16.0)
+                                .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
                                 .hint_text("Type a command\u{2026}")
                                 .font(egui::FontId::monospace(theme::FONT_UI_MD)),
                         );
@@ -125,70 +129,57 @@ impl App {
                                 self.command_palette_selected += 1;
                             }
                             if enter {
-                                action_to_run = Some(filtered[self.command_palette_selected].action);
+                                action_to_run =
+                                    Some(filtered[self.command_palette_selected].action);
                             }
 
                             egui::ScrollArea::vertical()
                                 .id_source(self.vp_id("cmd_palette_scroll"))
                                 .auto_shrink([false; 2])
-                                .max_height(dialog_h - 80.0)
+                                .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
                                 .show(ui, |ui| {
                                     for (idx, entry) in filtered.iter().enumerate() {
                                         let is_selected = idx == self.command_palette_selected;
-                                        let row_bg = if is_selected {
-                                            t.surface1
-                                        } else {
-                                            egui::Color32::TRANSPARENT
-                                        };
+                                        let item_w = dialog_w - theme::SP_4 * 2.0;
 
-                                        let (row_rect, resp) = ui.allocate_exact_size(
-                                            egui::vec2(
-                                                dialog_w - theme::SP_4 * 2.0,
-                                                24.0,
-                                            ),
-                                            egui::Sense::click(),
+                                        let resp = ui_kit::list_item(
+                                            ui,
+                                            item_w,
+                                            is_selected,
+                                            |painter, row_rect| {
+                                                // Action label
+                                                let label_pos = egui::pos2(
+                                                    row_rect.min.x + theme::SP_3,
+                                                    row_rect.center().y - theme::FONT_UI_SM * 0.55,
+                                                );
+                                                painter.text(
+                                                    label_pos,
+                                                    egui::Align2::LEFT_TOP,
+                                                    &entry.label,
+                                                    egui::FontId::proportional(theme::FONT_UI_SM),
+                                                    if is_selected { t.text } else { t.subtext0 },
+                                                );
+
+                                                // Keybinding hint (right-aligned)
+                                                if let Some(ref hint) = entry.shortcut_hint {
+                                                    let hint_pos = egui::pos2(
+                                                        row_rect.max.x - theme::SP_3,
+                                                        row_rect.center().y
+                                                            - theme::FONT_UI_XS * 0.55,
+                                                    );
+                                                    painter.text(
+                                                        hint_pos,
+                                                        egui::Align2::RIGHT_TOP,
+                                                        hint,
+                                                        egui::FontId::monospace(theme::FONT_UI_XS),
+                                                        t.overlay0,
+                                                    );
+                                                }
+                                            },
                                         );
 
                                         if resp.hovered() && !is_selected {
                                             self.command_palette_selected = idx;
-                                        }
-
-                                        ui.painter().rect_filled(
-                                            row_rect,
-                                            theme::R_SM,
-                                            if resp.hovered() && !is_selected {
-                                                t.surface0
-                                            } else {
-                                                row_bg
-                                            },
-                                        );
-
-                                        // Action label
-                                        let label_pos = egui::pos2(
-                                            row_rect.min.x + theme::SP_3,
-                                            row_rect.center().y - theme::FONT_UI_SM * 0.55,
-                                        );
-                                        ui.painter().text(
-                                            label_pos,
-                                            egui::Align2::LEFT_TOP,
-                                            &entry.label,
-                                            egui::FontId::proportional(theme::FONT_UI_SM),
-                                            if is_selected { t.text } else { t.subtext0 },
-                                        );
-
-                                        // Keybinding hint (right-aligned)
-                                        if let Some(ref hint) = entry.shortcut_hint {
-                                            let hint_pos = egui::pos2(
-                                                row_rect.max.x - theme::SP_3,
-                                                row_rect.center().y - theme::FONT_UI_XS * 0.55,
-                                            );
-                                            ui.painter().text(
-                                                hint_pos,
-                                                egui::Align2::RIGHT_TOP,
-                                                hint,
-                                                egui::FontId::monospace(theme::FONT_UI_XS),
-                                                t.overlay0,
-                                            );
                                         }
 
                                         if resp.clicked() {

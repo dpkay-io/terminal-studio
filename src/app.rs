@@ -198,6 +198,7 @@ pub struct App {
     /// Which group of sessions to close when the close-all dialog is confirmed.
     close_all_target: CloseAllTarget,
     show_quit_confirm: bool,
+    quit_confirmed: bool,
 
     // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
     session_workspace_filter: Option<Option<u64>>,
@@ -262,7 +263,12 @@ impl eframe::App for App {
             .pane_state
             .active_pane_id
             .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-            .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
+            .map(|p| {
+                matches!(
+                    p.content,
+                    PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)
+                )
+            })
             .unwrap_or(false);
         let any_overlay = self.workspace_dialog.is_some()
             || self.workspace_edit_dialog.is_some()
@@ -316,7 +322,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
 
-        if ctx.input(|i| i.viewport().close_requested()) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.show_quit_confirm = true;
         }
@@ -401,17 +407,29 @@ impl eframe::App for App {
                     }
                 }
             } else {
-                self.command_start_times.entry(sid).or_insert_with(Instant::now);
+                self.command_start_times
+                    .entry(sid)
+                    .or_insert_with(Instant::now);
             }
         }
 
         // Check for bell events and trigger visual flash.
         for entry in &self.session_state.sessions {
-            if entry.session.read().bell.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                if let Some(pane) = self.pane_state.panes.iter().find(|p| {
-                    matches!(&p.content, PaneContent::Terminal(sid) if *sid == entry.id)
-                }) {
-                    self.flash.trigger(feedback::FlashTarget::Pane(pane.id), feedback::FlashKind::Neutral);
+            if entry
+                .session
+                .read()
+                .bell
+                .swap(false, std::sync::atomic::Ordering::Relaxed)
+            {
+                if let Some(pane) =
+                    self.pane_state.panes.iter().find(
+                        |p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == entry.id),
+                    )
+                {
+                    self.flash.trigger(
+                        feedback::FlashTarget::Pane(pane.id),
+                        feedback::FlashKind::Neutral,
+                    );
                 }
             }
         }
@@ -512,19 +530,15 @@ impl eframe::App for App {
             if let Some(result) = self.workers.git_worker.take_commit_result() {
                 match result {
                     Ok(cwd) => {
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Success,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
                         self.workers.git_worker.enqueue_git(&cwd);
                         self.workers.git_worker.enqueue_unpushed(&cwd);
                     }
                     Err(msg) => {
                         log::error!("git commit failed: {msg}");
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Error,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
                     }
                 }
             }
@@ -533,36 +547,28 @@ impl eframe::App for App {
                 match result {
                     Ok(cwd) => {
                         self.push_error = None;
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Success,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
                         self.workers.git_worker.enqueue_unpushed(&cwd);
                     }
                     Err(msg) => {
                         log::error!("git push failed: {msg}");
                         self.push_error = Some(msg);
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Error,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
                     }
                 }
             }
             if let Some(result) = self.workers.git_worker.take_gitignore_result() {
                 match result {
                     Ok(_cwd) => {
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Success,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
                     }
                     Err(msg) => {
                         log::error!("gitignore update failed: {msg}");
-                        self.flash.trigger(
-                            feedback::FlashTarget::Global,
-                            feedback::FlashKind::Error,
-                        );
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
                     }
                 }
             }
@@ -1182,14 +1188,14 @@ impl App {
                                                         egui::RichText::new("Open in Editor")
                                                             .size(theme::FONT_UI_SM),
                                                     )
-                                                    .rounding(3.0),
+                                                    .rounding(theme::R_SM),
                                                 )
                                                 .clicked()
                                             {
                                                 open_md_in_editor = Some(md_path.clone());
                                             }
                                         });
-                                        ui.add_space(4.0);
+                                        ui.add_space(theme::SP_2);
                                         let content = md_active_content
                                             .as_deref()
                                             .map(|s| s.as_str())
@@ -1874,7 +1880,7 @@ impl App {
                             input_rect,
                             egui::TextEdit::singleline(&mut self.term_search.query)
                                 .desired_width(input_rect.width())
-                                .font(egui::FontId::monospace(12.0))
+                                .font(egui::FontId::monospace(theme::FONT_UI_MD))
                                 .hint_text("Search\u{2026}"),
                         );
                         if resp.changed() {
@@ -1916,7 +1922,7 @@ impl App {
                             egui::pos2(bar_rect.max.x - 48.0, bar_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             &count_text,
-                            egui::FontId::monospace(11.0),
+                            egui::FontId::monospace(theme::FONT_UI_SM),
                             t.subtext0,
                         );
                     }
@@ -2739,7 +2745,10 @@ impl App {
                         self.pane_state.active_pane_id = Some(new_pane_id);
                         self.session_state.active_id = Some(new_sid);
                         self.update_is_active_flags();
-                        self.flash.trigger(feedback::FlashTarget::Pane(new_pane_id), feedback::FlashKind::Success);
+                        self.flash.trigger(
+                            feedback::FlashTarget::Pane(new_pane_id),
+                            feedback::FlashKind::Success,
+                        );
                         ctx.request_repaint();
                     }
                 }
@@ -3176,11 +3185,7 @@ impl App {
                     .active_pane_id
                     .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                     .and_then(|p| {
-                        Self::pane_group(
-                            &self.session_state.sessions,
-                            &self.workspace_store,
-                            p,
-                        )
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
                     });
             }
             if self

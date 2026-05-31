@@ -18,7 +18,7 @@ pub(super) fn next_unused_color(store: &WorkspaceStore, exclude_id: Option<u64>)
     let used: Vec<[u8; 3]> = store
         .workspaces
         .iter()
-        .filter(|w| exclude_id.map_or(true, |id| w.id != id))
+        .filter(|w| exclude_id != Some(w.id))
         .map(|w| w.color)
         .collect();
     PRESET_COLORS

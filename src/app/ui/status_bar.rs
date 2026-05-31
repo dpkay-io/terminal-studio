@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use crate::theme;
+use crate::ui_kit;
 
 pub(in crate::app) struct StatusBarData {
     pub cwd: String,
@@ -102,7 +103,11 @@ pub(in crate::app) fn render_status_bar(
         let galley = painter.layout_no_wrap(text.clone(), font.clone(), *color);
         let w = galley.size().x;
         rx -= w;
-        painter.galley(egui::pos2(rx, y_center - galley.size().y * 0.5), galley, *color);
+        painter.galley(
+            egui::pos2(rx, y_center - galley.size().y * 0.5),
+            galley,
+            *color,
+        );
         rx -= pad;
     }
 
@@ -125,30 +130,7 @@ pub(in crate::app) fn render_status_bar(
             egui::vec2(pill_w, pill_h),
         );
 
-        let resp = ui.allocate_rect(pill_rect, egui::Sense::click());
-        let hovered = resp.hovered();
-
-        let tint = if hovered {
-            theme::tinted(t.blue_rgb, theme::BLEND_LIGHT)
-        } else {
-            theme::tinted(t.blue_rgb, theme::BLEND_SUBTLE)
-        };
-        let bg = egui::Color32::from_rgb(tint[0], tint[1], tint[2]);
-        let p = ui.painter();
-        p.rect_filled(pill_rect, theme::R_SM, bg);
-        let text_galley = p.layout_no_wrap(label.to_string(), pill_font, t.accent);
-        p.galley(
-            egui::pos2(
-                pill_rect.min.x + theme::SP_4,
-                pill_rect.center().y - text_galley.size().y * 0.5,
-            ),
-            text_galley,
-            t.accent,
-        );
-
-        if hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
+        let resp = ui_kit::pill_button(ui, label, pill_rect);
 
         if resp.clicked() {
             save_clicked = true;

@@ -3,6 +3,7 @@ use super::super::title::effective_title;
 use super::super::App;
 use crate::pane_tree::SplitDir;
 use crate::theme;
+use crate::ui_kit;
 
 /// Result of rendering the tab bar, consumed by the caller.
 pub(in crate::app) struct TabBarResult {
@@ -141,20 +142,14 @@ impl App {
                                 egui::pos2(tab_rect.max.x - theme::BTN_W, tab_rect.min.y),
                                 egui::vec2(theme::BTN_W, tab_h),
                             );
-                            let close_resp = ui.interact(
-                                close_rect,
+                            let close_resp = ui_kit::icon_button(
+                                ui,
                                 egui::Id::new(("tab_close", pane_id)),
-                                egui::Sense::click(),
-                            );
-                            if close_resp.hovered() {
-                                painter.rect_filled(close_rect, 0.0, theme::active().danger_bg);
-                            }
-                            painter.text(
-                                close_rect.center(),
-                                egui::Align2::CENTER_CENTER,
+                                close_rect,
                                 "\u{00d7}",
-                                egui::FontId::proportional(14.0),
+                                theme::FONT_TERM,
                                 theme::active().danger_fg,
+                                ui_kit::IconButtonStyle::Danger,
                             );
 
                             // Title text (clipped before close button)
@@ -169,20 +164,25 @@ impl App {
                             let is_renaming = self.tab_rename_pane_id == Some(pane_id);
                             if is_renaming {
                                 let edit_rect = egui::Rect::from_min_max(
-                                    egui::pos2(text_x, tab_rect.min.y + 2.0),
-                                    egui::pos2(close_rect.min.x - theme::SP_1, tab_rect.max.y - 2.0),
+                                    egui::pos2(text_x, tab_rect.min.y + theme::SP_1),
+                                    egui::pos2(
+                                        close_rect.min.x - theme::SP_1,
+                                        tab_rect.max.y - theme::SP_1,
+                                    ),
                                 );
                                 let edit_id = egui::Id::new(("tab_rename_edit", pane_id));
-                                let resp = ui.allocate_ui_at_rect(edit_rect, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut self.tab_rename_text)
-                                            .id(edit_id)
-                                            .desired_width(edit_rect.width())
-                                            .font(egui::FontId::proportional(theme::FONT_UI_MD))
-                                            .frame(false)
-                                            .text_color(title_color),
-                                    )
-                                }).inner;
+                                let resp = ui
+                                    .allocate_ui_at_rect(edit_rect, |ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.tab_rename_text)
+                                                .id(edit_id)
+                                                .desired_width(edit_rect.width())
+                                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                                .frame(false)
+                                                .text_color(title_color),
+                                        )
+                                    })
+                                    .inner;
                                 if !resp.has_focus() {
                                     ui.memory_mut(|m| m.request_focus(edit_id));
                                 }
@@ -191,8 +191,15 @@ impl App {
                                 if enter {
                                     let new_title = self.tab_rename_text.trim().to_string();
                                     if !new_title.is_empty() {
-                                        if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
-                                            if let Some(entry) = self.session_state.sessions.iter().find(|e| e.id == *sid) {
+                                        if let PaneContent::Terminal(sid) =
+                                            &self.pane_state.panes[i].content
+                                        {
+                                            if let Some(entry) = self
+                                                .session_state
+                                                .sessions
+                                                .iter()
+                                                .find(|e| e.id == *sid)
+                                            {
                                                 entry.session.read().set_title(new_title);
                                             }
                                         }
@@ -242,7 +249,9 @@ impl App {
                             } else if tab_resp.clicked() {
                                 clicked_pane_id = Some(pane_id);
                                 // Clear badge when tab is clicked
-                                if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
+                                if let PaneContent::Terminal(sid) =
+                                    &self.pane_state.panes[i].content
+                                {
                                     self.completed_badges.remove(sid);
                                 }
                             }
@@ -343,11 +352,11 @@ impl App {
             );
             let icon_sz = egui::vec2(theme::BTN_W, tab_h);
             let t = theme::active();
-            let mut x = tab_actions_rect.min.x + 2.0;
+            let mut x = tab_actions_rect.min.x + theme::SP_1;
 
             let icon_stroke = egui::Stroke::new(1.2, t.subtext1);
             let icon_hover_stroke = egui::Stroke::new(1.2, t.text);
-            let icon_inset = 6.0_f32;
+            let icon_inset = theme::ICON_INSET;
 
             // Split horizontal (side-by-side)
             let split_h_rect =
@@ -358,7 +367,8 @@ impl App {
                 egui::Sense::click(),
             );
             let sh_stroke = if split_h_resp.hovered() {
-                ui.painter().rect_filled(split_h_rect, theme::R_SM, t.surface2);
+                ui.painter()
+                    .rect_filled(split_h_rect, theme::R_SM, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -386,7 +396,8 @@ impl App {
                 egui::Sense::click(),
             );
             let sv_stroke = if split_v_resp.hovered() {
-                ui.painter().rect_filled(split_v_rect, theme::R_SM, t.surface2);
+                ui.painter()
+                    .rect_filled(split_v_rect, theme::R_SM, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -408,22 +419,19 @@ impl App {
             // Close all sessions in current workspace group
             let close_all_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-            let close_all_resp = ui.interact(
-                close_all_rect,
+            let close_all_resp = ui_kit::icon_button(
+                ui,
                 self.vp_id("tab_close_all"),
-                egui::Sense::click(),
-            );
-            if close_all_resp.hovered() {
-                ui.painter().rect_filled(close_all_rect, theme::R_SM, t.danger_bg);
-            }
-            ui.painter().text(
-                close_all_rect.center(),
-                egui::Align2::CENTER_CENTER,
+                close_all_rect,
                 "\u{2716}",
-                egui::FontId::proportional(12.0),
+                theme::FONT_UI_MD,
                 t.danger_fg,
+                ui_kit::IconButtonStyle::Danger,
             );
-            if close_all_resp.on_hover_text("Close all sessions in this workspace").clicked() {
+            if close_all_resp
+                .on_hover_text("Close all sessions in this workspace")
+                .clicked()
+            {
                 self.show_close_all_confirm = true;
             }
         });

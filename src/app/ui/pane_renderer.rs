@@ -10,6 +10,7 @@ use crate::pane_tree::{split_rect, PaneNode, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::syntax;
 use crate::theme;
+use crate::ui_kit;
 
 /// Actions emitted by the 3-dot context menu on split panes.
 pub(in crate::app) enum PaneContextAction {
@@ -194,30 +195,13 @@ fn render_pane_context_menu(
         return;
     }
 
-    let t = theme::active();
-    let btn_size = egui::vec2(22.0, 22.0);
+    let btn_size = egui::vec2(theme::BTN_SQ, theme::BTN_SQ);
     let sb_inset = theme::SCROLLBAR_HIT_W + 4.0;
     let btn_pos = egui::pos2(rect.max.x - btn_size.x - sb_inset, rect.min.y + 6.0);
     let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
 
     let btn_id = egui::Id::new(("pane_menu_btn", pane_id));
-    let btn_resp = ui.interact(btn_rect, btn_id, egui::Sense::click());
-
-    let btn_bg = if popup_open || btn_resp.hovered() {
-        t.surface2
-    } else {
-        t.surface1
-    };
-    ui.painter().rect_filled(btn_rect, theme::R_MD, btn_bg);
-
-    // Three vertical dots
-    let center = btn_rect.center();
-    let dot_r = 1.5;
-    let dot_gap = 4.5;
-    for i in [-1.0_f32, 0.0, 1.0] {
-        ui.painter()
-            .circle_filled(egui::pos2(center.x, center.y + i * dot_gap), dot_r, t.text);
-    }
+    let btn_resp = ui_kit::dot_menu_button(ui, btn_id, btn_rect, popup_open);
 
     if btn_resp.clicked() {
         ui.memory_mut(|m| m.toggle_popup(popup_id));
@@ -377,10 +361,14 @@ fn render_file_editor_leaf(
                 };
                 if ui
                     .add(
-                        egui::Button::new(egui::RichText::new("Raw").size(theme::FONT_UI_SM).color(raw_color))
-                            .fill(raw_bg)
-                            .rounding(egui::Rounding::same(theme::R_MD))
-                            .min_size(egui::vec2(56.0, 20.0)),
+                        egui::Button::new(
+                            egui::RichText::new("Raw")
+                                .size(theme::FONT_UI_SM)
+                                .color(raw_color),
+                        )
+                        .fill(raw_bg)
+                        .rounding(egui::Rounding::same(theme::R_MD))
+                        .min_size(egui::vec2(56.0, 20.0)),
                     )
                     .clicked()
                     && previewing
@@ -436,7 +424,7 @@ fn render_file_editor_leaf(
                             ui.spacing_mut().item_spacing.x = 0.0;
                             ui.vertical(|ui| {
                                 ui.set_min_width(gutter_w);
-                                ui.add_space(2.0);
+                                ui.add_space(theme::SP_1);
                                 for n in 1..=line_count {
                                     let num_str = format!("{:>width$}", n, width = digits);
                                     ui.add_sized(
@@ -503,7 +491,12 @@ fn render_note_editor_leaf(
         None => "General Notes",
     };
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).strong().size(theme::FONT_UI_LG).color(t.text));
+        ui.label(
+            egui::RichText::new(label)
+                .strong()
+                .size(theme::FONT_UI_LG)
+                .color(t.text),
+        );
     });
     ui.separator();
 
@@ -640,11 +633,8 @@ impl App {
             render_node(ui, &tree, content_rect, &mut rctx);
 
             // Global flash overlay (rare — PTY spawn errors)
-            self.flash.render_on_rect(
-                ui.painter(),
-                content_rect,
-                feedback::FlashTarget::Global,
-            );
+            self.flash
+                .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
         }
 
         // ── File drag hover overlay ────────────────────────────────────────
@@ -663,7 +653,7 @@ impl App {
                 ),
             );
             painter.rect_stroke(
-                content_rect.shrink(2.0),
+                content_rect.shrink(theme::SP_1),
                 4.0,
                 egui::Stroke::new(2.0, t.blue),
             );
@@ -671,7 +661,7 @@ impl App {
                 content_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Drop file(s) to paste path",
-                egui::FontId::proportional(16.0),
+                egui::FontId::proportional(theme::FONT_STATUS),
                 t.text,
             );
         }

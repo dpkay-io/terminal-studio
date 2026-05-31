@@ -204,7 +204,7 @@ fn build_line_job(spans: &[(egui::Color32, String)]) -> egui::text::LayoutJob {
     let code_bg_rgb = t.md_code_bg.to_array();
     let bg_rgb = [code_bg_rgb[0], code_bg_rgb[1], code_bg_rgb[2]];
     let mut job = egui::text::LayoutJob::default();
-    let font = egui::FontId::monospace(12.0);
+    let font = egui::FontId::monospace(theme::FONT_UI_MD);
     for (color, text) in spans {
         let fg_rgb = [color.r(), color.g(), color.b()];
         let safe_color = theme::ensure_readable(fg_rgb, bg_rgb);
@@ -286,7 +286,9 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                             frame.show(ui, |ui| {
                                 ui.set_min_width(col_content_width);
                                 if is_header {
-                                    ui.label(egui::RichText::new(*cell).strong().size(theme::FONT_UI_MD));
+                                    ui.label(
+                                        egui::RichText::new(*cell).strong().size(theme::FONT_UI_MD),
+                                    );
                                 } else {
                                     theme::render_inline(ui, cell);
                                 }

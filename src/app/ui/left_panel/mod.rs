@@ -6,6 +6,7 @@ use super::super::App;
 use crate::pty::foreground::ForegroundProcess;
 use crate::pty::ShellKind;
 use crate::theme;
+use crate::ui_kit;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
@@ -77,21 +78,23 @@ impl App {
                 .default_width(theme::LEFT_SIDEBAR_W)
                 .width_range(80.0..=400.0)
                 .resizable(true)
-                .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(6.0, 0.0)))
+                .frame(
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_0)),
+                )
                 .show(ctx, |ui| {
                     let panel_rect = ui.max_rect();
                     let panel_w = panel_rect.width();
                     let total_h = panel_rect.height();
 
-                    const DIV_H: f32 = 8.0;
                     const COLLAPSED_H: f32 = theme::HEADER_H;
 
                     // ── Height allocation ──────────────────────────────────────
                     let (sess_h, ws_h) = if self.workspace_panel_collapsed {
-                        (total_h - COLLAPSED_H - DIV_H, COLLAPSED_H)
+                        (total_h - COLLAPSED_H - theme::PANEL_DIV_H, COLLAPSED_H)
                     } else {
                         let wh = (total_h * self.workspace_panel_ratio).max(60.0);
-                        let sh = (total_h - wh - DIV_H).max(60.0);
+                        let sh = (total_h - wh - theme::PANEL_DIV_H).max(60.0);
                         (sh, wh)
                     };
 
@@ -110,31 +113,23 @@ impl App {
                     let div_top = panel_rect.min.y + sess_h;
                     let div_rect = egui::Rect::from_min_size(
                         egui::pos2(panel_rect.left(), div_top),
-                        egui::vec2(panel_w, DIV_H),
+                        egui::vec2(panel_w, theme::PANEL_DIV_H),
                     );
-                    let div_resp = ui.interact(
-                        div_rect,
+                    let delta = ui_kit::drag_divider(
+                        ui,
                         self.vp_id("ws_panel_divider"),
-                        egui::Sense::drag(),
+                        div_rect,
+                        theme::active().ws_div_idle,
+                        theme::active().ws_div_active,
                     );
-                    if div_resp.hovered() || div_resp.dragged() {
-                        ctx.set_cursor_icon(egui::CursorIcon::ResizeVertical);
-                    }
-                    let div_color = if div_resp.hovered() || div_resp.dragged() {
-                        theme::active().ws_div_active
-                    } else {
-                        theme::active().ws_div_idle
-                    };
-                    ui.painter()
-                        .rect_filled(div_rect, theme::STROKE_THIN, div_color);
-                    if !self.workspace_panel_collapsed && div_resp.dragged() {
-                        let delta = div_resp.drag_delta().y;
-                        let new_ws_h = (ws_h - delta).clamp(60.0, total_h - 60.0 - DIV_H);
+                    if !self.workspace_panel_collapsed && delta != 0.0 {
+                        let new_ws_h =
+                            (ws_h - delta).clamp(60.0, total_h - 60.0 - theme::PANEL_DIV_H);
                         self.workspace_panel_ratio = new_ws_h / total_h;
                     }
 
                     // ── Workspaces section ─────────────────────────────────────
-                    let ws_top = div_top + DIV_H;
+                    let ws_top = div_top + theme::PANEL_DIV_H;
                     let ws_rect = egui::Rect::from_min_size(
                         egui::pos2(panel_rect.left(), ws_top),
                         egui::vec2(panel_w, ws_h),

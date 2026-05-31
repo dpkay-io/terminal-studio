@@ -69,7 +69,7 @@ impl App {
                 floating: true,
                 bar_width: 12.0,
                 handle_min_length: 20.0,
-                bar_inner_margin: 2.0,
+                bar_inner_margin: theme::SP_1,
                 bar_outer_margin: 0.0,
                 floating_width: 4.0,
                 floating_allocated_width: 0.0,
@@ -206,6 +206,7 @@ impl App {
             show_close_all_confirm: false,
             close_all_target: CloseAllTarget::default(),
             show_quit_confirm: false,
+            quit_confirmed: false,
             session_workspace_filter: None,
             pending_window_focus: None,
             pending_diff_panes: HashMap::new(),
@@ -1307,7 +1308,7 @@ impl App {
             floating: true,
             bar_width: 12.0,
             handle_min_length: 20.0,
-            bar_inner_margin: 2.0,
+            bar_inner_margin: theme::SP_1,
             bar_outer_margin: 0.0,
             floating_width: 4.0,
             floating_allocated_width: 0.0,
@@ -1385,7 +1386,7 @@ impl App {
         let bar_w = rect.width() - 8.0;
         let x0 = rect.min.x + 4.0;
 
-        let font = egui::FontId::monospace(9.0);
+        let font = egui::FontId::monospace(theme::FONT_SYS_SM);
         let t = theme::active();
 
         struct Row<'a> {
@@ -1444,7 +1445,7 @@ impl App {
             egui::pos2(rect.center().x, rect.max.y - 2.0),
             egui::Align2::CENTER_BOTTOM,
             &net_text,
-            egui::FontId::monospace(8.0),
+            egui::FontId::monospace(theme::FONT_SYS_XS),
             fg.linear_multiply(0.7),
         );
     }

@@ -5,6 +5,7 @@ use super::SessionListActions;
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
 use crate::pty::foreground::ForegroundProcess;
 use crate::theme;
+use crate::ui_kit;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 
@@ -331,7 +332,7 @@ impl App {
                             ),
                             egui::Align2::LEFT_CENTER,
                             &display,
-                            egui::FontId::monospace(11.0),
+                            egui::FontId::monospace(theme::FONT_UI_SM),
                             if selected { t.text } else { t.subtext0 },
                         );
 
@@ -501,10 +502,14 @@ impl App {
                         egui::pos2(row_rect.max.x - theme::BTN_W - sb_pad, row_rect.min.y),
                         egui::vec2(theme::BTN_W, row_rect.height()),
                     );
-                    let quit_resp = ui.interact(
-                        quit_rect,
+                    let quit_resp = ui_kit::icon_button(
+                        ui,
                         egui::Id::new(("pane_quit", pane.id)),
-                        egui::Sense::click(),
+                        quit_rect,
+                        "\u{00d7}",
+                        theme::FONT_TERM,
+                        theme::active().danger_fg,
+                        ui_kit::IconButtonStyle::Danger,
                     );
 
                     let bg = if is_active {
@@ -524,19 +529,11 @@ impl App {
                         painter.rect_filled(border, 0.0, theme::from_rgb(c));
                     }
 
-                    // Draw quit button
-                    if quit_resp.hovered() {
-                        painter.rect_filled(quit_rect, 0.0, theme::active().danger_bg);
-                    }
-                    painter.text(
-                        quit_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        "\u{00d7}",
-                        egui::FontId::proportional(14.0),
-                        theme::active().danger_fg,
-                    );
-
-                    let win_icon_w: f32 = if in_other_window { 14.0 } else { 0.0 };
+                    let win_icon_w: f32 = if in_other_window {
+                        theme::FONT_TERM
+                    } else {
+                        0.0
+                    };
 
                     if in_other_window {
                         painter.text(
@@ -546,7 +543,7 @@ impl App {
                             ),
                             egui::Align2::CENTER_CENTER,
                             "\u{2197}",
-                            egui::FontId::proportional(11.0),
+                            egui::FontId::proportional(theme::FONT_UI_SM),
                             theme::active().blue,
                         );
                     }

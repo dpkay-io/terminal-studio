@@ -14,6 +14,7 @@ mod syntax;
 mod sys_monitor;
 mod terminal;
 mod theme;
+mod ui_kit;
 mod updater;
 mod url_detector;
 mod workspace;

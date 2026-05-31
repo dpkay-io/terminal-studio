@@ -12,16 +12,35 @@ use super::file_browser::{list_dir_entries, run_git_info, FileEntry};
 enum Job {
     GitInfo(PathBuf),
     DirList(PathBuf),
-    Stage { cwd: PathBuf, path: String },
-    Unstage { cwd: PathBuf, path: String },
+    Stage {
+        cwd: PathBuf,
+        path: String,
+    },
+    Unstage {
+        cwd: PathBuf,
+        path: String,
+    },
     StageAll(PathBuf),
     UnstageAll(PathBuf),
-    Diff { cwd: PathBuf, rel_path: String },
+    Diff {
+        cwd: PathBuf,
+        rel_path: String,
+    },
     UnpushedCommits(PathBuf),
-    Commit { cwd: PathBuf, message: String, amend: bool },
-    Push { cwd: PathBuf, force: bool },
+    Commit {
+        cwd: PathBuf,
+        message: String,
+        amend: bool,
+    },
+    Push {
+        cwd: PathBuf,
+        force: bool,
+    },
     LastCommitMessage(PathBuf),
-    Gitignore { cwd: PathBuf, pattern: String },
+    Gitignore {
+        cwd: PathBuf,
+        pattern: String,
+    },
 }
 
 pub(super) struct WorkerResults {
@@ -168,7 +187,11 @@ impl GitWorker {
                                 .unwrap_or_default();
                             results_bg.lock().unpushed.insert(cwd, commits);
                         }
-                        Job::Commit { cwd, message, amend } => {
+                        Job::Commit {
+                            cwd,
+                            message,
+                            amend,
+                        } => {
                             let mut args = vec!["commit".to_string()];
                             if amend {
                                 args.push("--amend".to_string());
@@ -227,11 +250,10 @@ impl GitWorker {
                         Job::Gitignore { cwd, pattern } => {
                             let gitignore_path = cwd.join(".gitignore");
                             let result = (|| -> Result<PathBuf, String> {
-                                let mut content = std::fs::read_to_string(&gitignore_path)
-                                    .unwrap_or_default();
-                                let already_present = content
-                                    .lines()
-                                    .any(|line| line.trim() == pattern.trim());
+                                let mut content =
+                                    std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+                                let already_present =
+                                    content.lines().any(|line| line.trim() == pattern.trim());
                                 if already_present {
                                     return Ok(cwd.clone());
                                 }
@@ -485,10 +507,8 @@ mod tests {
 
     #[test]
     fn test_gitignore_no_duplicate() {
-        let tmp = std::env::temp_dir().join(format!(
-            "git_worker_dedup_test_{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("git_worker_dedup_test_{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         std::process::Command::new("git")
             .args(["init"])
