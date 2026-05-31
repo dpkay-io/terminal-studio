@@ -450,9 +450,12 @@ impl App {
                         let target_vis = visible_indices.get(target_i).copied();
                         let drag_vis = visible_indices.get(drag_idx).copied();
                         if let (Some(from), Some(to)) = (drag_vis, target_vis) {
-                            if from != to {
+                            if from != to
+                                && from < self.pane_state.panes.len()
+                            {
                                 let pane = self.pane_state.panes.remove(from);
                                 let insert_at = if to > from { to - 1 } else { to };
+                                let insert_at = insert_at.min(self.pane_state.panes.len());
                                 self.pane_state.panes.insert(insert_at, pane);
                             }
                         }

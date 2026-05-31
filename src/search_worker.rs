@@ -13,14 +13,10 @@ use parking_lot::{Mutex, RwLock};
 use crate::terminal::Session;
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct GlobalSearchMatch {
     pub session_id: u32,
     pub session_title: String,
-    pub line: i32,
     pub line_text: String,
-    pub start_col: usize,
-    pub end_col: usize,
     pub score: i64,
 }
 
@@ -73,7 +69,6 @@ impl SearchWorker {
                         continue;
                     }
 
-                    let query_lower = job.query.to_lowercase();
                     let mut all_matches = Vec::new();
 
                     for (session_id, session_title, session_lock) in &job.sessions {
@@ -84,7 +79,7 @@ impl SearchWorker {
 
                         // Extract all needed data under a short-lived read lock,
                         // then release it before doing any further locking or heavy work.
-                        let lines: Vec<(i32, String)> = {
+                        let lines: Vec<String> = {
                             let session = session_lock.read();
                             let term = &session.term;
                             let grid = term.grid();
@@ -104,31 +99,18 @@ impl SearchWorker {
                                 }
                                 let trimmed = line_text.trim_end().to_string();
                                 if !trimmed.is_empty() {
-                                    extracted.push((line_idx, trimmed));
+                                    extracted.push(trimmed);
                                 }
                             }
                             extracted
                         };
-                        // Session read lock is now released.
 
-                        // Fuzzy-match on the extracted lines without holding any lock.
-                        for (line_idx, trimmed) in &lines {
+                        for trimmed in &lines {
                             if let Some(score) = matcher.fuzzy_match(trimmed, &job.query) {
-                                let line_lower = trimmed.to_lowercase();
-                                let (start, end) = if let Some(pos) = line_lower.find(&query_lower)
-                                {
-                                    (pos, pos + query_lower.len())
-                                } else {
-                                    (0, trimmed.len().min(query_lower.len()))
-                                };
-
                                 all_matches.push(GlobalSearchMatch {
                                     session_id: *session_id,
                                     session_title: session_title.clone(),
-                                    line: *line_idx,
                                     line_text: trimmed.clone(),
-                                    start_col: start,
-                                    end_col: end,
                                     score,
                                 });
                             }

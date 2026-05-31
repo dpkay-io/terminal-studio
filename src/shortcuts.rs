@@ -314,6 +314,7 @@ pub fn key_from_name(name: &str) -> Option<egui::Key> {
         "P" => Some(egui::Key::P),
         "T" => Some(egui::Key::T),
         "W" => Some(egui::Key::W),
+        "Z" => Some(egui::Key::Z),
         "Space" => Some(egui::Key::Space),
         _ => None,
     }

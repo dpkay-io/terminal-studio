@@ -185,35 +185,6 @@ pub(super) fn render_dir_tree(
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn collect_all_files(root: &Path, out: &mut Vec<FileEntry>, max_depth: usize) {
-    if max_depth == 0 {
-        return;
-    }
-    if let Ok(rd) = std::fs::read_dir(root) {
-        for e in rd.flatten() {
-            let p = e.path();
-            let name = p
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if name.starts_with('.') {
-                continue;
-            }
-            let is_dir = p.is_dir();
-            if is_dir {
-                collect_all_files(&p, out, max_depth - 1);
-            } else {
-                out.push(FileEntry {
-                    name,
-                    path: p,
-                    is_dir: false,
-                });
-            }
-        }
-    }
-}
-
 pub(super) fn render_flat_file_list(
     ui: &mut egui::Ui,
     entries: &[FileEntry],

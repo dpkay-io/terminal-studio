@@ -218,6 +218,7 @@ impl SessionManager {
                     if pty_writer.write_all(&data).is_err() {
                         break;
                     }
+                    let _ = pty_writer.flush();
                 }
             })?;
 

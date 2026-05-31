@@ -318,8 +318,13 @@ impl App {
 
                     let text = &m.line_text;
                     let max_chars = ((row_rect.width() / 7.0) as usize).max(20);
-                    let display = if text.len() > max_chars {
-                        format!("{}\u{2026}", &text[..max_chars])
+                    let display = if text.chars().count() > max_chars {
+                        let byte_end = text
+                            .char_indices()
+                            .nth(max_chars)
+                            .map(|(i, _)| i)
+                            .unwrap_or(text.len());
+                        format!("{}\u{2026}", &text[..byte_end])
                     } else {
                         text.clone()
                     };

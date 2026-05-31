@@ -760,6 +760,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("ws_edit"), config, |ui| {
             ui_kit::dialog_header(ui, "Workspace Settings");
 
@@ -876,7 +877,7 @@ impl App {
                         )
                         .clicked()
                         {
-                            // cancel handled by dismissed below
+                            cancel_clicked = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let t = theme::active();
@@ -951,7 +952,7 @@ impl App {
                     }
                 }
             }
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.workspace_edit_dialog = None;
         }
     }
@@ -1001,6 +1002,7 @@ impl App {
             }
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("close_all"), config, |ui| {
             ui_kit::dialog_header(ui, &title);
 
@@ -1019,7 +1021,7 @@ impl App {
                 if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
                     .clicked()
                 {
-                    // cancel handled by dismissed below
+                    cancel_clicked = true;
                 }
             });
         });
@@ -1119,7 +1121,7 @@ impl App {
             }
 
             self.save_session();
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.show_close_all_confirm = false;
             self.close_all_target = CloseAllTarget::default();
         }
@@ -1138,6 +1140,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("quit"), config, |ui| {
             ui_kit::dialog_header(ui, "Quit Terminal Studio?");
 
@@ -1156,7 +1159,7 @@ impl App {
                 if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
                     .clicked()
                 {
-                    // cancel handled by dismissed below
+                    cancel_clicked = true;
                 }
             });
         });
@@ -1170,7 +1173,7 @@ impl App {
             self.show_quit_confirm = false;
             self.quit_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.show_quit_confirm = false;
         }
     }
@@ -1191,6 +1194,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("commit"), config, |ui| {
             ui_kit::dialog_header(ui, "Commit");
 
@@ -1233,7 +1237,7 @@ impl App {
                 if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
                     .clicked()
                 {
-                    // cancel handled by dismissed below
+                    cancel_clicked = true;
                 }
                 ui.label(ui_kit::hint("Ctrl+Enter to commit"));
             });
@@ -1256,7 +1260,7 @@ impl App {
             self.commit_message.clear();
             self.commit_amend = false;
             self.commit_dialog_focus_requested = false;
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.show_commit_dialog = false;
             self.commit_message.clear();
             self.commit_amend = false;
@@ -1277,6 +1281,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("push"), config, |ui| {
             ui_kit::dialog_header(ui, "Push to Remote");
 
@@ -1310,7 +1315,7 @@ impl App {
                 if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
                     .clicked()
                 {
-                    // cancel handled by dismissed below
+                    cancel_clicked = true;
                 }
             });
         });
@@ -1329,7 +1334,7 @@ impl App {
             }
             self.show_push_dialog = false;
             self.push_force = false;
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.show_push_dialog = false;
             self.push_force = false;
         }
@@ -1347,6 +1352,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("stage_all"), config, |ui| {
             ui_kit::dialog_header(ui, "Stage All Changes");
 
@@ -1361,7 +1367,7 @@ impl App {
                 if ui_kit::action_button(ui, "No", true, ui_kit::ActionButtonStyle::Cancel)
                     .clicked()
                 {
-                    // cancel handled by dismissed below
+                    cancel_clicked = true;
                 }
             });
         });
@@ -1376,7 +1382,7 @@ impl App {
                 self.workers.git_worker.enqueue_stage_all(&cwd);
             }
             self.show_stage_all_confirm = false;
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.show_stage_all_confirm = false;
         }
     }
@@ -1411,6 +1417,7 @@ impl App {
             ..Default::default()
         };
 
+        let mut cancel_clicked = false;
         let resp = ui_kit::dialog(ctx, self.vp_id("open_folder"), config, |ui| {
             ui_kit::dialog_header(ui, title_text);
 
@@ -1571,7 +1578,7 @@ impl App {
                     if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
                         .clicked()
                     {
-                        // cancel handled by dismissed below
+                        cancel_clicked = true;
                     }
                 });
             }
@@ -1693,7 +1700,7 @@ impl App {
                     self.navigate_to_workspace(ws_id);
                 }
             }
-        } else if resp.dismissed {
+        } else if resp.dismissed || cancel_clicked {
             self.open_folder_dialog = None;
         }
     }

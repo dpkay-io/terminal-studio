@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::sync::Arc;
 
 use alacritty_terminal::grid::Dimensions;
@@ -59,15 +58,21 @@ impl SearchState {
 
             let line_lower = line_text.to_lowercase();
             let mut search_from = 0;
-            while let Some(pos) = line_lower[search_from..].find(&query_lower) {
-                let start = search_from + pos;
-                let end = start + query_lower.len();
+            while let Some(byte_pos) = line_lower[search_from..].find(&query_lower) {
+                let match_byte_start = search_from + byte_pos;
+                let match_byte_end = match_byte_start + query_lower.len();
+                // Convert byte offsets to character (column) offsets for the renderer
+                let start = line_lower[..match_byte_start].chars().count();
+                let end = start
+                    + line_lower[match_byte_start..match_byte_end]
+                        .chars()
+                        .count();
                 self.matches.push(SearchMatch {
                     line: line_idx,
                     start_col: start,
                     end_col: end,
                 });
-                search_from = start + 1;
+                search_from = match_byte_start + 1;
             }
         }
 

@@ -389,10 +389,9 @@ impl TerminalView {
         }
 
         // ── Selection highlight ────────────────────────────────────────────────
-        if let Some(sel) = selection {
+        if let Some(sel) = selection.filter(|_| visible_rows > 0) {
             let sel_color = t.selection_bg;
             let (sc, sr, ec, er) = sel.ordered();
-            // Snap start/end to wide-char boundaries using the cell buffer.
             let (sc, ec) = RENDER_BUF.with(|buf| {
                 let buf = buf.borrow();
                 let snap_start = |col: u16, row: u16| -> u16 {
@@ -415,7 +414,7 @@ impl TerminalView {
                 };
                 (snap_start(sc, sr), snap_end(ec, er))
             });
-            for screen_row in sr..=er.min(visible_rows as u16 - 1) {
+            for screen_row in sr..=er.min(visible_rows.saturating_sub(1) as u16) {
                 let y = rect.min.y + screen_row as f32 * cell_height;
                 let start_col = if screen_row == sr { sc } else { 0 };
                 let end_col = if screen_row == er {

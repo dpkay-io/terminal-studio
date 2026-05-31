@@ -198,7 +198,7 @@ impl App {
 
         if let Some(action) = action_to_run {
             self.close_command_palette();
-            self.execute_palette_action(action);
+            self.execute_palette_action(action, ctx);
         }
     }
 
@@ -208,11 +208,13 @@ impl App {
         self.command_palette_selected = 0;
     }
 
-    fn execute_palette_action(&mut self, action: AppAction) {
+    fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
         match action {
             AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
             AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
-            AppAction::FocusTerminal => {}
+            AppAction::FocusTerminal => {
+                ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
+            }
             AppAction::NewTerminalTab => {
                 self.deferred_spawn = Some(self.configured_shell());
             }
@@ -273,6 +275,44 @@ impl App {
             }
             AppAction::DuplicateSession => {
                 self.deferred_duplicate = true;
+            }
+            AppAction::NextWorkspace if self.current_window_id.is_none() => {
+                let ws_ids: Vec<u64> = self
+                    .workspace_store
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.host_window_id.is_none())
+                    .map(|w| w.id)
+                    .collect();
+                if !ws_ids.is_empty() {
+                    let cur = self
+                        .active_group
+                        .and_then(|g| ws_ids.iter().position(|&id| id == g))
+                        .unwrap_or(0);
+                    let next = (cur + 1) % ws_ids.len();
+                    self.deferred_open_workspace = Some(ws_ids[next]);
+                }
+            }
+            AppAction::PrevWorkspace if self.current_window_id.is_none() => {
+                let ws_ids: Vec<u64> = self
+                    .workspace_store
+                    .workspaces
+                    .iter()
+                    .filter(|w| w.host_window_id.is_none())
+                    .map(|w| w.id)
+                    .collect();
+                if !ws_ids.is_empty() {
+                    let cur = self
+                        .active_group
+                        .and_then(|g| ws_ids.iter().position(|&id| id == g))
+                        .unwrap_or(0);
+                    let prev = if cur == 0 {
+                        ws_ids.len() - 1
+                    } else {
+                        cur - 1
+                    };
+                    self.deferred_open_workspace = Some(ws_ids[prev]);
+                }
             }
             AppAction::CommandPalette => {}
             _ => {}

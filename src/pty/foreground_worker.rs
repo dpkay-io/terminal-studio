@@ -34,7 +34,7 @@ impl ForegroundWorker {
         if let Err(e) = thread::Builder::new()
             .name("foreground-detector".into())
             .spawn(move || {
-                while alive_bg.load(Ordering::Relaxed) {
+                while alive_bg.load(Ordering::Acquire) {
                     let snapshot: Vec<(u32, u32)> = pids_bg.lock().clone();
                     for (sid, shell_pid) in snapshot {
                         let result = detect_child(shell_pid);
@@ -64,6 +64,6 @@ impl ForegroundWorker {
 
 impl Drop for ForegroundWorker {
     fn drop(&mut self) {
-        self.alive.store(false, Ordering::Relaxed);
+        self.alive.store(false, Ordering::Release);
     }
 }

@@ -33,7 +33,11 @@ impl SessionState {
     pub(super) fn remove(&mut self, id: u32) -> Option<SessionEntry> {
         let pos = self.sessions.iter().position(|e| e.id == id)?;
         self.uninit_sessions.remove(&id);
-        Some(self.sessions.remove(pos))
+        let entry = self.sessions.remove(pos);
+        entry
+            .alive
+            .store(false, std::sync::atomic::Ordering::Release);
+        Some(entry)
     }
 
     #[allow(dead_code)]

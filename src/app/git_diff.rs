@@ -39,7 +39,6 @@ fn kind_to_color(kind: FileChangeKind) -> egui::Color32 {
 
 pub(super) fn render_git_diff(
     ui: &mut egui::Ui,
-    diff: &str,
     status: &str,
     unpushed: &[(String, String)],
     push_in_progress: bool,
@@ -401,7 +400,6 @@ pub(super) fn render_git_diff(
         }
     }
 
-    let _ = diff;
     if status.is_empty() && unpushed.is_empty() && !push_in_progress && push_error.is_none() {
         ui.add_space(theme::SP_4);
         ui.vertical_centered(|ui| {

@@ -193,6 +193,7 @@ impl App {
             global_search_selected: 0,
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
+            detection_lines_hash: 0,
             auto_opened_md: HashSet::new(),
             terminal_md_content: HashMap::new(),
             tab_drag_source: None,
@@ -960,12 +961,17 @@ impl App {
             .enumerate()
             .map(|(i, e)| (e.id, i))
             .collect();
-        let pane_id_to_index: HashMap<u32, usize> = self
+        let saved_pane_ids: Vec<u32> = self
             .pane_state
             .panes
             .iter()
+            .filter(|p| !matches!(p.content, PaneContent::FileDiff(_)))
+            .map(|p| p.id)
+            .collect();
+        let pane_id_to_index: HashMap<u32, usize> = saved_pane_ids
+            .iter()
             .enumerate()
-            .map(|(i, p)| (p.id, i))
+            .map(|(i, &id)| (id, i))
             .collect();
 
         let sessions = self
@@ -1329,8 +1335,11 @@ impl App {
             Some(s) => s,
             None => return String::new(),
         };
+        let Some(entry) = self.session_state.sessions.get(session_idx) else {
+            return String::new();
+        };
         let (sc, sr, ec, er) = sel.ordered();
-        let session = self.session_state.sessions[session_idx].session.read();
+        let session = entry.session.read();
         let term = &session.term;
         let grid = term.grid();
         let term_cols = term.columns();

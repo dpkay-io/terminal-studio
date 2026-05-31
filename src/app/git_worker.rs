@@ -7,11 +7,10 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::file_browser::{list_dir_entries, run_git_info, FileEntry};
+use super::file_browser::run_git_info;
 
 enum Job {
     GitInfo(PathBuf),
-    DirList(PathBuf),
     Stage {
         cwd: PathBuf,
         path: String,
@@ -45,7 +44,6 @@ enum Job {
 
 pub(super) struct WorkerResults {
     pub(super) git: HashMap<PathBuf, (String, String)>,
-    pub(super) dirs: HashMap<PathBuf, Arc<Vec<FileEntry>>>,
     pub(super) diff_results: Vec<(PathBuf, String)>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
     pub(super) commit_result: Option<Result<PathBuf, String>>,
@@ -58,7 +56,6 @@ pub(super) struct GitWorker {
     tx: mpsc::Sender<Job>,
     results: Arc<Mutex<WorkerResults>>,
     git_inflight: Arc<Mutex<HashSet<PathBuf>>>,
-    dir_inflight: Arc<Mutex<HashSet<PathBuf>>>,
     alive: Arc<AtomicBool>,
     ctx: egui::Context,
 }
@@ -68,7 +65,6 @@ impl GitWorker {
         let (tx, rx) = mpsc::channel::<Job>();
         let results = Arc::new(Mutex::new(WorkerResults {
             git: HashMap::new(),
-            dirs: HashMap::new(),
             diff_results: Vec::new(),
             unpushed: HashMap::new(),
             commit_result: None,
@@ -77,19 +73,17 @@ impl GitWorker {
             gitignore_result: None,
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
-        let dir_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let alive = Arc::new(AtomicBool::new(true));
 
         let results_bg = Arc::clone(&results);
         let git_inflight_bg = Arc::clone(&git_inflight);
-        let dir_inflight_bg = Arc::clone(&dir_inflight);
         let alive_bg = Arc::clone(&alive);
         let ctx_bg = ctx.clone();
 
         if let Err(e) = thread::Builder::new()
             .name("git-worker".into())
             .spawn(move || {
-                while alive_bg.load(Ordering::Relaxed) {
+                while alive_bg.load(Ordering::Acquire) {
                     let job = match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(j) => j,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -100,11 +94,6 @@ impl GitWorker {
                             let info = run_git_info(&p);
                             results_bg.lock().git.insert(p.clone(), info);
                             git_inflight_bg.lock().remove(&p);
-                        }
-                        Job::DirList(p) => {
-                            let entries = Arc::new(list_dir_entries(&p));
-                            results_bg.lock().dirs.insert(p.clone(), entries);
-                            dir_inflight_bg.lock().remove(&p);
                         }
                         Job::Stage { cwd, path } => {
                             let ok = std::process::Command::new("git")
@@ -282,7 +271,6 @@ impl GitWorker {
             tx,
             results,
             git_inflight,
-            dir_inflight,
             alive,
             ctx,
         }
@@ -297,21 +285,8 @@ impl GitWorker {
         let _ = self.tx.send(Job::GitInfo(path.to_path_buf()));
     }
 
-    pub(super) fn enqueue_dir(&self, path: &Path) {
-        let mut inflight = self.dir_inflight.lock();
-        if inflight.contains(path) {
-            return;
-        }
-        inflight.insert(path.to_path_buf());
-        let _ = self.tx.send(Job::DirList(path.to_path_buf()));
-    }
-
     pub(super) fn take_git(&self, path: &Path) -> Option<(String, String)> {
         self.results.lock().git.remove(path)
-    }
-
-    pub(super) fn take_dir(&self, path: &Path) -> Option<Arc<Vec<FileEntry>>> {
-        self.results.lock().dirs.remove(path)
     }
 
     pub(super) fn enqueue_stage(&self, cwd: &Path, path: String) {
@@ -401,7 +376,7 @@ impl GitWorker {
 
 impl Drop for GitWorker {
     fn drop(&mut self) {
-        self.alive.store(false, Ordering::Relaxed);
+        self.alive.store(false, Ordering::Release);
         let _ = self.tx.send(Job::GitInfo(PathBuf::new()));
         self.ctx.request_repaint();
     }
@@ -422,13 +397,6 @@ mod tests {
     fn test_take_git_empty() {
         let worker = GitWorker::spawn(egui::Context::default());
         let result = worker.take_git(Path::new("/nonexistent/path"));
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_take_dir_empty() {
-        let worker = GitWorker::spawn(egui::Context::default());
-        let result = worker.take_dir(Path::new("/nonexistent/path"));
         assert!(result.is_none());
     }
 
@@ -536,26 +504,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[test]
-    fn test_enqueue_dir_and_take() {
-        let cwd = std::env::current_dir().unwrap();
-        let worker = GitWorker::spawn(egui::Context::default());
-        worker.enqueue_dir(&cwd);
-
-        let mut result = None;
-        for _ in 0..60 {
-            std::thread::sleep(Duration::from_millis(50));
-            if let Some(r) = worker.take_dir(&cwd) {
-                result = Some(r);
-                break;
-            }
-        }
-        assert!(
-            result.is_some(),
-            "dir listing should have produced a result"
-        );
-        let entries = result.unwrap();
-        // The project directory should have at least some entries (Cargo.toml, src/, etc.)
-        assert!(!entries.is_empty(), "directory listing should not be empty");
-    }
 }

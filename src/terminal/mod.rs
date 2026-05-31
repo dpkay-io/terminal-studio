@@ -162,6 +162,9 @@ impl Session {
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        if cols == 0 || rows == 0 {
+            return;
+        }
         let size = TermSize {
             cols: cols as usize,
             lines: rows as usize,

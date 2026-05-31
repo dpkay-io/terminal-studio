@@ -250,6 +250,25 @@ mod tests {
     }
 
     #[test]
+    fn test_next_id_after_deletion() {
+        // Simulate: created workspaces 1,2,3 then deleted workspace 2.
+        // next_id must return max(1,3)+1 = 4, not len()+1 = 3 (which would collide).
+        let mut store = make_store(vec![("A", "/a"), ("B", "/b"), ("C", "/c")]);
+        store.workspaces.retain(|w| w.id != 2);
+        assert_eq!(store.workspaces.len(), 2);
+        assert_eq!(store.next_id(), 4);
+    }
+
+    #[test]
+    fn test_next_id_after_deletion_keeps_only_highest() {
+        // Only the highest-id workspace remains after deleting everything else.
+        let mut store = make_store(vec![("A", "/a"), ("B", "/b"), ("C", "/c")]);
+        store.workspaces.retain(|w| w.id == 3);
+        assert_eq!(store.workspaces.len(), 1);
+        assert_eq!(store.next_id(), 4);
+    }
+
+    #[test]
     fn test_note_store_get_empty() {
         let store = NoteStore::default();
         assert_eq!(store.get(None), "");

@@ -21,7 +21,6 @@ use alacritty_terminal::{
 mod feedback;
 mod file_browser;
 mod git_diff;
-#[allow(dead_code)]
 mod git_worker;
 mod input;
 mod markdown;
@@ -177,6 +176,8 @@ pub struct App {
 
     // Detected markdown file paths in the currently visible terminal content
     detected_md_paths: Vec<crate::md_detector::DetectedMdPath>,
+    // Hash of visible lines from last detection pass — skip re-detection when unchanged
+    detection_lines_hash: u64,
     // Tracks which md paths were already auto-opened in the right panel to avoid re-triggering
     auto_opened_md: HashSet<PathBuf>,
     // Content cache for terminal-detected MD files, with associated workspace ID
@@ -771,7 +772,6 @@ impl App {
         // tab strip.
         struct PanelSnap {
             is_git: bool,
-            git_diff: String,
             git_status: String,
             git_unpushed: Vec<(String, String)>,
             dir_entries: Arc<Vec<FileEntry>>,
@@ -797,7 +797,6 @@ impl App {
                     };
                     PanelSnap {
                         is_git: d.is_git,
-                        git_diff: d.git_diff.clone(),
                         git_status: d.git_status.clone(),
                         git_unpushed: d.git_unpushed.clone(),
                         dir_entries: Arc::clone(&d.dir_entries),
@@ -819,7 +818,6 @@ impl App {
                     };
                     PanelSnap {
                         is_git: false,
-                        git_diff: String::new(),
                         git_status: String::new(),
                         git_unpushed: Vec::new(),
                         dir_entries: Arc::new(Vec::new()),
@@ -842,7 +840,6 @@ impl App {
                 };
                 PanelSnap {
                     is_git: false,
-                    git_diff: String::new(),
                     git_status: String::new(),
                     git_unpushed: Vec::new(),
                     dir_entries: Arc::new(Vec::new()),
@@ -853,7 +850,6 @@ impl App {
         };
         let PanelSnap {
             is_git,
-            git_diff,
             git_status,
             git_unpushed,
             dir_entries,
@@ -1154,7 +1150,6 @@ impl App {
                                     RightTab::GitDiff => {
                                         let result = render_git_diff(
                                             ui,
-                                            &git_diff,
                                             &git_status,
                                             &git_unpushed,
                                             self.push_in_progress,
@@ -1685,8 +1680,16 @@ impl App {
                             lines.push((grid_line, text));
                         }
                         drop(session);
-                        self.detected_urls = crate::url_detector::detect_urls(&lines);
-                        self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        lines.hash(&mut hasher);
+                        cwd.hash(&mut hasher);
+                        let lines_hash = hasher.finish();
+                        if lines_hash != self.detection_lines_hash {
+                            self.detection_lines_hash = lines_hash;
+                            self.detected_urls = crate::url_detector::detect_urls(&lines);
+                            self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
+                        }
                         for md in &self.detected_md_paths {
                             if self.auto_opened_md.contains(&md.path) {
                                 continue;
@@ -2795,11 +2798,13 @@ impl App {
                                                 pane_id: source_pane_id,
                                                 last_size: (80, 24),
                                             };
-                                            *self
+                                            if let Some(tree) = self
                                                 .pane_state
                                                 .pane_trees
                                                 .get_mut(&active_root_pid)
-                                                .unwrap() = replacement;
+                                            {
+                                                *tree = replacement;
+                                            }
                                             Some(node)
                                         }
                                         RemoveResult::Done => Some(PaneNode::Leaf {

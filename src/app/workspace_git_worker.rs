@@ -41,7 +41,7 @@ impl WorkspaceGitWorker {
         if let Err(e) = thread::Builder::new()
             .name("workspace-git".into())
             .spawn(move || {
-                while alive_bg.load(Ordering::Relaxed) {
+                while alive_bg.load(Ordering::Acquire) {
                     let (ws_id, path) = match rx.recv_timeout(Duration::from_secs(1)) {
                         Ok(job) => job,
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -94,7 +94,8 @@ impl WorkspaceGitWorker {
 
 impl Drop for WorkspaceGitWorker {
     fn drop(&mut self) {
-        self.alive.store(false, Ordering::Relaxed);
+        self.alive.store(false, Ordering::Release);
+        let _ = self.tx.send((0, PathBuf::new()));
     }
 }
 
