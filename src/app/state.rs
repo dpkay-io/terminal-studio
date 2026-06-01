@@ -228,6 +228,7 @@ impl App {
             )),
             md_prefer_preview: false,
             term_search: crate::search::SearchState::new(),
+            text_search: crate::search::TextSearchState::new(),
             show_global_search: false,
             global_search_query: String::new(),
             global_search_debouncer: crate::app::ui::debounce::Debouncer::new(
@@ -272,6 +273,7 @@ impl App {
             push_in_progress: false,
             push_error: None,
             show_stage_all_confirm: false,
+            revert_confirm_file: None,
             context_menu_pos: None,
         };
 

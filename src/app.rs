@@ -20,6 +20,7 @@ use alacritty_terminal::{
 
 mod feedback;
 mod file_browser;
+mod diff_parser;
 mod git_diff;
 mod git_worker;
 mod input;
@@ -165,6 +166,8 @@ pub struct App {
 
     // Terminal content search (Ctrl+F)
     term_search: crate::search::SearchState,
+    // Text content search for file editors, notes, diffs (Ctrl+F)
+    text_search: crate::search::TextSearchState,
 
     // Global search across all sessions (Ctrl+Shift+N)
     show_global_search: bool,
@@ -249,6 +252,9 @@ pub struct App {
     // Git stage-all confirm dialog state
     show_stage_all_confirm: bool,
 
+    // Git revert confirm dialog state — holds the file path to revert
+    revert_confirm_file: Option<String>,
+
     // Position where the terminal context menu was opened (captured on right-click)
     context_menu_pos: Option<egui::Pos2>,
 }
@@ -280,13 +286,15 @@ impl eframe::App for App {
             || self.show_quick_switcher
             || self.show_command_palette
             || self.term_search.active
+            || self.text_search.active
             || self.show_global_search
             || self.session_search_active
             || self.dir_search_active
             || self.show_quit_confirm
             || self.show_commit_dialog
             || self.show_push_dialog
-            || self.show_stage_all_confirm;
+            || self.show_stage_all_confirm
+            || self.revert_confirm_file.is_some();
         let notes_has_focus = _ctx.memory(|m| {
             m.focused()
                 .map(|id| id == self.vp_id("notes_textedit"))
@@ -538,11 +546,14 @@ impl eframe::App for App {
 
             // Drain completed diff results and update pending FileDiff panes
             let diff_results = self.workers.git_worker.take_diff_results();
-            for (full_path, diff_output) in diff_results {
+            for (full_path, old_content, new_content, raw_diff) in diff_results {
+                let hunks = diff_parser::parse_diff(&raw_diff);
                 if let Some(pane_id) = self.pending_diff_panes.remove(&full_path) {
                     if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                         if let PaneContent::FileDiff(ref mut d) = pane.content {
-                            d.diff_content = diff_output;
+                            d.old_content = old_content;
+                            d.new_content = new_content;
+                            d.hunks = hunks;
                         }
                     }
                 }
@@ -592,6 +603,20 @@ impl eframe::App for App {
                     }
                     Err(msg) => {
                         log::error!("gitignore update failed: {msg}");
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
+                    }
+                }
+            }
+
+            for result in self.workers.git_worker.take_revert_results() {
+                match result {
+                    Ok(_cwd) => {
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
+                    }
+                    Err(msg) => {
+                        log::error!("git revert failed: {msg}");
                         self.flash
                             .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
                     }
@@ -907,6 +932,8 @@ impl App {
         let mut git_show_push_dialog = false;
         let mut _git_show_stage_all_confirm = false;
         let mut git_gitignore_pattern: Option<String> = None;
+        let mut git_request_refresh = false;
+        let mut git_revert_file: Option<String> = None;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
@@ -1204,6 +1231,12 @@ impl App {
                                         if result.gitignore_pattern.is_some() {
                                             git_gitignore_pattern = result.gitignore_pattern;
                                         }
+                                        if result.request_refresh {
+                                            git_request_refresh = true;
+                                        }
+                                        if result.revert_file.is_some() {
+                                            git_revert_file = result.revert_file;
+                                        }
                                     }
                                     RightTab::Markdown(md_path) => {
                                         ui.horizontal(|ui| {
@@ -1446,6 +1479,15 @@ impl App {
         if let Some(pattern) = git_gitignore_pattern {
             if let Some(cwd) = active_cwd.as_ref() {
                 self.workers.git_worker.enqueue_gitignore(cwd, pattern);
+            }
+        }
+        if let Some(path) = git_revert_file {
+            self.revert_confirm_file = Some(path);
+        }
+        if git_request_refresh {
+            if let Some(cwd) = active_cwd.as_ref() {
+                self.workers.git_worker.enqueue_git(cwd);
+                self.workers.git_worker.enqueue_unpushed(cwd);
             }
         }
 
@@ -1723,7 +1765,9 @@ impl App {
                             self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
                         }
                         for md in &self.detected_md_paths {
-                            if self.auto_opened_md.contains(&md.path) {
+                            if self.auto_opened_md.contains(&md.path)
+                                || self.shown_md_tabs.contains(&md.path)
+                            {
                                 continue;
                             }
                             let is_recent = std::fs::metadata(&md.path)
@@ -1943,6 +1987,7 @@ impl App {
                 || self.show_commit_dialog
                 || self.show_push_dialog
                 || self.show_stage_all_confirm
+                || self.revert_confirm_file.is_some()
                 || self.show_quit_confirm;
 
             // Global shortcuts that work even when a modal/dialog is open
@@ -1965,12 +2010,12 @@ impl App {
                         Some(AppAction::SearchAllSessions)
                     } else if i.consume_key(cs, egui::Key::Z) {
                         Some(AppAction::ZoomPane)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false }, egui::Key::F) {
+                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
-                    } else if (self.show_shortcut_help || self.term_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+                    } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                         if self.show_global_search {
                             Some(AppAction::SearchAllSessions)
-                        } else if self.term_search.active {
+                        } else if self.term_search.active || self.text_search.active {
                             Some(AppAction::SearchTerminal)
                         } else {
                             Some(AppAction::ToggleShortcutHelp)
@@ -2010,11 +2055,27 @@ impl App {
                         self.dir_search_active = true;
                     }
                     Some(AppAction::SearchTerminal) => {
-                        self.term_search.active = !self.term_search.active;
-                        if !self.term_search.active {
+                        let is_terminal = self.pane_state.active_pane_id.and_then(|pid| {
+                            self.pane_state.panes.iter().find(|p| p.id == pid)
+                        }).map(|p| matches!(p.content, PaneContent::Terminal(_)))
+                        .unwrap_or(true);
+                        if is_terminal {
+                            self.text_search.clear();
+                            self.term_search.active = !self.term_search.active;
+                            if !self.term_search.active {
+                                self.term_search.query.clear();
+                                self.term_search.matches.clear();
+                                self.term_search.current_index = None;
+                            }
+                        } else {
+                            self.term_search.active = false;
                             self.term_search.query.clear();
                             self.term_search.matches.clear();
                             self.term_search.current_index = None;
+                            self.text_search.active = !self.text_search.active;
+                            if !self.text_search.active {
+                                self.text_search.clear();
+                            }
                         }
                     }
                     Some(AppAction::SearchAllSessions) => {
@@ -2295,7 +2356,8 @@ impl App {
                                 .map(|g| g.scrollbar_hovered || g.scrollbar_drag_offset.is_some())
                                 .unwrap_or(false);
                             if !sb_active {
-                            if let Some(sid) = active_session_id {
+                            let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
+                            if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                     let (has_mouse, sgr) = {
                                         let s = self.session_state.sessions[idx].session.read();
@@ -2445,7 +2507,8 @@ impl App {
                             }
                         }
                         egui::Event::PointerMoved(pos) if !self.term_selecting => {
-                            if let Some(sid) = active_session_id {
+                            let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
+                            if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                     let (drag, motion, sgr) = {
                                         let s = self.session_state.sessions[idx].session.read();
@@ -2488,8 +2551,9 @@ impl App {
                                 .zip(self.active_term_geo.as_ref())
                                 .map(|(pos, geo)| geo.rect.contains(pos))
                                 .unwrap_or(false);
+                            let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if over_term {
-                                if let Some(sid) = active_session_id {
+                                if let Some(sid) = hovered_sid.or(active_session_id) {
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                         let (has_mouse, sgr) = {
                                             let s = self.session_state.sessions[idx].session.read();
@@ -3566,7 +3630,10 @@ impl App {
                         id: pane_id,
                         content: PaneContent::FileDiff(FileDiffState {
                             path: full_path.clone(),
-                            diff_content: String::new(),
+                            old_content: String::new(),
+                            new_content: String::new(),
+                            hunks: Vec::new(),
+                            diff_mode: self.settings.diff_view_mode,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
@@ -3679,5 +3746,6 @@ impl App {
         self.render_commit_dialog(ctx);
         self.render_push_dialog(ctx);
         self.render_stage_all_confirm(ctx);
+        self.render_revert_confirm(ctx);
     }
 }

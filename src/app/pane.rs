@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::diff_parser::{DiffHunk, DiffViewMode};
 use crate::pty::ShellKind;
 use crate::terminal::Session;
 
@@ -49,7 +50,10 @@ pub(super) struct FileEditorState {
 #[derive(Clone, Debug)]
 pub(super) struct FileDiffState {
     pub(super) path: PathBuf,
-    pub(super) diff_content: String,
+    pub(super) old_content: String,
+    pub(super) new_content: String,
+    pub(super) hunks: Vec<DiffHunk>,
+    pub(super) diff_mode: DiffViewMode,
 }
 
 #[derive(Clone, Debug)]
@@ -180,7 +184,10 @@ mod tests {
         });
         let diff = PaneContent::FileDiff(FileDiffState {
             path: PathBuf::from("file.rs"),
-            diff_content: "+added line".to_string(),
+            old_content: String::new(),
+            new_content: "+added line".to_string(),
+            hunks: Vec::new(),
+            diff_mode: DiffViewMode::Inline,
         });
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::diff_parser::DiffViewMode;
 use crate::theme;
 use crate::util;
 
@@ -28,6 +29,7 @@ pub(super) struct AppSettings {
     pub(super) scroll_lines: u32,
     pub(super) default_shell: Option<String>,
     pub(super) show_sys_monitor: bool,
+    pub(super) diff_view_mode: DiffViewMode,
 }
 
 impl Default for AppSettings {
@@ -46,6 +48,7 @@ impl Default for AppSettings {
             scroll_lines: 3,
             default_shell: None,
             show_sys_monitor: true,
+            diff_view_mode: DiffViewMode::Inline,
         }
     }
 }

@@ -1,3 +1,4 @@
+use super::diff_parser::DiffViewMode;
 use crate::git::parser::{parse_git_status, FileChangeKind};
 use crate::theme;
 
@@ -16,6 +17,8 @@ pub(super) struct GitDiffResult {
     pub(super) show_push_dialog: bool,
     pub(super) show_stage_all_confirm: bool,
     pub(super) gitignore_pattern: Option<String>,
+    pub(super) request_refresh: bool,
+    pub(super) revert_file: Option<String>,
 }
 
 fn kind_to_tag(kind: FileChangeKind) -> &'static str {
@@ -52,9 +55,30 @@ pub(super) fn render_git_diff(
     let mut show_push_dialog = false;
     let show_stage_all_confirm = false;
     let mut gitignore_pattern: Option<String> = None;
+    let mut request_refresh = false;
+    let mut revert_file: Option<String> = None;
 
     let panel_width = ui.available_width();
     ui.set_max_width(panel_width);
+
+    let t = theme::active();
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme::SP_2);
+            let btn = ui.add(
+                egui::Button::new(
+                    egui::RichText::new("\u{21BB}")
+                        .size(theme::FONT_UI_MD)
+                        .color(t.text),
+                )
+                .frame(false),
+            );
+            if btn.clicked() {
+                request_refresh = true;
+            }
+            btn.on_hover_text("Refresh git status");
+        });
+    });
 
     let has_status = !status.is_empty();
     let has_unpushed = !unpushed.is_empty();
@@ -270,6 +294,7 @@ pub(super) fn render_git_diff(
                             &mut open_diff_file,
                             &mut open_file,
                             &mut gitignore_pattern,
+                            &mut revert_file,
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -374,6 +399,7 @@ pub(super) fn render_git_diff(
                             &mut open_diff_file,
                             &mut open_file,
                             &mut gitignore_pattern,
+                            &mut revert_file,
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -426,6 +452,8 @@ pub(super) fn render_git_diff(
         show_push_dialog,
         show_stage_all_confirm,
         gitignore_pattern,
+        request_refresh,
+        revert_file,
     }
 }
 
@@ -437,6 +465,7 @@ fn file_context_menu(
     open_diff_file: &mut Option<String>,
     open_file: &mut Option<String>,
     gitignore_pattern: &mut Option<String>,
+    revert_file: &mut Option<String>,
 ) {
     if ui.button("View diff").clicked() {
         *open_diff_file = Some(path.to_string());
@@ -459,74 +488,232 @@ fn file_context_menu(
         }
     }
     ui.separator();
+    let revert_label = egui::RichText::new("Revert changes").color(theme::active().error);
+    if ui.button(revert_label).clicked() {
+        *revert_file = Some(path.to_string());
+        ui.close_menu();
+    }
+    ui.separator();
     if ui.button("Add to .gitignore").clicked() {
         *gitignore_pattern = Some(path.to_string());
         ui.close_menu();
     }
 }
 
-pub(super) fn render_inline_diff(ui: &mut egui::Ui, diff_content: &str) {
-    let max_w = ui.available_width();
-    ui.set_max_width(max_w);
-    for line in diff_content.lines() {
-        if line.starts_with("@@") {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(line)
-                        .monospace()
+pub(super) fn render_diff_toolbar(
+    ui: &mut egui::Ui,
+    current_mode: DiffViewMode,
+) -> Option<DiffViewMode> {
+    let mut new_mode = None;
+    let t = theme::active();
+
+    ui.horizontal(|ui| {
+        ui.add_space(theme::SP_2);
+
+        let modes = [
+            (DiffViewMode::Inline, "Inline"),
+            (DiffViewMode::SideBySide, "Side by Side"),
+        ];
+
+        for (mode, label) in &modes {
+            let is_active = current_mode == *mode;
+            let (bg, fg) = if is_active {
+                (t.accent, t.text)
+            } else {
+                (t.surface1, t.subtext0)
+            };
+            let btn = ui.add(
+                egui::Button::new(
+                    egui::RichText::new(*label)
                         .size(theme::FONT_UI_SM)
-                        .color(theme::active().git_hunk),
+                        .color(fg),
                 )
-                .truncate(),
+                .fill(bg)
+                .rounding(theme::R_SM),
             );
-        } else if line.starts_with('+') {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(line)
-                        .monospace()
-                        .size(theme::FONT_UI_SM)
-                        .color(theme::active().git_added),
-                )
-                .truncate(),
-            );
-        } else if line.starts_with('-') {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(line)
-                        .monospace()
-                        .size(theme::FONT_UI_SM)
-                        .color(theme::active().git_removed),
-                )
-                .truncate(),
-            );
-        } else if line.starts_with("diff --git ") {
-            ui.add_space(theme::SP_3);
-            let fname = line
-                .strip_prefix("diff --git ")
-                .and_then(|s| s.split(" b/").last())
-                .unwrap_or(line);
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(fname)
-                        .strong()
-                        .color(theme::active().git_filename)
-                        .size(theme::FONT_UI_LG),
-                )
-                .truncate(),
-            );
-        } else if line.starts_with("index ") || line.starts_with("--- ") || line.starts_with("+++ ")
-        {
-            // skip meta
-        } else {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(line)
-                        .monospace()
-                        .size(theme::FONT_UI_SM)
-                        .color(theme::active().subtext0),
-                )
-                .truncate(),
-            );
+            if btn.clicked() && !is_active {
+                new_mode = Some(*mode);
+            }
         }
+    });
+
+    new_mode
+}
+
+pub(super) fn render_inline_diff_full(
+    ui: &mut egui::Ui,
+    old_content: &str,
+    new_content: &str,
+    hunks: &[super::diff_parser::DiffHunk],
+) {
+    use super::diff_parser::{build_full_diff_lines, DiffLineKind};
+
+    let lines = build_full_diff_lines(old_content, new_content, hunks);
+    let t = theme::active();
+    let gutter_w = 36.0_f32;
+    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
+    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+
+    for line in &lines {
+        let (text_color, bg_color) = match line.kind {
+            DiffLineKind::Added => (t.git_added, Some(t.git_added.gamma_multiply(0.12))),
+            DiffLineKind::Removed => (t.git_removed, Some(t.git_removed.gamma_multiply(0.12))),
+            DiffLineKind::Context => (t.text, None),
+        };
+
+        ui.horizontal(|ui| {
+            let old_text = line.old_lineno.map(|n| format!("{n}")).unwrap_or_default();
+            let (old_rect, _) =
+                ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+            ui.painter().text(
+                egui::pos2(old_rect.max.x - 4.0, old_rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                &old_text,
+                gutter_font.clone(),
+                t.overlay0,
+            );
+
+            let new_text = line.new_lineno.map(|n| format!("{n}")).unwrap_or_default();
+            let (new_rect, _) =
+                ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+            ui.painter().text(
+                egui::pos2(new_rect.max.x - 4.0, new_rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                &new_text,
+                gutter_font.clone(),
+                t.overlay0,
+            );
+
+            let avail = ui.available_width();
+            let (content_rect, _) = ui.allocate_exact_size(
+                egui::vec2(avail.max(200.0), line_h),
+                egui::Sense::hover(),
+            );
+            if let Some(bg) = bg_color {
+                ui.painter().rect_filled(content_rect, 0.0, bg);
+            }
+            ui.painter().text(
+                egui::pos2(content_rect.min.x + 4.0, content_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &line.content,
+                font_mono.clone(),
+                text_color,
+            );
+        });
     }
+}
+
+pub(super) fn render_side_by_side_diff(
+    ui: &mut egui::Ui,
+    old_content: &str,
+    new_content: &str,
+    hunks: &[super::diff_parser::DiffHunk],
+) {
+    use super::diff_parser::{build_full_diff_lines, build_side_by_side_lines};
+
+    let full = build_full_diff_lines(old_content, new_content, hunks);
+    let (left_lines, right_lines) = build_side_by_side_lines(&full);
+
+    let t = theme::active();
+    let total_w = ui.available_width();
+    let half_w = (total_w / 2.0 - 1.0).max(100.0);
+    let gutter_w = 36.0_f32;
+    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
+    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+
+    ui.horizontal(|ui| {
+        let (left_header, _) =
+            ui.allocate_exact_size(egui::vec2(half_w, line_h + 4.0), egui::Sense::hover());
+        ui.painter().text(
+            egui::pos2(left_header.min.x + theme::SP_2, left_header.center().y),
+            egui::Align2::LEFT_CENTER,
+            "HEAD",
+            egui::FontId::proportional(theme::FONT_UI_SM),
+            t.subtext0,
+        );
+        let (sep_rect, _) =
+            ui.allocate_exact_size(egui::vec2(2.0, line_h + 4.0), egui::Sense::hover());
+        ui.painter().rect_filled(sep_rect, 0.0, t.surface2);
+        let (right_header, _) =
+            ui.allocate_exact_size(egui::vec2(half_w, line_h + 4.0), egui::Sense::hover());
+        ui.painter().text(
+            egui::pos2(
+                right_header.min.x + theme::SP_2,
+                right_header.center().y,
+            ),
+            egui::Align2::LEFT_CENTER,
+            "Working Tree",
+            egui::FontId::proportional(theme::FONT_UI_SM),
+            t.subtext0,
+        );
+    });
+    ui.separator();
+
+    for i in 0..left_lines.len() {
+        let left = &left_lines[i];
+        let right = &right_lines[i];
+
+        ui.horizontal(|ui| {
+            render_sbs_cell(ui, left, half_w, gutter_w, line_h, &font_mono, &gutter_font, &t);
+
+            let (sep_rect, _) =
+                ui.allocate_exact_size(egui::vec2(2.0, line_h), egui::Sense::hover());
+            ui.painter().rect_filled(sep_rect, 0.0, t.surface2);
+
+            render_sbs_cell(ui, right, half_w, gutter_w, line_h, &font_mono, &gutter_font, &t);
+        });
+    }
+}
+
+fn render_sbs_cell(
+    ui: &mut egui::Ui,
+    line: &super::diff_parser::SideBySideLine,
+    panel_w: f32,
+    gutter_w: f32,
+    line_h: f32,
+    font_mono: &egui::FontId,
+    gutter_font: &egui::FontId,
+    t: &theme::Theme,
+) {
+    use super::diff_parser::DiffLineKind;
+
+    let (text_color, bg_color) = match line.kind {
+        DiffLineKind::Added => (t.git_added, Some(t.git_added.gamma_multiply(0.12))),
+        DiffLineKind::Removed => (t.git_removed, Some(t.git_removed.gamma_multiply(0.12))),
+        DiffLineKind::Context => {
+            if line.content.is_none() {
+                (t.overlay0, Some(t.surface0))
+            } else {
+                (t.text, None)
+            }
+        }
+    };
+
+    let num_text = line.lineno.map(|n| format!("{n}")).unwrap_or_default();
+    let (gutter_rect, _) =
+        ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+    ui.painter().text(
+        egui::pos2(gutter_rect.max.x - 4.0, gutter_rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        &num_text,
+        gutter_font.clone(),
+        t.overlay0,
+    );
+
+    let content_w = (panel_w - gutter_w).max(50.0);
+    let (content_rect, _) =
+        ui.allocate_exact_size(egui::vec2(content_w, line_h), egui::Sense::hover());
+    if let Some(bg) = bg_color {
+        ui.painter().rect_filled(content_rect, 0.0, bg);
+    }
+    let display = line.content.as_deref().unwrap_or("");
+    ui.painter().text(
+        egui::pos2(content_rect.min.x + 4.0, content_rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        display,
+        font_mono.clone(),
+        text_color,
+    );
 }

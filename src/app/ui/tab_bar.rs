@@ -495,7 +495,7 @@ impl App {
     }
 
     /// Compute the display text for a tab at the given pane index.
-    fn tab_display_text(&self, pane_index: usize) -> String {
+    pub(in crate::app) fn tab_display_text(&self, pane_index: usize) -> String {
         match &self.pane_state.panes[pane_index].content {
             PaneContent::Terminal(sid) => {
                 let sid = *sid;

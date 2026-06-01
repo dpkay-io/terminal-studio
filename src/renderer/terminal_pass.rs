@@ -45,6 +45,9 @@ pub struct TerminalGeometry {
     pub scrollbar_drag_offset: Option<usize>,
     /// True while the pointer hovers over the scrollbar hit region.
     pub scrollbar_hovered: bool,
+    /// Session ID this geometry belongs to — used to route mouse/scroll events
+    /// to the correct terminal in split pane views.
+    pub session_id: Option<u32>,
 }
 
 impl TerminalGeometry {
@@ -553,6 +556,7 @@ impl TerminalView {
             cell_h: cell_height,
             scrollbar_drag_offset,
             scrollbar_hovered,
+            session_id: None,
         }
     }
 }
@@ -684,6 +688,7 @@ mod tests {
             cell_h: 20.0,
             scrollbar_drag_offset: None,
             scrollbar_hovered: false,
+            session_id: None,
         }
     }
 

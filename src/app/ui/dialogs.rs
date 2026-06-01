@@ -1400,6 +1400,58 @@ impl App {
         }
     }
 
+    pub(in crate::app) fn render_revert_confirm(&mut self, ctx: &egui::Context) {
+        let file_path = match &self.revert_confirm_file {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        let mut do_revert = false;
+        let config = ui_kit::DialogConfig {
+            width: ui_kit::DialogWidth::Fixed(380.0),
+            max_height: 140.0,
+            ..Default::default()
+        };
+
+        let mut cancel_clicked = false;
+        let resp = ui_kit::dialog(ctx, self.vp_id("revert_confirm"), config, |ui| {
+            ui_kit::dialog_header(ui, "Revert Changes");
+
+            ui.label(
+                egui::RichText::new(format!("Discard all changes to \"{}\"?", file_path))
+                    .size(crate::theme::FONT_UI_MD),
+            );
+            ui.add_space(crate::theme::SP_1);
+            ui.label(
+                egui::RichText::new("This cannot be undone.")
+                    .size(crate::theme::FONT_UI_SM)
+                    .color(crate::theme::active().error),
+            );
+
+            ui_kit::dialog_footer(ui, |ui| {
+                if ui_kit::action_button(ui, "Yes", true, ui_kit::ActionButtonStyle::Danger)
+                    .clicked()
+                {
+                    do_revert = true;
+                }
+                if ui_kit::action_button(ui, "No", true, ui_kit::ActionButtonStyle::Cancel)
+                    .clicked()
+                {
+                    cancel_clicked = true;
+                }
+            });
+        });
+
+        if do_revert {
+            if let Some(cwd) = self.active_cwd() {
+                self.workers.git_worker.enqueue_revert(&cwd, file_path);
+            }
+            self.revert_confirm_file = None;
+        } else if resp.dismissed || cancel_clicked {
+            self.revert_confirm_file = None;
+        }
+    }
+
     pub(in crate::app) fn render_open_folder_dialog(&mut self, ctx: &egui::Context) {
         if self.open_folder_dialog.is_none() {
             return;

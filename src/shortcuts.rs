@@ -505,11 +505,11 @@ impl ShortcutRegistry {
             ),
             // Quick Switcher
             (Shortcut::cs(egui::Key::Space), AppAction::OpenQuickSwitcher),
-            // Terminal search (Ctrl+Shift+F — Ctrl+F left free for terminal apps)
+            // Terminal search (Ctrl+F)
             (
                 Shortcut {
                     ctrl: true,
-                    shift: true,
+                    shift: false,
                     alt: false,
                     key: egui::Key::F,
                 },

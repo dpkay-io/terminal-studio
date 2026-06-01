@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::super::feedback;
@@ -47,6 +48,9 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub cursor_style: CursorStyle,
     pub has_splits: bool,
     pub flash: &'a crate::app::feedback::FlashManager,
+    pub pane_titles: &'a HashMap<u32, String>,
+    pub text_search: &'a mut crate::search::TextSearchState,
+    pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
 }
 
 /// Recursively render a pane tree node into the given rect.
@@ -66,7 +70,23 @@ pub(in crate::app) fn render_node(
             // Track width for resize
             rctx.pane_widths_snap.push((pane_id, rect.width()));
 
-            ui.allocate_ui_at_rect(rect, |ui| match &pane.content {
+            // When this pane is part of a split, draw a compact header so every
+            // pane is visually identifiable (consistent with the main tab bar).
+            let content_rect = if rctx.has_splits {
+                let header_rect = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width(), theme::PANE_HEADER_H),
+                );
+                render_pane_header(ui, pane_id, header_rect, is_focused, rctx);
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x, rect.min.y + theme::PANE_HEADER_H),
+                    rect.max,
+                )
+            } else {
+                rect
+            };
+
+            ui.allocate_ui_at_rect(content_rect, |ui| match &pane.content {
                 PaneContent::Terminal(sid) => {
                     render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
                 }
@@ -78,7 +98,9 @@ pub(in crate::app) fn render_node(
                     render_file_editor_leaf(ui, ed, pane_id, rctx);
                 }
                 PaneContent::FileDiff(d) => {
-                    render_file_diff_leaf(ui, d, pane_id);
+                    if let Some(new_mode) = render_file_diff_leaf(ui, d, pane_id, rctx) {
+                        rctx.diff_mode_changes.push((pane_id, new_mode));
+                    }
                 }
                 PaneContent::NoteEditor(ne) => {
                     render_note_editor_leaf(ui, ne, pane_id, rctx);
@@ -119,11 +141,6 @@ pub(in crate::app) fn render_node(
                         }
                     }
                 }
-            }
-
-            // 3-dot context menu for split panes (visible on hover)
-            if rctx.has_splits {
-                render_pane_context_menu(ui, pane_id, rect, rctx);
             }
         }
         PaneNode::Split {
@@ -177,77 +194,141 @@ pub(in crate::app) fn render_node(
     }
 }
 
-// ── Pane context menu (3-dot) ────────────────────────────────────────────────
+// ── Split-pane header ──────────────────────────────────────────────────────
 
-fn render_pane_context_menu(
+fn render_pane_header(
     ui: &mut egui::Ui,
     pane_id: u32,
-    rect: egui::Rect,
+    header_rect: egui::Rect,
+    is_focused: bool,
     rctx: &mut RenderCtx<'_>,
 ) {
+    let t = theme::active();
+
+    // Background — use the surface colour matching the main tab bar, slightly
+    // tinted for the focused pane so it stands out.
+    let bg = if is_focused { t.surface1 } else { t.surface0 };
+    ui.painter().rect_filled(header_rect, 0.0, bg);
+
+    // Bottom separator line
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(
+            egui::pos2(header_rect.min.x, header_rect.max.y - theme::STROKE_THIN),
+            egui::vec2(header_rect.width(), theme::STROKE_THIN),
+        ),
+        0.0,
+        t.surface2,
+    );
+
+    // Active indicator — accent bottom highlight, mirroring main tab bar style
+    if is_focused {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(
+                    header_rect.min.x,
+                    header_rect.max.y - theme::TAB_ACTIVE_HIGHLIGHT_H,
+                ),
+                egui::vec2(header_rect.width(), theme::TAB_ACTIVE_HIGHLIGHT_H),
+            ),
+            0.0,
+            t.accent,
+        );
+    }
+
+    // 3-dot context menu button (right side of header)
     let popup_id = egui::Id::new(("pane_ctx_menu", pane_id));
     let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+
+    let btn_size = egui::vec2(theme::BTN_SQ, theme::BTN_SQ);
+    let btn_pos = egui::pos2(
+        header_rect.max.x - btn_size.x - theme::SP_2,
+        header_rect.min.y + (theme::PANE_HEADER_H - btn_size.y) * 0.5,
+    );
+    let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
 
     let pane_hovered = ui.ctx().input(|i| {
         i.pointer
             .latest_pos()
-            .map(|p| rect.contains(p))
+            .map(|p| header_rect.contains(p))
             .unwrap_or(false)
     });
 
-    if !pane_hovered && !popup_open {
-        return;
+    let show_btn = pane_hovered || popup_open;
+    if show_btn {
+        let btn_id = egui::Id::new(("pane_hdr_menu_btn", pane_id));
+        let btn_resp = ui_kit::dot_menu_button(ui, btn_id, btn_rect, popup_open);
+        if btn_resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        egui::containers::popup::popup_below_widget(
+            ui,
+            popup_id,
+            &btn_resp,
+            egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
+            |ui| {
+                ui.set_min_width(160.0);
+                if ui.button("Move to tab").clicked() {
+                    rctx.pane_context_actions
+                        .push(PaneContextAction::MoveToTab(pane_id));
+                    ui.memory_mut(|m| m.close_popup());
+                }
+                ui.separator();
+                if ui.button("Split horizontal").clicked() {
+                    rctx.pane_context_actions
+                        .push(PaneContextAction::SplitHorizontal(pane_id));
+                    ui.memory_mut(|m| m.close_popup());
+                }
+                if ui.button("Split vertical").clicked() {
+                    rctx.pane_context_actions
+                        .push(PaneContextAction::SplitVertical(pane_id));
+                    ui.memory_mut(|m| m.close_popup());
+                }
+                ui.separator();
+                if ui.button("Close pane").clicked() {
+                    rctx.pane_context_actions
+                        .push(PaneContextAction::Close(pane_id));
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            },
+        );
     }
 
-    let btn_size = egui::vec2(theme::BTN_SQ, theme::BTN_SQ);
-    let sb_inset = theme::SCROLLBAR_HIT_W + 4.0;
-    let btn_pos = egui::pos2(rect.max.x - btn_size.x - sb_inset, rect.min.y + 6.0);
-    let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+    // Title text
+    let title = rctx
+        .pane_titles
+        .get(&pane_id)
+        .map(|s| s.as_str())
+        .unwrap_or("Terminal");
+    let title_color = if is_focused { t.text } else { t.subtext1 };
+    let text_left = header_rect.min.x + theme::TAB_PAD_X;
+    let text_right = if show_btn {
+        btn_rect.min.x - theme::SP_1
+    } else {
+        header_rect.max.x - theme::SP_2
+    };
+    ui.painter()
+        .with_clip_rect(egui::Rect::from_min_max(
+            egui::pos2(text_left, header_rect.min.y),
+            egui::pos2(text_right, header_rect.max.y),
+        ))
+        .text(
+            egui::pos2(text_left, header_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            title,
+            egui::FontId::proportional(theme::FONT_UI_SM),
+            title_color,
+        );
 
-    let btn_id = egui::Id::new(("pane_menu_btn", pane_id));
-    let btn_resp = ui_kit::dot_menu_button(ui, btn_id, btn_rect, popup_open);
-
-    if btn_resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
-    }
-
-    egui::containers::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &btn_resp,
-        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_min_width(160.0);
-
-            if ui.button("Move to tab").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::MoveToTab(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-
-            ui.separator();
-
-            if ui.button("Split horizontal").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::SplitHorizontal(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-
-            if ui.button("Split vertical").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::SplitVertical(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-
-            ui.separator();
-
-            if ui.button("Close pane").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::Close(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-        },
+    // Click on header to focus pane
+    let hdr_resp = ui.interact(
+        header_rect,
+        egui::Id::new(("pane_hdr_click", pane_id)),
+        egui::Sense::click(),
     );
+    if hdr_resp.clicked() {
+        *rctx.clicked_pane_id = Some(pane_id);
+    }
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -274,7 +355,7 @@ fn render_terminal_leaf(
         } else {
             None
         };
-        let geo = crate::renderer::terminal_pass::TerminalView::new(Arc::clone(&session)).show(
+        let mut geo = crate::renderer::terminal_pass::TerminalView::new(Arc::clone(&session)).show(
             ui,
             is_focused,
             rctx.cursor_blink_on,
@@ -300,7 +381,10 @@ fn render_terminal_leaf(
                 .map(|p| geo.rect.contains(p))
                 .unwrap_or(false)
         });
-        if is_focused || pointer_in_rect {
+        geo.session_id = Some(sid);
+        if pointer_in_rect {
+            *rctx.active_term_geo = Some(geo);
+        } else if is_focused && rctx.active_term_geo.is_none() {
             *rctx.active_term_geo = Some(geo);
         }
     }
@@ -330,14 +414,85 @@ fn render_terminal_leaf(
     }
 }
 
+/// Render the floating text-search bar for non-terminal panes.
+/// Returns the 0-based line number of the current match (if any) so callers
+/// can scroll to it.
+fn render_text_search_bar(
+    ui: &mut egui::Ui,
+    pane_rect: egui::Rect,
+    content: &str,
+    search: &mut crate::search::TextSearchState,
+) -> Option<usize> {
+    if !search.active {
+        return None;
+    }
+    let t = theme::active();
+    let bar_w = 320.0_f32;
+    let bar_h = 30.0_f32;
+    let bar_rect = egui::Rect::from_min_size(
+        egui::pos2(pane_rect.max.x - bar_w - 8.0, pane_rect.min.y + 8.0),
+        egui::vec2(bar_w, bar_h),
+    );
+    ui.painter()
+        .rect_filled(bar_rect, theme::R_MD, t.surface0);
+    ui.painter()
+        .rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
+
+    let input_rect = egui::Rect::from_min_max(
+        egui::pos2(bar_rect.min.x + 6.0, bar_rect.min.y + 4.0),
+        egui::pos2(bar_rect.max.x - 90.0, bar_rect.max.y - 4.0),
+    );
+    let resp = ui.put(
+        input_rect,
+        egui::TextEdit::singleline(&mut search.query)
+            .desired_width(input_rect.width())
+            .font(egui::FontId::monospace(theme::FONT_UI_MD))
+            .hint_text("Search\u{2026}"),
+    );
+    if resp.changed() {
+        search.search(content);
+    }
+    resp.request_focus();
+
+    if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
+        search.prev_match();
+    } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        search.next_match();
+    }
+
+    let count_text = if search.matches.is_empty() {
+        if search.query.is_empty() {
+            String::new()
+        } else {
+            "0/0".to_string()
+        }
+    } else {
+        format!(
+            "{}/{}",
+            search.current_index.unwrap_or(0) + 1,
+            search.matches.len()
+        )
+    };
+    ui.painter().text(
+        egui::pos2(bar_rect.max.x - 48.0, bar_rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        &count_text,
+        egui::FontId::monospace(theme::FONT_UI_SM),
+        t.subtext0,
+    );
+
+    search.current_match().map(|m| m.line)
+}
+
 fn render_file_editor_leaf(
     ui: &mut egui::Ui,
     ed: &super::super::pane::FileEditorState,
     pane_id: u32,
     rctx: &mut RenderCtx<'_>,
 ) {
+    let pane_rect = ui.max_rect();
     ui.painter()
-        .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+        .rect_filled(pane_rect, 0.0, theme::active().bg_term);
     if !file_browser::is_supported_text_file(&ed.path, &ed.content) {
         ui.centered_and_justified(|ui| {
             ui.label(
@@ -400,6 +555,14 @@ fn render_file_editor_leaf(
             });
             ui.separator();
         }
+
+        let is_focused = rctx.focused_pane_id == Some(pane_id);
+        let scroll_target = if is_focused {
+            rctx.text_search.current_match().map(|m| m.line)
+        } else {
+            None
+        };
+
         if previewing {
             if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
                 if let Some(ref text) = et.1 {
@@ -472,10 +635,24 @@ fn render_file_editor_leaf(
                                         .frame(false),
                                 );
                             }
+
+                            if let Some(target_line) = scroll_target {
+                                let target_y = theme::SP_1 + target_line as f32 * line_h;
+                                let scroll_rect = egui::Rect::from_min_size(
+                                    egui::pos2(0.0, target_y),
+                                    egui::vec2(1.0, line_h),
+                                );
+                                ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+                            }
                         });
                     });
             }
         }
+
+        if is_focused && rctx.text_search.active {
+            render_text_search_bar(ui, pane_rect, &ed.content, &mut rctx.text_search);
+        }
+
         if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
             rctx.editor_saves.push(pane_id);
         }
@@ -488,8 +665,9 @@ fn render_note_editor_leaf(
     pane_id: u32,
     rctx: &mut RenderCtx<'_>,
 ) {
+    let pane_rect = ui.max_rect();
     let t = theme::active();
-    ui.painter().rect_filled(ui.max_rect(), 0.0, t.bg_term);
+    ui.painter().rect_filled(pane_rect, 0.0, t.bg_term);
 
     let label = match ne.workspace_id {
         Some(_) => "Workspace Notes",
@@ -505,12 +683,26 @@ fn render_note_editor_leaf(
     });
     ui.separator();
 
+    let is_focused = rctx.focused_pane_id == Some(pane_id);
+    let scroll_target = if is_focused {
+        rctx.text_search.current_match().map(|m| m.line)
+    } else {
+        None
+    };
+
     if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
         if let Some(ref mut text) = et.1 {
+            let content_snapshot = if is_focused && rctx.text_search.active {
+                Some(text.clone())
+            } else {
+                None
+            };
+
             egui::ScrollArea::both()
                 .id_source(("note_editor_scroll", pane_id))
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
                     ui.add(
                         egui::TextEdit::multiline(text)
                             .font(egui::TextStyle::Monospace)
@@ -518,14 +710,32 @@ fn render_note_editor_leaf(
                             .hint_text("Notes for this workspace\u{2026}")
                             .frame(false),
                     );
+                    if let Some(target_line) = scroll_target {
+                        let target_y = target_line as f32 * line_h;
+                        let scroll_rect = egui::Rect::from_min_size(
+                            egui::pos2(0.0, target_y),
+                            egui::vec2(1.0, line_h),
+                        );
+                        ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+                    }
                 });
+
+            if let Some(content) = content_snapshot {
+                render_text_search_bar(ui, pane_rect, &content, &mut rctx.text_search);
+            }
         }
     }
 }
 
-fn render_file_diff_leaf(ui: &mut egui::Ui, d: &super::super::pane::FileDiffState, pane_id: u32) {
+fn render_file_diff_leaf(
+    ui: &mut egui::Ui,
+    d: &super::super::pane::FileDiffState,
+    pane_id: u32,
+    rctx: &mut RenderCtx<'_>,
+) -> Option<super::super::diff_parser::DiffViewMode> {
+    let pane_rect = ui.max_rect();
     ui.painter()
-        .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+        .rect_filled(pane_rect, 0.0, theme::active().bg_term);
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("\u{21c4} {}", d.path.display()))
@@ -535,12 +745,55 @@ fn render_file_diff_leaf(ui: &mut egui::Ui, d: &super::super::pane::FileDiffStat
         );
     });
     ui.separator();
+
+    let mode_change = super::super::git_diff::render_diff_toolbar(ui, d.diff_mode);
+    ui.separator();
+
+    let is_focused = rctx.focused_pane_id == Some(pane_id);
+    let scroll_target = if is_focused {
+        rctx.text_search.current_match().map(|m| m.line)
+    } else {
+        None
+    };
+
     egui::ScrollArea::both()
         .id_source(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
-            super::super::git_diff::render_inline_diff(ui, &d.diff_content);
+            let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+            match d.diff_mode {
+                super::super::diff_parser::DiffViewMode::Inline => {
+                    super::super::git_diff::render_inline_diff_full(
+                        ui,
+                        &d.old_content,
+                        &d.new_content,
+                        &d.hunks,
+                    );
+                }
+                super::super::diff_parser::DiffViewMode::SideBySide => {
+                    super::super::git_diff::render_side_by_side_diff(
+                        ui,
+                        &d.old_content,
+                        &d.new_content,
+                        &d.hunks,
+                    );
+                }
+            }
+            if let Some(target_line) = scroll_target {
+                let target_y = target_line as f32 * line_h;
+                let scroll_rect = egui::Rect::from_min_size(
+                    egui::pos2(0.0, target_y),
+                    egui::vec2(1.0, line_h),
+                );
+                ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+            }
         });
+
+    if is_focused && rctx.text_search.active {
+        render_text_search_bar(ui, pane_rect, &d.new_content, &mut rctx.text_search);
+    }
+
+    mode_change
 }
 
 impl App {
@@ -615,6 +868,21 @@ impl App {
                 let s = matches!(&t, PaneNode::Split { .. });
                 (t, s)
             };
+            // Pre-compute display titles for all leaf panes so the header
+            // renderer doesn't need access to App.
+            let pane_titles: HashMap<u32, String> = if has_splits {
+                tree.leaf_ids()
+                    .into_iter()
+                    .filter_map(|pid| {
+                        let idx = self.pane_state.panes.iter().position(|p| p.id == pid)?;
+                        Some((pid, self.tab_display_text(idx)))
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
+
+            let mut diff_mode_changes = Vec::new();
             let mut rctx = RenderCtx {
                 sessions: &self.session_state.sessions,
                 panes: &self.pane_state.panes,
@@ -638,12 +906,25 @@ impl App {
                 cursor_style: self.settings.cursor_style,
                 has_splits,
                 flash: &self.flash,
+                pane_titles: &pane_titles,
+                text_search: &mut self.text_search,
+                diff_mode_changes: &mut diff_mode_changes,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
 
             // Global flash overlay (rare — PTY spawn errors)
             self.flash
                 .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
+
+            for (pane_id, new_mode) in diff_mode_changes {
+                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                    if let PaneContent::FileDiff(ref mut d) = pane.content {
+                        d.diff_mode = new_mode;
+                    }
+                }
+                self.settings.diff_view_mode = new_mode;
+                self.settings.save();
+            }
         }
 
         // ── File drag hover overlay ────────────────────────────────────────

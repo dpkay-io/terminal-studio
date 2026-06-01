@@ -2,6 +2,7 @@ use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
 use crate::ui_kit;
 
+use super::super::pane::PaneContent;
 use super::super::App;
 
 impl App {
@@ -258,11 +259,27 @@ impl App {
                 self.notes_panel_collapsed = !self.notes_panel_collapsed;
             }
             AppAction::SearchTerminal => {
-                self.term_search.active = !self.term_search.active;
-                if !self.term_search.active {
+                let is_terminal = self.pane_state.active_pane_id.and_then(|pid| {
+                    self.pane_state.panes.iter().find(|p| p.id == pid)
+                }).map(|p| matches!(p.content, PaneContent::Terminal(_)))
+                .unwrap_or(true);
+                if is_terminal {
+                    self.text_search.clear();
+                    self.term_search.active = !self.term_search.active;
+                    if !self.term_search.active {
+                        self.term_search.query.clear();
+                        self.term_search.matches.clear();
+                        self.term_search.current_index = None;
+                    }
+                } else {
+                    self.term_search.active = false;
                     self.term_search.query.clear();
                     self.term_search.matches.clear();
                     self.term_search.current_index = None;
+                    self.text_search.active = !self.text_search.active;
+                    if !self.text_search.active {
+                        self.text_search.clear();
+                    }
                 }
             }
             AppAction::SearchAllSessions => {

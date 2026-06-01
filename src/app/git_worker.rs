@@ -40,16 +40,21 @@ enum Job {
         cwd: PathBuf,
         pattern: String,
     },
+    Revert {
+        cwd: PathBuf,
+        path: String,
+    },
 }
 
 pub(super) struct WorkerResults {
     pub(super) git: HashMap<PathBuf, (String, String)>,
-    pub(super) diff_results: Vec<(PathBuf, String)>,
+    pub(super) diff_results: Vec<(PathBuf, String, String, String)>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
     pub(super) commit_results: Vec<Result<PathBuf, String>>,
     pub(super) push_results: Vec<Result<PathBuf, String>>,
     pub(super) last_commit_msg: HashMap<PathBuf, String>,
     pub(super) gitignore_results: Vec<Result<PathBuf, String>>,
+    pub(super) revert_results: Vec<Result<PathBuf, String>>,
 }
 
 pub(super) struct GitWorker {
@@ -71,6 +76,7 @@ impl GitWorker {
             push_results: Vec::new(),
             last_commit_msg: HashMap::new(),
             gitignore_results: Vec::new(),
+            revert_results: Vec::new(),
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let alive = Arc::new(AtomicBool::new(true));
@@ -145,17 +151,27 @@ impl GitWorker {
                                 }
                             }
                             Job::Diff { cwd, rel_path } => {
-                                let diff_output = std::process::Command::new("git")
+                                let old_content = std::process::Command::new("git")
+                                    .args(["show", &format!("HEAD:{}", rel_path)])
+                                    .current_dir(&cwd)
+                                    .output()
+                                    .ok()
+                                    .filter(|o| o.status.success())
+                                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                                    .unwrap_or_default();
+                                let raw_diff = std::process::Command::new("git")
                                     .args(["diff", "HEAD", "--", &rel_path])
                                     .current_dir(&cwd)
                                     .output()
                                     .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
                                     .unwrap_or_default();
+                                let new_content = std::fs::read_to_string(cwd.join(&rel_path))
+                                    .unwrap_or_default();
                                 let full_path = cwd.join(&rel_path);
                                 results_bg
                                     .lock()
                                     .diff_results
-                                    .push((full_path, diff_output));
+                                    .push((full_path, old_content, new_content, raw_diff));
                             }
                             Job::UnpushedCommits(cwd) => {
                                 let parse_log =
@@ -301,6 +317,26 @@ impl GitWorker {
                                 })();
                                 results_bg.lock().gitignore_results.push(result);
                             }
+                            Job::Revert { cwd, path } => {
+                                let output = std::process::Command::new("git")
+                                    .args(["checkout", "HEAD", "--", &path])
+                                    .current_dir(&cwd)
+                                    .output();
+                                let result = match output {
+                                    Ok(o) if o.status.success() => {
+                                        let info = run_git_info(&cwd);
+                                        results_bg.lock().git.insert(cwd.clone(), info);
+                                        Ok(cwd)
+                                    }
+                                    Ok(o) => {
+                                        let stderr =
+                                            String::from_utf8_lossy(&o.stderr).into_owned();
+                                        Err(stderr)
+                                    }
+                                    Err(e) => Err(e.to_string()),
+                                };
+                                results_bg.lock().revert_results.push(result);
+                            }
                         }
                         ctx_bg.request_repaint();
                     }
@@ -360,7 +396,7 @@ impl GitWorker {
         });
     }
 
-    pub(super) fn take_diff_results(&self) -> Vec<(PathBuf, String)> {
+    pub(super) fn take_diff_results(&self) -> Vec<(PathBuf, String, String, String)> {
         let mut lock = self.results.lock();
         std::mem::take(&mut lock.diff_results)
     }
@@ -413,6 +449,17 @@ impl GitWorker {
 
     pub(super) fn take_gitignore_results(&self) -> Vec<Result<PathBuf, String>> {
         std::mem::take(&mut self.results.lock().gitignore_results)
+    }
+
+    pub(super) fn enqueue_revert(&self, cwd: &Path, path: String) {
+        let _ = self.tx.send(Job::Revert {
+            cwd: cwd.to_path_buf(),
+            path,
+        });
+    }
+
+    pub(super) fn take_revert_results(&self) -> Vec<Result<PathBuf, String>> {
+        std::mem::take(&mut self.results.lock().revert_results)
     }
 }
 
@@ -543,6 +590,71 @@ mod tests {
         assert!(result.unwrap().is_ok());
         let content = std::fs::read_to_string(tmp.join(".gitignore")).unwrap();
         assert_eq!(content.matches("target/").count(), 1);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_take_revert_results_empty() {
+        let worker = GitWorker::spawn(egui::Context::default());
+        assert!(worker.take_revert_results().is_empty());
+    }
+
+    #[test]
+    fn test_revert_restores_file() {
+        let tmp = std::env::temp_dir().join(format!("git_worker_revert_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+
+        let file_path = tmp.join("test.txt");
+        std::fs::write(&file_path, "original\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+
+        std::fs::write(&file_path, "modified\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "modified\n"
+        );
+
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_revert(&tmp, "test.txt".to_string());
+
+        let mut result = None;
+        for _ in 0..60 {
+            std::thread::sleep(Duration::from_millis(50));
+            let results = worker.take_revert_results();
+            if let Some(r) = results.into_iter().next() {
+                result = Some(r);
+                break;
+            }
+        }
+        assert!(result.is_some(), "revert job should produce a result");
+        assert!(result.unwrap().is_ok());
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content.trim(), "original");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
