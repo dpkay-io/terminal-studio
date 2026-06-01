@@ -99,7 +99,7 @@ impl App {
 
                         // Build filtered action list
                         let query = self.command_palette_query.trim().to_lowercase();
-                        let all_actions = all_palette_actions();
+                        let all_actions = all_palette_actions(&self.shortcut_registry);
                         let filtered: Vec<&PaletteEntry> = if query.is_empty() {
                             all_actions.iter().collect()
                         } else {
@@ -327,7 +327,7 @@ struct PaletteEntry {
     shortcut_hint: Option<String>,
 }
 
-fn all_palette_actions() -> Vec<PaletteEntry> {
+fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
     use AppAction::*;
     let actions = [
         ToggleLeftSidebar,
@@ -353,7 +353,6 @@ fn all_palette_actions() -> Vec<PaletteEntry> {
         ZoomPane,
     ];
 
-    let registry = ShortcutRegistry::new();
     actions
         .into_iter()
         .map(|action| {
@@ -403,7 +402,8 @@ mod tests {
 
     #[test]
     fn all_palette_actions_non_empty() {
-        let actions = all_palette_actions();
+        let registry = ShortcutRegistry::new();
+        let actions = all_palette_actions(&registry);
         assert!(!actions.is_empty());
         for entry in &actions {
             assert!(!entry.label.is_empty());
@@ -412,7 +412,8 @@ mod tests {
 
     #[test]
     fn palette_entry_labels_unique() {
-        let actions = all_palette_actions();
+        let registry = ShortcutRegistry::new();
+        let actions = all_palette_actions(&registry);
         let mut labels: Vec<&str> = actions.iter().map(|e| e.label.as_str()).collect();
         labels.sort();
         labels.dedup();

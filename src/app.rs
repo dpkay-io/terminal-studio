@@ -529,7 +529,7 @@ impl eframe::App for App {
             }
 
             // Drain commit/push results and show flash feedback
-            if let Some(result) = self.workers.git_worker.take_commit_result() {
+            for result in self.workers.git_worker.take_commit_results() {
                 match result {
                     Ok(cwd) => {
                         self.flash
@@ -544,7 +544,7 @@ impl eframe::App for App {
                     }
                 }
             }
-            if let Some(result) = self.workers.git_worker.take_push_result() {
+            for result in self.workers.git_worker.take_push_results() {
                 self.push_in_progress = false;
                 match result {
                     Ok(cwd) => {
@@ -561,7 +561,7 @@ impl eframe::App for App {
                     }
                 }
             }
-            if let Some(result) = self.workers.git_worker.take_gitignore_result() {
+            for result in self.workers.git_worker.take_gitignore_results() {
                 match result {
                     Ok(_cwd) => {
                         self.flash
@@ -3336,10 +3336,10 @@ impl App {
         }
 
         // 6. Editor text changes
-        for (i, (pane_id, new_text)) in editor_texts.iter().enumerate() {
+        for (pane_id, new_text) in &editor_texts {
             if let Some(ref new_text) = new_text {
-                if i < self.pane_state.panes.len() && self.pane_state.panes[i].id == *pane_id {
-                    match self.pane_state.panes[i].content {
+                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == *pane_id) {
+                    match pane.content {
                         PaneContent::FileEditor(ref mut ed) if *new_text != ed.content => {
                             ed.content = new_text.clone();
                             ed.dirty = true;

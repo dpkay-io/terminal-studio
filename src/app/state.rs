@@ -803,7 +803,7 @@ impl App {
                     return;
                 }
             } else if self.current_window_id.is_some() {
-                let pane_id = self
+                if let Some(pane_id) = self
                     .pane_state
                     .panes
                     .iter()
@@ -812,17 +812,18 @@ impl App {
                             == group
                     })
                     .map(|p| p.id)
-                    .unwrap_or(0);
-                self.pending_window_focus = Some(PendingWindowFocus {
-                    target_viewport_id: egui::ViewportId::ROOT,
-                    target_window_idx: None,
-                    pane_id,
-                    group: Some(ws_id),
-                });
+                {
+                    self.pending_window_focus = Some(PendingWindowFocus {
+                        target_viewport_id: egui::ViewportId::ROOT,
+                        target_window_idx: None,
+                        pane_id,
+                        group: Some(ws_id),
+                    });
+                }
                 return;
             }
         } else if self.current_window_id.is_some() {
-            let pane_id = self
+            if let Some(pane_id) = self
                 .pane_state
                 .panes
                 .iter()
@@ -831,13 +832,14 @@ impl App {
                         .is_none()
                 })
                 .map(|p| p.id)
-                .unwrap_or(0);
-            self.pending_window_focus = Some(PendingWindowFocus {
-                target_viewport_id: egui::ViewportId::ROOT,
-                target_window_idx: None,
-                pane_id,
-                group: None,
-            });
+            {
+                self.pending_window_focus = Some(PendingWindowFocus {
+                    target_viewport_id: egui::ViewportId::ROOT,
+                    target_window_idx: None,
+                    pane_id,
+                    group: None,
+                });
+            }
             return;
         }
 
@@ -1057,9 +1059,14 @@ impl App {
             .iter()
             .filter_map(|p| {
                 let content = match &p.content {
-                    PaneContent::Terminal(sid) => SavedPaneContent::Terminal {
-                        session_index: session_id_to_index.get(sid).copied().unwrap_or(0),
-                    },
+                    PaneContent::Terminal(sid) => {
+                        let Some(&idx) = session_id_to_index.get(sid) else {
+                            return None;
+                        };
+                        SavedPaneContent::Terminal {
+                            session_index: idx,
+                        }
+                    }
                     PaneContent::DeferredTerminal {
                         cwd,
                         pending_command,

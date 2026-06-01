@@ -46,10 +46,10 @@ pub(super) struct WorkerResults {
     pub(super) git: HashMap<PathBuf, (String, String)>,
     pub(super) diff_results: Vec<(PathBuf, String)>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
-    pub(super) commit_result: Option<Result<PathBuf, String>>,
-    pub(super) push_result: Option<Result<PathBuf, String>>,
+    pub(super) commit_results: Vec<Result<PathBuf, String>>,
+    pub(super) push_results: Vec<Result<PathBuf, String>>,
     pub(super) last_commit_msg: HashMap<PathBuf, String>,
-    pub(super) gitignore_result: Option<Result<PathBuf, String>>,
+    pub(super) gitignore_results: Vec<Result<PathBuf, String>>,
 }
 
 pub(super) struct GitWorker {
@@ -67,10 +67,10 @@ impl GitWorker {
             git: HashMap::new(),
             diff_results: Vec::new(),
             unpushed: HashMap::new(),
-            commit_result: None,
-            push_result: None,
+            commit_results: Vec::new(),
+            push_results: Vec::new(),
             last_commit_msg: HashMap::new(),
-            gitignore_result: None,
+            gitignore_results: Vec::new(),
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let alive = Arc::new(AtomicBool::new(true));
@@ -157,21 +157,40 @@ impl GitWorker {
                                 .push((full_path, diff_output));
                         }
                         Job::UnpushedCommits(cwd) => {
-                            let output = std::process::Command::new("git")
-                                .args(["log", "--oneline", "@{upstream}..HEAD"])
-                                .current_dir(&cwd)
-                                .output()
-                                .ok();
-                            let commits: Vec<(String, String)> = output
-                                .filter(|o| o.status.success())
-                                .and_then(|o| String::from_utf8(o.stdout).ok())
-                                .map(|s| {
+                            let parse_log = |output: std::process::Output| -> Option<Vec<(String, String)>> {
+                                if !output.status.success() {
+                                    return None;
+                                }
+                                String::from_utf8(output.stdout).ok().map(|s| {
                                     s.lines()
                                         .filter_map(|line| {
                                             let (hash, msg) = line.split_once(' ')?;
                                             Some((hash.to_string(), msg.to_string()))
                                         })
                                         .collect()
+                                })
+                            };
+                            let commits = std::process::Command::new("git")
+                                .args(["log", "--oneline", "@{upstream}..HEAD"])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok()
+                                .and_then(parse_log)
+                                .or_else(|| {
+                                    // No upstream configured — try origin/main, then origin/master
+                                    for remote_branch in &["origin/main", "origin/master"] {
+                                        let range = format!("{remote_branch}..HEAD");
+                                        if let Some(commits) = std::process::Command::new("git")
+                                            .args(["log", "--oneline", &range])
+                                            .current_dir(&cwd)
+                                            .output()
+                                            .ok()
+                                            .and_then(&parse_log)
+                                        {
+                                            return Some(commits);
+                                        }
+                                    }
+                                    None
                                 })
                                 .unwrap_or_default();
                             results_bg.lock().unpushed.insert(cwd, commits);
@@ -211,7 +230,7 @@ impl GitWorker {
                                         }
                                         Err(e) => Err(e.to_string()),
                                     };
-                                    res.lock().commit_result = Some(result);
+                                    res.lock().commit_results.push(result);
                                     ctx_c.request_repaint();
                                 });
                         }
@@ -241,7 +260,7 @@ impl GitWorker {
                                         }
                                         Err(e) => Err(e.to_string()),
                                     };
-                                    res.lock().push_result = Some(result);
+                                    res.lock().push_results.push(result);
                                     ctx_p.request_repaint();
                                 });
                         }
@@ -272,13 +291,13 @@ impl GitWorker {
                                 }
                                 content.push_str(&pattern);
                                 content.push('\n');
-                                std::fs::write(&gitignore_path, &content)
+                                crate::util::atomic_write(&gitignore_path, &content)
                                     .map_err(|e| e.to_string())?;
                                 let info = run_git_info(&cwd);
                                 results_bg.lock().git.insert(cwd.clone(), info);
                                 Ok(cwd.clone())
                             })();
-                            results_bg.lock().gitignore_result = Some(result);
+                            results_bg.lock().gitignore_results.push(result);
                         }
                     }
                     ctx_bg.request_repaint();
@@ -360,8 +379,8 @@ impl GitWorker {
         });
     }
 
-    pub(super) fn take_commit_result(&self) -> Option<Result<PathBuf, String>> {
-        self.results.lock().commit_result.take()
+    pub(super) fn take_commit_results(&self) -> Vec<Result<PathBuf, String>> {
+        std::mem::take(&mut self.results.lock().commit_results)
     }
 
     pub(super) fn enqueue_push(&self, cwd: &Path, force: bool) {
@@ -371,8 +390,8 @@ impl GitWorker {
         });
     }
 
-    pub(super) fn take_push_result(&self) -> Option<Result<PathBuf, String>> {
-        self.results.lock().push_result.take()
+    pub(super) fn take_push_results(&self) -> Vec<Result<PathBuf, String>> {
+        std::mem::take(&mut self.results.lock().push_results)
     }
 
     pub(super) fn enqueue_last_commit_msg(&self, cwd: &Path) {
@@ -390,8 +409,8 @@ impl GitWorker {
         });
     }
 
-    pub(super) fn take_gitignore_result(&self) -> Option<Result<PathBuf, String>> {
-        self.results.lock().gitignore_result.take()
+    pub(super) fn take_gitignore_results(&self) -> Vec<Result<PathBuf, String>> {
+        std::mem::take(&mut self.results.lock().gitignore_results)
     }
 }
 
@@ -458,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn test_take_gitignore_result_empty() {
+    fn test_take_gitignore_results_empty() {
         let worker = GitWorker::spawn(egui::Context::default());
-        assert!(worker.take_gitignore_result().is_none());
+        assert!(worker.take_gitignore_results().is_empty());
     }
 
     #[test]
@@ -480,7 +499,8 @@ mod tests {
         let mut result = None;
         for _ in 0..60 {
             std::thread::sleep(Duration::from_millis(50));
-            if let Some(r) = worker.take_gitignore_result() {
+            let results = worker.take_gitignore_results();
+            if let Some(r) = results.into_iter().next() {
                 result = Some(r);
                 break;
             }
@@ -512,7 +532,8 @@ mod tests {
         let mut result = None;
         for _ in 0..60 {
             std::thread::sleep(Duration::from_millis(50));
-            if let Some(r) = worker.take_gitignore_result() {
+            let results = worker.take_gitignore_results();
+            if let Some(r) = results.into_iter().next() {
                 result = Some(r);
                 break;
             }

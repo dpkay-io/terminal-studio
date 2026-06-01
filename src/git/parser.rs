@@ -96,7 +96,9 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
         }
         let x = line.as_bytes()[0];
         let y = line.as_bytes()[1];
-        let raw_path = line[3..].trim();
+        let Some(raw_path) = line.get(3..) else {
+            continue;
+        };
 
         // Staged (index) changes -- first column
         match x {

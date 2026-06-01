@@ -449,85 +449,80 @@ impl ShortcutRegistry {
     }
 
     pub fn groups(&self) -> Vec<ShortcutGroup> {
-        vec![
-            ShortcutGroup {
-                name: "Panel Navigation",
-                entries: vec![
-                    (AppAction::ToggleLeftSidebar, Shortcut::cs(egui::Key::B)),
-                    (AppAction::ToggleRightSidebar, Shortcut::cs(egui::Key::E)),
-                    (AppAction::FocusTerminal, Shortcut::cs(egui::Key::Backtick)),
+        let lookup = |action: AppAction| -> Option<Shortcut> {
+            self.bindings
+                .iter()
+                .find(|(_, a)| *a == action)
+                .map(|(s, _)| s.clone())
+        };
+
+        let group_defs: &[(&str, &[AppAction])] = &[
+            (
+                "Panel Navigation",
+                &[
+                    AppAction::ToggleLeftSidebar,
+                    AppAction::ToggleRightSidebar,
+                    AppAction::FocusTerminal,
                 ],
-            },
-            ShortcutGroup {
-                name: "Tab Management",
-                entries: vec![
-                    (AppAction::NewTerminalTab, Shortcut::cs(egui::Key::T)),
-                    (AppAction::CloseCurrentPane, Shortcut::cs(egui::Key::W)),
-                    (AppAction::PreviousTab, Shortcut::cs(egui::Key::OpenBracket)),
-                    (AppAction::NextTab, Shortcut::cs(egui::Key::CloseBracket)),
-                    (AppAction::SwitchToTab1, Shortcut::cs(egui::Key::Num1)),
-                    (AppAction::SwitchToTab9, Shortcut::cs(egui::Key::Num9)),
+            ),
+            (
+                "Tab Management",
+                &[
+                    AppAction::NewTerminalTab,
+                    AppAction::CloseCurrentPane,
+                    AppAction::PreviousTab,
+                    AppAction::NextTab,
+                    AppAction::SwitchToTab1,
+                    AppAction::SwitchToTab9,
                 ],
-            },
-            ShortcutGroup {
-                name: "Pane Splits",
-                entries: vec![
-                    (
-                        AppAction::SplitHorizontal,
-                        Shortcut::cs(egui::Key::Backslash),
-                    ),
-                    (AppAction::SplitVertical, Shortcut::cs(egui::Key::Minus)),
-                    (AppAction::ZoomPane, Shortcut::cs(egui::Key::Z)),
+            ),
+            (
+                "Pane Splits",
+                &[
+                    AppAction::SplitHorizontal,
+                    AppAction::SplitVertical,
+                    AppAction::ZoomPane,
                 ],
-            },
-            ShortcutGroup {
-                name: "Workspace",
-                entries: vec![
-                    (AppAction::OpenQuickSwitcher, Shortcut::cs(egui::Key::Space)),
-                    (AppAction::OpenSettings, Shortcut::cs(egui::Key::Comma)),
-                    (AppAction::NextWorkspace, Shortcut::cs(egui::Key::PageDown)),
-                    (AppAction::PrevWorkspace, Shortcut::cs(egui::Key::PageUp)),
+            ),
+            (
+                "Workspace",
+                &[
+                    AppAction::OpenQuickSwitcher,
+                    AppAction::OpenSettings,
+                    AppAction::NextWorkspace,
+                    AppAction::PrevWorkspace,
                 ],
-            },
-            ShortcutGroup {
-                name: "Right Panel",
-                entries: vec![
-                    (AppAction::RightTabGitDiff, Shortcut::cs(egui::Key::G)),
-                    (AppAction::ToggleNotes, Shortcut::cs(egui::Key::J)),
+            ),
+            (
+                "Right Panel",
+                &[AppAction::RightTabGitDiff, AppAction::ToggleNotes],
+            ),
+            ("Session", &[AppAction::DuplicateSession]),
+            (
+                "Search",
+                &[
+                    AppAction::FocusSessionSearch,
+                    AppAction::RightTabDirectory,
+                    AppAction::SearchTerminal,
+                    AppAction::SearchAllSessions,
                 ],
-            },
-            ShortcutGroup {
-                name: "Session",
-                entries: vec![(AppAction::DuplicateSession, Shortcut::cs(egui::Key::K))],
-            },
-            ShortcutGroup {
-                name: "Search",
-                entries: vec![
-                    (AppAction::FocusSessionSearch, Shortcut::cs(egui::Key::F)),
-                    (AppAction::RightTabDirectory, Shortcut::cs(egui::Key::D)),
-                    (
-                        AppAction::SearchTerminal,
-                        Shortcut {
-                            ctrl: true,
-                            shift: true,
-                            alt: false,
-                            key: egui::Key::F,
-                        },
-                    ),
-                    (AppAction::SearchAllSessions, Shortcut::cs(egui::Key::N)),
-                ],
-            },
-            ShortcutGroup {
-                name: "Help",
-                entries: vec![
-                    (
-                        AppAction::ToggleShortcutHelp,
-                        Shortcut::cs(egui::Key::Slash),
-                    ),
-                    (AppAction::CommandPalette, Shortcut::cs(egui::Key::P)),
-                ],
-            },
-        ]
+            ),
+            (
+                "Help",
+                &[AppAction::ToggleShortcutHelp, AppAction::CommandPalette],
+            ),
+        ];
+
+        group_defs
+            .iter()
+            .map(|(name, actions)| ShortcutGroup {
+                name,
+                entries: actions
+                    .iter()
+                    .filter_map(|&action| lookup(action).map(|s| (action, s)))
+                    .collect(),
+            })
+            .collect()
     }
 }
 

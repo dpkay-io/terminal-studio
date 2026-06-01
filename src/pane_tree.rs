@@ -224,7 +224,7 @@ pub fn split_rect(
             (a, div, b)
         }
         SplitDir::Vertical => {
-            let y = rect.min.y + rect.height() * ratio;
+            let y = (rect.min.y + rect.height() * ratio).round();
             let a = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y - half));
             let div = egui::Rect::from_min_max(
                 egui::pos2(rect.min.x, y - half),

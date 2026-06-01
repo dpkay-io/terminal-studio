@@ -29,11 +29,15 @@ pub fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()
     })?;
     std::fs::create_dir_all(parent)?;
 
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = parent.join(format!(
-        ".{}.tmp",
+        ".{}.{}.{}.tmp",
         path.file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("data")
+            .unwrap_or("data"),
+        std::process::id(),
+        seq,
     ));
 
     std::fs::write(&tmp, content)?;
