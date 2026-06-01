@@ -558,6 +558,10 @@ impl App {
         split_ratio_changes: &mut Vec<(u32, f32)>,
         pane_context_actions: &mut Vec<PaneContextAction>,
     ) {
+        // Clear stale terminal geometry so non-terminal panes (e.g. file editor)
+        // don't inherit geometry from a previously rendered terminal tab (H9).
+        self.active_term_geo = None;
+
         let root_pane_id = active_pane_id_snap.and_then(|apid| {
             if self.pane_state.pane_trees.contains_key(&apid) {
                 return Some(apid);

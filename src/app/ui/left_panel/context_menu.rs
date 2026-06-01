@@ -93,20 +93,19 @@ impl App {
     /// Handle closing a pane from the sidebar quit button.
     fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
         let Some(qpid) = quit_pane_id else { return };
-        let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == qpid) else {
+        if !self.pane_state.panes.iter().any(|p| p.id == qpid) {
             return;
-        };
-
-        let killed_sid = match &self.pane_state.panes[pos].content {
-            PaneContent::Terminal(sid) => Some(*sid),
-            _ => None,
-        };
-        self.pane_state.panes.remove(pos);
-        if self.pane_state.active_pane_id == Some(qpid) {
-            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
         }
-        // Clean up split tree
-        if self.pane_state.pane_trees.remove(&qpid).is_none() {
+
+        // Collect ALL pane IDs that must be closed.  When the quit target is
+        // the root of a split tree we must also close every sibling leaf so
+        // their PTY sessions are not leaked (H7).
+        let panes_to_close: Vec<u32> = if let Some(tree) = self.pane_state.pane_trees.remove(&qpid)
+        {
+            // qpid is a root key — collect every leaf in the tree.
+            tree.leaf_ids()
+        } else {
+            // qpid lives inside another root's tree — prune it.
             let root_pid_opt = self
                 .pane_state
                 .pane_trees
@@ -125,14 +124,51 @@ impl App {
                     }
                 }
             }
-        }
-        if let Some(sid) = killed_sid {
-            self.session_state.remove(sid);
-            if self.session_state.active_id == Some(sid) {
-                self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
-                self.update_is_active_flags();
+            vec![qpid]
+        };
+
+        // Clear zoomed state if the zoomed pane is among those being closed (H8).
+        if let Some(zpid) = self.zoomed_pane_id {
+            if panes_to_close.contains(&zpid) {
+                self.zoomed_pane_id = None;
             }
         }
+
+        // Collect session IDs to kill, then remove pane entries.
+        let killed_sids: Vec<u32> = self
+            .pane_state
+            .panes
+            .iter()
+            .filter(|p| panes_to_close.contains(&p.id))
+            .filter_map(|p| match &p.content {
+                PaneContent::Terminal(sid) => Some(*sid),
+                _ => None,
+            })
+            .collect();
+        self.pane_state
+            .panes
+            .retain(|p| !panes_to_close.contains(&p.id));
+
+        if self
+            .pane_state
+            .active_pane_id
+            .is_some_and(|id| panes_to_close.contains(&id))
+        {
+            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+        }
+
+        for sid in &killed_sids {
+            self.session_state.remove(*sid);
+        }
+        if self
+            .session_state
+            .active_id
+            .is_some_and(|id| killed_sids.contains(&id))
+        {
+            self.session_state.active_id = self.session_state.sessions.first().map(|e| e.id);
+            self.update_is_active_flags();
+        }
+
         // Ensure active session is shown in a pane
         if self.pane_state.panes.is_empty() {
             if let Some(new_sid) = self.session_state.active_id {

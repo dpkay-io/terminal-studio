@@ -325,7 +325,7 @@ impl KeybindingsConfig {
             (
                 Shortcut {
                     ctrl: true,
-                    shift: false,
+                    shift: true,
                     alt: false,
                     key: egui::Key::F,
                 },

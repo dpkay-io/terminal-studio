@@ -254,14 +254,14 @@ impl ThemeDef {
         };
 
         let cursor_color = if self.is_light {
-            Color32::from_rgba_premultiplied(40, 40, 40, ALPHA_CURSOR)
+            Color32::from_rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR)
         } else {
-            Color32::from_rgba_premultiplied(255, 255, 255, ALPHA_CURSOR)
+            Color32::from_rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR)
         };
         let cursor_dim_color = if self.is_light {
-            Color32::from_rgba_premultiplied(40, 40, 40, ALPHA_CURSOR_DIM)
+            Color32::from_rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR_DIM)
         } else {
-            Color32::from_rgba_premultiplied(255, 255, 255, ALPHA_CURSOR_DIM)
+            Color32::from_rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR_DIM)
         };
         let selection_bg_rgb = blend(self.base, self.blue, 0.55);
         let scrollbar_color = if self.is_light {

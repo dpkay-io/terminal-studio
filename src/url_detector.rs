@@ -22,8 +22,8 @@ pub fn detect_urls(lines: &[(i32, String)]) -> Vec<DetectedUrl> {
         for m in re.find_iter(text) {
             urls.push(DetectedUrl {
                 line: *line_idx,
-                start_col: m.start(),
-                end_col: m.end(),
+                start_col: text[..m.start()].chars().count(),
+                end_col: text[..m.end()].chars().count(),
                 url: m.as_str().to_string(),
             });
         }

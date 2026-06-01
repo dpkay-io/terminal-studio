@@ -146,6 +146,10 @@ pub fn reader_thread(
     let mut buf = [0u8; 65536];
 
     loop {
+        if !alive.load(Ordering::Relaxed) {
+            break;
+        }
+
         let n = match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
@@ -154,6 +158,10 @@ pub fn reader_thread(
                 break;
             }
         };
+
+        if !alive.load(Ordering::Relaxed) {
+            break;
+        }
 
         // ── Tee: scan for OSC 7 / OSC 52 without holding session lock ────────
         let mut cwd_perf = CwdPerformer::new();

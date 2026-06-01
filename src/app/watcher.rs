@@ -83,7 +83,7 @@ impl WatchState {
         for dir in to_add {
             if self
                 .watcher
-                .watch(&dir, RecursiveMode::NonRecursive)
+                .watch(&dir, RecursiveMode::Recursive)
                 .is_ok()
             {
                 let gd = dir.join(".git");
@@ -139,10 +139,24 @@ impl WatchState {
 
         for event in events {
             for path in &event.paths {
-                let dir: PathBuf = match path.parent().map(PathBuf::from) {
-                    Some(p) if self.watched.contains(&p) => p,
-                    Some(p) if self.git_dirs.contains_key(&p) => self.git_dirs[&p].clone(),
-                    _ => continue,
+                // Walk up from the event path to find the watched root directory.
+                // With recursive watching, events arrive from subdirectories too.
+                let dir: PathBuf = if let Some(mut p) = path.parent().map(PathBuf::from) {
+                    if self.git_dirs.contains_key(&p) {
+                        self.git_dirs[&p].clone()
+                    } else {
+                        loop {
+                            if self.watched.contains(&p) {
+                                break p;
+                            }
+                            match p.parent() {
+                                Some(parent) if parent != p => p = parent.to_path_buf(),
+                                _ => break p, // will fail the dir_data lookup below
+                            }
+                        }
+                    }
+                } else {
+                    continue;
                 };
                 let Some(data) = self.dir_data.get_mut(&dir) else {
                     continue;
@@ -190,7 +204,7 @@ impl WatchState {
             }
         }
 
-        // Batch dir refreshes — one scan per dir instead of one per event.
+        // Batch dir refreshes -- one scan per dir instead of one per event.
         for dir in dirs_needing_refresh {
             if let Some(data) = self.dir_data.get_mut(&dir) {
                 data.dir_entries = Arc::new(list_dir_entries(&dir));

@@ -277,6 +277,7 @@ impl eframe::App for App {
             || self.show_settings
             || self.show_shortcut_help
             || self.show_quick_switcher
+            || self.show_command_palette
             || self.term_search.active
             || self.show_global_search
             || self.session_search_active
@@ -1975,7 +1976,13 @@ impl App {
                 || self.show_settings
                 || self.show_shortcut_help
                 || self.show_quick_switcher
-                || self.show_command_palette;
+                || self.show_command_palette
+                || self.open_folder_dialog.is_some()
+                || self.show_close_all_confirm
+                || self.show_commit_dialog
+                || self.show_push_dialog
+                || self.show_stage_all_confirm
+                || self.show_quit_confirm;
 
             // Global shortcuts that work even when a modal/dialog is open
             {
@@ -1997,7 +2004,7 @@ impl App {
                         Some(AppAction::SearchAllSessions)
                     } else if i.consume_key(cs, egui::Key::Z) {
                         Some(AppAction::ZoomPane)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
+                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
                     } else if (self.show_shortcut_help || self.term_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                         if self.show_global_search {
@@ -2224,6 +2231,7 @@ impl App {
                                     egui::Key::ArrowDown  => Some(SplitDir::Vertical),
                                     _ => None,
                                 };
+                                let mut handled = false;
                                 if let Some(_dir) = dir_opt {
                                     if let Some(active_pid) = active_pane_id_snap {
                                         let root_pid_opt = self.pane_state.pane_trees.iter()
@@ -2243,17 +2251,21 @@ impl App {
                                                             }
                                                         };
                                                         clicked_pane_id = Some(next);
+                                                        handled = true;
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                } else if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
-                                    if let Some(sid) = active_session_id {
-                                        self.scroll_accum.remove(&sid);
-                                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                            let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
+                                }
+                                if !handled {
+                                    if let Some(bytes) = key_to_pty_bytes(key, modifiers) {
+                                        if let Some(sid) = active_session_id {
+                                            self.scroll_accum.remove(&sid);
+                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                                self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
+                                                let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
+                                            }
                                         }
                                     }
                                 }
@@ -2463,6 +2475,44 @@ impl App {
                                     if let Some(sel) = &mut self.term_selection {
                                         sel.end_col = col;
                                         sel.end_row = row;
+                                    }
+                                }
+                            }
+                        }
+                        egui::Event::PointerMoved(pos) if !self.term_selecting => {
+                            if let Some(sid) = active_session_id {
+                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                    let (drag, motion, sgr) = {
+                                        let s = self.session_state.sessions[idx].session.read();
+                                        let mode = s.term.mode();
+                                        (
+                                            mode.contains(TermMode::MOUSE_DRAG),
+                                            mode.contains(TermMode::MOUSE_MOTION),
+                                            mode.contains(TermMode::SGR_MOUSE),
+                                        )
+                                    };
+                                    if drag || motion {
+                                        if let Some(geo) = &self.active_term_geo {
+                                            if geo.rect.contains(*pos) {
+                                                if let Some((col, row)) = geo.to_cell(*pos) {
+                                                    let held_btn = ctx.input(|i| {
+                                                        if i.pointer.button_down(egui::PointerButton::Primary) { Some(0u8) }
+                                                        else if i.pointer.button_down(egui::PointerButton::Middle) { Some(1u8) }
+                                                        else if i.pointer.button_down(egui::PointerButton::Secondary) { Some(2u8) }
+                                                        else { None }
+                                                    });
+                                                    let btn_code = match held_btn {
+                                                        Some(b) => Some(b + 32),
+                                                        None if motion => Some(35),
+                                                        None => None,
+                                                    };
+                                                    if let Some(code) = btn_code {
+                                                        let bytes = mouse_event_bytes(code, col, row, true, sgr);
+                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

@@ -277,15 +277,35 @@ impl TerminalView {
                     }
                     let x = rect.min.x + col as f32 * cell_width;
                     let pos = egui::pos2(x, y);
-                    painter.text(pos, egui::Align2::LEFT_TOP, c.ch, base_font.clone(), c.fg);
-                    if c.bold {
-                        painter.text(
-                            egui::pos2(x + 0.5, y),
-                            egui::Align2::LEFT_TOP,
-                            c.ch,
+                    if c.wide {
+                        let wide_rect = egui::Rect::from_min_size(
+                            pos,
+                            egui::vec2(2.0 * cell_width, cell_height),
+                        );
+                        let galley = painter.layout_no_wrap(
+                            c.ch.to_string(),
                             base_font.clone(),
                             c.fg,
                         );
+                        painter.galley(
+                            egui::pos2(
+                                wide_rect.min.x + (wide_rect.width() - galley.size().x) * 0.5,
+                                wide_rect.min.y,
+                            ),
+                            galley,
+                            egui::Color32::TRANSPARENT,
+                        );
+                    } else {
+                        painter.text(pos, egui::Align2::LEFT_TOP, c.ch, base_font.clone(), c.fg);
+                        if c.bold {
+                            painter.text(
+                                egui::pos2(x + 0.5, y),
+                                egui::Align2::LEFT_TOP,
+                                c.ch,
+                                base_font.clone(),
+                                c.fg,
+                            );
+                        }
                     }
                 }
 

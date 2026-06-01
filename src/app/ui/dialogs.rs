@@ -1069,8 +1069,22 @@ impl App {
             self.pane_state
                 .panes
                 .retain(|p| !pane_ids_to_close.contains(&p.id));
-            for pid in &pane_ids_to_close {
-                self.pane_state.pane_trees.remove(pid);
+            // Remove/prune any split trees that contain panes being closed.
+            // Trees are keyed by root ID, not leaf ID, so we must find which
+            // root trees reference any of the closing panes.
+            let roots_to_remove: Vec<u32> = self
+                .pane_state
+                .pane_trees
+                .iter()
+                .filter(|(_, tree)| {
+                    tree.leaf_ids()
+                        .iter()
+                        .any(|lid| pane_ids_to_close.contains(lid))
+                })
+                .map(|(&rpid, _)| rpid)
+                .collect();
+            for rpid in roots_to_remove {
+                self.pane_state.pane_trees.remove(&rpid);
             }
             if self
                 .pane_state

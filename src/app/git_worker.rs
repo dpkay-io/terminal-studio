@@ -181,48 +181,69 @@ impl GitWorker {
                             message,
                             amend,
                         } => {
-                            let mut args = vec!["commit".to_string()];
-                            if amend {
-                                args.push("--amend".to_string());
-                            }
-                            args.push("-m".to_string());
-                            args.push(message);
-                            let output = std::process::Command::new("git")
-                                .args(&args)
-                                .current_dir(&cwd)
-                                .output();
-                            let result = match output {
-                                Ok(o) if o.status.success() => {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
-                                    Ok(cwd)
-                                }
-                                Ok(o) => {
-                                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
-                                    Err(stderr)
-                                }
-                                Err(e) => Err(e.to_string()),
-                            };
-                            results_bg.lock().commit_result = Some(result);
+                            // Spawn on a separate thread so commit doesn't
+                            // block status/diff queries on the worker thread.
+                            let res = Arc::clone(&results_bg);
+                            let ctx_c = ctx_bg.clone();
+                            let _ = thread::Builder::new()
+                                .name("git-commit".into())
+                                .spawn(move || {
+                                    let mut args = vec!["commit".to_string()];
+                                    if amend {
+                                        args.push("--amend".to_string());
+                                    }
+                                    args.push("-m".to_string());
+                                    args.push(message);
+                                    let output = std::process::Command::new("git")
+                                        .args(&args)
+                                        .current_dir(&cwd)
+                                        .output();
+                                    let result = match output {
+                                        Ok(o) if o.status.success() => {
+                                            let info = run_git_info(&cwd);
+                                            res.lock().git.insert(cwd.clone(), info);
+                                            Ok(cwd)
+                                        }
+                                        Ok(o) => {
+                                            let stderr =
+                                                String::from_utf8_lossy(&o.stderr).into_owned();
+                                            Err(stderr)
+                                        }
+                                        Err(e) => Err(e.to_string()),
+                                    };
+                                    res.lock().commit_result = Some(result);
+                                    ctx_c.request_repaint();
+                                });
                         }
                         Job::Push { cwd, force } => {
-                            let mut args = vec!["push"];
-                            if force {
-                                args.push("--force");
-                            }
-                            let output = std::process::Command::new("git")
-                                .args(&args)
-                                .current_dir(&cwd)
-                                .output();
-                            let result = match output {
-                                Ok(o) if o.status.success() => Ok(cwd),
-                                Ok(o) => {
-                                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
-                                    Err(stderr)
-                                }
-                                Err(e) => Err(e.to_string()),
-                            };
-                            results_bg.lock().push_result = Some(result);
+                            // Spawn on a separate thread so push (which can be
+                            // very slow over the network) doesn't block the
+                            // fast query loop on the worker thread.
+                            let res = Arc::clone(&results_bg);
+                            let ctx_p = ctx_bg.clone();
+                            let _ = thread::Builder::new()
+                                .name("git-push".into())
+                                .spawn(move || {
+                                    let mut args = vec!["push"];
+                                    if force {
+                                        args.push("--force");
+                                    }
+                                    let output = std::process::Command::new("git")
+                                        .args(&args)
+                                        .current_dir(&cwd)
+                                        .output();
+                                    let result = match output {
+                                        Ok(o) if o.status.success() => Ok(cwd),
+                                        Ok(o) => {
+                                            let stderr =
+                                                String::from_utf8_lossy(&o.stderr).into_owned();
+                                            Err(stderr)
+                                        }
+                                        Err(e) => Err(e.to_string()),
+                                    };
+                                    res.lock().push_result = Some(result);
+                                    ctx_p.request_repaint();
+                                });
                         }
                         Job::LastCommitMessage(cwd) => {
                             let msg = std::process::Command::new("git")
@@ -411,7 +432,7 @@ mod tests {
     fn test_enqueue_git_inflight_dedup() {
         let worker = GitWorker::spawn(egui::Context::default());
         let path = PathBuf::from("/some/fake/path");
-        // Enqueue the same path twice — should not panic
+        // Enqueue the same path twice -- should not panic
         worker.enqueue_git(&path);
         worker.enqueue_git(&path);
     }
@@ -503,5 +524,4 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
-
 }

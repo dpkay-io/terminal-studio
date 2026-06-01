@@ -38,8 +38,8 @@ pub fn detect_md_paths(lines: &[(i32, String)], cwd: &Path) -> Vec<DetectedMdPat
             if resolved.is_file() {
                 paths.push(DetectedMdPath {
                     line: *line_idx,
-                    start_col: m.start(),
-                    end_col: m.end(),
+                    start_col: text[..m.start()].chars().count(),
+                    end_col: text[..m.end()].chars().count(),
                     path: resolved,
                 });
             }

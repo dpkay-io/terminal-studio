@@ -35,10 +35,11 @@ impl App {
         let mut move_to_split: Option<(u32, SplitDir)> = None;
 
         // ── Tab bar (horizontally scrollable) ────────────────────────
+        let mut tab_scroll_offset_x: f32 = 0.0;
         ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
             ui.painter()
                 .rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
-            egui::ScrollArea::horizontal()
+            let scroll_out = egui::ScrollArea::horizontal()
                 .id_source(self.vp_id("tab_bar_scroll"))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
@@ -335,6 +336,7 @@ impl App {
                         }
                     });
                 });
+            tab_scroll_offset_x = scroll_out.state.offset.x;
         });
 
         // ── Tab-bar action buttons (split / close-all) ──────────
@@ -444,8 +446,10 @@ impl App {
                     // Find which tab the pointer is over by index
                     let tab_count = visible_indices.len();
                     if tab_count > 1 {
-                        let tab_bar_x = ui.min_rect().min.x;
-                        let rel_x = pos.x - tab_bar_x;
+                        let tab_bar_x = tab_bar_rect.min.x;
+                        // Subtract scroll offset so the index is correct
+                        // when the tab bar has been scrolled (H15).
+                        let rel_x = pos.x - tab_bar_x + tab_scroll_offset_x;
                         let target_i = ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
                         let target_vis = visible_indices.get(target_i).copied();
                         let drag_vis = visible_indices.get(drag_idx).copied();
