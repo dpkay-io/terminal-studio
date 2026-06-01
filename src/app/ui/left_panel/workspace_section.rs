@@ -140,6 +140,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width() - theme::SCROLLBAR_PAD);
                 ui.spacing_mut().item_spacing.y = theme::SP_2;
 
                 if has_active_other {

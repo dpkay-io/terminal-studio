@@ -6,6 +6,7 @@ mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
+#[allow(dead_code)]
 pub(super) mod status_bar;
 mod tab_bar;
 mod titlebar;

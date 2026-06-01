@@ -282,7 +282,10 @@ impl eframe::App for App {
             || self.show_global_search
             || self.session_search_active
             || self.dir_search_active
-            || self.show_quit_confirm;
+            || self.show_quit_confirm
+            || self.show_commit_dialog
+            || self.show_push_dialog
+            || self.show_stage_all_confirm;
         let notes_has_focus = _ctx.memory(|m| {
             m.focused()
                 .map(|id| id == self.vp_id("notes_textedit"))
@@ -895,7 +898,7 @@ impl App {
         let mut git_open_file: Option<String> = None;
         let mut git_show_commit_dialog = false;
         let mut git_show_push_dialog = false;
-        let mut git_show_stage_all_confirm = false;
+        let mut _git_show_stage_all_confirm = false;
         let mut git_gitignore_pattern: Option<String> = None;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
@@ -907,7 +910,7 @@ impl App {
         if self.show_right_panel {
             egui::SidePanel::right(self.vp_id("right_panel"))
                 .default_width(theme::RIGHT_SIDEBAR_W)
-                .width_range(80.0..=400.0)
+                .width_range(80.0..=800.0)
                 .resizable(true)
                 .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
@@ -1016,7 +1019,7 @@ impl App {
                         egui::ScrollArea::vertical()
                             .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
-                                let w = ui.available_width();
+                                let w = ui.available_width() - theme::SCROLLBAR_PAD;
                                 ui.set_min_width(w);
                                 ui.set_max_width(w);
                                 match &active_tab {
@@ -1054,20 +1057,18 @@ impl App {
                                                     .workspace_store
                                                     .find_for_path(cwd)
                                                     .is_some();
-                                                let (btn_text, tip) = if already_saved {
-                                                    ("✓ Saved", "Already saved as workspace")
-                                                } else {
-                                                    ("🔖 Save", "Save as workspace")
-                                                };
-                                                let save_btn = ui.add_enabled(
-                                                    !already_saved,
-                                                    egui::Button::new(
-                                                        egui::RichText::new(btn_text).size(theme::FONT_UI_MD),
-                                                    )
-                                                    .frame(false),
-                                                );
-                                                if save_btn.on_hover_text(tip).clicked() {
-                                                    open_ws_dialog = Some(cwd.clone());
+                                                if !already_saved {
+                                                    let save_btn = ui.add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new("+ Save Workspace")
+                                                                .size(theme::FONT_UI_SM)
+                                                                .color(theme::active().accent_strong),
+                                                        )
+                                                        .rounding(theme::R_MD),
+                                                    );
+                                                    if save_btn.on_hover_text("Save this directory as a workspace").clicked() {
+                                                        open_ws_dialog = Some(cwd.clone());
+                                                    }
                                                 }
                                             });
                                             // ── Directory search bar (always visible) ──
@@ -1191,7 +1192,7 @@ impl App {
                                             git_show_push_dialog = true;
                                         }
                                         if result.show_stage_all_confirm {
-                                            git_show_stage_all_confirm = true;
+                                            _git_show_stage_all_confirm = true;
                                         }
                                         if result.gitignore_pattern.is_some() {
                                             git_gitignore_pattern = result.gitignore_pattern;
@@ -1202,11 +1203,12 @@ impl App {
                                             if ui
                                                 .add(
                                                     egui::Button::new(
-                                                        egui::RichText::new("Open in Editor")
+                                                        egui::RichText::new("\u{2B1C} Open in Pane")
                                                             .size(theme::FONT_UI_SM),
                                                     )
                                                     .rounding(theme::R_SM),
                                                 )
+                                                .on_hover_text("Open this file in the main editor area")
                                                 .clicked()
                                             {
                                                 open_md_in_editor = Some(md_path.clone());
@@ -1331,7 +1333,7 @@ impl App {
                                         if ui
                                             .add(
                                                 egui::Button::new(
-                                                    egui::RichText::new("\u{2197}")
+                                                    egui::RichText::new("\u{2B1C}")
                                                         .size(theme::FONT_UI_MD),
                                                 )
                                                 .min_size(egui::vec2(
@@ -1340,7 +1342,7 @@ impl App {
                                                 ))
                                                 .frame(false),
                                             )
-                                            .on_hover_text("Open in pane")
+                                            .on_hover_text("Open in main pane")
                                             .clicked()
                                         {
                                             pending_open_note = Some(self.active_group);
@@ -1403,6 +1405,9 @@ impl App {
                     GitStageAction::Stage(path) => {
                         self.workers.git_worker.enqueue_stage(cwd, path);
                     }
+                    GitStageAction::StageAll => {
+                        self.workers.git_worker.enqueue_stage_all(cwd);
+                    }
                     GitStageAction::Unstage(path) => {
                         self.workers.git_worker.enqueue_unstage(cwd, path);
                     }
@@ -1425,9 +1430,7 @@ impl App {
             self.push_force = false;
             self.push_error = None;
         }
-        if git_show_stage_all_confirm && !self.show_stage_all_confirm {
-            self.show_stage_all_confirm = true;
-        }
+        // Stage-all is now handled directly via GitStageAction::StageAll
         if let Some(pattern) = git_gitignore_pattern {
             if let Some(cwd) = active_cwd.as_ref() {
                 self.workers.git_worker.enqueue_gitignore(cwd, pattern);
@@ -1623,14 +1626,9 @@ impl App {
                     egui::pos2(panel_rect.min.x + tab_scroll_w, panel_rect.min.y),
                     egui::vec2(tab_actions_w, tab_h),
                 );
-                let status_h = theme::STATUS_BAR_H;
                 let content_rect = egui::Rect::from_min_size(
                     egui::pos2(panel_rect.min.x, panel_rect.min.y + tab_h),
-                    egui::vec2(panel_rect.width(), (panel_h - tab_h - status_h).max(0.0)),
-                );
-                let status_rect = egui::Rect::from_min_size(
-                    egui::pos2(panel_rect.min.x, content_rect.max.y),
-                    egui::vec2(panel_rect.width(), status_h),
+                    egui::vec2(panel_rect.width(), (panel_h - tab_h).max(0.0)),
                 );
 
                 // ── Tab bar (horizontally scrollable) + action buttons ──────
@@ -1740,25 +1738,6 @@ impl App {
 
                     if !self.detected_urls.is_empty() {
                         let t = theme::active();
-                        let painter = ui.painter();
-                        let session = entry.session.read();
-                        let display_offset = session.term.grid().display_offset();
-                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
-                        drop(session);
-                        for detected in &self.detected_urls {
-                            let screen_row = detected.line + display_offset as i32;
-                            if screen_row < 0 || screen_row >= visible_rows as i32 {
-                                continue;
-                            }
-                            let y = geo.rect.min.y + screen_row as f32 * geo.cell_h + geo.cell_h - 1.5;
-                            let x0 = geo.rect.min.x + detected.start_col as f32 * geo.cell_w;
-                            let x1 = geo.rect.min.x + detected.end_col as f32 * geo.cell_w;
-                            painter.line_segment(
-                                [egui::pos2(x0, y), egui::pos2(x1, y)],
-                                egui::Stroke::new(0.5, t.overlay0),
-                            );
-                        }
-
                         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
                         let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
                         if ctrl_held {
@@ -1801,25 +1780,6 @@ impl App {
                     // ── MD path underlines + click-to-open ───────────────────
                     if !self.detected_md_paths.is_empty() {
                         let t = theme::active();
-                        let painter = ui.painter();
-                        let session = entry.session.read();
-                        let display_offset = session.term.grid().display_offset();
-                        let visible_rows = (geo.rect.height() / geo.cell_h) as usize;
-                        drop(session);
-                        for detected in &self.detected_md_paths {
-                            let screen_row = detected.line + display_offset as i32;
-                            if screen_row < 0 || screen_row >= visible_rows as i32 {
-                                continue;
-                            }
-                            let y = geo.rect.min.y + screen_row as f32 * geo.cell_h + geo.cell_h - 1.5;
-                            let x0 = geo.rect.min.x + detected.start_col as f32 * geo.cell_w;
-                            let x1 = geo.rect.min.x + detected.end_col as f32 * geo.cell_w;
-                            painter.line_segment(
-                                [egui::pos2(x0, y), egui::pos2(x1, y)],
-                                egui::Stroke::new(0.5, t.green),
-                            );
-                        }
-
                         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
                         let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
                         if ctrl_held {
@@ -1954,38 +1914,6 @@ impl App {
                 }
             }
 
-            // ── Status bar ─────────────────────────────────────────────────
-            {
-                let sb_cwd_path = self.active_cwd().unwrap_or_default();
-                let sb_cwd = sb_cwd_path.to_string_lossy().to_string();
-                let unsaved_folder = self.active_group.is_none()
-                    && !sb_cwd.is_empty();
-                let (sb_branch, sb_diff) = self.active_group
-                    .and_then(|ws_id| self.workers.workspace_git_worker.get(ws_id))
-                    .map(|gi| (gi.branch.clone(), gi.diff_count))
-                    .unwrap_or_default();
-                let sb_shell = active_session_id
-                    .and_then(|sid| self.session_state.find(sid))
-                    .map(|e| e.shell.display_name().to_string())
-                    .unwrap_or_default();
-                let (sb_cols, sb_rows) = self.pane_state.active_pane_id
-                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                    .map(|p| p.last_size)
-                    .unwrap_or((0, 0));
-                let sb_result = ui::status_bar::render_status_bar(ui, status_rect, &ui::status_bar::StatusBarData {
-                    cwd: sb_cwd,
-                    git_branch: sb_branch,
-                    git_diff_count: sb_diff,
-                    shell_name: sb_shell,
-                    cols: sb_cols,
-                    rows: sb_rows,
-                    zoomed: self.zoomed_pane_id.is_some(),
-                    unsaved_folder,
-                });
-                if sb_result.save_workspace_clicked && self.workspace_dialog.is_none() {
-                    self.workspace_dialog = Some(WorkspaceDialog::new(sb_cwd_path));
-                }
-            }
 
             // ── Terminal input routing ─────────────────────────────────────
             let any_other_widget_focused = {

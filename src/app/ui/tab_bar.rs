@@ -108,7 +108,20 @@ impl App {
                                         egui::vec2(theme::TAB_W, theme::TAB_ACTIVE_HIGHLIGHT_H),
                                     ),
                                     0.0,
-                                    theme::active().text,
+                                    theme::active().accent,
+                                );
+                                // Active indicator dot
+                                let dot_radius = 3.0;
+                                let dot_x = tab_rect.min.x + theme::TAB_PAD_X
+                                    + if ws_color.is_some() { theme::TAB_COLOR_STRIP_W } else { 0.0 }
+                                    + dot_radius;
+                                let dot_color = ws_color
+                                    .map(theme::from_rgb)
+                                    .unwrap_or(theme::active().accent);
+                                painter.circle_filled(
+                                    egui::pos2(dot_x, tab_rect.center().y),
+                                    dot_radius,
+                                    dot_color,
                                 );
                             }
 
@@ -154,13 +167,15 @@ impl App {
                             );
 
                             // Title text (clipped before close button)
+                            let dot_offset = if is_active { 10.0 } else { 0.0 };
                             let text_x = tab_rect.min.x
                                 + theme::TAB_PAD_X
                                 + if ws_color.is_some() {
                                     theme::TAB_COLOR_STRIP_W
                                 } else {
                                     0.0
-                                };
+                                }
+                                + dot_offset;
 
                             let is_renaming = self.tab_rename_pane_id == Some(pane_id);
                             if is_renaming {

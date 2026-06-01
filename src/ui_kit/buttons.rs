@@ -114,6 +114,7 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
 
 // ── Pill button ────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn pill_button(ui: &mut egui::Ui, label: &str, rect: egui::Rect) -> egui::Response {
     let t = theme::active();
     let resp = ui.allocate_rect(rect, egui::Sense::click());

@@ -368,6 +368,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width() - theme::SCROLLBAR_PAD);
                 let matcher = SkimMatcherV2::default();
                 for pane in self.pane_state.panes.iter() {
                     let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane
@@ -501,6 +502,25 @@ impl App {
                     );
                     let row_rect = resp.rect;
 
+                    // Paint background first so subsequent elements are visible
+                    let row_hovered = resp.hovered();
+                    let bg = if is_active {
+                        theme::active().bg_row_active
+                    } else if row_hovered {
+                        theme::active().bg_row_hover
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    painter.rect_filled(row_rect, 0.0, bg);
+
+                    if let Some(c) = ws_color {
+                        let border = egui::Rect::from_min_size(
+                            row_rect.min,
+                            egui::vec2(theme::WS_BORDER_W, row_rect.height()),
+                        );
+                        painter.rect_filled(border, 0.0, theme::from_rgb(c));
+                    }
+
                     // Quit button — inset from right edge to avoid scrollbar overlap
                     let sb_pad = 14.0_f32;
                     let quit_rect = egui::Rect::from_min_size(
@@ -516,23 +536,6 @@ impl App {
                         theme::active().danger_fg,
                         ui_kit::IconButtonStyle::Danger,
                     );
-
-                    let bg = if is_active {
-                        theme::active().bg_row_active
-                    } else if resp.hovered() || quit_resp.hovered() {
-                        theme::active().bg_row_hover
-                    } else {
-                        egui::Color32::TRANSPARENT
-                    };
-                    painter.rect_filled(row_rect, 0.0, bg);
-
-                    if let Some(c) = ws_color {
-                        let border = egui::Rect::from_min_size(
-                            row_rect.min,
-                            egui::vec2(theme::WS_BORDER_W, row_rect.height()),
-                        );
-                        painter.rect_filled(border, 0.0, theme::from_rgb(c));
-                    }
 
                     let win_icon_w: f32 = if in_other_window {
                         theme::FONT_TERM

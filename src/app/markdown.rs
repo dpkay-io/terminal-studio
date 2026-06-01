@@ -2,6 +2,8 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
     use crate::syntax;
     use crate::theme;
 
+    ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+
     let lines: Vec<&str> = content.lines().collect();
     let len = lines.len();
     let mut i = 0;
@@ -38,28 +40,34 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 .inner_margin(egui::Margin::symmetric(theme::SP_4, theme::SP_3))
                 .rounding(egui::Rounding::same(theme::R_MD))
                 .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    if let Some(syn) = maybe_syntax {
-                        let highlighted = syntax::highlighted_lines(&code_text, syn);
-                        for spans in &highlighted {
-                            let job = build_line_job(spans);
-                            ui.label(job);
-                        }
-                    } else {
-                        let th = theme::active();
-                        let code_fg = theme::ensure_readable(
-                            [th.md_code.r(), th.md_code.g(), th.md_code.b()],
-                            [th.md_code_bg.r(), th.md_code_bg.g(), th.md_code_bg.b()],
-                        );
-                        for code_line in &code_buf {
-                            ui.label(
-                                egui::RichText::new(*code_line)
-                                    .monospace()
-                                    .size(theme::FONT_UI_MD)
-                                    .color(code_fg),
-                            );
-                        }
-                    }
+                    let avail = ui.available_width();
+                    ui.set_min_width(avail);
+                    egui::ScrollArea::horizontal()
+                        .id_source("md_code_scroll")
+                        .show(ui, |ui| {
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                            if let Some(syn) = maybe_syntax {
+                                let highlighted = syntax::highlighted_lines(&code_text, syn);
+                                for spans in &highlighted {
+                                    let job = build_line_job(spans);
+                                    ui.label(job);
+                                }
+                            } else {
+                                let th = theme::active();
+                                let code_fg = theme::ensure_readable(
+                                    [th.md_code.r(), th.md_code.g(), th.md_code.b()],
+                                    [th.md_code_bg.r(), th.md_code_bg.g(), th.md_code_bg.b()],
+                                );
+                                for code_line in &code_buf {
+                                    ui.label(
+                                        egui::RichText::new(*code_line)
+                                            .monospace()
+                                            .size(theme::FONT_UI_MD)
+                                            .color(code_fg),
+                                    );
+                                }
+                            }
+                        });
                 });
             ui.add_space(theme::SP_2);
             continue;

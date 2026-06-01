@@ -3,6 +3,7 @@ use crate::theme;
 
 pub(super) enum GitStageAction {
     Stage(String),
+    StageAll,
     Unstage(String),
     UnstageAll,
 }
@@ -49,7 +50,7 @@ pub(super) fn render_git_diff(
     let mut open_file: Option<String> = None;
     let mut show_commit_dialog = false;
     let mut show_push_dialog = false;
-    let mut show_stage_all_confirm = false;
+    let show_stage_all_confirm = false;
     let mut gitignore_pattern: Option<String> = None;
 
     let panel_width = ui.available_width();
@@ -321,7 +322,7 @@ pub(super) fn render_git_diff(
                         .on_hover_text("Stage All")
                         .clicked()
                     {
-                        show_stage_all_confirm = true;
+                        action = Some(GitStageAction::StageAll);
                     }
                 });
             });

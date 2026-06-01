@@ -435,7 +435,7 @@ pub const DIVIDER_W: f32 = 6.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const BTN_W: f32 = 24.0;
 pub const SESSION_ROW_H: f32 = 22.0;
-pub const WS_BORDER_W: f32 = 2.0;
+pub const WS_BORDER_W: f32 = 4.0;
 pub const LEFT_SIDEBAR_W: f32 = 180.0;
 pub const RIGHT_SIDEBAR_W: f32 = 180.0;
 pub const CONTEXT_BTN_SZ: f32 = 20.0;
@@ -456,6 +456,7 @@ pub const TAB_ACTION_GAP: f32 = 2.0;
 pub const SCROLLBAR_W_IDLE: f32 = 4.0;
 pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
 pub const SCROLLBAR_HIT_W: f32 = 16.0;
+pub const SCROLLBAR_PAD: f32 = 10.0;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 

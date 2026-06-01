@@ -98,8 +98,9 @@ pub(in crate::app) fn render_node(
                 crate::app::feedback::FlashTarget::Pane(pane_id),
             );
 
-            // Click to focus pane
-            if ui
+            // Click to focus pane (ignore clicks during panel resize drags)
+            let any_drag = ui.ctx().input(|inp| inp.pointer.any_down() && inp.pointer.is_decidedly_dragging());
+            if !any_drag && ui
                 .ctx()
                 .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
             {
