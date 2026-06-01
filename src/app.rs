@@ -1052,7 +1052,7 @@ impl App {
                                     let content_w = scroll_output.content_size.x;
                                     if offset_x > 1.0 {
                                         let fade = egui::Rect::from_min_size(inner.left_top(), egui::vec2(14.0, inner.height()));
-                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(60));
+                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(theme::ALPHA_SCROLL_INDICATOR));
                                         ui.painter().text(
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,
@@ -1066,7 +1066,7 @@ impl App {
                                             egui::pos2(inner.right() - 14.0, inner.top()),
                                             inner.right_bottom(),
                                         );
-                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(60));
+                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(theme::ALPHA_SCROLL_INDICATOR));
                                         ui.painter().text(
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,

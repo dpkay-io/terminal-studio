@@ -209,12 +209,11 @@ impl App {
                                         )
                                     })
                                     .inner;
-                                let clicked_outside = ui.input(|i| i.pointer.any_pressed())
-                                    && !resp.has_focus()
-                                    && !resp.contains_pointer();
+                                let lost_focus = resp.lost_focus()
+                                    && !ui.input(|i| i.key_pressed(egui::Key::Escape));
                                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                                if enter || clicked_outside {
+                                if enter || lost_focus {
                                     let new_title = self.tab_rename_text.trim().to_string();
                                     if !new_title.is_empty() {
                                         if let PaneContent::Terminal(sid) =

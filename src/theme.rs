@@ -439,7 +439,6 @@ pub const WS_BORDER_W: f32 = 4.0;
 pub const LEFT_SIDEBAR_W: f32 = 180.0;
 pub const RIGHT_SIDEBAR_W: f32 = 180.0;
 pub const CONTEXT_BTN_SZ: f32 = 20.0;
-pub const STATUS_BAR_H: f32 = 20.0;
 
 // ── Tab bar constants ───────────────────────────────────────────────────────
 
@@ -498,6 +497,7 @@ pub const ALPHA_SCROLLBAR_IDLE: u8 = 140;
 pub const ALPHA_SCROLLBAR_HOVER: u8 = 160;
 pub const ALPHA_SCROLLBAR_DRAG: u8 = 220;
 pub const ALPHA_FLASH: u8 = 120;
+pub const ALPHA_SCROLL_INDICATOR: u8 = 60;
 
 // ── Blend factors ───────────────────────────────────────────────────────────
 
