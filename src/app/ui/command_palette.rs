@@ -262,10 +262,12 @@ impl App {
                 self.notes_panel_collapsed = !self.notes_panel_collapsed;
             }
             AppAction::SearchTerminal => {
-                let is_terminal = self.pane_state.active_pane_id.and_then(|pid| {
-                    self.pane_state.panes.iter().find(|p| p.id == pid)
-                }).map(|p| matches!(p.content, PaneContent::Terminal(_)))
-                .unwrap_or(true);
+                let is_terminal = self
+                    .pane_state
+                    .active_pane_id
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .map(|p| matches!(p.content, PaneContent::Terminal(_)))
+                    .unwrap_or(true);
                 if is_terminal {
                     self.text_search.clear();
                     self.term_search.active = !self.term_search.active;

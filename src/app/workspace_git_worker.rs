@@ -92,6 +92,7 @@ impl WorkspaceGitWorker {
         self.cache.lock().get(&ws_id).map(|e| e.info.clone())
     }
 
+    #[cfg(test)]
     pub(super) fn is_loading(&self, ws_id: u64) -> bool {
         self.inflight.lock().contains(&ws_id)
     }
@@ -118,7 +119,7 @@ fn fetch_git_info(path: &Path) -> WorkspaceGitInfo {
         .unwrap_or_default();
 
     let diff_count = Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "-uall"])
         .current_dir(path)
         .output()
         .ok()

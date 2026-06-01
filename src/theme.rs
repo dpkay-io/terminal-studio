@@ -443,7 +443,6 @@ pub const CONTEXT_BTN_SZ: f32 = 20.0;
 // ── Tab bar constants ───────────────────────────────────────────────────────
 
 pub const TAB_H: f32 = 26.0;
-pub const PANE_HEADER_H: f32 = 24.0;
 pub const TAB_W: f32 = 150.0;
 pub const TAB_COLOR_STRIP_W: f32 = 3.0;
 pub const TAB_ACTIVE_HIGHLIGHT_H: f32 = 2.0;

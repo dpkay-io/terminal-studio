@@ -585,7 +585,6 @@ impl App {
                         max_rows: 1,
                         break_anywhere: true,
                         overflow_character: Some('\u{2026}'),
-                        ..Default::default()
                     };
                     let galley = ui.fonts(|f| f.layout_job(job));
                     painter.galley(

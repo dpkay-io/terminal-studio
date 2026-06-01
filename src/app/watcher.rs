@@ -14,10 +14,7 @@ use super::file_browser::{list_dir_entries, DirData};
 /// Results produced by the watcher worker thread, consumed by the UI thread.
 pub(super) enum WatchResult {
     /// A new directory was added to the watch set.
-    DirAdded {
-        path: PathBuf,
-        data: DirData,
-    },
+    DirAdded { path: PathBuf, data: DirData },
     /// A directory was removed from the watch set.
     DirRemoved(PathBuf),
     /// Directory entries were refreshed (file create/remove detected).
@@ -32,10 +29,7 @@ pub(super) enum WatchResult {
         content: Arc<String>,
     },
     /// A markdown file was removed.
-    MdRemoved {
-        dir: PathBuf,
-        path: PathBuf,
-    },
+    MdRemoved { dir: PathBuf, path: PathBuf },
     /// A directory needs a git refresh (debounced).
     GitRefreshNeeded(PathBuf),
 }
@@ -340,7 +334,12 @@ fn sync_cwds(
     for dir in to_add {
         if state.watcher.watch(&dir, RecursiveMode::Recursive).is_ok() {
             let gd = dir.join(".git");
-            if gd.is_dir() && state.watcher.watch(&gd, RecursiveMode::NonRecursive).is_ok() {
+            if gd.is_dir()
+                && state
+                    .watcher
+                    .watch(&gd, RecursiveMode::NonRecursive)
+                    .is_ok()
+            {
                 state.git_dirs.insert(gd, dir.clone());
             }
             let dir_is_git = dir.join(".git").exists();

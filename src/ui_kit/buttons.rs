@@ -42,11 +42,11 @@ pub fn icon_button(
                 t.danger_bg
             } else {
                 egui::Color32::from_rgba_unmultiplied(
-                        t.danger_fg.r(),
-                        t.danger_fg.g(),
-                        t.danger_fg.b(),
-                        20,
-                    )
+                    t.danger_fg.r(),
+                    t.danger_fg.g(),
+                    t.danger_fg.b(),
+                    20,
+                )
             }
         }
     };

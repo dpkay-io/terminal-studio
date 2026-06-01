@@ -18,9 +18,9 @@ use alacritty_terminal::{
 
 // ── Submodules ───────────────────────────────────────────────────────────────
 
+mod diff_parser;
 mod feedback;
 mod file_browser;
-mod diff_parser;
 mod git_diff;
 mod git_worker;
 mod input;
@@ -3134,8 +3134,18 @@ impl App {
                                     last_size,
                                 },
                             );
-                            self.pane_state.active_pane_id = Some(pid);
-                            if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
+                            // Focus the first remaining leaf in the original tree
+                            // so the user stays in their current workspace view.
+                            let stay_pid = self
+                                .pane_state
+                                .pane_trees
+                                .get(&root_pid)
+                                .and_then(|t| t.leaf_ids().first().copied())
+                                .unwrap_or(root_pid);
+                            self.pane_state.active_pane_id = Some(stay_pid);
+                            if let Some(pane) =
+                                self.pane_state.panes.iter().find(|p| p.id == stay_pid)
+                            {
                                 if let PaneContent::Terminal(sid) = pane.content {
                                     self.session_state.active_id = Some(sid);
                                     self.update_is_active_flags();

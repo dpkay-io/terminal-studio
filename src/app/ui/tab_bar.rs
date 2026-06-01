@@ -322,7 +322,6 @@ impl App {
                                         ui.close_menu();
                                     }
                                 });
-
                             });
                         }
                     });

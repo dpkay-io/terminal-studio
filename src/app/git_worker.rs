@@ -86,95 +86,96 @@ impl GitWorker {
         let alive_bg = Arc::clone(&alive);
         let ctx_bg = ctx.clone();
 
-        if let Err(e) =
-            thread::Builder::new()
-                .name("git-worker".into())
-                .spawn(move || {
-                    while alive_bg.load(Ordering::Acquire) {
-                        let job = match rx.recv_timeout(Duration::from_secs(1)) {
-                            Ok(j) => j,
-                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        };
-                        match job {
-                            Job::GitInfo(p) => {
-                                let info = run_git_info(&p);
-                                results_bg.lock().git.insert(p.clone(), info);
-                                git_inflight_bg.lock().remove(&p);
+        if let Err(e) = thread::Builder::new()
+            .name("git-worker".into())
+            .spawn(move || {
+                while alive_bg.load(Ordering::Acquire) {
+                    let job = match rx.recv_timeout(Duration::from_secs(1)) {
+                        Ok(j) => j,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    match job {
+                        Job::GitInfo(p) => {
+                            let info = run_git_info(&p);
+                            results_bg.lock().git.insert(p.clone(), info);
+                            git_inflight_bg.lock().remove(&p);
+                        }
+                        Job::Stage { cwd, path } => {
+                            let ok = std::process::Command::new("git")
+                                .args(["add", "--", &path])
+                                .current_dir(&cwd)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if ok {
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
                             }
-                            Job::Stage { cwd, path } => {
-                                let ok = std::process::Command::new("git")
-                                    .args(["add", "--", &path])
-                                    .current_dir(&cwd)
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-                                if ok {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
-                                }
+                        }
+                        Job::Unstage { cwd, path } => {
+                            let ok = std::process::Command::new("git")
+                                .args(["reset", "HEAD", "--", &path])
+                                .current_dir(&cwd)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if ok {
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
                             }
-                            Job::Unstage { cwd, path } => {
-                                let ok = std::process::Command::new("git")
-                                    .args(["reset", "HEAD", "--", &path])
-                                    .current_dir(&cwd)
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-                                if ok {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
-                                }
+                        }
+                        Job::StageAll(cwd) => {
+                            let ok = std::process::Command::new("git")
+                                .args(["add", "-A"])
+                                .current_dir(&cwd)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if ok {
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
                             }
-                            Job::StageAll(cwd) => {
-                                let ok = std::process::Command::new("git")
-                                    .args(["add", "-A"])
-                                    .current_dir(&cwd)
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-                                if ok {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
-                                }
+                        }
+                        Job::UnstageAll(cwd) => {
+                            let ok = std::process::Command::new("git")
+                                .args(["reset", "HEAD"])
+                                .current_dir(&cwd)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            if ok {
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
                             }
-                            Job::UnstageAll(cwd) => {
-                                let ok = std::process::Command::new("git")
-                                    .args(["reset", "HEAD"])
-                                    .current_dir(&cwd)
-                                    .status()
-                                    .map(|s| s.success())
-                                    .unwrap_or(false);
-                                if ok {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
-                                }
-                            }
-                            Job::Diff { cwd, rel_path } => {
-                                let old_content = std::process::Command::new("git")
-                                    .args(["show", &format!("HEAD:{}", rel_path)])
-                                    .current_dir(&cwd)
-                                    .output()
-                                    .ok()
-                                    .filter(|o| o.status.success())
-                                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                                    .unwrap_or_default();
-                                let raw_diff = std::process::Command::new("git")
-                                    .args(["diff", "HEAD", "--", &rel_path])
-                                    .current_dir(&cwd)
-                                    .output()
-                                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-                                    .unwrap_or_default();
-                                let new_content = std::fs::read_to_string(cwd.join(&rel_path))
-                                    .unwrap_or_default();
-                                let full_path = cwd.join(&rel_path);
-                                results_bg
-                                    .lock()
-                                    .diff_results
-                                    .push((full_path, old_content, new_content, raw_diff));
-                            }
-                            Job::UnpushedCommits(cwd) => {
-                                let parse_log =
+                        }
+                        Job::Diff { cwd, rel_path } => {
+                            let old_content = std::process::Command::new("git")
+                                .args(["show", &format!("HEAD:{}", rel_path)])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok()
+                                .filter(|o| o.status.success())
+                                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                                .unwrap_or_default();
+                            let raw_diff = std::process::Command::new("git")
+                                .args(["diff", "HEAD", "--", &rel_path])
+                                .current_dir(&cwd)
+                                .output()
+                                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                                .unwrap_or_default();
+                            let new_content =
+                                std::fs::read_to_string(cwd.join(&rel_path)).unwrap_or_default();
+                            let full_path = cwd.join(&rel_path);
+                            results_bg.lock().diff_results.push((
+                                full_path,
+                                old_content,
+                                new_content,
+                                raw_diff,
+                            ));
+                        }
+                        Job::UnpushedCommits(cwd) => {
+                            let parse_log =
                                 |output: std::process::Output| -> Option<Vec<(String, String)>> {
                                     if !output.status.success() {
                                         return None;
@@ -188,42 +189,44 @@ impl GitWorker {
                                             .collect()
                                     })
                                 };
-                                let commits = std::process::Command::new("git")
-                                    .args(["log", "--oneline", "@{upstream}..HEAD"])
-                                    .current_dir(&cwd)
-                                    .output()
-                                    .ok()
-                                    .and_then(parse_log)
-                                    .or_else(|| {
-                                        // No upstream configured — try origin/main, then origin/master
-                                        for remote_branch in &["origin/main", "origin/master"] {
-                                            let range = format!("{remote_branch}..HEAD");
-                                            if let Some(commits) = std::process::Command::new("git")
-                                                .args(["log", "--oneline", &range])
-                                                .current_dir(&cwd)
-                                                .output()
-                                                .ok()
-                                                .and_then(&parse_log)
-                                            {
-                                                return Some(commits);
-                                            }
+                            let commits = std::process::Command::new("git")
+                                .args(["log", "--oneline", "@{upstream}..HEAD"])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok()
+                                .and_then(parse_log)
+                                .or_else(|| {
+                                    // No upstream configured — try origin/main, then origin/master
+                                    for remote_branch in &["origin/main", "origin/master"] {
+                                        let range = format!("{remote_branch}..HEAD");
+                                        if let Some(commits) = std::process::Command::new("git")
+                                            .args(["log", "--oneline", &range])
+                                            .current_dir(&cwd)
+                                            .output()
+                                            .ok()
+                                            .and_then(&parse_log)
+                                        {
+                                            return Some(commits);
                                         }
-                                        None
-                                    })
-                                    .unwrap_or_default();
-                                results_bg.lock().unpushed.insert(cwd, commits);
-                            }
-                            Job::Commit {
-                                cwd,
-                                message,
-                                amend,
-                            } => {
-                                // Spawn on a separate thread so commit doesn't
-                                // block status/diff queries on the worker thread.
-                                let res = Arc::clone(&results_bg);
-                                let ctx_c = ctx_bg.clone();
-                                let _ = thread::Builder::new().name("git-commit".into()).spawn(
-                                    move || {
+                                    }
+                                    None
+                                })
+                                .unwrap_or_default();
+                            results_bg.lock().unpushed.insert(cwd, commits);
+                        }
+                        Job::Commit {
+                            cwd,
+                            message,
+                            amend,
+                        } => {
+                            // Spawn on a separate thread so commit doesn't
+                            // block status/diff queries on the worker thread.
+                            let res = Arc::clone(&results_bg);
+                            let ctx_c = ctx_bg.clone();
+                            let _ =
+                                thread::Builder::new()
+                                    .name("git-commit".into())
+                                    .spawn(move || {
                                         let mut args = vec!["commit".to_string()];
                                         if amend {
                                             args.push("--amend".to_string());
@@ -249,17 +252,18 @@ impl GitWorker {
                                         };
                                         res.lock().commit_results.push(result);
                                         ctx_c.request_repaint();
-                                    },
-                                );
-                            }
-                            Job::Push { cwd, force } => {
-                                // Spawn on a separate thread so push (which can be
-                                // very slow over the network) doesn't block the
-                                // fast query loop on the worker thread.
-                                let res = Arc::clone(&results_bg);
-                                let ctx_p = ctx_bg.clone();
-                                let _ = thread::Builder::new().name("git-push".into()).spawn(
-                                    move || {
+                                    });
+                        }
+                        Job::Push { cwd, force } => {
+                            // Spawn on a separate thread so push (which can be
+                            // very slow over the network) doesn't block the
+                            // fast query loop on the worker thread.
+                            let res = Arc::clone(&results_bg);
+                            let ctx_p = ctx_bg.clone();
+                            let _ =
+                                thread::Builder::new()
+                                    .name("git-push".into())
+                                    .spawn(move || {
                                         let mut args = vec!["push"];
                                         if force {
                                             args.push("--force");
@@ -279,68 +283,66 @@ impl GitWorker {
                                         };
                                         res.lock().push_results.push(result);
                                         ctx_p.request_repaint();
-                                    },
-                                );
-                            }
-                            Job::LastCommitMessage(cwd) => {
-                                let msg = std::process::Command::new("git")
-                                    .args(["log", "-1", "--format=%B"])
-                                    .current_dir(&cwd)
-                                    .output()
-                                    .ok()
-                                    .filter(|o| o.status.success())
-                                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                                    .map(|s| s.trim().to_string())
-                                    .unwrap_or_default();
-                                results_bg.lock().last_commit_msg.insert(cwd, msg);
-                            }
-                            Job::Gitignore { cwd, pattern } => {
-                                let gitignore_path = cwd.join(".gitignore");
-                                let result = (|| -> Result<PathBuf, String> {
-                                    let mut content = std::fs::read_to_string(&gitignore_path)
-                                        .unwrap_or_default();
-                                    let already_present =
-                                        content.lines().any(|line| line.trim() == pattern.trim());
-                                    if already_present {
-                                        return Ok(cwd.clone());
-                                    }
-                                    if !content.is_empty() && !content.ends_with('\n') {
-                                        content.push('\n');
-                                    }
-                                    content.push_str(&pattern);
+                                    });
+                        }
+                        Job::LastCommitMessage(cwd) => {
+                            let msg = std::process::Command::new("git")
+                                .args(["log", "-1", "--format=%B"])
+                                .current_dir(&cwd)
+                                .output()
+                                .ok()
+                                .filter(|o| o.status.success())
+                                .and_then(|o| String::from_utf8(o.stdout).ok())
+                                .map(|s| s.trim().to_string())
+                                .unwrap_or_default();
+                            results_bg.lock().last_commit_msg.insert(cwd, msg);
+                        }
+                        Job::Gitignore { cwd, pattern } => {
+                            let gitignore_path = cwd.join(".gitignore");
+                            let result = (|| -> Result<PathBuf, String> {
+                                let mut content =
+                                    std::fs::read_to_string(&gitignore_path).unwrap_or_default();
+                                let already_present =
+                                    content.lines().any(|line| line.trim() == pattern.trim());
+                                if already_present {
+                                    return Ok(cwd.clone());
+                                }
+                                if !content.is_empty() && !content.ends_with('\n') {
                                     content.push('\n');
-                                    crate::util::atomic_write(&gitignore_path, &content)
-                                        .map_err(|e| e.to_string())?;
+                                }
+                                content.push_str(&pattern);
+                                content.push('\n');
+                                crate::util::atomic_write(&gitignore_path, &content)
+                                    .map_err(|e| e.to_string())?;
+                                let info = run_git_info(&cwd);
+                                results_bg.lock().git.insert(cwd.clone(), info);
+                                Ok(cwd.clone())
+                            })();
+                            results_bg.lock().gitignore_results.push(result);
+                        }
+                        Job::Revert { cwd, path } => {
+                            let output = std::process::Command::new("git")
+                                .args(["checkout", "HEAD", "--", &path])
+                                .current_dir(&cwd)
+                                .output();
+                            let result = match output {
+                                Ok(o) if o.status.success() => {
                                     let info = run_git_info(&cwd);
                                     results_bg.lock().git.insert(cwd.clone(), info);
-                                    Ok(cwd.clone())
-                                })();
-                                results_bg.lock().gitignore_results.push(result);
-                            }
-                            Job::Revert { cwd, path } => {
-                                let output = std::process::Command::new("git")
-                                    .args(["checkout", "HEAD", "--", &path])
-                                    .current_dir(&cwd)
-                                    .output();
-                                let result = match output {
-                                    Ok(o) if o.status.success() => {
-                                        let info = run_git_info(&cwd);
-                                        results_bg.lock().git.insert(cwd.clone(), info);
-                                        Ok(cwd)
-                                    }
-                                    Ok(o) => {
-                                        let stderr =
-                                            String::from_utf8_lossy(&o.stderr).into_owned();
-                                        Err(stderr)
-                                    }
-                                    Err(e) => Err(e.to_string()),
-                                };
-                                results_bg.lock().revert_results.push(result);
-                            }
+                                    Ok(cwd)
+                                }
+                                Ok(o) => {
+                                    let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+                                    Err(stderr)
+                                }
+                                Err(e) => Err(e.to_string()),
+                            };
+                            results_bg.lock().revert_results.push(result);
                         }
-                        ctx_bg.request_repaint();
                     }
-                })
+                    ctx_bg.request_repaint();
+                }
+            })
         {
             log::error!("failed to spawn git-worker thread: {e}");
         }
@@ -634,10 +636,7 @@ mod tests {
             .ok();
 
         std::fs::write(&file_path, "modified\n").unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&file_path).unwrap(),
-            "modified\n"
-        );
+        assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "modified\n");
 
         let worker = GitWorker::spawn(egui::Context::default());
         worker.enqueue_revert(&tmp, "test.txt".to_string());

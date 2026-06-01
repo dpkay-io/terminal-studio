@@ -123,7 +123,7 @@ pub(super) fn run_git_info(dir: &Path) -> (String, String) {
     };
     let staged = git(&["diff", "--cached", "--no-color"]);
     let unstaged = git(&["diff", "--no-color"]);
-    let status = git(&["status", "--porcelain"]);
+    let status = git(&["status", "--porcelain", "-uall"]);
     let diff = match (staged.is_empty(), unstaged.is_empty()) {
         (true, true) => String::new(),
         (false, true) => format!("=== Staged ===\n{staged}"),

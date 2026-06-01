@@ -121,10 +121,7 @@ fn parse_hunk_header(line: &str) -> Option<(usize, usize, usize, usize)> {
 
 fn parse_range(s: &str) -> (usize, usize) {
     if let Some((start, count)) = s.split_once(',') {
-        (
-            start.parse().unwrap_or(0),
-            count.parse().unwrap_or(0),
-        )
+        (start.parse().unwrap_or(0), count.parse().unwrap_or(0))
     } else {
         let start = s.parse().unwrap_or(0);
         (start, if start == 0 { 0 } else { 1 })
@@ -148,7 +145,11 @@ pub(super) fn build_full_diff_lines(
     };
 
     if hunks.is_empty() {
-        let source = if !new_lines.is_empty() { &new_lines } else { &old_lines };
+        let source = if !new_lines.is_empty() {
+            &new_lines
+        } else {
+            &old_lines
+        };
         return source
             .iter()
             .enumerate()
@@ -462,10 +463,23 @@ index abc..def 100644
         let old = "old1\nline2\nline3";
         let new = "new1\nline2\nline3";
         let hunks = vec![DiffHunk {
-            old_start: 1, old_count: 1, new_start: 1, new_count: 1,
+            old_start: 1,
+            old_count: 1,
+            new_start: 1,
+            new_count: 1,
             lines: vec![
-                DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(1), new_lineno: None, content: "old1".into() },
-                DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(1), content: "new1".into() },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    old_lineno: Some(1),
+                    new_lineno: None,
+                    content: "old1".into(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    old_lineno: None,
+                    new_lineno: Some(1),
+                    content: "new1".into(),
+                },
             ],
         }];
         let lines = build_full_diff_lines(old, new, &hunks);
@@ -483,10 +497,23 @@ index abc..def 100644
         let old = "line1\nline2\nold3";
         let new = "line1\nline2\nnew3";
         let hunks = vec![DiffHunk {
-            old_start: 3, old_count: 1, new_start: 3, new_count: 1,
+            old_start: 3,
+            old_count: 1,
+            new_start: 3,
+            new_count: 1,
             lines: vec![
-                DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(3), new_lineno: None, content: "old3".into() },
-                DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(3), content: "new3".into() },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    old_lineno: Some(3),
+                    new_lineno: None,
+                    content: "old3".into(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    old_lineno: None,
+                    new_lineno: Some(3),
+                    content: "new3".into(),
+                },
             ],
         }];
         let lines = build_full_diff_lines(old, new, &hunks);
@@ -505,17 +532,43 @@ index abc..def 100644
         let new = "A\nb\nc\nd\nE";
         let hunks = vec![
             DiffHunk {
-                old_start: 1, old_count: 1, new_start: 1, new_count: 1,
+                old_start: 1,
+                old_count: 1,
+                new_start: 1,
+                new_count: 1,
                 lines: vec![
-                    DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(1), new_lineno: None, content: "a".into() },
-                    DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(1), content: "A".into() },
+                    DiffLine {
+                        kind: DiffLineKind::Removed,
+                        old_lineno: Some(1),
+                        new_lineno: None,
+                        content: "a".into(),
+                    },
+                    DiffLine {
+                        kind: DiffLineKind::Added,
+                        old_lineno: None,
+                        new_lineno: Some(1),
+                        content: "A".into(),
+                    },
                 ],
             },
             DiffHunk {
-                old_start: 5, old_count: 1, new_start: 5, new_count: 1,
+                old_start: 5,
+                old_count: 1,
+                new_start: 5,
+                new_count: 1,
                 lines: vec![
-                    DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(5), new_lineno: None, content: "e".into() },
-                    DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(5), content: "E".into() },
+                    DiffLine {
+                        kind: DiffLineKind::Removed,
+                        old_lineno: Some(5),
+                        new_lineno: None,
+                        content: "e".into(),
+                    },
+                    DiffLine {
+                        kind: DiffLineKind::Added,
+                        old_lineno: None,
+                        new_lineno: Some(5),
+                        content: "E".into(),
+                    },
                 ],
             },
         ];
@@ -530,10 +583,23 @@ index abc..def 100644
     #[test]
     fn test_build_full_new_file() {
         let hunks = vec![DiffHunk {
-            old_start: 0, old_count: 0, new_start: 1, new_count: 2,
+            old_start: 0,
+            old_count: 0,
+            new_start: 1,
+            new_count: 2,
             lines: vec![
-                DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(1), content: "hello".into() },
-                DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(2), content: "world".into() },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    old_lineno: None,
+                    new_lineno: Some(1),
+                    content: "hello".into(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Added,
+                    old_lineno: None,
+                    new_lineno: Some(2),
+                    content: "world".into(),
+                },
             ],
         }];
         let lines = build_full_diff_lines("", "hello\nworld", &hunks);
@@ -544,10 +610,23 @@ index abc..def 100644
     #[test]
     fn test_build_full_deleted_file() {
         let hunks = vec![DiffHunk {
-            old_start: 1, old_count: 2, new_start: 0, new_count: 0,
+            old_start: 1,
+            old_count: 2,
+            new_start: 0,
+            new_count: 0,
             lines: vec![
-                DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(1), new_lineno: None, content: "bye".into() },
-                DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(2), new_lineno: None, content: "gone".into() },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    old_lineno: Some(1),
+                    new_lineno: None,
+                    content: "bye".into(),
+                },
+                DiffLine {
+                    kind: DiffLineKind::Removed,
+                    old_lineno: Some(2),
+                    new_lineno: None,
+                    content: "gone".into(),
+                },
             ],
         }];
         let lines = build_full_diff_lines("bye\ngone", "", &hunks);
@@ -558,8 +637,18 @@ index abc..def 100644
     #[test]
     fn test_side_by_side_no_changes() {
         let full = vec![
-            DiffLine { kind: DiffLineKind::Context, old_lineno: Some(1), new_lineno: Some(1), content: "a".into() },
-            DiffLine { kind: DiffLineKind::Context, old_lineno: Some(2), new_lineno: Some(2), content: "b".into() },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                old_lineno: Some(1),
+                new_lineno: Some(1),
+                content: "a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                old_lineno: Some(2),
+                new_lineno: Some(2),
+                content: "b".into(),
+            },
         ];
         let (left, right) = build_side_by_side_lines(&full);
         assert_eq!(left.len(), 2);
@@ -571,8 +660,18 @@ index abc..def 100644
     #[test]
     fn test_side_by_side_remove_then_add() {
         let full = vec![
-            DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(1), new_lineno: None, content: "old".into() },
-            DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(1), content: "new".into() },
+            DiffLine {
+                kind: DiffLineKind::Removed,
+                old_lineno: Some(1),
+                new_lineno: None,
+                content: "old".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Added,
+                old_lineno: None,
+                new_lineno: Some(1),
+                content: "new".into(),
+            },
         ];
         let (left, right) = build_side_by_side_lines(&full);
         assert_eq!(left.len(), right.len());
@@ -585,9 +684,24 @@ index abc..def 100644
     #[test]
     fn test_side_by_side_pure_add() {
         let full = vec![
-            DiffLine { kind: DiffLineKind::Context, old_lineno: Some(1), new_lineno: Some(1), content: "a".into() },
-            DiffLine { kind: DiffLineKind::Added, old_lineno: None, new_lineno: Some(2), content: "inserted".into() },
-            DiffLine { kind: DiffLineKind::Context, old_lineno: Some(2), new_lineno: Some(3), content: "b".into() },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                old_lineno: Some(1),
+                new_lineno: Some(1),
+                content: "a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Added,
+                old_lineno: None,
+                new_lineno: Some(2),
+                content: "inserted".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                old_lineno: Some(2),
+                new_lineno: Some(3),
+                content: "b".into(),
+            },
         ];
         let (left, right) = build_side_by_side_lines(&full);
         assert_eq!(left.len(), right.len());
@@ -603,8 +717,18 @@ index abc..def 100644
     #[test]
     fn test_side_by_side_pure_remove() {
         let full = vec![
-            DiffLine { kind: DiffLineKind::Removed, old_lineno: Some(1), new_lineno: None, content: "deleted".into() },
-            DiffLine { kind: DiffLineKind::Context, old_lineno: Some(2), new_lineno: Some(1), content: "kept".into() },
+            DiffLine {
+                kind: DiffLineKind::Removed,
+                old_lineno: Some(1),
+                new_lineno: None,
+                content: "deleted".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                old_lineno: Some(2),
+                new_lineno: Some(1),
+                content: "kept".into(),
+            },
         ];
         let (left, right) = build_side_by_side_lines(&full);
         assert_eq!(left.len(), right.len());

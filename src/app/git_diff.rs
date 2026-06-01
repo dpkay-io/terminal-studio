@@ -88,6 +88,7 @@ pub(super) fn render_git_diff(
             tag: &'static str,
             path: String,
             color: egui::Color32,
+            kind: FileChangeKind,
         }
 
         let parsed = if has_status {
@@ -103,6 +104,7 @@ pub(super) fn render_git_diff(
                 tag: kind_to_tag(fs.kind),
                 path: fs.path.clone(),
                 color: kind_to_color(fs.kind),
+                kind: fs.kind,
             };
             if fs.staged {
                 staged.push(entry);
@@ -295,11 +297,14 @@ pub(super) fn render_git_diff(
                             ui,
                             &entry.path,
                             true,
-                            &mut action,
-                            &mut open_diff_file,
-                            &mut open_file,
-                            &mut gitignore_pattern,
-                            &mut revert_file,
+                            entry.kind,
+                            &mut ContextMenuOutputs {
+                                action: &mut action,
+                                open_diff_file: &mut open_diff_file,
+                                open_file: &mut open_file,
+                                gitignore_pattern: &mut gitignore_pattern,
+                                revert_file: &mut revert_file,
+                            },
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -405,11 +410,14 @@ pub(super) fn render_git_diff(
                             ui,
                             &entry.path,
                             false,
-                            &mut action,
-                            &mut open_diff_file,
-                            &mut open_file,
-                            &mut gitignore_pattern,
-                            &mut revert_file,
+                            entry.kind,
+                            &mut ContextMenuOutputs {
+                                action: &mut action,
+                                open_diff_file: &mut open_diff_file,
+                                open_file: &mut open_file,
+                                gitignore_pattern: &mut gitignore_pattern,
+                                revert_file: &mut revert_file,
+                            },
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -467,45 +475,50 @@ pub(super) fn render_git_diff(
     }
 }
 
+struct ContextMenuOutputs<'a> {
+    action: &'a mut Option<GitStageAction>,
+    open_diff_file: &'a mut Option<String>,
+    open_file: &'a mut Option<String>,
+    gitignore_pattern: &'a mut Option<String>,
+    revert_file: &'a mut Option<String>,
+}
+
 fn file_context_menu(
     ui: &mut egui::Ui,
     path: &str,
     is_staged: bool,
-    action: &mut Option<GitStageAction>,
-    open_diff_file: &mut Option<String>,
-    open_file: &mut Option<String>,
-    gitignore_pattern: &mut Option<String>,
-    revert_file: &mut Option<String>,
+    kind: FileChangeKind,
+    out: &mut ContextMenuOutputs,
 ) {
-    if ui.button("View diff").clicked() {
-        *open_diff_file = Some(path.to_string());
+    if kind != FileChangeKind::Untracked && ui.button("View diff").clicked() {
+        *out.open_diff_file = Some(path.to_string());
         ui.close_menu();
     }
     if ui.button("Open file").clicked() {
-        *open_file = Some(path.to_string());
+        *out.open_file = Some(path.to_string());
         ui.close_menu();
     }
     ui.separator();
     if is_staged {
         if ui.button("Unstage").clicked() {
-            *action = Some(GitStageAction::Unstage(path.to_string()));
+            *out.action = Some(GitStageAction::Unstage(path.to_string()));
             ui.close_menu();
         }
-    } else {
-        if ui.button("Stage").clicked() {
-            *action = Some(GitStageAction::Stage(path.to_string()));
-            ui.close_menu();
-        }
-    }
-    ui.separator();
-    let revert_label = egui::RichText::new("Revert changes").color(theme::active().error);
-    if ui.button(revert_label).clicked() {
-        *revert_file = Some(path.to_string());
+    } else if ui.button("Stage").clicked() {
+        *out.action = Some(GitStageAction::Stage(path.to_string()));
         ui.close_menu();
+    }
+    if kind != FileChangeKind::Untracked {
+        ui.separator();
+        let revert_label = egui::RichText::new("Revert changes").color(theme::active().error);
+        if ui.button(revert_label).clicked() {
+            *out.revert_file = Some(path.to_string());
+            ui.close_menu();
+        }
     }
     ui.separator();
     if ui.button("Add to .gitignore").clicked() {
-        *gitignore_pattern = Some(path.to_string());
+        *out.gitignore_pattern = Some(path.to_string());
         ui.close_menu();
     }
 }
@@ -596,10 +609,8 @@ pub(super) fn render_inline_diff_full(
             );
 
             let avail = ui.available_width();
-            let (content_rect, _) = ui.allocate_exact_size(
-                egui::vec2(avail.max(200.0), line_h),
-                egui::Sense::hover(),
-            );
+            let (content_rect, _) =
+                ui.allocate_exact_size(egui::vec2(avail.max(200.0), line_h), egui::Sense::hover());
             if let Some(bg) = bg_color {
                 ui.painter().rect_filled(content_rect, 0.0, bg);
             }
@@ -649,10 +660,7 @@ pub(super) fn render_side_by_side_diff(
         let (right_header, _) =
             ui.allocate_exact_size(egui::vec2(half_w, line_h + 4.0), egui::Sense::hover());
         ui.painter().text(
-            egui::pos2(
-                right_header.min.x + theme::SP_2,
-                right_header.center().y,
-            ),
+            egui::pos2(right_header.min.x + theme::SP_2, right_header.center().y),
             egui::Align2::LEFT_CENTER,
             "Working Tree",
             egui::FontId::proportional(theme::FONT_UI_SM),
@@ -661,30 +669,41 @@ pub(super) fn render_side_by_side_diff(
     });
     ui.separator();
 
+    let lay = SbsLayout {
+        panel_w: half_w,
+        gutter_w,
+        line_h,
+        font_mono: &font_mono,
+        gutter_font: &gutter_font,
+    };
     for i in 0..left_lines.len() {
         let left = &left_lines[i];
         let right = &right_lines[i];
 
         ui.horizontal(|ui| {
-            render_sbs_cell(ui, left, half_w, gutter_w, line_h, &font_mono, &gutter_font, &t);
+            render_sbs_cell(ui, left, &lay, t);
 
             let (sep_rect, _) =
                 ui.allocate_exact_size(egui::vec2(2.0, line_h), egui::Sense::hover());
             ui.painter().rect_filled(sep_rect, 0.0, t.surface2);
 
-            render_sbs_cell(ui, right, half_w, gutter_w, line_h, &font_mono, &gutter_font, &t);
+            render_sbs_cell(ui, right, &lay, t);
         });
     }
+}
+
+struct SbsLayout<'a> {
+    panel_w: f32,
+    gutter_w: f32,
+    line_h: f32,
+    font_mono: &'a egui::FontId,
+    gutter_font: &'a egui::FontId,
 }
 
 fn render_sbs_cell(
     ui: &mut egui::Ui,
     line: &super::diff_parser::SideBySideLine,
-    panel_w: f32,
-    gutter_w: f32,
-    line_h: f32,
-    font_mono: &egui::FontId,
-    gutter_font: &egui::FontId,
+    lay: &SbsLayout,
     t: &theme::Theme,
 ) {
     use super::diff_parser::DiffLineKind;
@@ -703,18 +722,18 @@ fn render_sbs_cell(
 
     let num_text = line.lineno.map(|n| format!("{n}")).unwrap_or_default();
     let (gutter_rect, _) =
-        ui.allocate_exact_size(egui::vec2(gutter_w, line_h), egui::Sense::hover());
+        ui.allocate_exact_size(egui::vec2(lay.gutter_w, lay.line_h), egui::Sense::hover());
     ui.painter().text(
         egui::pos2(gutter_rect.max.x - 4.0, gutter_rect.center().y),
         egui::Align2::RIGHT_CENTER,
         &num_text,
-        gutter_font.clone(),
+        lay.gutter_font.clone(),
         t.overlay0,
     );
 
-    let content_w = (panel_w - gutter_w).max(50.0);
+    let content_w = (lay.panel_w - lay.gutter_w).max(50.0);
     let (content_rect, _) =
-        ui.allocate_exact_size(egui::vec2(content_w, line_h), egui::Sense::hover());
+        ui.allocate_exact_size(egui::vec2(content_w, lay.line_h), egui::Sense::hover());
     if let Some(bg) = bg_color {
         ui.painter().rect_filled(content_rect, 0.0, bg);
     }
@@ -723,7 +742,7 @@ fn render_sbs_cell(
         egui::pos2(content_rect.min.x + 4.0, content_rect.center().y),
         egui::Align2::LEFT_CENTER,
         display,
-        font_mono.clone(),
+        lay.font_mono.clone(),
         text_color,
     );
 }

@@ -15,7 +15,6 @@ struct WorkspaceCardData {
     has_active_session: bool,
     git_branch: String,
     git_diff_count: usize,
-    is_git_loading: bool,
 }
 
 impl App {
@@ -145,7 +144,6 @@ impl App {
                         .map(|i| i.branch.clone())
                         .unwrap_or_default(),
                     git_diff_count: git_info.map(|i| i.diff_count).unwrap_or(0),
-                    is_git_loading: self.workers.workspace_git_worker.is_loading(w.id),
                 }
             })
             .collect();
@@ -187,8 +185,7 @@ impl App {
         active_group_snap: Option<u64>,
     ) {
         let active = active_group_snap == Some(data.id);
-        let has_git_row =
-            !data.git_branch.is_empty() || data.git_diff_count > 0 || data.is_git_loading;
+        let has_git_row = !data.git_branch.is_empty() || data.git_diff_count > 0;
         let card_h = if has_git_row {
             theme::HEADER_H + theme::GIT_ROW_H
         } else {
@@ -295,11 +292,8 @@ impl App {
                 theme::active().subtext0
             };
             if gear_resp.hovered() {
-                ui.painter().rect_filled(
-                    gear_rect,
-                    theme::R_SM,
-                    theme::active().bg_row_hover,
-                );
+                ui.painter()
+                    .rect_filled(gear_rect, theme::R_SM, theme::active().bg_row_hover);
             }
             ui.painter().text(
                 egui::pos2(
@@ -315,9 +309,7 @@ impl App {
             // Git info row
             if has_git_row {
                 let mut git_text = String::new();
-                if data.is_git_loading && data.git_branch.is_empty() {
-                    git_text.push_str("\u{21bb} loading\u{2026}");
-                } else if !data.git_branch.is_empty() {
+                if !data.git_branch.is_empty() {
                     git_text.push_str(&data.git_branch);
                 }
                 if data.git_diff_count > 0 {
