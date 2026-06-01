@@ -97,14 +97,15 @@ fn worker(
     }
 
     loop {
-        match cmd_rx.recv() {
+        match cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
             Ok(Command::Check) => {
                 do_check(&shared, &ctx);
             }
             Ok(Command::StartUpdate) => {
                 do_update(&shared, &ctx);
             }
-            Err(_) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }
@@ -226,12 +227,29 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
             .timeout(std::time::Duration::from_secs(300))
             .build()?;
 
-        let resp = client.get(&download_url).send()?;
+        let mut resp = client.get(&download_url).send()?;
         if !resp.status().is_success() {
             return Err(anyhow::anyhow!("Download failed: HTTP {}", resp.status()));
         }
 
-        let bytes = resp.bytes()?.to_vec();
+        let total = resp.content_length().unwrap_or(0);
+        let mut bytes = Vec::with_capacity(total as usize);
+        let mut downloaded: u64 = 0;
+        let mut buf = [0u8; 32768];
+        loop {
+            let n = std::io::Read::read(&mut resp, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+            downloaded += n as u64;
+            if total > 0 {
+                let pct = (downloaded as f32 / total as f32) * 100.0;
+                let mut s = shared.lock();
+                s.status = UpdateStatus::Downloading { progress_pct: pct };
+                ctx.request_repaint();
+            }
+        }
 
         {
             let mut s = shared.lock();

@@ -84,10 +84,10 @@ impl App {
 
         let dialog_w = (screen_rect.width() * 0.95)
             .min(screen_rect.width() - 20.0)
-            .max(400.0);
+            .clamp(200.0, 600.0);
         let dialog_h = (screen_rect.height() * 0.95)
             .min(screen_rect.height() - 20.0)
-            .max(300.0);
+            .clamp(200.0, 600.0);
 
         egui::Area::new(self.vp_id("quick_switcher_dialog"))
             .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
@@ -1095,7 +1095,7 @@ impl App {
             }
 
             for sid in &session_ids {
-                self.session_state.remove(*sid);
+                self.remove_session_and_cleanup(*sid);
             }
 
             self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
@@ -1288,7 +1288,6 @@ impl App {
         }
 
         let mut do_push = false;
-        let push_force = self.push_force;
         let config = ui_kit::DialogConfig {
             width: ui_kit::DialogWidth::Fixed(340.0),
             max_height: 140.0,
@@ -1305,7 +1304,7 @@ impl App {
             ui.checkbox(&mut self.push_force, "Force push");
 
             ui_kit::dialog_footer(ui, |ui| {
-                if push_force {
+                if self.push_force {
                     if ui_kit::action_button(
                         ui,
                         "Force Push",

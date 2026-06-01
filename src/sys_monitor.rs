@@ -19,6 +19,7 @@ pub struct SystemStats {
 pub struct SysMonitor {
     stats: Arc<Mutex<SystemStats>>,
     alive: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl SysMonitor {
@@ -28,15 +29,18 @@ impl SysMonitor {
         let alive = Arc::new(AtomicBool::new(true));
         let alive_bg = alive.clone();
 
-        if let Err(e) = std::thread::Builder::new()
+        let handle = match std::thread::Builder::new()
             .name("sys-monitor".into())
             .spawn(move || poll_loop(shared, ctx, interval, alive_bg))
         {
-            log::error!("failed to spawn sys-monitor thread: {e}");
-            return None;
-        }
+            Ok(h) => Some(h),
+            Err(e) => {
+                log::error!("failed to spawn sys-monitor thread: {e}");
+                return None;
+            }
+        };
 
-        Some(Self { stats, alive })
+        Some(Self { stats, alive, thread: handle })
     }
 
     pub fn stats(&self) -> SystemStats {
@@ -47,6 +51,9 @@ impl SysMonitor {
 impl Drop for SysMonitor {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Relaxed);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 

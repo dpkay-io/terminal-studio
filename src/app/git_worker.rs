@@ -417,7 +417,6 @@ impl GitWorker {
 impl Drop for GitWorker {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Release);
-        let _ = self.tx.send(Job::GitInfo(PathBuf::new()));
         self.ctx.request_repaint();
     }
 }

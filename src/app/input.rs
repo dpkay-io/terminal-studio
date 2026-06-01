@@ -209,8 +209,15 @@ pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr:
         .into_bytes()
     } else {
         let b = btn + 32;
-        let x = ((col + 1) + 32).min(255) as u8;
-        let y = ((row + 1) + 32).min(255) as u8;
+        let raw_x = (col + 1) + 32;
+        let raw_y = (row + 1) + 32;
+        if raw_x > 255 || raw_y > 255 {
+            log::warn!(
+                "X11 mouse encoding: coordinates ({col},{row}) exceed protocol limit of 222; truncating"
+            );
+        }
+        let x = raw_x.min(255) as u8;
+        let y = raw_y.min(255) as u8;
         vec![0x1b, b'[', b'M', b, x, y]
     }
 }

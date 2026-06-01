@@ -18,6 +18,7 @@ pub struct ForegroundWorker {
     cache: Arc<Mutex<HashMap<u32, Option<ForegroundProcess>>>>,
     pids: Arc<Mutex<Vec<(u32, u32)>>>,
     alive: Arc<AtomicBool>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ForegroundWorker {
@@ -31,7 +32,7 @@ impl ForegroundWorker {
         let pids_bg = pids.clone();
         let alive_bg = alive.clone();
 
-        if let Err(e) = thread::Builder::new()
+        let handle = match thread::Builder::new()
             .name("foreground-detector".into())
             .spawn(move || {
                 while alive_bg.load(Ordering::Acquire) {
@@ -43,14 +44,17 @@ impl ForegroundWorker {
                         let result = detect_child(shell_pid);
                         cache_bg.lock().insert(sid, result);
                     }
-                    thread::sleep(Duration::from_millis(1000));
+                    thread::sleep(Duration::from_millis(500));
                 }
-            })
-        {
-            log::error!("failed to spawn foreground-detector thread: {e}");
-        }
+            }) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                log::error!("failed to spawn foreground-detector thread: {e}");
+                None
+            }
+        };
 
-        ForegroundWorker { cache, pids, alive }
+        ForegroundWorker { cache, pids, alive, thread: handle }
     }
 
     /// Update the set of sessions to poll.  Call whenever sessions are added or removed.
@@ -71,5 +75,8 @@ impl ForegroundWorker {
 impl Drop for ForegroundWorker {
     fn drop(&mut self) {
         self.alive.store(false, Ordering::Release);
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
     }
 }

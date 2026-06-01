@@ -537,6 +537,9 @@ impl eframe::App for App {
                     }
                 }
             }
+            // Evict pending_diff_panes entries whose pane no longer exists (L19)
+            self.pending_diff_panes
+                .retain(|_, pid| self.pane_state.panes.iter().any(|p| p.id == *pid));
 
             // Drain commit/push results and show flash feedback
             for result in self.workers.git_worker.take_commit_results() {
@@ -761,6 +764,14 @@ impl App {
             Some(w) => id.with(w.0),
             None => id,
         }
+    }
+
+    fn remove_session_and_cleanup(&mut self, sid: u32) {
+        self.session_state.remove(sid);
+        self.command_start_times.remove(&sid);
+        self.completed_badges.remove(&sid);
+        self.resize_debounce.remove(&sid);
+        self.scroll_accum.remove(&sid);
     }
 
     fn render_window_body(&mut self, ctx: &egui::Context) {
@@ -2959,7 +2970,7 @@ impl App {
                                 if let PaneContent::Terminal(sid) =
                                     self.pane_state.panes[pos].content
                                 {
-                                    self.session_state.remove(sid);
+                                    self.remove_session_and_cleanup(sid);
                                     if self.session_state.active_id == Some(sid) {
                                         self.session_state.active_id =
                                             self.session_state.sessions.first().map(|e| e.id);
@@ -2997,7 +3008,7 @@ impl App {
                             .position(|p| p.id == active_pid)
                         {
                             if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
-                                self.session_state.remove(sid);
+                                self.remove_session_and_cleanup(sid);
                                 if self.session_state.active_id == Some(sid) {
                                     self.session_state.active_id =
                                         self.session_state.sessions.first().map(|e| e.id);
@@ -3093,7 +3104,7 @@ impl App {
                                 if let PaneContent::Terminal(sid) =
                                     self.pane_state.panes[pos].content
                                 {
-                                    self.session_state.remove(sid);
+                                    self.remove_session_and_cleanup(sid);
                                     if self.session_state.active_id == Some(sid) {
                                         self.session_state.active_id =
                                             self.session_state.sessions.first().map(|e| e.id);
@@ -3124,7 +3135,7 @@ impl App {
                                 if let PaneContent::Terminal(sid) =
                                     self.pane_state.panes[pos].content
                                 {
-                                    self.session_state.remove(sid);
+                                    self.remove_session_and_cleanup(sid);
                                     if self.session_state.active_id == Some(sid) {
                                         self.session_state.active_id =
                                             self.session_state.sessions.first().map(|e| e.id);
@@ -3230,7 +3241,7 @@ impl App {
             for leaf_pid in &tree_ids {
                 if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == *leaf_pid) {
                     if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
-                        self.session_state.remove(sid);
+                        self.remove_session_and_cleanup(sid);
                         if self.session_state.active_id == Some(sid) {
                             self.session_state.active_id =
                                 self.session_state.sessions.first().map(|e| e.id);
@@ -3290,7 +3301,7 @@ impl App {
                 if let Some(&first_vi) = visible_indices.first() {
                     let removed = self.pane_state.panes.remove(first_vi);
                     if let PaneContent::Terminal(sid) = removed.content {
-                        self.session_state.remove(sid);
+                        self.remove_session_and_cleanup(sid);
                         if self.session_state.active_id == Some(sid) {
                             self.session_state.active_id =
                                 self.session_state.sessions.first().map(|e| e.id);

@@ -37,6 +37,7 @@ pub struct SearchWorker {
     results: Arc<Mutex<GlobalSearchResults>>,
     generation: Arc<Mutex<u64>>,
     alive: Arc<AtomicBool>,
+    thread_running: bool,
 }
 
 impl SearchWorker {
@@ -54,7 +55,7 @@ impl SearchWorker {
         let generation_bg = Arc::clone(&generation);
         let alive_bg = Arc::clone(&alive);
 
-        if let Err(e) = thread::Builder::new()
+        let thread_running = match thread::Builder::new()
             .name("search-worker".into())
             .spawn(move || {
                 let matcher = SkimMatcherV2::default();
@@ -130,20 +131,28 @@ impl SearchWorker {
                     res.completed = true;
                     ctx.request_repaint();
                 }
-            })
-        {
-            log::error!("failed to spawn search-worker thread: {e}");
-        }
+            }) {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("failed to spawn search-worker thread: {e}");
+                false
+            }
+        };
 
         SearchWorker {
             tx,
             results,
             generation,
             alive,
+            thread_running,
         }
     }
 
     pub fn search(&self, query: String, sessions: Vec<(u32, String, Arc<RwLock<Session>>)>) {
+        if !self.thread_running {
+            log::warn!("search-worker thread not running; search ignored");
+            return;
+        }
         let gen = {
             let mut g = self.generation.lock();
             *g += 1;

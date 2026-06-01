@@ -158,7 +158,7 @@ impl App {
         }
 
         for sid in &killed_sids {
-            self.session_state.remove(*sid);
+            self.remove_session_and_cleanup(*sid);
         }
         if self
             .session_state

@@ -139,30 +139,39 @@ mod platform {
     use super::ForegroundProcess;
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        // pgrep -P <pid> lists direct children by PID
-        let out = std::process::Command::new("pgrep")
-            .args(["-P", &shell_pid.to_string()])
+        // Single `ps` call: list child processes of shell_pid with their commands.
+        // `-o ppid=,pid=,command=` gives parent PID, PID, and full command, no header.
+        let out = std::process::Command::new("ps")
+            .args(["-eo", "ppid=,command="])
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
-        let child_pid: u32 = text.lines().next()?.trim().parse().ok()?;
-
-        // ps -o command= gives the full command string without a header
-        let ps = std::process::Command::new("ps")
-            .args(["-o", "command=", "-p", &child_pid.to_string()])
-            .output()
-            .ok()?;
-        let cmd = String::from_utf8_lossy(&ps.stdout);
-        let cmd = cmd.trim();
-        if cmd.is_empty() {
-            return None;
+        let shell_pid_str = shell_pid.to_string();
+        for line in text.lines() {
+            let trimmed = line.trim_start();
+            // Check if this process is a child of our shell
+            if let Some(rest) = trimmed.strip_prefix(&shell_pid_str) {
+                if rest.starts_with(' ') {
+                    let cmd = rest.trim();
+                    if cmd.is_empty() {
+                        continue;
+                    }
+                    let args: Vec<String> =
+                        cmd.split_whitespace().map(str::to_string).collect();
+                    let name = args
+                        .first()?
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&args[0])
+                        .to_string();
+                    return Some(ForegroundProcess {
+                        name,
+                        cmdline: args,
+                    });
+                }
+            }
         }
-        let args: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
-        let name = args.first()?.rsplit('/').next()?.to_string();
-        Some(ForegroundProcess {
-            name,
-            cmdline: args,
-        })
+        None
     }
 }
 

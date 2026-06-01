@@ -72,7 +72,8 @@ impl WorkspaceGitWorker {
     }
 
     pub(super) fn request_if_stale(&self, ws_id: u64, path: &Path) {
-        if self.inflight.lock().contains(&ws_id) {
+        let mut inflight = self.inflight.lock();
+        if inflight.contains(&ws_id) {
             return;
         }
         let is_fresh = self
@@ -83,7 +84,7 @@ impl WorkspaceGitWorker {
         if is_fresh {
             return;
         }
-        self.inflight.lock().insert(ws_id);
+        inflight.insert(ws_id);
         let _ = self.tx.send((ws_id, path.to_path_buf()));
     }
 

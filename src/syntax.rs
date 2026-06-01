@@ -26,7 +26,7 @@ fn syn_color(c: Color32) -> SynColor {
 }
 
 fn to_egui(c: SynColor) -> Color32 {
-    Color32::from_rgba_premultiplied(c.r, c.g, c.b, c.a)
+    Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
 }
 
 fn build_theme(t: &theme::Theme) -> Theme {

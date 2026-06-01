@@ -34,6 +34,7 @@ pub struct FileSearchWorker {
     results: Arc<Mutex<FileSearchResults>>,
     generation: Arc<Mutex<u64>>,
     alive: Arc<AtomicBool>,
+    thread_running: bool,
 }
 
 impl FileSearchWorker {
@@ -52,7 +53,7 @@ impl FileSearchWorker {
         let generation_bg = Arc::clone(&generation);
         let alive_bg = Arc::clone(&alive);
 
-        if let Err(e) = thread::Builder::new()
+        let thread_running = match thread::Builder::new()
             .name("file-search-worker".into())
             .spawn(move || {
                 let matcher = SkimMatcherV2::default();
@@ -108,20 +109,28 @@ impl FileSearchWorker {
                     res.completed = true;
                     ctx.request_repaint();
                 }
-            })
-        {
-            log::error!("failed to spawn file-search-worker thread: {e}");
-        }
+            }) {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("failed to spawn file-search-worker thread: {e}");
+                false
+            }
+        };
 
         FileSearchWorker {
             tx,
             results,
             generation,
             alive,
+            thread_running,
         }
     }
 
     pub fn search(&self, query: String, root: PathBuf) {
+        if !self.thread_running {
+            log::warn!("file-search-worker thread not running; search ignored");
+            return;
+        }
         let gen = {
             let mut g = self.generation.lock();
             *g += 1;

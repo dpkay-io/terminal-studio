@@ -44,6 +44,14 @@ pub fn ensure_zsh_integration() -> Option<PathBuf> {
 
     for &(name, content) in files {
         let path = dir.join(name);
+        // Skip rewrite if file already has correct content (L6)
+        if path.is_file() {
+            if let Ok(existing) = fs::read_to_string(&path) {
+                if existing == content {
+                    continue;
+                }
+            }
+        }
         if let Err(e) = fs::write(&path, content) {
             log::warn!("Failed to write {name}: {e}");
             return None;

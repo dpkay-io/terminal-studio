@@ -15,11 +15,24 @@ pub(super) struct SubdirCache<'a> {
     pub(super) ttl: Duration,
 }
 
+const SUBDIR_CACHE_MAX: usize = 256;
+
 impl<'a> SubdirCache<'a> {
     pub(super) fn get_or_read(&mut self, path: &Path) -> Arc<Vec<FileEntry>> {
         if let Some((entries, t)) = self.map.get(path) {
             if t.elapsed() < self.ttl {
                 return Arc::clone(entries);
+            }
+        }
+        // Evict oldest entries when cache exceeds limit (L2)
+        if self.map.len() >= SUBDIR_CACHE_MAX {
+            let oldest = self
+                .map
+                .iter()
+                .min_by_key(|(_, (_, t))| *t)
+                .map(|(k, _)| k.clone());
+            if let Some(k) = oldest {
+                self.map.remove(&k);
             }
         }
         let entries = Arc::new(list_dir_entries(path));
@@ -64,9 +77,23 @@ pub(super) fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if name.starts_with('.') {
-                continue;
+                const ALLOWED_DOTFILES: &[&str] = &[
+                    ".github",
+                    ".vscode",
+                    ".gitignore",
+                    ".gitmodules",
+                    ".editorconfig",
+                    ".env.example",
+                    ".dockerignore",
+                    ".prettierrc",
+                    ".eslintrc",
+                ];
+                if !ALLOWED_DOTFILES.iter().any(|&a| name == a) {
+                    continue;
+                }
             }
-            let is_dir = e.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+            // Follow symlinks so symlinked directories show as dirs (L4)
+            let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
             entries.push(FileEntry {
                 is_dir,
                 name,
@@ -240,7 +267,24 @@ pub(super) fn is_supported_text_file(_path: &Path, content: &str) -> bool {
     if content.is_empty() {
         return true;
     }
-    content.len() < 2_000_000 && !content.as_bytes().contains(&0)
+    if content.len() >= 2_000_000 {
+        return false;
+    }
+    let bytes = content.as_bytes();
+    // Check first 8KB for binary indicators
+    let check_len = bytes.len().min(8192);
+    let sample = &bytes[..check_len];
+    // Null bytes are a definitive binary signal
+    if sample.contains(&0) {
+        return false;
+    }
+    // High ratio of non-text control chars indicates binary (PDF, images, etc.)
+    let control_count = sample
+        .iter()
+        .filter(|&&b| b < 0x20 && b != b'\n' && b != b'\r' && b != b'\t' && b != 0x1b)
+        .count();
+    let threshold = check_len / 8;
+    control_count <= threshold
 }
 
 pub(super) fn file_icon(ext: &str) -> &'static str {

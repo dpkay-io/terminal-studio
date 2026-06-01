@@ -344,6 +344,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         RightTabGitDiff,
         ToggleNotes,
         DuplicateSession,
+        CopySelection,
         FocusSessionSearch,
         FocusFileSearch,
         ToggleShortcutHelp,

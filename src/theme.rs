@@ -494,7 +494,7 @@ pub const ALPHA_OVERLAY_DIM: u8 = 140;
 pub const ALPHA_SCROLLBAR_IDLE: u8 = 140;
 pub const ALPHA_SCROLLBAR_HOVER: u8 = 160;
 pub const ALPHA_SCROLLBAR_DRAG: u8 = 220;
-pub const ALPHA_FLASH: u8 = 60;
+pub const ALPHA_FLASH: u8 = 120;
 
 // ── Blend factors ───────────────────────────────────────────────────────────
 
@@ -505,7 +505,7 @@ pub const BLEND_STRONG: f32 = 0.75;
 
 // ── Flash timing ────────────────────────────────────────────────────────────
 
-pub const FLASH_DURATION_MS: u64 = 150;
+pub const FLASH_DURATION_MS: u64 = 350;
 
 // ── Button sizing ──────────────────────────────────────────────────────────
 
@@ -895,6 +895,47 @@ fn parse_inline_spans(input: &str) -> Vec<InlineSpan> {
             }
             // *italic*
             if let Some(end) = input[pos + 1..].find('*') {
+                if end > 0 {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::Italic(
+                        input[pos + 1..pos + 1 + end].to_string(),
+                    ));
+                    pos = pos + 1 + end + 1;
+                    continue;
+                }
+            }
+        }
+
+        // Underscore-based emphasis: ___bold italic___, __bold__, _italic_
+        if bytes[pos] == b'_' {
+            // ___bold italic___
+            if pos + 2 < len && bytes[pos + 1] == b'_' && bytes[pos + 2] == b'_' {
+                if let Some(end) = input[pos + 3..].find("___") {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::BoldItalic(
+                        input[pos + 3..pos + 3 + end].to_string(),
+                    ));
+                    pos = pos + 3 + end + 3;
+                    continue;
+                }
+            }
+            // __bold__
+            if pos + 1 < len && bytes[pos + 1] == b'_' {
+                if let Some(end) = input[pos + 2..].find("__") {
+                    if !plain.is_empty() {
+                        spans.push(InlineSpan::Text(std::mem::take(&mut plain)));
+                    }
+                    spans.push(InlineSpan::Bold(input[pos + 2..pos + 2 + end].to_string()));
+                    pos = pos + 2 + end + 2;
+                    continue;
+                }
+            }
+            // _italic_
+            if let Some(end) = input[pos + 1..].find('_') {
                 if end > 0 {
                     if !plain.is_empty() {
                         spans.push(InlineSpan::Text(std::mem::take(&mut plain)));

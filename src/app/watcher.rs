@@ -55,10 +55,11 @@ impl WatchState {
             })
             .collect();
 
+        // Also remove watched dirs that no longer exist on disk (L22)
         let to_remove: Vec<PathBuf> = self
             .watched
             .iter()
-            .filter(|d| !current.contains(*d))
+            .filter(|d| !current.contains(*d) || !d.is_dir())
             .cloned()
             .collect();
         for dir in to_remove {
@@ -180,10 +181,17 @@ impl WatchState {
                     }
                     EventKind::Modify(_) => {
                         if is_md && path.is_file() && data.md_files.contains_key(path) {
-                            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                            if size <= 1_048_576 {
-                                let content = std::fs::read_to_string(path).unwrap_or_default();
-                                data.md_files.insert(path.clone(), Arc::new(content));
+                            // Debounce: skip if file was modified very recently (still being written) (L23)
+                            let recently_modified = std::fs::metadata(path)
+                                .and_then(|m| m.modified())
+                                .map(|t| t.elapsed().unwrap_or_default() < Duration::from_millis(50))
+                                .unwrap_or(false);
+                            if !recently_modified {
+                                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                                if size <= 1_048_576 {
+                                    let content = std::fs::read_to_string(path).unwrap_or_default();
+                                    data.md_files.insert(path.clone(), Arc::new(content));
+                                }
                             }
                         }
                         if data.is_git {
