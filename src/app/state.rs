@@ -168,6 +168,7 @@ impl App {
             open_folder_dialog: None,
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
+            workspace_search_query: String::new(),
             note_store: NoteStore::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,

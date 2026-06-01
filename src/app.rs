@@ -84,6 +84,7 @@ pub struct App {
 
     workspace_panel_ratio: f32,
     workspace_panel_collapsed: bool,
+    workspace_search_query: String,
 
     note_store: NoteStore,
     notes_panel_ratio: f32,
@@ -468,17 +469,23 @@ impl eframe::App for App {
 
         // ── Sync watchers + process FS events ──────────────────────────────
         if let Some(ws) = &mut self.watch_state {
-            // Resync when sessions are added/removed or every 3s to catch CWD changes.
+            // Send CWDs to worker when sessions change or every 3s for CWD drift.
             let session_count = self.session_state.sessions.len();
             let now = Instant::now();
             if session_count != ws.last_session_count
                 || now.duration_since(ws.last_sync) >= Duration::from_secs(3)
             {
-                ws.sync(&self.session_state.sessions);
+                let cwds: Vec<PathBuf> = self
+                    .session_state
+                    .sessions
+                    .iter()
+                    .map(|e| e.session.read().cwd.clone())
+                    .collect();
+                ws.request_sync(cwds);
                 ws.last_sync = now;
                 ws.last_session_count = session_count;
             }
-            let (created_md, removed_md) = ws.process_events();
+            let (created_md, removed_md) = ws.drain_results();
             for path in created_md {
                 self.shown_md_tabs.insert(path);
             }
@@ -1303,6 +1310,11 @@ impl App {
                                     egui::RichText::new("Notes")
                                         .strong()
                                         .size(theme::FONT_UI_MD),
+                                );
+                                ui.label(
+                                    egui::RichText::new("· autosaved")
+                                        .size(theme::FONT_UI_XS)
+                                        .color(theme::active().fg_muted),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::super::super::App;
 use super::WorkspaceSectionActions;
+use crate::app::ui::search_bar::search_bar_persistent;
 use crate::theme;
 use crate::ui_kit;
 
@@ -73,6 +74,23 @@ impl App {
     fn render_workspace_list(&mut self, ui: &mut egui::Ui, actions: &mut WorkspaceSectionActions) {
         let active_group_snap = self.active_group;
 
+        // Search bar
+        let search_id = self.vp_id("workspace_search_input");
+        let sb = search_bar_persistent(
+            ui,
+            &mut self.workspace_search_query,
+            "\u{1f50d}",
+            "Filter workspaces\u{2026}",
+            search_id,
+            false,
+        );
+        if sb.escaped {
+            self.workspace_search_query.clear();
+        }
+        ui.add_space(theme::SP_1);
+
+        let search_filter = self.workspace_search_query.to_lowercase();
+
         // Which workspaces have panes open across any window
         let active_ws_ids: HashSet<u64> = self
             .pane_state
@@ -137,13 +155,18 @@ impl App {
                 .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
+        // Apply search filter
+        if !search_filter.is_empty() {
+            workspaces.retain(|w| w.name.to_lowercase().contains(&search_filter));
+        }
+
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width() - theme::SCROLLBAR_PAD);
                 ui.spacing_mut().item_spacing.y = theme::SP_2;
 
-                if has_active_other {
+                if has_active_other && search_filter.is_empty() {
                     self.render_other_group(ui, actions, active_group_snap, has_active_other);
                 }
 
