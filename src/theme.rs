@@ -458,6 +458,7 @@ pub const SCROLLBAR_W_IDLE: f32 = 4.0;
 pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
 pub const SCROLLBAR_HIT_W: f32 = 16.0;
 pub const SCROLLBAR_PAD: f32 = 10.0;
+pub const SCROLLBAR_BTN_PAD: f32 = SCROLLBAR_PAD + SCROLLBAR_W_IDLE;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 
@@ -1571,6 +1572,16 @@ fn all_defs() -> Vec<ThemeDef> {
     ]
 }
 
+pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    Color32::from_rgba_unmultiplied(
+        (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
+        (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
+        (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
+        (a.a() as f32 + (b.a() as f32 - a.a() as f32) * t) as u8,
+    )
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1832,5 +1843,42 @@ mod tests {
         for i in 1..256 {
             assert!(lut[i] >= lut[i - 1], "LUT must be monotonic at index {i}");
         }
+    }
+
+    #[test]
+    fn test_scrollbar_btn_pad_matches_sum() {
+        assert!((SCROLLBAR_BTN_PAD - (SCROLLBAR_PAD + SCROLLBAR_W_IDLE)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_lerp_color_endpoints() {
+        let a = Color32::from_rgb(0, 0, 0);
+        let b = Color32::from_rgb(255, 255, 255);
+        let at_zero = lerp_color(a, b, 0.0);
+        assert_eq!(at_zero.r(), 0);
+        assert_eq!(at_zero.g(), 0);
+        let at_one = lerp_color(a, b, 1.0);
+        assert_eq!(at_one.r(), 255);
+        assert_eq!(at_one.g(), 255);
+    }
+
+    #[test]
+    fn test_lerp_color_midpoint() {
+        let a = Color32::from_rgb(0, 100, 200);
+        let b = Color32::from_rgb(100, 200, 0);
+        let mid = lerp_color(a, b, 0.5);
+        assert_eq!(mid.r(), 50);
+        assert_eq!(mid.g(), 150);
+        assert_eq!(mid.b(), 100);
+    }
+
+    #[test]
+    fn test_lerp_color_clamps() {
+        let a = Color32::from_rgb(100, 100, 100);
+        let b = Color32::from_rgb(200, 200, 200);
+        let under = lerp_color(a, b, -1.0);
+        assert_eq!(under.r(), 100);
+        let over = lerp_color(a, b, 2.0);
+        assert_eq!(over.r(), 200);
     }
 }
