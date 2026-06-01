@@ -522,7 +522,7 @@ impl App {
                     }
 
                     // Quit button — inset from right edge to avoid scrollbar overlap
-                    let sb_pad = 14.0_f32;
+                    let sb_pad = theme::SCROLLBAR_BTN_PAD;
                     let quit_rect = egui::Rect::from_min_size(
                         egui::pos2(row_rect.max.x - theme::BTN_W - sb_pad, row_rect.min.y),
                         egui::vec2(theme::BTN_W, row_rect.height()),
@@ -571,18 +571,28 @@ impl App {
                     } else {
                         theme::active().subtext0
                     };
-                    painter
-                        .with_clip_rect(egui::Rect::from_min_max(
-                            egui::pos2(text_x, row_rect.min.y),
-                            egui::pos2(clip_max, row_rect.max.y),
-                        ))
-                        .text(
-                            egui::pos2(text_x, row_rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            &label,
-                            egui::FontId::proportional(theme::FONT_UI_MD),
-                            text_color,
-                        );
+                    let available_w = (clip_max - text_x).max(0.0);
+                    let mut job = egui::text::LayoutJob::single_section(
+                        label.clone(),
+                        egui::TextFormat {
+                            font_id: egui::FontId::proportional(theme::FONT_UI_MD),
+                            color: text_color,
+                            ..Default::default()
+                        },
+                    );
+                    job.wrap = egui::text::TextWrapping {
+                        max_width: available_w,
+                        max_rows: 1,
+                        break_anywhere: true,
+                        overflow_character: Some('\u{2026}'),
+                        ..Default::default()
+                    };
+                    let galley = ui.fonts(|f| f.layout_job(job));
+                    painter.galley(
+                        egui::pos2(text_x, row_rect.center().y - galley.rect.height() / 2.0),
+                        galley,
+                        text_color,
+                    );
 
                     let resp = if in_other_window {
                         resp.on_hover_text(format!("{} (switch window)", label))
