@@ -84,6 +84,9 @@ impl App {
                                 .hint_text("Type a command\u{2026}")
                                 .font(egui::FontId::monospace(theme::FONT_UI_MD)),
                         );
+                        if resp.changed() {
+                            self.command_palette_selected = 0;
+                        }
                         if resp.lost_focus()
                             && !esc
                             && !ui.input(|i| i.key_pressed(egui::Key::Escape))

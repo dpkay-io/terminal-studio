@@ -1290,7 +1290,7 @@ impl App {
         let mut do_push = false;
         let config = ui_kit::DialogConfig {
             width: ui_kit::DialogWidth::Fixed(340.0),
-            max_height: 140.0,
+            max_height: 180.0,
             ..Default::default()
         };
 
@@ -1302,6 +1302,14 @@ impl App {
             ui.add_space(theme::SP_3);
 
             ui.checkbox(&mut self.push_force, "Force push");
+            if self.push_force {
+                ui.add_space(theme::SP_1);
+                ui.label(
+                    egui::RichText::new("\u{26a0} This will overwrite remote history. Commits others have pulled may be lost.")
+                        .size(theme::FONT_UI_XS)
+                        .color(theme::active().error),
+                );
+            }
 
             ui_kit::dialog_footer(ui, |ui| {
                 if self.push_force {
