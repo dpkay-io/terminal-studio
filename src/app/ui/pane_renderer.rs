@@ -157,11 +157,17 @@ pub(in crate::app) fn render_node(
             // Draw divider
             let div_id = egui::Id::new(("split_div", *split_id));
             let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
-            let div_color = if div_resp.dragged() || div_resp.hovered() {
-                theme::active().divider_active
-            } else {
-                theme::active().divider_idle
-            };
+            let is_active = div_resp.dragged() || div_resp.hovered();
+            let anim_t = ui.ctx().animate_bool_with_time(
+                div_id.with("anim"),
+                is_active,
+                0.15,
+            );
+            let div_color = theme::lerp_color(
+                theme::active().divider_idle,
+                theme::active().divider_active,
+                anim_t,
+            );
             ui.painter()
                 .rect_filled(div_rect, theme::STROKE_THIN, div_color);
 
