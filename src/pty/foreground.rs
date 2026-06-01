@@ -53,15 +53,14 @@ mod platform {
             let mut entry: PROCESSENTRY32W = std::mem::zeroed();
             entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-            let mut result: Option<(u32, String)> = None;
+            let mut best: Option<(u32, String)> = None;
 
             if Process32FirstW(snap, &mut entry) != 0 {
                 loop {
                     if entry.th32ParentProcessID == parent_pid {
                         let name = wide_to_string(&entry.szExeFile);
                         if !SKIP.iter().any(|&s| name.eq_ignore_ascii_case(s)) {
-                            result = Some((entry.th32ProcessID, name));
-                            break;
+                            best = Some((entry.th32ProcessID, name));
                         }
                     }
                     if Process32NextW(snap, &mut entry) == 0 {
@@ -71,7 +70,7 @@ mod platform {
             }
 
             CloseHandle(snap);
-            result
+            best
         }
     }
 
@@ -88,10 +87,10 @@ mod platform {
     use super::ForegroundProcess;
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        let child_pid = find_child_pid(shell_pid)?;
-        let cmdline_bytes = std::fs::read(format!("/proc/{}/cmdline", child_pid)).ok()?;
+        let fg_pid = find_foreground_pid(shell_pid)?;
+        let cmdline_bytes = std::fs::read(format!("/proc/{}/cmdline", fg_pid)).ok()?;
         if cmdline_bytes.is_empty() {
-            return None; // zombie
+            return None;
         }
         let args: Vec<String> = cmdline_bytes
             .split(|&b| b == 0)
@@ -108,38 +107,28 @@ mod platform {
         })
     }
 
-    fn find_child_pid(shell_pid: u32) -> Option<u32> {
-        // Walk all /proc/<N> entries and find a direct child of shell_pid.
-        let proc = std::fs::read_dir("/proc").ok()?;
-        for entry in proc.flatten() {
-            let fname = entry.file_name();
-            let Ok(child_pid): Result<u32, _> = fname.to_string_lossy().parse() else {
-                continue;
-            };
-            if child_pid == shell_pid {
-                continue;
-            }
-            let stat = match std::fs::read_to_string(format!("/proc/{}/stat", child_pid)) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if ppid_from_stat(&stat) == Some(shell_pid) {
-                return Some(child_pid);
-            }
+    fn find_foreground_pid(shell_pid: u32) -> Option<u32> {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", shell_pid)).ok()?;
+        let tpgid = tpgid_from_stat(&stat)?;
+        if tpgid == shell_pid || tpgid == 0 {
+            return None;
         }
-        None
+        Some(tpgid)
     }
 
-    /// Parse the ppid field from `/proc/<pid>/stat`.
-    /// Format: `pid (comm) state ppid ...`
-    /// The comm field may contain spaces, so we find the last `)` first.
-    fn ppid_from_stat(stat: &str) -> Option<u32> {
+    /// Parse the tpgid (foreground process group ID) from `/proc/<pid>/stat`.
+    /// Format: `pid (comm) state ppid pgrp session tty_nr tpgid ...`
+    /// Fields after `)`: state(0) ppid(1) pgrp(2) session(3) tty_nr(4) tpgid(5)
+    fn tpgid_from_stat(stat: &str) -> Option<u32> {
         let after = stat.rfind(')')?.checked_add(2)?;
         let rest = stat.get(after..)?;
-        // rest = "state ppid ..."
         let mut parts = rest.split_whitespace();
         parts.next()?; // state
-        parts.next()?.parse().ok()
+        parts.next()?; // ppid
+        parts.next()?; // pgrp
+        parts.next()?; // session
+        parts.next()?; // tty_nr
+        parts.next()?.parse().ok() // tpgid
     }
 }
 

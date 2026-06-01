@@ -268,7 +268,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                 egui::Color32::TRANSPARENT
                             };
 
-                            let mut frame =
+                            let frame =
                                 egui::Frame::none()
                                     .fill(bg)
                                     .inner_margin(egui::Margin::symmetric(
@@ -276,14 +276,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                         theme::SP_1 + 1.0,
                                     ));
 
-                            if col_idx < col_count.saturating_sub(1) {
-                                frame = frame.stroke(egui::Stroke::new(
-                                    border_width,
-                                    th.md_table_border.linear_multiply(0.5),
-                                ));
-                            }
-
-                            frame.show(ui, |ui| {
+                            let cell_resp = frame.show(ui, |ui| {
                                 ui.set_min_width(col_content_width);
                                 if is_header {
                                     ui.label(
@@ -293,6 +286,20 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                     theme::render_inline(ui, cell);
                                 }
                             });
+
+                            if col_idx < col_count.saturating_sub(1) {
+                                let r = cell_resp.response.rect;
+                                ui.painter().line_segment(
+                                    [
+                                        egui::pos2(r.max.x, r.min.y),
+                                        egui::pos2(r.max.x, r.max.y),
+                                    ],
+                                    egui::Stroke::new(
+                                        border_width,
+                                        th.md_table_border.linear_multiply(0.5),
+                                    ),
+                                );
+                            }
                         }
                         ui.end_row();
                     }

@@ -356,6 +356,7 @@ impl App {
                                         self.show_settings = true;
                                     }
                                     UpdateStatus::RestartRequired => {
+                                        self.save_session();
                                         crate::updater::restart_app();
                                     }
                                     _ => {}
@@ -364,7 +365,14 @@ impl App {
                         }
                     }
 
-                    // Title centered — "Terminal Studio" subtle, workspace name prominent
+                    // Title centered — clipped to avoid overlapping traffic lights and right buttons
+                    let mac_clip_min_x = r.min.x + 72.0 + mac_btn_w * 2.0 + theme::TITLEBAR_ICON_GAP;
+                    let mac_clip_max_x = sysmon_mac_x - theme::TITLEBAR_ICON_GAP;
+                    let mac_clip_rect = egui::Rect::from_min_max(
+                        egui::pos2(mac_clip_min_x, r.min.y),
+                        egui::pos2(mac_clip_max_x, r.max.y),
+                    );
+                    let mac_clipped = painter.with_clip_rect(mac_clip_rect);
                     if let Some(_ws_color) = active_ws_color {
                         let prefix = "Terminal Studio \u{2014} ";
                         let ws_name = self
@@ -388,15 +396,15 @@ impl App {
                         let total_w = prefix_galley.size().x + name_galley.size().x;
                         let start_x = r.center().x - total_w / 2.0;
                         let text_y = r.center().y - prefix_galley.size().y / 2.0;
-                        painter.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
+                        mac_clipped.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
                         let name_y = r.center().y - name_galley.size().y / 2.0;
-                        painter.galley(
+                        mac_clipped.galley(
                             egui::pos2(start_x + total_w - name_galley.size().x, name_y),
                             name_galley,
                             tb_fg,
                         );
                     } else {
-                        painter.text(
+                        mac_clipped.text(
                             r.center(),
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
@@ -653,6 +661,7 @@ impl App {
                                         self.show_settings = true;
                                     }
                                     UpdateStatus::RestartRequired => {
+                                        self.save_session();
                                         crate::updater::restart_app();
                                     }
                                     _ => {}

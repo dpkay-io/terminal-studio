@@ -19,6 +19,9 @@ pub struct SelectionRange {
     pub start_row: u16,
     pub end_col: u16,
     pub end_row: u16,
+    /// `display_offset` at the time the selection was created. Used to adjust
+    /// the highlight if the terminal scrolls while the selection is active.
+    pub display_offset: usize,
 }
 
 impl SelectionRange {
@@ -299,7 +302,7 @@ impl TerminalView {
                         painter.text(pos, egui::Align2::LEFT_TOP, c.ch, base_font.clone(), c.fg);
                         if c.bold {
                             painter.text(
-                                egui::pos2(x + 0.5, y),
+                                egui::pos2(x + 1.0, y),
                                 egui::Align2::LEFT_TOP,
                                 c.ch,
                                 base_font.clone(),
@@ -411,7 +414,11 @@ impl TerminalView {
         // ── Selection highlight ────────────────────────────────────────────────
         if let Some(sel) = selection.filter(|_| visible_rows > 0) {
             let sel_color = t.selection_bg;
-            let (sc, sr, ec, er) = sel.ordered();
+            let (sc, sr_raw, ec, er_raw) = sel.ordered();
+            // Adjust selection rows when display_offset changed since selection start
+            let offset_delta = display_offset as i32 - sel.display_offset as i32;
+            let sr = (sr_raw as i32 + offset_delta).max(0) as u16;
+            let er = (er_raw as i32 + offset_delta).max(0) as u16;
             let (sc, ec) = RENDER_BUF.with(|buf| {
                 let buf = buf.borrow();
                 let snap_start = |col: u16, row: u16| -> u16 {
@@ -438,7 +445,7 @@ impl TerminalView {
                 let y = rect.min.y + screen_row as f32 * cell_height;
                 let start_col = if screen_row == sr { sc } else { 0 };
                 let end_col = if screen_row == er {
-                    ec + 1
+                    (ec + 1).min(cols as u16)
                 } else {
                     cols as u16
                 };
@@ -489,8 +496,8 @@ impl TerminalView {
                 bar_w_thin
             };
             let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
-            let thumb_h = (rect.height() * thumb_frac).max(20.0);
-            let track_h = rect.height() - thumb_h;
+            let thumb_h = (rect.height() * thumb_frac).max(20.0).min(rect.height());
+            let track_h = (rect.height() - thumb_h).max(0.0);
 
             let lines_above = history.saturating_sub(display_offset);
             let top_frac = lines_above as f32 / (total_lines - visible_rows).max(1) as f32;
@@ -630,6 +637,7 @@ mod tests {
             start_row: 1,
             end_col: 10,
             end_row: 5,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (2, 1, 10, 5));
     }
@@ -641,6 +649,7 @@ mod tests {
             start_row: 5,
             end_col: 2,
             end_row: 1,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (2, 1, 10, 5));
     }
@@ -652,6 +661,7 @@ mod tests {
             start_row: 3,
             end_col: 5,
             end_row: 3,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (5, 3, 15, 3));
     }
@@ -663,6 +673,7 @@ mod tests {
             start_row: 4,
             end_col: 7,
             end_row: 4,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (7, 4, 7, 4));
     }

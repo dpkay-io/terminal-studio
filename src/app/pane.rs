@@ -14,6 +14,7 @@ pub(super) struct TermSelection {
     pub(super) start_row: u16,
     pub(super) end_col: u16,
     pub(super) end_row: u16,
+    pub(super) display_offset: usize,
 }
 
 impl TermSelection {
@@ -99,6 +100,7 @@ mod tests {
             start_row: 1,
             end_col: 10,
             end_row: 3,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (2, 1, 10, 3));
     }
@@ -110,6 +112,7 @@ mod tests {
             start_row: 5,
             end_col: 2,
             end_row: 1,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (2, 1, 10, 5));
     }
@@ -121,6 +124,7 @@ mod tests {
             start_row: 3,
             end_col: 5,
             end_row: 3,
+            display_offset: 0,
         };
         // Same row, start_col > end_col => should swap
         assert_eq!(sel.ordered(), (5, 3, 15, 3));
@@ -133,6 +137,7 @@ mod tests {
             start_row: 2,
             end_col: 4,
             end_row: 2,
+            display_offset: 0,
         };
         assert_eq!(sel.ordered(), (4, 2, 4, 2));
     }

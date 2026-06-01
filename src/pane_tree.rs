@@ -214,7 +214,9 @@ pub fn split_rect(
     let half = theme::DIVIDER_W / 2.0;
     match dir {
         SplitDir::Horizontal => {
-            let x = (rect.min.x + rect.width() * ratio).round();
+            let x = (rect.min.x + rect.width() * ratio)
+                .round()
+                .clamp(rect.min.x + half, rect.max.x - half);
             let a = egui::Rect::from_min_max(rect.min, egui::pos2(x - half, rect.max.y));
             let div = egui::Rect::from_min_max(
                 egui::pos2(x - half, rect.min.y),
@@ -224,7 +226,9 @@ pub fn split_rect(
             (a, div, b)
         }
         SplitDir::Vertical => {
-            let y = (rect.min.y + rect.height() * ratio).round();
+            let y = (rect.min.y + rect.height() * ratio)
+                .round()
+                .clamp(rect.min.y + half, rect.max.y - half);
             let a = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, y - half));
             let div = egui::Rect::from_min_max(
                 egui::pos2(rect.min.x, y - half),

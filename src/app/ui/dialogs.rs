@@ -1626,9 +1626,13 @@ impl App {
             self.navigate_to_workspace(parent_id);
         } else if open_it {
             if let Some(dlg) = self.open_folder_dialog.take() {
-                // Save preferred shell
-                self.settings.default_shell = Some(dlg.selected_shell.display_name().to_string());
-                self.settings.save();
+                // Only persist shell preference when the user explicitly changed it
+                let current_default = self.settings.default_shell.as_deref();
+                let chosen = dlg.selected_shell.display_name();
+                if current_default.is_some_and(|d| d != chosen) {
+                    self.settings.default_shell = Some(chosen.to_string());
+                    self.settings.save();
+                }
 
                 let ws_id = if dlg.save_as_workspace {
                     if let Some(existing_id) = dlg.existing_workspace_id {

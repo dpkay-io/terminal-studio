@@ -94,6 +94,7 @@ pub struct Session {
     pub prompt_ready: bool,
     title: Arc<Mutex<String>>,
     pub bell: Arc<AtomicBool>,
+    pub pending_clipboard: Option<String>,
 }
 
 impl Session {
@@ -125,6 +126,7 @@ impl Session {
             prompt_ready: false,
             title,
             bell,
+            pending_clipboard: None,
         }
     }
 
@@ -153,6 +155,7 @@ impl Session {
             prompt_ready: false,
             title,
             bell,
+            pending_clipboard: None,
         }
     }
 

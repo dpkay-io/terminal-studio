@@ -173,11 +173,10 @@ pub fn reader_thread(
             s.cwd = cwd;
             s.prompt_ready = cwd_perf.new_prompt_ready;
         }
-        // OSC 52: set system clipboard
+        // OSC 52: queue clipboard text for the UI thread (arboard fails on
+        // non-main threads on Wayland)
         if let Some(text) = cwd_perf.clipboard_text.take() {
-            if let Ok(mut clip) = arboard::Clipboard::new() {
-                let _ = clip.set_text(text);
-            }
+            session.write().pending_clipboard = Some(text);
         }
 
         // ── Feed alacritty Term in 4 KB chunks (UI can render between chunks) ─

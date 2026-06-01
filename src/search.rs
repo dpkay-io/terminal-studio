@@ -48,11 +48,13 @@ impl SearchState {
 
         for line_idx in (-history)..total_lines {
             let mut line_text = String::with_capacity(cols);
+            let mut char_to_col: Vec<usize> = Vec::with_capacity(cols);
             for col in 0..cols {
                 let cell = &grid[Line(line_idx)][Column(col)];
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
+                char_to_col.push(col);
                 line_text.push(cell.c);
             }
 
@@ -61,16 +63,19 @@ impl SearchState {
             while let Some(byte_pos) = line_lower[search_from..].find(&query_lower) {
                 let match_byte_start = search_from + byte_pos;
                 let match_byte_end = match_byte_start + query_lower.len();
-                // Convert byte offsets to character (column) offsets for the renderer
-                let start = line_lower[..match_byte_start].chars().count();
-                let end = start
-                    + line_lower[match_byte_start..match_byte_end]
-                        .chars()
-                        .count();
+                let char_start = line_lower[..match_byte_start].chars().count();
+                let char_len = line_lower[match_byte_start..match_byte_end]
+                    .chars()
+                    .count();
+                let start_col = char_to_col.get(char_start).copied().unwrap_or(char_start);
+                let end_col = char_to_col
+                    .get(char_start + char_len)
+                    .copied()
+                    .unwrap_or_else(|| start_col + char_len);
                 self.matches.push(SearchMatch {
                     line: line_idx,
-                    start_col: start,
-                    end_col: end,
+                    start_col,
+                    end_col,
                 });
                 search_from = match_byte_start + 1;
             }

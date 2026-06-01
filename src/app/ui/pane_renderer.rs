@@ -265,6 +265,7 @@ fn render_terminal_leaf(
                     start_row: s.start_row,
                     end_col: s.end_col,
                     end_row: s.end_row,
+                    display_offset: s.display_offset,
                 })
         } else {
             None

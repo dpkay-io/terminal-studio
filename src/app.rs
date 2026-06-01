@@ -436,6 +436,16 @@ impl eframe::App for App {
             }
         }
 
+        // Process OSC 52 clipboard requests queued by reader threads.
+        for entry in &self.session_state.sessions {
+            let text = entry.session.write().pending_clipboard.take();
+            if let Some(text) = text {
+                if let Ok(mut clip) = arboard::Clipboard::new() {
+                    let _ = clip.set_text(text);
+                }
+            }
+        }
+
         // Poll quickly while any session is still initializing (CWD not set yet).
         // Only check sessions we know are still uninitialized to avoid per-frame
         // read locks on all sessions in the steady state.
@@ -2414,6 +2424,7 @@ impl App {
                                                                     start_row: row,
                                                                     end_col: end as u16,
                                                                     end_row: row,
+                                                                    display_offset,
                                                                 });
                                                                 self.term_selecting = false;
                                                                 self.term_selection_sid = Some(sid);
@@ -2421,26 +2432,29 @@ impl App {
                                                         }
                                                         3 => {
                                                             // Triple-click: select line
-                                                            let cols = {
+                                                            let (cols, sel_offset) = {
                                                                 let session = self.session_state.sessions[idx].session.read();
-                                                                session.term.columns() as u16
+                                                                (session.term.columns() as u16, session.term.grid().display_offset())
                                                             };
                                                             self.term_selection = Some(TermSelection {
                                                                 start_col: 0,
                                                                 start_row: row,
                                                                 end_col: cols.saturating_sub(1),
                                                                 end_row: row,
+                                                                display_offset: sel_offset,
                                                             });
                                                             self.term_selecting = false;
                                                             self.term_selection_sid = Some(sid);
                                                         }
                                                         _ => {
                                                             // Single-click: start selection
+                                                            let sel_offset = self.session_state.sessions[idx].session.read().term.grid().display_offset();
                                                             self.term_selection = Some(TermSelection {
                                                                 start_col: col,
                                                                 start_row: row,
                                                                 end_col: col,
                                                                 end_row: row,
+                                                                display_offset: sel_offset,
                                                             });
                                                             self.term_selecting = true;
                                                             self.term_selection_sid = Some(sid);
@@ -2662,12 +2676,14 @@ impl App {
                                                     let session = entry.session.read();
                                                     let visible_rows = (geo.rect.height() / geo.cell_h) as u16;
                                                     let cols = session.term.columns() as u16;
+                                                    let sel_offset = session.term.grid().display_offset();
                                                     drop(session);
                                                     self.term_selection = Some(TermSelection {
                                                         start_col: 0,
                                                         start_row: 0,
                                                         end_col: cols.saturating_sub(1),
                                                         end_row: visible_rows.saturating_sub(1),
+                                                        display_offset: sel_offset,
                                                     });
                                                     self.term_selection_sid = Some(sid);
                                                 }
@@ -3437,9 +3453,8 @@ impl App {
                 }
                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                     let entry = &self.session_state.sessions[idx];
-                    let mut sess = entry.session.write();
                     SessionManager::resize(&entry.master, cols, rows);
-                    sess.resize(cols, rows);
+                    entry.session.write().resize(cols, rows);
                 }
             }
             // Keep repainting while a resize is pending so the debounce fires promptly.
