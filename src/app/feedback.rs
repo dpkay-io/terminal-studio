@@ -52,8 +52,9 @@ impl FlashManager {
         let duration_ms = theme::FLASH_DURATION_MS as f32;
         self.flashes.iter().find(|f| f.target == target).map(|f| {
             let elapsed = f.start.elapsed().as_millis() as f32;
-            let progress = (elapsed / duration_ms).min(1.0);
-            let alpha = (theme::ALPHA_FLASH as f32 * (1.0 - progress)) as u8;
+            let t = (elapsed / duration_ms).min(1.0);
+            let smooth = t * t * (3.0 - 2.0 * t);
+            let alpha = (theme::ALPHA_FLASH as f32 * (1.0 - smooth)) as u8;
             (f.kind, alpha)
         })
     }
@@ -129,6 +130,18 @@ mod tests {
         crate::theme::set_theme(crate::theme::ThemeId::CatppuccinMocha);
         let color = FlashManager::flash_color(FlashKind::Neutral, 60);
         assert_eq!(color.a(), 60);
+    }
+
+    #[test]
+    fn test_alpha_easing_holds_brightness() {
+        let mut fm = FlashManager::new();
+        fm.trigger(FlashTarget::Global, FlashKind::Neutral);
+        sleep(Duration::from_millis(theme::FLASH_DURATION_MS / 10));
+        let (_, alpha_early) = fm.flash_alpha(FlashTarget::Global).unwrap();
+        assert!(
+            alpha_early >= (theme::ALPHA_FLASH as f32 * 0.85) as u8,
+            "eased flash should hold brightness early: got {alpha_early}"
+        );
     }
 
     #[test]
