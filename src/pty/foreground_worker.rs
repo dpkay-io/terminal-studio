@@ -54,7 +54,12 @@ impl ForegroundWorker {
             }
         };
 
-        ForegroundWorker { cache, pids, alive, thread: handle }
+        ForegroundWorker {
+            cache,
+            pids,
+            alive,
+            thread: handle,
+        }
     }
 
     /// Update the set of sessions to poll.  Call whenever sessions are added or removed.

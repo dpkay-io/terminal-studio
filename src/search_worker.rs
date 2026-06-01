@@ -55,89 +55,90 @@ impl SearchWorker {
         let generation_bg = Arc::clone(&generation);
         let alive_bg = Arc::clone(&alive);
 
-        let thread_running = match thread::Builder::new()
-            .name("search-worker".into())
-            .spawn(move || {
-                let matcher = SkimMatcherV2::default();
-                while alive_bg.load(Ordering::Relaxed) {
-                    let job = match rx.recv_timeout(Duration::from_secs(1)) {
-                        Ok(j) => j,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-
-                    if *generation_bg.lock() != job.generation {
-                        continue;
-                    }
-
-                    let mut all_matches = Vec::new();
-
-                    for (session_id, session_title, session_lock) in &job.sessions {
-                        // Check generation BEFORE acquiring the session lock
-                        if *generation_bg.lock() != job.generation {
-                            break;
-                        }
-
-                        // Extract all needed data under a short-lived read lock,
-                        // then release it before doing any further locking or heavy work.
-                        let lines: Vec<String> = {
-                            let session = session_lock.read();
-                            let term = &session.term;
-                            let grid = term.grid();
-                            let cols = term.columns();
-                            let total_lines = term.screen_lines() as i32;
-                            let history = grid.history_size() as i32;
-
-                            let mut extracted = Vec::new();
-                            for line_idx in (-history)..total_lines {
-                                let mut line_text = String::with_capacity(cols);
-                                for col in 0..cols {
-                                    let cell = &grid[Line(line_idx)][Column(col)];
-                                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                                        continue;
-                                    }
-                                    line_text.push(cell.c);
-                                }
-                                let trimmed = line_text.trim_end().to_string();
-                                if !trimmed.is_empty() {
-                                    extracted.push(trimmed);
-                                }
-                            }
-                            extracted
+        let thread_running =
+            match thread::Builder::new()
+                .name("search-worker".into())
+                .spawn(move || {
+                    let matcher = SkimMatcherV2::default();
+                    while alive_bg.load(Ordering::Relaxed) {
+                        let job = match rx.recv_timeout(Duration::from_secs(1)) {
+                            Ok(j) => j,
+                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
                         };
 
-                        for trimmed in &lines {
-                            if let Some(score) = matcher.fuzzy_match(trimmed, &job.query) {
-                                all_matches.push(GlobalSearchMatch {
-                                    session_id: *session_id,
-                                    session_title: session_title.clone(),
-                                    line_text: trimmed.clone(),
-                                    score,
-                                });
+                        if *generation_bg.lock() != job.generation {
+                            continue;
+                        }
+
+                        let mut all_matches = Vec::new();
+
+                        for (session_id, session_title, session_lock) in &job.sessions {
+                            // Check generation BEFORE acquiring the session lock
+                            if *generation_bg.lock() != job.generation {
+                                break;
+                            }
+
+                            // Extract all needed data under a short-lived read lock,
+                            // then release it before doing any further locking or heavy work.
+                            let lines: Vec<String> = {
+                                let session = session_lock.read();
+                                let term = &session.term;
+                                let grid = term.grid();
+                                let cols = term.columns();
+                                let total_lines = term.screen_lines() as i32;
+                                let history = grid.history_size() as i32;
+
+                                let mut extracted = Vec::new();
+                                for line_idx in (-history)..total_lines {
+                                    let mut line_text = String::with_capacity(cols);
+                                    for col in 0..cols {
+                                        let cell = &grid[Line(line_idx)][Column(col)];
+                                        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                                            continue;
+                                        }
+                                        line_text.push(cell.c);
+                                    }
+                                    let trimmed = line_text.trim_end().to_string();
+                                    if !trimmed.is_empty() {
+                                        extracted.push(trimmed);
+                                    }
+                                }
+                                extracted
+                            };
+
+                            for trimmed in &lines {
+                                if let Some(score) = matcher.fuzzy_match(trimmed, &job.query) {
+                                    all_matches.push(GlobalSearchMatch {
+                                        session_id: *session_id,
+                                        session_title: session_title.clone(),
+                                        line_text: trimmed.clone(),
+                                        score,
+                                    });
+                                }
                             }
                         }
+
+                        if *generation_bg.lock() != job.generation {
+                            continue;
+                        }
+
+                        all_matches.sort_by_key(|b| std::cmp::Reverse(b.score));
+                        all_matches.truncate(200);
+
+                        let mut res = results_bg.lock();
+                        res.matches = all_matches;
+                        res.query = job.query;
+                        res.completed = true;
+                        ctx.request_repaint();
                     }
-
-                    if *generation_bg.lock() != job.generation {
-                        continue;
-                    }
-
-                    all_matches.sort_by_key(|b| std::cmp::Reverse(b.score));
-                    all_matches.truncate(200);
-
-                    let mut res = results_bg.lock();
-                    res.matches = all_matches;
-                    res.query = job.query;
-                    res.completed = true;
-                    ctx.request_repaint();
+                }) {
+                Ok(_) => true,
+                Err(e) => {
+                    log::error!("failed to spawn search-worker thread: {e}");
+                    false
                 }
-            }) {
-            Ok(_) => true,
-            Err(e) => {
-                log::error!("failed to spawn search-worker thread: {e}");
-                false
-            }
-        };
+            };
 
         SearchWorker {
             tx,

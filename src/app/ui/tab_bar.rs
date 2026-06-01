@@ -112,8 +112,13 @@ impl App {
                                 );
                                 // Active indicator dot
                                 let dot_radius = 3.0;
-                                let dot_x = tab_rect.min.x + theme::TAB_PAD_X
-                                    + if ws_color.is_some() { theme::TAB_COLOR_STRIP_W } else { 0.0 }
+                                let dot_x = tab_rect.min.x
+                                    + theme::TAB_PAD_X
+                                    + if ws_color.is_some() {
+                                        theme::TAB_COLOR_STRIP_W
+                                    } else {
+                                        0.0
+                                    }
                                     + dot_radius;
                                 let dot_color = ws_color
                                     .map(theme::from_rgb)
@@ -469,9 +474,7 @@ impl App {
                         let target_vis = visible_indices.get(target_i).copied();
                         let drag_vis = visible_indices.get(drag_idx).copied();
                         if let (Some(from), Some(to)) = (drag_vis, target_vis) {
-                            if from != to
-                                && from < self.pane_state.panes.len()
-                            {
+                            if from != to && from < self.pane_state.panes.len() {
                                 let pane = self.pane_state.panes.remove(from);
                                 let insert_at = if to > from { to - 1 } else { to };
                                 let insert_at = insert_at.min(self.pane_state.panes.len());

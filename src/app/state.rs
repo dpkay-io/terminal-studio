@@ -94,8 +94,9 @@ impl App {
             {
                 let win_root =
                     std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-                let font_path =
-                    std::path::PathBuf::from(&win_root).join("Fonts").join("seguisym.ttf");
+                let font_path = std::path::PathBuf::from(&win_root)
+                    .join("Fonts")
+                    .join("seguisym.ttf");
                 if let Ok(data) = std::fs::read(&font_path) {
                     fonts
                         .font_data
@@ -1060,12 +1061,8 @@ impl App {
             .filter_map(|p| {
                 let content = match &p.content {
                     PaneContent::Terminal(sid) => {
-                        let Some(&idx) = session_id_to_index.get(sid) else {
-                            return None;
-                        };
-                        SavedPaneContent::Terminal {
-                            session_index: idx,
-                        }
+                        let &idx = session_id_to_index.get(sid)?;
+                        SavedPaneContent::Terminal { session_index: idx }
                     }
                     PaneContent::DeferredTerminal {
                         cwd,

@@ -306,11 +306,7 @@ impl App {
                         .active_group
                         .and_then(|g| ws_ids.iter().position(|&id| id == g))
                         .unwrap_or(0);
-                    let prev = if cur == 0 {
-                        ws_ids.len() - 1
-                    } else {
-                        cur - 1
-                    };
+                    let prev = if cur == 0 { ws_ids.len() - 1 } else { cur - 1 };
                     self.deferred_open_workspace = Some(ws_ids[prev]);
                 }
             }

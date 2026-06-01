@@ -285,11 +285,8 @@ impl TerminalView {
                             pos,
                             egui::vec2(2.0 * cell_width, cell_height),
                         );
-                        let galley = painter.layout_no_wrap(
-                            c.ch.to_string(),
-                            base_font.clone(),
-                            c.fg,
-                        );
+                        let galley =
+                            painter.layout_no_wrap(c.ch.to_string(), base_font.clone(), c.fg);
                         painter.galley(
                             egui::pos2(
                                 wide_rect.min.x + (wide_rect.width() - galley.size().x) * 0.5,

@@ -40,7 +40,11 @@ impl SysMonitor {
             }
         };
 
-        Some(Self { stats, alive, thread: handle })
+        Some(Self {
+            stats,
+            alive,
+            thread: handle,
+        })
     }
 
     pub fn stats(&self) -> SystemStats {

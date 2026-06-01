@@ -82,11 +82,7 @@ impl WatchState {
             .filter(|d| !self.watched.contains(d))
             .collect();
         for dir in to_add {
-            if self
-                .watcher
-                .watch(&dir, RecursiveMode::Recursive)
-                .is_ok()
-            {
+            if self.watcher.watch(&dir, RecursiveMode::Recursive).is_ok() {
                 let gd = dir.join(".git");
                 if gd.is_dir() && self.watcher.watch(&gd, RecursiveMode::NonRecursive).is_ok() {
                     self.git_dirs.insert(gd, dir.clone());
@@ -184,7 +180,9 @@ impl WatchState {
                             // Debounce: skip if file was modified very recently (still being written) (L23)
                             let recently_modified = std::fs::metadata(path)
                                 .and_then(|m| m.modified())
-                                .map(|t| t.elapsed().unwrap_or_default() < Duration::from_millis(50))
+                                .map(|t| {
+                                    t.elapsed().unwrap_or_default() < Duration::from_millis(50)
+                                })
                                 .unwrap_or(false);
                             if !recently_modified {
                                 let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
