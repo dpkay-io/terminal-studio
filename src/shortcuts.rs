@@ -650,13 +650,23 @@ mod tests {
     #[test]
     fn label_generation() {
         let reg = ShortcutRegistry::new();
+        let expected_toggle = if cfg!(target_os = "macos") {
+            "\u{2318}+\u{21E7}+B"
+        } else {
+            "Ctrl+Shift+B"
+        };
         assert_eq!(
             reg.label_for(AppAction::ToggleLeftSidebar),
-            Some("Ctrl+Shift+B")
+            Some(expected_toggle)
         );
+        let expected_split = if cfg!(target_os = "macos") {
+            "\u{2318}+\u{21E7}+\\"
+        } else {
+            "Ctrl+Shift+\\"
+        };
         assert_eq!(
             reg.label_for(AppAction::SplitHorizontal),
-            Some("Ctrl+Shift+\\")
+            Some(expected_split)
         );
     }
 

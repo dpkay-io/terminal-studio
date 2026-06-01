@@ -337,9 +337,6 @@ mod tests {
         let entries = parse_git_status(input);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, "\u{00e9}new");
-        assert_eq!(
-            entries[0].original_path,
-            Some("\u{00e9}old".to_string())
-        );
+        assert_eq!(entries[0].original_path, Some("\u{00e9}old".to_string()));
     }
 }

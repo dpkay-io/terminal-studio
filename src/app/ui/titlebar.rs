@@ -366,7 +366,8 @@ impl App {
                     }
 
                     // Title centered — clipped to avoid overlapping traffic lights and right buttons
-                    let mac_clip_min_x = r.min.x + 72.0 + mac_btn_w * 2.0 + theme::TITLEBAR_ICON_GAP;
+                    let mac_clip_min_x =
+                        r.min.x + 72.0 + mac_btn_w * 2.0 + theme::TITLEBAR_ICON_GAP;
                     let mac_clip_max_x = sysmon_mac_x - theme::TITLEBAR_ICON_GAP;
                     let mac_clip_rect = egui::Rect::from_min_max(
                         egui::pos2(mac_clip_min_x, r.min.y),

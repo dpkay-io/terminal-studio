@@ -64,9 +64,7 @@ impl SearchState {
                 let match_byte_start = search_from + byte_pos;
                 let match_byte_end = match_byte_start + query_lower.len();
                 let char_start = line_lower[..match_byte_start].chars().count();
-                let char_len = line_lower[match_byte_start..match_byte_end]
-                    .chars()
-                    .count();
+                let char_len = line_lower[match_byte_start..match_byte_end].chars().count();
                 let start_col = char_to_col.get(char_start).copied().unwrap_or(char_start);
                 let end_col = char_to_col
                     .get(char_start + char_len)

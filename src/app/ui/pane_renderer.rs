@@ -99,10 +99,13 @@ pub(in crate::app) fn render_node(
             );
 
             // Click to focus pane (ignore clicks during panel resize drags)
-            let any_drag = ui.ctx().input(|inp| inp.pointer.any_down() && inp.pointer.is_decidedly_dragging());
-            if !any_drag && ui
+            let any_drag = ui
                 .ctx()
-                .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
+                .input(|inp| inp.pointer.any_down() && inp.pointer.is_decidedly_dragging());
+            if !any_drag
+                && ui
+                    .ctx()
+                    .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
             {
                 if let Some(pos) = ui.ctx().input(|inp| inp.pointer.interact_pos()) {
                     if rect.contains(pos) {

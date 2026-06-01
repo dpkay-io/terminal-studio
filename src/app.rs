@@ -2803,10 +2803,8 @@ impl App {
                                                 pane_id: source_pane_id,
                                                 last_size: (80, 24),
                                             };
-                                            if let Some(tree) = self
-                                                .pane_state
-                                                .pane_trees
-                                                .get_mut(&active_root_pid)
+                                            if let Some(tree) =
+                                                self.pane_state.pane_trees.get_mut(&active_root_pid)
                                             {
                                                 *tree = replacement;
                                             }

@@ -156,8 +156,7 @@ mod platform {
                     if cmd.is_empty() {
                         continue;
                     }
-                    let args: Vec<String> =
-                        cmd.split_whitespace().map(str::to_string).collect();
+                    let args: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
                     let name = args
                         .first()?
                         .rsplit('/')

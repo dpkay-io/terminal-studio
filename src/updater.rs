@@ -335,10 +335,7 @@ fn apply_update(_current_exe: &std::path::Path, new_bytes: &[u8]) -> Result<(), 
         }
 
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            _current_exe,
-            std::fs::Permissions::from_mode(0o755),
-        );
+        let _ = std::fs::set_permissions(_current_exe, std::fs::Permissions::from_mode(0o755));
 
         Ok(())
     }

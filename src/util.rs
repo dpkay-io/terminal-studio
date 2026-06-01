@@ -33,9 +33,7 @@ pub fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()
     let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let tmp = parent.join(format!(
         ".{}.{}.{}.tmp",
-        path.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("data"),
+        path.file_name().and_then(|n| n.to_str()).unwrap_or("data"),
         std::process::id(),
         seq,
     ));
@@ -46,7 +44,10 @@ pub fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()
     {
         use std::os::windows::ffi::OsStrExt;
         let wide = |p: &std::path::Path| -> Vec<u16> {
-            p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+            p.as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
         };
         let src = wide(&tmp);
         let dst = wide(path);

@@ -298,10 +298,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                             if col_idx < col_count.saturating_sub(1) {
                                 let r = cell_resp.response.rect;
                                 ui.painter().line_segment(
-                                    [
-                                        egui::pos2(r.max.x, r.min.y),
-                                        egui::pos2(r.max.x, r.max.y),
-                                    ],
+                                    [egui::pos2(r.max.x, r.min.y), egui::pos2(r.max.x, r.max.y)],
                                     egui::Stroke::new(
                                         border_width,
                                         th.md_table_border.linear_multiply(0.5),
