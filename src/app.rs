@@ -94,6 +94,7 @@ pub struct App {
     show_left_panel: bool,
     show_right_panel: bool,
     show_settings: bool,
+    settings_saved_at: Option<Instant>,
     show_shortcut_help: bool,
     show_quick_switcher: bool,
     quick_switcher_query: String,

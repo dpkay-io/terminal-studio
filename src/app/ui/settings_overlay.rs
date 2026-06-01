@@ -28,6 +28,15 @@ impl App {
                     if ui_kit::dialog_header_with_close(ui, "Settings") {
                         close_settings = true;
                     }
+                    if let Some(saved_at) = self.settings_saved_at {
+                        if saved_at.elapsed() < std::time::Duration::from_secs(2) {
+                            ui.label(
+                                egui::RichText::new("\u{2713} Saved")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(theme::active().success),
+                            );
+                        }
+                    }
 
                     egui::ScrollArea::vertical()
                         .max_height(dialog_h - 60.0)
@@ -357,6 +366,7 @@ impl App {
 
             if settings_changed {
                 self.settings.save();
+                self.settings_saved_at = Some(std::time::Instant::now());
                 self.apply_theme_visuals(ctx);
                 self.cached_cell_size = None;
             }

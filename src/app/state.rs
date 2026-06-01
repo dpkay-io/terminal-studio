@@ -175,6 +175,7 @@ impl App {
             show_left_panel: true,
             show_right_panel: true,
             show_settings: false,
+            settings_saved_at: None,
             show_shortcut_help: false,
             show_quick_switcher: false,
             quick_switcher_query: String::new(),
