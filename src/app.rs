@@ -162,6 +162,7 @@ pub struct App {
     dir_search_query: String,
     dir_search_active: bool,
     dir_search_debouncer: crate::app::ui::debounce::Debouncer,
+    dir_search_changed_at: Instant,
 
     // Terminal content search (Ctrl+F)
     term_search: crate::search::SearchState,
@@ -971,7 +972,7 @@ impl App {
                             .fill(theme::active().surface0)
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
-                                egui::ScrollArea::horizontal()
+                                let scroll_output = egui::ScrollArea::horizontal()
                                     .id_source(self.vp_id("right_tab_bar"))
                                     .max_height(theme::HEADER_H)
                                     .show(ui, |ui| {
@@ -1044,6 +1045,36 @@ impl App {
                                             }
                                         });
                                     });
+                                {
+                                    let inner = scroll_output.inner_rect;
+                                    let offset_x = scroll_output.state.offset.x;
+                                    let content_w = scroll_output.content_size.x;
+                                    if offset_x > 1.0 {
+                                        let fade = egui::Rect::from_min_size(inner.left_top(), egui::vec2(14.0, inner.height()));
+                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(60));
+                                        ui.painter().text(
+                                            fade.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "\u{2039}",
+                                            egui::FontId::proportional(theme::FONT_UI_SM),
+                                            theme::active().text,
+                                        );
+                                    }
+                                    if content_w > inner.width() + offset_x + 1.0 {
+                                        let fade = egui::Rect::from_min_max(
+                                            egui::pos2(inner.right() - 14.0, inner.top()),
+                                            inner.right_bottom(),
+                                        );
+                                        ui.painter().rect_filled(fade, 0.0, egui::Color32::from_black_alpha(60));
+                                        ui.painter().text(
+                                            fade.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "\u{203a}",
+                                            egui::FontId::proportional(theme::FONT_UI_SM),
+                                            theme::active().text,
+                                        );
+                                    }
+                                }
                             });
 
                         ui.separator();
@@ -1143,6 +1174,7 @@ impl App {
                                                         );
                                                     }
                                                 } else {
+                                                    self.dir_search_changed_at = Instant::now();
                                                     ctx.request_repaint_after(
                                                         std::time::Duration::from_millis(160),
                                                     );
@@ -1154,7 +1186,10 @@ impl App {
 
                                             if show_search_results {
                                                 let results = self.workers.file_search_worker.results();
-                                                if !results.completed {
+                                                if !results.completed
+                                                    && self.dir_search_changed_at.elapsed()
+                                                        > std::time::Duration::from_millis(200)
+                                                {
                                                     ui.label(
                                                         egui::RichText::new("Searching…")
                                                             .italics()
@@ -1342,6 +1377,26 @@ impl App {
                                         .strong()
                                         .size(theme::FONT_UI_MD),
                                 );
+                                if let Some(ws_id) = self.active_group {
+                                    if let Some(ws) = self
+                                        .workspace_store
+                                        .workspaces
+                                        .iter()
+                                        .find(|w| w.id == ws_id)
+                                    {
+                                        ui.label(
+                                            egui::RichText::new(format!("\u{00b7} {}", ws.name))
+                                                .size(theme::FONT_UI_XS)
+                                                .color(theme::active().fg_secondary),
+                                        );
+                                    }
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new("\u{00b7} Other")
+                                            .size(theme::FONT_UI_XS)
+                                            .color(theme::active().fg_secondary),
+                                    );
+                                }
                                 ui.label(
                                     egui::RichText::new("· autosaved")
                                         .size(theme::FONT_UI_XS)

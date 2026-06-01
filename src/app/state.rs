@@ -226,6 +226,7 @@ impl App {
             dir_search_debouncer: crate::app::ui::debounce::Debouncer::new(Duration::from_millis(
                 150,
             )),
+            dir_search_changed_at: Instant::now(),
             md_prefer_preview: false,
             term_search: crate::search::SearchState::new(),
             text_search: crate::search::TextSearchState::new(),
