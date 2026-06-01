@@ -57,12 +57,7 @@ impl AppSettings {
             theme::set_theme(s.theme_id);
             return s;
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            let s = Self::default();
-            theme::set_theme(s.theme_id);
-            return s;
-        };
-        let s: Self = serde_json::from_str(&text).unwrap_or_default();
+        let s: Self = crate::util::safe_json_load(&path).unwrap_or_default();
         theme::set_theme(s.theme_id);
         s
     }

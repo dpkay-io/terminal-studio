@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::{mpsc, Arc};
 
 use parking_lot::Mutex;
@@ -278,47 +277,58 @@ fn preflight_checks(binary_path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_update(current_exe: &std::path::Path, new_bytes: &[u8]) -> Result<(), String> {
-    let dir = current_exe
-        .parent()
-        .ok_or_else(|| "Cannot determine binary directory".to_string())?;
-
-    let temp_path = dir.join("terminal-studio.update");
-    std::fs::write(&temp_path, new_bytes)
-        .map_err(|e| format!("Failed to write update file: {e}"))?;
-
-    // Platform-specific binary replacement
-    let backup_path = backup_path_for(current_exe);
-
-    // Rename current → backup
-    if let Err(e) = std::fs::rename(current_exe, &backup_path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(format!("Failed to backup current binary: {e}"));
-    }
-
-    // Move new → current
-    if let Err(e) = std::fs::rename(&temp_path, current_exe) {
-        // Rollback
-        let _ = std::fs::rename(&backup_path, current_exe);
-        return Err(format!("Failed to install new binary (rolled back): {e}"));
-    }
-
-    // Unix: set executable permission
-    #[cfg(unix)]
+fn apply_update(_current_exe: &std::path::Path, new_bytes: &[u8]) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(current_exe, std::fs::Permissions::from_mode(0o755));
+        let dir = _current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory".to_string())?;
+        let temp_path = dir.join("terminal-studio.update");
+        std::fs::write(&temp_path, new_bytes)
+            .map_err(|e| format!("Failed to write update file: {e}"))?;
+        if let Err(e) = self_replace::self_replace(&temp_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Failed to replace binary: {e}"));
+        }
+        let _ = std::fs::remove_file(&temp_path);
+        Ok(())
     }
 
-    Ok(())
+    #[cfg(not(target_os = "windows"))]
+    {
+        let dir = _current_exe
+            .parent()
+            .ok_or_else(|| "Cannot determine binary directory".to_string())?;
+
+        let temp_path = dir.join("terminal-studio.update");
+        std::fs::write(&temp_path, new_bytes)
+            .map_err(|e| format!("Failed to write update file: {e}"))?;
+
+        let backup_path = backup_path_for(_current_exe);
+
+        if let Err(e) = std::fs::rename(_current_exe, &backup_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("Failed to backup current binary: {e}"));
+        }
+
+        if let Err(e) = std::fs::rename(&temp_path, _current_exe) {
+            let _ = std::fs::rename(&backup_path, _current_exe);
+            return Err(format!("Failed to install new binary (rolled back): {e}"));
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            _current_exe,
+            std::fs::Permissions::from_mode(0o755),
+        );
+
+        Ok(())
+    }
 }
 
-fn backup_path_for(exe: &std::path::Path) -> PathBuf {
-    if cfg!(target_os = "windows") {
-        exe.with_extension("exe.old")
-    } else {
-        exe.with_extension("old")
-    }
+#[cfg(not(target_os = "windows"))]
+fn backup_path_for(exe: &std::path::Path) -> std::path::PathBuf {
+    exe.with_extension("old")
 }
 
 fn platform_asset_name() -> &'static str {

@@ -199,9 +199,14 @@ impl SessionManager {
             cmd.cwd(dir);
         }
 
-        let child = pty_pair.slave.spawn_command(cmd)?;
+        let mut child = pty_pair.slave.spawn_command(cmd)?;
         let shell_pid = child.process_id().unwrap_or(u32::MAX);
-        drop(child);
+
+        thread::Builder::new()
+            .name(format!("pty-reaper-{}", id))
+            .spawn(move || {
+                let _ = child.wait();
+            })?;
 
         let reader = pty_pair.master.try_clone_reader()?;
 

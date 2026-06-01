@@ -1,4 +1,24 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Deserialize JSON from a file. On parse failure, creates a `.bak` backup
+/// of the corrupt file and returns `None` so callers fall back to defaults
+/// without silently destroying the original data on next save.
+pub fn safe_json_load<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(val) => Some(val),
+        Err(e) => {
+            let bak = path.with_extension("json.bak");
+            log::warn!(
+                "corrupt JSON in {}: {e} — backing up to {}",
+                path.display(),
+                bak.display()
+            );
+            let _ = std::fs::copy(path, &bak);
+            None
+        }
+    }
+}
 
 /// Write `content` to `path` atomically: writes to a sibling temp file, then
 /// renames over the target. On failure the target file is left untouched (or
@@ -18,17 +38,38 @@ pub fn atomic_write(path: &std::path::Path, content: &str) -> std::io::Result<()
 
     std::fs::write(&tmp, content)?;
 
-    // On Windows, rename fails if the target exists — remove it first.
     #[cfg(target_os = "windows")]
     {
-        let _ = std::fs::remove_file(path);
+        use std::os::windows::ffi::OsStrExt;
+        let wide = |p: &std::path::Path| -> Vec<u16> {
+            p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        };
+        let src = wide(&tmp);
+        let dst = wide(path);
+        let ret = unsafe {
+            windows_sys::Win32::Storage::FileSystem::MoveFileExW(
+                src.as_ptr(),
+                dst.as_ptr(),
+                windows_sys::Win32::Storage::FileSystem::MOVEFILE_REPLACE_EXISTING
+                    | windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if ret == 0 {
+            let e = std::io::Error::last_os_error();
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok(())
     }
 
-    if let Err(e) = std::fs::rename(&tmp, path) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(e) = std::fs::rename(&tmp, path) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Returns the platform-appropriate config directory for Terminal Studio.

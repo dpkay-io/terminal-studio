@@ -582,10 +582,11 @@ fn ansi_indexed(index: u8, t: &Theme) -> (u8, u8, u8) {
             (r, g, b)
         }
         16..=231 => {
-            let n = index - 16;
-            let b = (n % 6) * 51;
-            let g = ((n / 6) % 6) * 51;
-            let r = (n / 36) * 51;
+            const CUBE_STEPS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+            let n = (index - 16) as usize;
+            let r = CUBE_STEPS[n / 36];
+            let g = CUBE_STEPS[(n / 6) % 6];
+            let b = CUBE_STEPS[n % 6];
             (r, g, b)
         }
         232..=255 => {
@@ -701,13 +702,16 @@ mod tests {
     #[test]
     fn test_ansi_indexed_216_cube() {
         let t = theme::active();
-        // Index 16 → first cube entry → n=0 → r=0, g=0, b=0
+        // Index 16 → first cube entry → (0,0,0)
         assert_eq!(ansi_indexed(16, t), (0, 0, 0));
-        // Index 231 → last cube entry → n=215 → r=(215/36)*51=5*51=255,
-        //   g=((215/6)%6)*51=(35%6)*51=5*51=255, b=(215%6)*51=5*51=255
+        // Index 231 → last cube entry → (255,255,255)
         assert_eq!(ansi_indexed(231, t), (255, 255, 255));
-        // Index 16+36=52 → n=36 → r=1*51=51, g=0, b=0
-        assert_eq!(ansi_indexed(52, t), (51, 0, 0));
+        // Index 52 → n=36 → r=CUBE_STEPS[1]=95, g=0, b=0
+        assert_eq!(ansi_indexed(52, t), (95, 0, 0));
+        // Index 21 → n=5 → r=0, g=0, b=CUBE_STEPS[5]=255
+        assert_eq!(ansi_indexed(21, t), (0, 0, 255));
+        // Index 196 → n=180 → r=CUBE_STEPS[5]=255, g=0, b=0
+        assert_eq!(ansi_indexed(196, t), (255, 0, 0));
     }
 
     #[test]

@@ -33,10 +33,7 @@ impl WorkspaceStore {
         let Some(path) = Self::data_path() else {
             return Self::default();
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&text).unwrap_or_default()
+        util::safe_json_load(&path).unwrap_or_default()
     }
 
     pub fn save(&self) {
@@ -99,10 +96,7 @@ impl NoteStore {
         let Some(path) = Self::data_path() else {
             return Self::default();
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self::default();
-        };
-        serde_json::from_str(&text).unwrap_or_default()
+        util::safe_json_load(&path).unwrap_or_default()
     }
 
     pub fn save(&self) {

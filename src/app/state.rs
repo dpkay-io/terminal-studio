@@ -613,12 +613,8 @@ impl App {
         let Some(path) = windows_data_path() else {
             return;
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        let Some(saved) = crate::util::safe_json_load::<Vec<SavedExtraWindow>>(&path) else {
             return;
-        };
-        let saved: Vec<SavedExtraWindow> = match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(_) => return,
         };
         let mut max_id: u64 = self.next_window_id.saturating_sub(1);
         for s in saved {
@@ -1137,10 +1133,7 @@ impl App {
         let Some(path) = session_data_path() else {
             return false;
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return false;
-        };
-        let Ok(state) = serde_json::from_str::<AppSession>(&text) else {
+        let Some(state) = crate::util::safe_json_load::<AppSession>(&path) else {
             return false;
         };
         if state.sessions.is_empty() && state.panes.is_empty() {
@@ -1380,7 +1373,7 @@ impl App {
         let mut result = String::new();
         for screen_row in sr..=er {
             let grid_line = screen_row as i32 - display_offset as i32;
-            if grid_line < 0 || grid_line >= term_rows as i32 {
+            if grid_line < -(grid.history_size() as i32) || grid_line >= term_rows as i32 {
                 continue;
             }
             let row_start = if screen_row == sr { sc as usize } else { 0 };

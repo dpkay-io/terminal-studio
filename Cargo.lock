@@ -3873,6 +3873,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "self-replace"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03ec815b5eab420ab893f63393878d89c90fdd94c0bcc44c07abb8ad95552fb7"
+dependencies = [
+ "fastrand 2.4.1",
+ "tempfile",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4307,7 +4318,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-studio"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4325,6 +4336,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "self-replace",
  "semver",
  "serde",
  "serde_json",

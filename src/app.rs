@@ -2389,9 +2389,9 @@ impl App {
                                                                 }
                                                             }
                                                             drop(session);
+                                                            let chars: Vec<char> = line_text.chars().collect();
                                                             let col_usize = col as usize;
-                                                            if col_usize < line_text.len() {
-                                                                let chars: Vec<char> = line_text.chars().collect();
+                                                            if col_usize < chars.len() {
                                                                 let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '.';
                                                                 let mut start = col_usize;
                                                                 let mut end = col_usize;
