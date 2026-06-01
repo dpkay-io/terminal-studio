@@ -103,13 +103,13 @@ impl TerminalView {
         Self { session }
     }
 
-    /// Render the terminal. `cursor_visible` toggles the blink cycle.
+    /// Render the terminal. `cursor_alpha` controls blink fade (0.0–1.0).
     /// Scroll position is read from the term's internal `display_offset`.
     pub fn show(
         &self,
         ui: &mut egui::Ui,
         is_focused: bool,
-        cursor_visible: bool,
+        cursor_alpha: f32,
         selection: Option<&SelectionRange>,
         font_size: f32,
         cursor_style: CursorStyle,
@@ -376,27 +376,33 @@ impl TerminalView {
         // The snapshot phase already filtered for SHOW_CURSOR + live-view +
         // bounds, so `cursor` is Some only when we should consider drawing.
         if let Some((cx, cy)) = cursor {
-            if cursor_visible || !is_focused {
+            if cursor_alpha > 0.01 || !is_focused {
                 let cursor_origin =
                     rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
                 if is_focused {
+                    let color = egui::Color32::from_rgba_unmultiplied(
+                        t.cursor_color.r(),
+                        t.cursor_color.g(),
+                        t.cursor_color.b(),
+                        (t.cursor_color.a() as f32 * cursor_alpha) as u8,
+                    );
                     match cursor_style {
                         CursorStyle::Block => {
                             let cursor_rect =
                                 Rect::from_min_size(cursor_origin, vec2(cell_width, cell_height));
-                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, color);
                         }
                         CursorStyle::Underline => {
                             let cursor_rect = Rect::from_min_size(
                                 egui::pos2(cursor_origin.x, cursor_origin.y + cell_height - 2.0),
                                 vec2(cell_width, 2.0),
                             );
-                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, color);
                         }
                         CursorStyle::Beam => {
                             let cursor_rect =
                                 Rect::from_min_size(cursor_origin, vec2(2.0, cell_height));
-                            painter.rect_filled(cursor_rect, 0.0, t.cursor_color);
+                            painter.rect_filled(cursor_rect, 0.0, color);
                         }
                     }
                 } else {

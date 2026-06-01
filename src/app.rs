@@ -122,9 +122,8 @@ pub struct App {
     was_focused: bool,
     // Shells available on this system, computed once at startup.
     available_shells: Vec<ShellKind>,
-    // Cursor blink phase (toggles every 500 ms)
-    cursor_blink_on: bool,
-    cursor_blink_last: Instant,
+    cursor_alpha: f32,
+    cursor_blink_start: Instant,
 
     // Terminal text selection state (per-session)
     term_selection: Option<TermSelection>,
@@ -355,13 +354,12 @@ impl eframe::App for App {
                 .map(|p| matches!(p.content, PaneContent::Terminal(_)))
                 .unwrap_or(false);
             if self.settings.cursor_blink && has_active_terminal {
-                if self.cursor_blink_last.elapsed() >= Duration::from_millis(500) {
-                    self.cursor_blink_on = !self.cursor_blink_on;
-                    self.cursor_blink_last = Instant::now();
-                }
-                ctx.request_repaint_after(Duration::from_millis(500));
+                let elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
+                let t = (elapsed % 1.0) * std::f32::consts::TAU;
+                self.cursor_alpha = 0.5 + 0.5 * t.cos();
+                ctx.request_repaint_after(Duration::from_millis(33));
             } else {
-                self.cursor_blink_on = true;
+                self.cursor_alpha = 1.0;
             }
         }
 
