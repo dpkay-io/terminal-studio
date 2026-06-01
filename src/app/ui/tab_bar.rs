@@ -192,6 +192,11 @@ impl App {
                                     ),
                                 );
                                 let edit_id = egui::Id::new(("tab_rename_edit", pane_id));
+                                ui.painter().rect_filled(
+                                    edit_rect,
+                                    theme::R_SM,
+                                    theme::active().surface1,
+                                );
                                 let resp = ui
                                     .allocate_ui_at_rect(edit_rect, |ui| {
                                         ui.add(
@@ -199,17 +204,17 @@ impl App {
                                                 .id(edit_id)
                                                 .desired_width(edit_rect.width())
                                                 .font(egui::FontId::proportional(theme::FONT_UI_MD))
-                                                .frame(false)
+                                                .frame(true)
                                                 .text_color(title_color),
                                         )
                                     })
                                     .inner;
-                                if !resp.has_focus() {
-                                    ui.memory_mut(|m| m.request_focus(edit_id));
-                                }
+                                let clicked_outside = ui.input(|i| i.pointer.any_pressed())
+                                    && !resp.has_focus()
+                                    && !resp.contains_pointer();
                                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                                if enter {
+                                if enter || clicked_outside {
                                     let new_title = self.tab_rename_text.trim().to_string();
                                     if !new_title.is_empty() {
                                         if let PaneContent::Terminal(sid) =
@@ -301,11 +306,6 @@ impl App {
 
                             // Right-click context menu for tab operations.
                             let can_move_to_split = visible_indices.len() >= 2;
-                            let extra_window_names: Vec<(u64, String)> = self
-                                .extra_windows
-                                .iter()
-                                .map(|w| (w.workspace_id, w.title.clone()))
-                                .collect();
                             tab_resp.context_menu(|ui| {
                                 if ui.button("Rename tab").clicked() {
                                     self.tab_rename_pane_id = Some(pane_id);
@@ -324,34 +324,6 @@ impl App {
                                     }
                                 });
 
-                                ui.separator();
-
-                                let t = theme::active();
-                                ui.label(
-                                    egui::RichText::new("Move tab to window\u{2026}")
-                                        .size(theme::FONT_UI_MD)
-                                        .color(t.fg_secondary),
-                                );
-                                ui.separator();
-                                if extra_window_names.is_empty() {
-                                    ui.label(
-                                        egui::RichText::new("No other windows")
-                                            .italics()
-                                            .color(t.fg_muted),
-                                    );
-                                } else {
-                                    for (_, win_title) in &extra_window_names {
-                                        ui.add_enabled_ui(false, |ui| {
-                                            let _ = ui.button(win_title);
-                                        });
-                                    }
-                                    ui.label(
-                                        egui::RichText::new("(tab move coming in Phase D)")
-                                            .italics()
-                                            .size(theme::FONT_UI_SM)
-                                            .color(t.fg_muted),
-                                    );
-                                }
                             });
                         }
                     });
