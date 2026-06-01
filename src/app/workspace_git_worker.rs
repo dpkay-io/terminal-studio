@@ -91,6 +91,10 @@ impl WorkspaceGitWorker {
     pub(super) fn get(&self, ws_id: u64) -> Option<WorkspaceGitInfo> {
         self.cache.lock().get(&ws_id).map(|e| e.info.clone())
     }
+
+    pub(super) fn is_loading(&self, ws_id: u64) -> bool {
+        self.inflight.lock().contains(&ws_id)
+    }
 }
 
 impl Drop for WorkspaceGitWorker {
@@ -185,6 +189,15 @@ mod tests {
         assert!(result.is_some(), "worker should produce a result");
         let info = result.unwrap();
         assert!(!info.branch.is_empty());
+    }
+
+    #[test]
+    fn test_is_loading_during_inflight() {
+        let worker = WorkspaceGitWorker::spawn(egui::Context::default());
+        assert!(!worker.is_loading(99));
+        let path = PathBuf::from("/nonexistent/test/path");
+        worker.request_if_stale(99, &path);
+        assert!(worker.is_loading(99));
     }
 
     #[test]
