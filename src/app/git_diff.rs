@@ -244,6 +244,11 @@ pub(super) fn render_git_diff(
                     {
                         show_commit_dialog = true;
                     }
+                    ui.label(
+                        egui::RichText::new("right-click for options")
+                            .size(theme::FONT_SYS_SM)
+                            .color(theme::active().overlay0),
+                    );
                 });
             });
             ui.add_space(theme::SP_2);
@@ -349,6 +354,11 @@ pub(super) fn render_git_diff(
                     {
                         action = Some(GitStageAction::StageAll);
                     }
+                    ui.label(
+                        egui::RichText::new("right-click for options")
+                            .size(theme::FONT_SYS_SM)
+                            .color(theme::active().overlay0),
+                    );
                 });
             });
             ui.add_space(theme::SP_2);
