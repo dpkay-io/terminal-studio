@@ -262,24 +262,33 @@ impl App {
 
                         // ── Hotkey hints ─────────────────────────────────
                         ui.horizontal(|ui| {
-                            let hint = |ui: &mut egui::Ui, key: &str, desc: &str| {
-                                let hint_fg = theme::ensure_readable(t.base_rgb, t.overlay0_rgb);
-                                ui.label(
-                                    egui::RichText::new(key)
-                                        .size(theme::FONT_UI_SM)
-                                        .strong()
-                                        .color(hint_fg)
-                                        .background_color(t.overlay0),
-                                );
-                                ui.label(
-                                    egui::RichText::new(desc)
-                                        .size(theme::FONT_UI_SM)
-                                        .color(t.subtext0),
-                                );
-                                ui.add_space(theme::SP_5);
-                            };
+                            let active_theme = theme::active();
+                            let hint =
+                                |ui: &mut egui::Ui, key: &str, desc: &str, active: bool| {
+                                    let (fg, bg) = if active {
+                                        (active_theme.text, active_theme.accent_muted)
+                                    } else {
+                                        let hint_fg =
+                                            theme::ensure_readable(t.base_rgb, t.overlay0_rgb);
+                                        (hint_fg, t.overlay0)
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(key)
+                                            .size(theme::FONT_UI_SM)
+                                            .strong()
+                                            .color(fg)
+                                            .background_color(bg),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(desc)
+                                            .size(theme::FONT_UI_SM)
+                                            .color(t.subtext0),
+                                    );
+                                    ui.add_space(theme::SP_5);
+                                };
+                            let in_letter_mode = self.quick_switcher_selected_ws.is_some();
                             if let Some(ws_idx) = self.quick_switcher_selected_ws {
-                                hint(ui, " a-z ", "select session");
+                                hint(ui, " a-z ", "select session", true);
                                 let badge = format!(" {} ", ws_idx + 1);
                                 let ws_badge_fg = theme::ensure_readable(t.base_rgb, t.green_rgb);
                                 ui.label(
@@ -296,11 +305,11 @@ impl App {
                                 );
                                 ui.add_space(theme::SP_5);
                             } else {
-                                hint(ui, " 1-9 ", "select workspace");
+                                hint(ui, " 1-9 ", "select workspace", !in_letter_mode);
                             }
-                            hint(ui, " / ", "search");
-                            hint(ui, " Enter ", "first match");
-                            hint(ui, " Esc ", "close");
+                            hint(ui, " / ", "search", false);
+                            hint(ui, " Enter ", "first match", false);
+                            hint(ui, " Esc ", "close", false);
                         });
 
                         ui.add_space(theme::SP_2);
