@@ -18,6 +18,9 @@ pub fn icon_button(
     style: IconButtonStyle,
 ) -> egui::Response {
     let resp = ui.interact(rect, id, egui::Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     let t = theme::active();
 
     let bg = match style {
@@ -89,7 +92,7 @@ pub fn action_button(
     style: ActionButtonStyle,
 ) -> egui::Response {
     let t = theme::active();
-    match style {
+    let resp = match style {
         ActionButtonStyle::Primary => ui.add_enabled(
             enabled,
             egui::Button::new(egui::RichText::new(label).color(t.accent_strong)),
@@ -99,7 +102,11 @@ pub fn action_button(
             egui::Button::new(egui::RichText::new(label).color(t.danger_fg)).fill(t.danger_bg),
         ),
         ActionButtonStyle::Cancel => ui.add_enabled(enabled, egui::Button::new(label)),
+    };
+    if resp.hovered() && enabled {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    resp
 }
 
 // ── Toggle chip ────────────────────────────────────────────────────────────
@@ -114,7 +121,11 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
     .fill(if selected { t.accent } else { t.surface1 })
     .rounding(theme::R_MD)
     .min_size(egui::vec2(0.0, theme::BTN_H_ACTION));
-    ui.add(btn)
+    let resp = ui.add(btn);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
 }
 
 // ── Pill button ────────────────────────────────────────────────────────────
@@ -161,6 +172,9 @@ pub fn dot_menu_button(
 ) -> egui::Response {
     let t = theme::active();
     let resp = ui.interact(rect, id, egui::Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 
     let bg = if open || resp.hovered() {
         t.surface2
@@ -194,5 +208,9 @@ pub fn color_swatch(ui: &mut egui::Ui, color: [u8; 3], selected: bool) -> egui::
         })
         .min_size(egui::vec2(theme::BTN_W, theme::BTN_W))
         .rounding(theme::R_MD);
-    ui.add(swatch)
+    let resp = ui.add(swatch);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
 }

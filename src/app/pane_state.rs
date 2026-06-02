@@ -292,8 +292,20 @@ mod tests {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
-        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
-        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        state.pane_trees.insert(
+            1,
+            PaneNode::Leaf {
+                pane_id: 1,
+                last_size: (0, 0),
+            },
+        );
+        state.pane_trees.insert(
+            2,
+            PaneNode::Leaf {
+                pane_id: 2,
+                last_size: (0, 0),
+            },
+        );
         let groups = vec![None, None];
         let result = state.visible_leaf_indices(&groups, None);
         assert_eq!(result, vec![0, 1]);
@@ -305,10 +317,19 @@ mod tests {
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
         state.panes.push(make_pane(3));
-        let mut tree1 = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        let mut tree1 = PaneNode::Leaf {
+            pane_id: 1,
+            last_size: (0, 0),
+        };
         tree1.split_pane(1, 3, 10, SplitDir::Horizontal);
         state.pane_trees.insert(1, tree1);
-        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        state.pane_trees.insert(
+            2,
+            PaneNode::Leaf {
+                pane_id: 2,
+                last_size: (0, 0),
+            },
+        );
         let groups = vec![None, None, None];
         let result = state.visible_leaf_indices(&groups, None);
         assert_eq!(result, vec![0, 2, 1]);
@@ -319,8 +340,20 @@ mod tests {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
-        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
-        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        state.pane_trees.insert(
+            1,
+            PaneNode::Leaf {
+                pane_id: 1,
+                last_size: (0, 0),
+            },
+        );
+        state.pane_trees.insert(
+            2,
+            PaneNode::Leaf {
+                pane_id: 2,
+                last_size: (0, 0),
+            },
+        );
         let groups = vec![Some(100), Some(200)];
         let result = state.visible_leaf_indices(&groups, Some(100));
         assert_eq!(result, vec![0]);
@@ -332,10 +365,19 @@ mod tests {
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
         state.panes.push(make_pane(3));
-        let mut tree1 = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        let mut tree1 = PaneNode::Leaf {
+            pane_id: 1,
+            last_size: (0, 0),
+        };
         tree1.split_pane(1, 3, 10, SplitDir::Horizontal);
         state.pane_trees.insert(1, tree1);
-        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        state.pane_trees.insert(
+            2,
+            PaneNode::Leaf {
+                pane_id: 2,
+                last_size: (0, 0),
+            },
+        );
         let groups = vec![Some(100), Some(200), Some(200)];
         let result = state.visible_leaf_indices(&groups, Some(100));
         assert_eq!(result, vec![0, 2]);
@@ -345,7 +387,13 @@ mod tests {
     fn close_leaf_only_pane_in_tree() {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
-        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
+        state.pane_trees.insert(
+            1,
+            PaneNode::Leaf {
+                pane_id: 1,
+                last_size: (0, 0),
+            },
+        );
         let result = state.close_leaf(1);
         assert!(result.is_some());
         let info = result.unwrap();
@@ -360,7 +408,10 @@ mod tests {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
-        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        let mut tree = PaneNode::Leaf {
+            pane_id: 1,
+            last_size: (0, 0),
+        };
         tree.split_pane(1, 2, 10, SplitDir::Horizontal);
         state.pane_trees.insert(1, tree);
         let result = state.close_leaf(2);
@@ -378,7 +429,10 @@ mod tests {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
-        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        let mut tree = PaneNode::Leaf {
+            pane_id: 1,
+            last_size: (0, 0),
+        };
         tree.split_pane(1, 2, 10, SplitDir::Horizontal);
         state.pane_trees.insert(1, tree);
         let result = state.close_leaf(1);
@@ -399,7 +453,10 @@ mod tests {
         state.panes.push(make_pane(1));
         state.panes.push(make_pane(2));
         state.panes.push(make_pane(3));
-        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        let mut tree = PaneNode::Leaf {
+            pane_id: 1,
+            last_size: (0, 0),
+        };
         tree.split_pane(1, 2, 10, SplitDir::Horizontal);
         tree.split_pane(2, 3, 11, SplitDir::Vertical);
         state.pane_trees.insert(1, tree);

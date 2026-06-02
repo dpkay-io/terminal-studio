@@ -61,10 +61,13 @@ impl App {
                             let i = *i;
                             let pane_id = self.pane_state.panes[i].id;
                             let is_active = active_pane_id_snap == Some(pane_id);
-                            let is_in_split = visible_roots.get(vis_pos)
+                            let is_in_split = visible_roots
+                                .get(vis_pos)
                                 .and_then(|r| *r)
                                 .is_some_and(|r| {
-                                    self.pane_state.pane_trees.get(&r)
+                                    self.pane_state
+                                        .pane_trees
+                                        .get(&r)
                                         .is_some_and(|t| t.leaf_ids().len() > 1)
                                 });
                             let ws_color = ws_colors[i];
@@ -146,7 +149,9 @@ impl App {
                             let same_group_next = vis_pos + 1 < visible_roots.len()
                                 && visible_roots[vis_pos] == visible_roots[vis_pos + 1]
                                 && visible_roots[vis_pos].is_some_and(|r| {
-                                    self.pane_state.pane_trees.get(&r)
+                                    self.pane_state
+                                        .pane_trees
+                                        .get(&r)
                                         .is_some_and(|t| t.leaf_ids().len() > 1)
                                 });
                             if same_group_next {
@@ -163,7 +168,10 @@ impl App {
                             } else {
                                 painter.rect_filled(
                                     egui::Rect::from_min_size(
-                                        egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
+                                        egui::pos2(
+                                            tab_rect.max.x - theme::STROKE_THIN,
+                                            tab_rect.min.y,
+                                        ),
                                         egui::vec2(theme::STROKE_THIN, tab_h),
                                     ),
                                     0.0,
@@ -179,6 +187,9 @@ impl App {
                                 egui::Id::new(("tab_click", pane_id)),
                                 egui::Sense::click_and_drag(),
                             );
+                            if tab_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
 
                             // Close button (x)
                             let close_rect = egui::Rect::from_min_size(
@@ -406,6 +417,9 @@ impl App {
                 self.vp_id("tab_split_h"),
                 egui::Sense::click(),
             );
+            if split_h_resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             let sh_stroke = if split_h_resp.hovered() {
                 ui.painter()
                     .rect_filled(split_h_rect, theme::R_SM, t.surface2);
@@ -435,6 +449,9 @@ impl App {
                 self.vp_id("tab_split_v"),
                 egui::Sense::click(),
             );
+            if split_v_resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             let sv_stroke = if split_v_resp.hovered() {
                 ui.painter()
                     .rect_filled(split_v_rect, theme::R_SM, t.surface2);

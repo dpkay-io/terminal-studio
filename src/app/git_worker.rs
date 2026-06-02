@@ -61,6 +61,7 @@ pub(super) struct GitWorker {
     tx: mpsc::Sender<Job>,
     results: Arc<Mutex<WorkerResults>>,
     git_inflight: Arc<Mutex<HashSet<PathBuf>>>,
+    manual_git_inflight: Arc<Mutex<HashSet<PathBuf>>>,
     alive: Arc<AtomicBool>,
     ctx: egui::Context,
 }
@@ -79,10 +80,13 @@ impl GitWorker {
             revert_results: Vec::new(),
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
+        let manual_git_inflight: Arc<Mutex<HashSet<PathBuf>>> =
+            Arc::new(Mutex::new(HashSet::new()));
         let alive = Arc::new(AtomicBool::new(true));
 
         let results_bg = Arc::clone(&results);
         let git_inflight_bg = Arc::clone(&git_inflight);
+        let manual_git_inflight_bg = Arc::clone(&manual_git_inflight);
         let alive_bg = Arc::clone(&alive);
         let ctx_bg = ctx.clone();
 
@@ -100,6 +104,7 @@ impl GitWorker {
                             let info = run_git_info(&p);
                             results_bg.lock().git.insert(p.clone(), info);
                             git_inflight_bg.lock().remove(&p);
+                            manual_git_inflight_bg.lock().remove(&p);
                         }
                         Job::Stage { cwd, path } => {
                             let ok = std::process::Command::new("git")
@@ -351,6 +356,7 @@ impl GitWorker {
             tx,
             results,
             git_inflight,
+            manual_git_inflight,
             alive,
             ctx,
         }
@@ -365,8 +371,13 @@ impl GitWorker {
         let _ = self.tx.send(Job::GitInfo(path.to_path_buf()));
     }
 
-    pub(super) fn is_git_inflight(&self, path: &Path) -> bool {
-        self.git_inflight.lock().contains(path)
+    pub(super) fn enqueue_git_manual(&self, path: &Path) {
+        self.manual_git_inflight.lock().insert(path.to_path_buf());
+        self.enqueue_git(path);
+    }
+
+    pub(super) fn is_manual_git_inflight(&self, path: &Path) -> bool {
+        self.manual_git_inflight.lock().contains(path)
     }
 
     pub(super) fn take_git(&self, path: &Path) -> Option<(String, String)> {

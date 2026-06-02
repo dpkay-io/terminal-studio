@@ -447,37 +447,37 @@ fn render_file_editor_leaf(
                 } else {
                     egui::Color32::TRANSPARENT
                 };
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Raw")
-                                .size(theme::FONT_UI_SM)
-                                .color(raw_color),
-                        )
-                        .fill(raw_bg)
-                        .rounding(egui::Rounding::same(theme::R_MD))
-                        .min_size(egui::vec2(56.0, 20.0)),
+                let raw_resp = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("Raw")
+                            .size(theme::FONT_UI_SM)
+                            .color(raw_color),
                     )
-                    .clicked()
-                    && previewing
-                {
+                    .fill(raw_bg)
+                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .min_size(egui::vec2(56.0, 20.0)),
+                );
+                if raw_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if raw_resp.clicked() && previewing {
                     rctx.editor_preview_toggles.push(pane_id);
                 }
                 ui.add_space(theme::SP_1);
-                if ui
-                    .add(
-                        egui::Button::new(
-                            egui::RichText::new("Preview")
-                                .size(theme::FONT_UI_SM)
-                                .color(preview_color),
-                        )
-                        .fill(preview_bg)
-                        .rounding(egui::Rounding::same(theme::R_MD))
-                        .min_size(egui::vec2(56.0, 20.0)),
+                let preview_resp = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("Preview")
+                            .size(theme::FONT_UI_SM)
+                            .color(preview_color),
                     )
-                    .clicked()
-                    && !previewing
-                {
+                    .fill(preview_bg)
+                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .min_size(egui::vec2(56.0, 20.0)),
+                );
+                if preview_resp.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if preview_resp.clicked() && !previewing {
                     rctx.editor_preview_toggles.push(pane_id);
                 }
             });

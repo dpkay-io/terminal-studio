@@ -13,6 +13,9 @@ pub fn list_item(
         egui::vec2(width, theme::DIALOG_ITEM_H),
         egui::Sense::click(),
     );
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 
     let bg = if selected {
         t.surface1

@@ -173,6 +173,9 @@ pub(super) fn render_dir_tree(
                     .sense(egui::Sense::click()),
                 )
                 .on_hover_text("Double-click to open terminal here");
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             if resp.double_clicked() {
                 *open_terminal_at = Some(entry.path.clone());
             } else if resp.clicked() {
@@ -205,6 +208,9 @@ pub(super) fn render_dir_tree(
                     .sense(egui::Sense::click()),
                 )
                 .on_hover_text(&entry.name);
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             if resp.clicked() {
                 *open_editor = Some(entry.path.clone());
             }
@@ -257,6 +263,9 @@ pub(super) fn render_flat_file_list(
                 .sense(egui::Sense::click()),
             )
             .on_hover_text(entry.path.display().to_string());
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if resp.clicked() {
             *open_editor = Some(entry.path.clone());
         }

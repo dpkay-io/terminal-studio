@@ -310,6 +310,9 @@ impl App {
                         egui::Sense::click(),
                     );
                     let row_rect = resp.rect;
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
 
                     if selected || resp.hovered() {
                         let hover_bg = if selected { bg } else { t.bg_row_hover };
@@ -501,6 +504,9 @@ impl App {
                         egui::Sense::click(),
                     );
                     let row_rect = resp.rect;
+                    if resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
 
                     // Paint background first so subsequent elements are visible
                     let row_hovered = resp.hovered();

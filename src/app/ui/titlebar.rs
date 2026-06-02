@@ -105,6 +105,9 @@ impl App {
                             self.vp_id("tb_mac").with(idx),
                             egui::Sense::click(),
                         );
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         let fill = if hover_any {
                             color
                         } else {
@@ -166,6 +169,9 @@ impl App {
                         );
                         let sw_resp =
                             ui.interact(sw_tbr, self.vp_id("tb_switcher"), egui::Sense::click());
+                        if sw_resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         let sw_bg = if self.show_quick_switcher {
                             theme::active().surface2
                         } else if sw_resp.hovered() {
@@ -339,6 +345,9 @@ impl App {
                             );
                             let resp =
                                 ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
+                            if resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
                             let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
@@ -470,6 +479,9 @@ impl App {
                             egui::vec2(total_w, r.height()),
                         );
                         let resp = ui.interact(br, self.vp_id("tb_switcher"), egui::Sense::click());
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         let bg = if self.show_quick_switcher {
                             theme::active().surface2
                         } else if resp.hovered() {
@@ -576,6 +588,9 @@ impl App {
                         );
                         let resp =
                             ui.interact(br, self.vp_id("tb_shortcuts"), egui::Sense::click());
+                        if resp.hovered() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
                         let bg = if resp.hovered() || self.show_shortcut_help {
                             theme::active().surface1
                         } else {
@@ -645,6 +660,9 @@ impl App {
                             );
                             let resp =
                                 ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
+                            if resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
                             let t = theme::active();
                             let bg = if resp.hovered() { t.green } else { t.surface2 };
                             let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);

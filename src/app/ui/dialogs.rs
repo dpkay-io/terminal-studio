@@ -517,7 +517,13 @@ impl App {
                                                 })
                                                 .response;
 
-                                            if hdr_resp.interact(egui::Sense::click()).clicked() {
+                                            let hdr_click = hdr_resp.interact(egui::Sense::click());
+                                            if hdr_click.hovered() {
+                                                ui.ctx().set_cursor_icon(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
+                                            }
+                                            if hdr_click.clicked() {
                                                 if let Some(wid) = group.ws_id {
                                                     switch_to_workspace = Some(wid);
                                                 } else {
@@ -590,7 +596,14 @@ impl App {
                                                     })
                                                     .response;
 
-                                                if resp.interact(egui::Sense::click()).clicked() {
+                                                let entry_click =
+                                                    resp.interact(egui::Sense::click());
+                                                if entry_click.hovered() {
+                                                    ui.ctx().set_cursor_icon(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                }
+                                                if entry_click.clicked() {
                                                     switch_to_pane = Some(entry.pane_id);
                                                 }
                                                 ui.add_space(theme::SP_1);

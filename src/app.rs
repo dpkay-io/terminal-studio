@@ -857,7 +857,7 @@ impl App {
                         is_git: d.is_git,
                         git_status: d.git_status.clone(),
                         git_unpushed: d.git_unpushed.clone(),
-                        git_refreshing: self.workers.git_worker.is_git_inflight(cwd),
+                        git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
                         dir_entries: Arc::clone(&d.dir_entries),
                         md_paths,
                         md_active_content,
@@ -879,7 +879,7 @@ impl App {
                         is_git: false,
                         git_status: String::new(),
                         git_unpushed: Vec::new(),
-                        git_refreshing: self.workers.git_worker.is_git_inflight(cwd),
+                        git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
                         dir_entries: Arc::new(Vec::new()),
                         md_paths,
                         md_active_content,
@@ -1533,7 +1533,7 @@ impl App {
         }
         if git_request_refresh {
             if let Some(cwd) = active_cwd.as_ref() {
-                self.workers.git_worker.enqueue_git(cwd);
+                self.workers.git_worker.enqueue_git_manual(cwd);
                 self.workers.git_worker.enqueue_unpushed(cwd);
             }
         }
@@ -1603,8 +1603,9 @@ impl App {
             .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p))
             .collect();
         let active_group_snap = self.active_group;
-        let visible_indices: Vec<usize> =
-            self.pane_state.visible_leaf_indices(&pane_groups, active_group_snap);
+        let visible_indices: Vec<usize> = self
+            .pane_state
+            .visible_leaf_indices(&pane_groups, active_group_snap);
         // If the focused pane's computed group no longer matches `active_group`, follow it.
         // This happens when the user runs `cd` in a terminal and the new CWD belongs to a
         // different workspace — without this, the user keeps typing into a pane they can't see.
@@ -3047,8 +3048,8 @@ impl App {
                 if self.zoomed_pane_id == Some(active_pid) {
                     self.zoomed_pane_id = None;
                 }
-                self.pane_state.active_pane_id = sibling_focus
-                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                self.pane_state.active_pane_id =
+                    sibling_focus.or_else(|| self.pane_state.panes.last().map(|p| p.id));
                 if let Some(new_pid) = self.pane_state.active_pane_id {
                     self.activate_pane(new_pid);
                 }
@@ -3285,8 +3286,8 @@ impl App {
             if self.pane_state.close_leaf(pid).is_some()
                 && self.pane_state.active_pane_id == Some(pid)
             {
-                self.pane_state.active_pane_id = sibling_focus
-                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                self.pane_state.active_pane_id =
+                    sibling_focus.or_else(|| self.pane_state.panes.last().map(|p| p.id));
                 if let Some(new_pid) = self.pane_state.active_pane_id {
                     self.activate_pane(new_pid);
                 }
@@ -3295,11 +3296,7 @@ impl App {
                     .active_pane_id
                     .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                     .and_then(|p| {
-                        Self::pane_group(
-                            &self.session_state.sessions,
-                            &self.workspace_store,
-                            p,
-                        )
+                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
                     });
             }
             if self.zoomed_pane_id == Some(pid) {

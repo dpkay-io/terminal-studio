@@ -291,6 +291,9 @@ pub(super) fn render_git_diff(
                             )
                         })
                         .inner;
+                    if label_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -398,6 +401,9 @@ pub(super) fn render_git_diff(
                             )
                         })
                         .inner;
+                    if label_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
                     if label_resp.double_clicked() {
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
@@ -552,6 +558,9 @@ pub(super) fn render_diff_toolbar(
                 .fill(bg)
                 .rounding(theme::R_SM),
             );
+            if btn.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
             if btn.clicked() && !is_active {
                 new_mode = Some(*mode);
             }

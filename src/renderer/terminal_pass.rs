@@ -491,7 +491,13 @@ impl TerminalView {
 
             let sb_mem_id = ui.id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
-            let is_dragging = (was_dragging || (pointer_in_hit && primary_down)) && any_down;
+            // If an egui widget (panel resize handle, split divider) has captured
+            // the pointer press, don't let the scrollbar activate. Uses
+            // potential_drag_id which is set immediately on press — no frame delay.
+            #[allow(deprecated)]
+            let egui_captured = ui.memory(|m| m.is_anything_being_dragged());
+            let is_dragging =
+                !egui_captured && (was_dragging || (pointer_in_hit && primary_down)) && any_down;
             ui.data_mut(|d| d.insert_temp(sb_mem_id, is_dragging));
 
             scrollbar_hovered = pointer_in_hit || is_dragging;
@@ -554,7 +560,7 @@ impl TerminalView {
             painter.rect_filled(bar_rect, bar_w * 0.5, bar_color);
         }
 
-        ui.allocate_rect(rect, Sense::click_and_drag());
+        ui.allocate_rect(rect, Sense::hover());
 
         TerminalGeometry {
             rect,

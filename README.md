@@ -14,17 +14,25 @@
 
 ## Features
 
-- **Multi-pane terminal** — split into as many side-by-side panes as you need, each independently resizable
+- **Multi-pane terminal** — split horizontally or vertically into as many panes as you need, each independently resizable with drag dividers
 - **GPU rendering via wgpu** — smooth, pixel-perfect text rendered on the GPU through egui's wgpu backend
 - **Full VTE/ANSI emulation** — 256-color, SGR attributes, mouse reporting, bracketed paste, alternate screen (same VTE parser as Alacritty)
 - **Workspace system** — named workspaces bound to directories; custom accent color auto-activates when your CWD matches
-- **File browser** — recursive directory tree; click any file to open it, `.md` files open in the markdown previewer
-- **Git integration** — live diff viewer with colored hunks and inline status badges
+- **File browser** — recursive directory tree with `.gitignore` support; click any file to open it, `.md` files open in the markdown previewer
+- **Git integration** — staged/unstaged diff viewer with colored hunks, inline/side-by-side modes, stage/unstage/commit/push from the UI
+- **Command palette** — `Ctrl+Shift+P` for quick access to 50+ actions
+- **Syntax highlighting** — powered by syntect (Sublime Text grammars) for file editor and diff views
+- **15 built-in themes** — Catppuccin Mocha, Dracula, Nord, and more; switch in Settings
+- **Configurable fonts & cursor** — adjust terminal font size, cursor style (block/underline/bar), and scrollback limit
+- **Custom keybindings** — remap any shortcut via Settings or `keybindings.json`
+- **In-terminal search** — `Ctrl+F` to search within the active terminal; cross-session fuzzy search in the session list
 - **Integrated markdown renderer** — headers, bold, code blocks, lists, blockquotes
 - **Integrated file editor** — edit any file in a center pane with `Ctrl+S` to save
 - **Per-workspace notes** — scratch-pad scoped to each workspace, auto-saved
 - **Session persistence** — open terminals and their CWDs are restored on next launch
-- **Catppuccin Mocha theme** — consistent dark theme throughout
+- **System monitor** — live CPU, RAM, and network stats in the status bar
+- **Auto-update** — checks GitHub releases once per day; one-click update from the toolbar
+- **Multi-window** — open workspaces in separate OS windows
 
 See [FEATURES.md](FEATURES.md) for the full feature list.
 
@@ -118,17 +126,27 @@ The update downloads in the background. When ready, click **Restart to finish up
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+S` | Save the active file-editor pane |
-| `Ctrl+C` | Send SIGINT to the foreground process |
+| `Ctrl+Shift+P` | Open command palette |
 | `Ctrl+Shift+C` | Copy selection |
+| `Ctrl+Shift+V` | Paste from clipboard |
+| `Ctrl+S` | Save the active file-editor pane |
+| `Ctrl+F` | Find in terminal |
+| `Ctrl+Shift+\` | Split pane horizontally |
+| `Ctrl+Shift+-` | Split pane vertically |
+| `Ctrl+Shift+W` | Close active pane |
+| `Alt+Arrow` | Move focus between split panes |
+| `Ctrl+Tab` | Next tab |
+| `Ctrl+Shift+Tab` | Previous tab |
+| `Ctrl+Shift+,` | Open settings |
 
-Terminal key sequences (`Ctrl+L`, `Ctrl+D`, etc.) pass through directly to the running shell.
+Terminal key sequences (`Ctrl+L`, `Ctrl+D`, `Ctrl+C`, etc.) pass through directly to the running shell. All shortcuts are customizable in Settings or via `keybindings.json`.
 
 ### Managing panes
 
-- Click **+** in the pane header to open a new terminal pane.
-- Drag the vertical divider between panes to resize.
-- Close a pane with its **×** button.
+- Click **+** in the tab bar to open a new terminal pane.
+- Use `Ctrl+Shift+\` / `Ctrl+Shift+-` to split the active pane.
+- Drag the divider between split panes to resize.
+- Close a pane with its **×** button or `Ctrl+Shift+W`.
 
 ### Workspaces
 
@@ -145,7 +163,7 @@ Terminal key sequences (`Ctrl+L`, `Ctrl+D`, etc.) pass through directly to the r
 
 ### Git diff viewer
 
-Switch to the **Git** tab in the right panel for a live diff of the working tree relative to HEAD. Click any file to expand its hunk view.
+Switch to the **Git** tab in the right panel for a live diff of the working tree relative to HEAD. Files are grouped into staged and unstaged sections. Click any file to expand its hunk view (inline or side-by-side). Stage, unstage, commit, and push directly from the UI.
 
 ---
 
@@ -175,6 +193,8 @@ All state is stored in a platform-specific directory — no config files next to
 | `session.json` | Open panes, CWDs, active workspace, panel layout |
 | `workspaces.json` | Workspace definitions (name, path, color) |
 | `notes.json` | Per-workspace scratch-pad notes |
+| `settings.json` | User preferences (theme, font size, cursor style, scrollback) |
+| `keybindings.json` | Custom keyboard shortcuts |
 
 Delete the directory to reset all state.
 
@@ -197,7 +217,7 @@ Known gaps:
 
 - Linux and macOS are less tested than Windows
 - The terminal emulator handles most TUI apps well but may have gaps with advanced escape sequences
-- No user-configurable theme or font yet
+- Split pane layout is not persisted across restarts
 
 If you hit a bug, please [open an issue](https://github.com/dpkay-io/terminal-studio/issues). Include your OS, shell, and the app or escape sequence that triggered the problem.
 

@@ -114,13 +114,14 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(title).strong().size(theme::FONT_UI_LG));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::Button::new(egui::RichText::new("\u{00d7}").size(theme::FONT_UI_LG))
-                        .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
-                )
-                .clicked()
-            {
+            let resp = ui.add(
+                egui::Button::new(egui::RichText::new("\u{00d7}").size(theme::FONT_UI_LG))
+                    .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
+            );
+            if resp.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
                 close = true;
             }
         });

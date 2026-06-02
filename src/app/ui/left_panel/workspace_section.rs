@@ -54,12 +54,15 @@ impl App {
                     } else {
                         "\u{25bc}"
                     };
-                    if ui
-                        .add(
-                            egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_UI_MD))
-                                .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                                .frame(false),
-                        )
+                    let collapse_resp = ui.add(
+                        egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_UI_MD))
+                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
+                            .frame(false),
+                    );
+                    if collapse_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if collapse_resp
                         .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
                         .clicked()
                     {
@@ -227,11 +230,17 @@ impl App {
             egui::Id::new(("ws_name", data.id)),
             egui::Sense::click(),
         );
+        if name_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         let gear_resp = ui.interact(
             gear_rect,
             egui::Id::new(("ws_gear", data.id)),
             egui::Sense::click(),
         );
+        if gear_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
 
         if ui.is_rect_visible(full_rect) {
             let rounding = egui::Rounding::same(theme::R_MD);
@@ -412,6 +421,9 @@ impl App {
         let other_w = ui.available_width();
         let (other_rect, other_resp) =
             ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click());
+        if other_resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         if ui.is_rect_visible(other_rect) {
             let rounding = egui::Rounding::same(theme::R_MD);
             ui.painter().rect_filled(other_rect, rounding, other_fill);

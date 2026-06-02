@@ -8,29 +8,113 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (261 tests)
+cargo test               # all unit tests (333 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
 ## Module Map
 
+### Core
+
 | File | Responsibility |
 |------|---------------|
 | `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false; calls `SingleInstanceGuard::try_acquire()` |
-| `src/app.rs` | `App` struct; ALL UI logic, state management, persistence |
+| `src/app.rs` | `App` struct; implements `eframe::App`; render dispatch to UI submodules |
 | `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
-| `src/app/feedback.rs` | `FlashManager`: subtle UI flash feedback system (copy, paste, errors) with auto-fade |
+| `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
+| `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
+| `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
+| `src/util.rs` | `safe_json_load()`, `atomic_write()`, directory expansion, panic handler |
+
+### Terminal & PTY
+
+| File | Responsibility |
+|------|---------------|
 | `src/terminal/mod.rs` | `Session` struct wrapping `Term<EventProxy>`; `EventProxy` (`EventListener` impl); `TermSize` (`Dimensions` impl) |
 | `src/terminal/tests.rs` | 11 terminal emulator tests using `alacritty_terminal` APIs |
-| `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; each session gets a dedicated pty-writer-N thread |
+| `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; `ShellKind` enum; each session gets dedicated reader/writer threads |
 | `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks |
+| `src/pty/shell_integration.rs` | Shell prompt integration helpers; OSC 7 injection for bash/zsh/fish |
 | `src/pty/foreground.rs` | Platform-specific foreground process detection (Windows toolhelp / Linux /proc) |
 | `src/pty/foreground_worker.rs` | `ForegroundWorker`: background thread polling foreground detection every 500ms; UI reads from cache |
 | `src/renderer/mod.rs` | Re-export of `terminal_pass` |
-| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry` — cell rendering using `alacritty_terminal` grid API |
-| `src/workspace.rs` | `WorkspaceStore`, `NoteStore` — JSON persistence |
-| `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
-| `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
+| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry`, `SelectionRange` — cell rendering using `alacritty_terminal` grid API |
+
+### App State & Logic (`src/app/`)
+
+| File | Responsibility |
+|------|---------------|
+| `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON |
+| `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management |
+| `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct |
+| `src/app/session_state.rs` | `SessionState`: session list management, find/add/remove operations |
+| `src/app/settings.rs` | `AppSettings`, `CursorStyle` enum; user settings (theme, fonts, cursor, scrollback); JSON persistence |
+| `src/app/input.rs` | `key_to_pty_bytes()`: keyboard→PTY byte translation (Ctrl+A–Z, arrows, function keys, modifiers) |
+| `src/app/title.rs` | `effective_title()`: workspace+session title formatting; shell escape helpers |
+| `src/app/feedback.rs` | `FlashManager`, `FlashTarget`, `FlashKind`: subtle UI flash feedback (copy, paste, error) with auto-fade |
+| `src/app/markdown.rs` | `render_markdown()`: headers, bold, code blocks, lists, blockquotes, links |
+| `src/app/persistence.rs` | `AppSession`, `SavedPane`, `SavedPaneContent`, `SavedSession`; JSON serialization; session restore |
+| `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces |
+| `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
+| `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
+
+### File System & Git (`src/app/`)
+
+| File | Responsibility |
+|------|---------------|
+| `src/app/watcher.rs` | `WatchState`, `WatchCommand`, `WatchResult`; background file system watcher (notify crate); debounced git refresh |
+| `src/app/file_browser.rs` | `FileEntry`, `DirData`, `SubdirCache`; directory tree listing; file entry sorting/caching; `.gitignore` parsing |
+| `src/app/git_diff.rs` | `GitDiffState`; git diff rendering, staged/unstaged sections, inline hunks, side-by-side toggle |
+| `src/app/git_worker.rs` | `GitWorker`: background thread for git operations (info, stage/unstage, commit, push, diff) |
+| `src/app/workspace_git_worker.rs` | Workspace-scoped git worker for per-workspace git state tracking |
+| `src/app/diff_parser.rs` | `DiffHunk`, `DiffLine`, `DiffViewMode`, `SideBySideLine`; unified diff format parser |
+| `src/git/parser.rs` | `FileChangeKind` enum, `GitFileStatus` struct; `git status --porcelain` parser (C-style unquoting) |
+
+### Search
+
+| File | Responsibility |
+|------|---------------|
+| `src/search.rs` | `SearchState`, `SearchMatch`, `TextSearchState`; in-session terminal text search with match navigation |
+| `src/search_worker.rs` | `SearchWorker`, `GlobalSearchResults`; background thread for cross-session fuzzy search |
+| `src/file_search_worker.rs` | `FileSearchWorker`, `FileSearchResults`; background thread for file path fuzzy search |
+
+### UI Components (`src/app/ui/`)
+
+| File | Responsibility |
+|------|---------------|
+| `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update button, toolbar, focus tracking |
+| `src/app/ui/tab_bar.rs` | `TabBarResult`, `render_tab_bar()`: horizontally scrollable tab strip, split group indicators |
+| `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
+| `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
+| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about |
+| `src/app/ui/settings_overlay.rs` | Settings panel: theme picker, cursor style, font size, scrollback, keybinding editor |
+| `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
+| `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
+| `src/app/ui/left_panel/session_list.rs` | Session list; "+New" menu; fuzzy filter; workspace filter dropdown |
+| `src/app/ui/left_panel/workspace_section.rs` | Workspace cards; collapse toggle; color swatch; git branch/diff badges |
+| `src/app/ui/left_panel/context_menu.rs` | Right-click context menu: rename, edit color, delete, duplicate, open in new window |
+
+### UI Kit (`src/ui_kit/`)
+
+| File | Responsibility |
+|------|---------------|
+| `src/ui_kit/buttons.rs` | `IconButton`, `ActionButton`, `IconButtonStyle`, `ActionButtonStyle`; themed button wrappers |
+| `src/ui_kit/containers.rs` | `dialog()`, `DialogConfig`, `DialogResponse`, `DialogAnchor`, `DialogWidth`; flex-box layouts |
+| `src/ui_kit/layout.rs` | Grid/flex helpers; responsive layout utilities |
+| `src/ui_kit/lists.rs` | Scrollable list rendering with selection tracking |
+| `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling |
+
+### Utilities & Infrastructure
+
+| File | Responsibility |
+|------|---------------|
+| `src/shortcuts.rs` | `AppAction` enum (50+ actions), `ShortcutRegistry`, `Shortcut`, `ShortcutGroup`; keybinding resolution |
+| `src/keybindings.rs` | `KeyBinding`, `KeybindingsConfig`; JSON-based custom keybindings; default binding set |
+| `src/syntax.rs` | Syntax highlighting via syntect; language detection; theme building from app theme |
+| `src/url_detector.rs` | `DetectedUrl`; regex-based URL detection in terminal output; clickable links |
+| `src/md_detector.rs` | `DetectedMdPath`; markdown file detection and path tracking |
+| `src/updater.rs` | `UpdateStatus`, `UpdateChecker`; background GitHub releases API polling; self-update |
+| `src/sys_monitor.rs` | `SysMonitor`, `SystemStats`; CPU/RAM/network monitoring via sysinfo; background thread |
 
 ## Key Types & IDs
 
@@ -38,7 +122,7 @@ RUST_LOG=debug cargo run # enable debug logging
 - Session IDs: `u32`
 - Workspace IDs: `u64`
 - Split IDs: `u32` (unique within `App.next_split_id`)
-- `PaneContent` is either `Terminal(session_id: u32)` or `FileEditor(FileEditorState)`
+- `PaneContent` enum: `Terminal(session_id)` | `DeferredTerminal(workspace_id)` | `FileEditor(FileEditorState)` | `FileDiff(path)` | `NoteEditor(workspace_id)`
 - `WorkspaceStore` is the source of truth for workspace data
 - Terminal grid coordinates: 0-based; columns/rows are `usize` inside alacritty, `u16` at the PTY layer
 
@@ -58,7 +142,14 @@ RUST_LOG=debug cargo run # enable debug logging
 - UI sends input via `SessionEntry.pty_tx: mpsc::Sender<Vec<u8>>`; alacritty's `PtyWrite` events go through the same channel
 - `Session` state is `Arc<RwLock<Session>>` — shared between reader thread and UI thread
 - `alive` flag is `Arc<AtomicBool>` — signals reader thread to stop
-- Foreground process detection runs in a single `foreground-detector` background thread (`ForegroundWorker`); UI reads cached results
+- Background singleton threads (each uses `Arc<AtomicBool> alive` + `Arc<Mutex<>> results`):
+  - `ForegroundWorker`: process detection polling (500ms)
+  - `WatchState`: file system monitoring + git refresh debounce
+  - `GitWorker`: git operations queue (stage/unstage/commit/push/diff)
+  - `SearchWorker`: cross-session fuzzy search
+  - `FileSearchWorker`: file path fuzzy search
+  - `UpdateChecker`: GitHub releases polling (24h interval)
+  - `SysMonitor`: CPU/RAM/network stats
 
 **Pane tree (in-tab splits):**
 - `App.pane_trees: HashMap<tab_id, PaneNode>` — one tree per tab
@@ -75,12 +166,16 @@ RUST_LOG=debug cargo run # enable debug logging
 
 **Persistence:**
 - JSON files in `%APPDATA%\terminal-studio\` (Windows) or `~/.config/terminal-studio/` (Unix)
-- `WorkspaceStore` / `NoteStore` serialize to JSON via serde
+- `session.json`: open panes, CWDs, active workspace, panel layout
+- `workspaces.json`: workspace definitions (name, path, color)
+- `notes.json`: per-workspace scratch-pad notes
+- `settings.json`: user preferences (theme, font size, cursor style, scrollback)
+- `keybindings.json`: custom keyboard shortcuts
 
 **File watching:**
 - `notify::RecommendedWatcher` with a channel-based event loop
 - Only tracks non-hidden directories (no dotfiles)
-- Git diff via `std::process::Command("git")`; refresh debounce is 500ms
+- Git operations via `GitWorker` background thread; refresh debounce is 500ms
 
 ## Terminal Emulator Details
 
@@ -95,18 +190,46 @@ RUST_LOG=debug cargo run # enable debug logging
 ## Dependencies
 
 ```toml
-alacritty_terminal = "0.26"  # full terminal emulator (grid, parser, modes)
+# UI framework
 eframe = "0.28"              # wgpu, default_fonts, persistence
 egui = "0.28"
+serde + serde_json = "1"
+
+# Terminal emulation
+alacritty_terminal = "0.26"  # full terminal emulator (grid, parser, modes)
 vte = "0.13"                 # tee parser for OSC 7 CWD extraction
 portable-pty = "0.8"         # ConPTY (Windows) / openpty (Unix)
-serde + serde_json = "1"
+
+# Concurrency & error handling
 parking_lot = "0.12"         # RwLock for session state
-notify = "6"                 # file system watching
 anyhow = "1"
+
+# Logging
 log = "0.4"
 env_logger = "0.11"
-windows-sys = "0.52"         # Windows-only: toolhelp, DWM, CreateMutexW, window messages
+
+# File system & dialogs
+notify = "6"                 # file system watching
+rfd = "0.15"                 # native file/folder picker dialogs
+
+# Search & text processing
+fuzzy-matcher = "0.3"        # Sublime-style fuzzy scoring
+regex = "1"                  # URL detection, search
+base64 = "0.22"              # OSC 52 clipboard decoding
+syntect = "5"                # syntax highlighting (Sublime Text grammars)
+
+# Self-update
+reqwest = "0.12"             # HTTP client (rustls, no OpenSSL)
+semver = "1"                 # version comparison
+self-replace = "1"           # replace running binary (Windows-safe)
+
+# System utilities
+sysinfo = "0.33"             # CPU, RAM, network monitoring
+open = "5"                   # open URLs in browser
+arboard = "3"                # clipboard access
+
+# Windows-only
+windows-sys = "0.52"         # DWM, toolhelp, CreateMutexW, window messages
 ```
 
 ## Conventions
@@ -146,15 +269,29 @@ Color32::from_rgb(30, 30, 46)
 - To add a custom response (e.g. device attribute): send bytes back via `EventProxy::send_event(Event::PtyWrite(...))` which alacritty calls automatically, or route through `pty_tx` directly.
 
 **Add a new UI panel/section:**
-- Edit `app.rs` → `update()` method
+- Create a new file in `src/app/ui/` and wire it from `src/app/ui/mod.rs`
+- Render calls dispatch from `app.rs` → `update()`
 
 **Add a new theme color:**
 1. Add constant to `theme.rs`
-2. Reference via `crate::theme::NEW_COLOR` in `app.rs` or renderer
+2. Reference via `crate::theme::NEW_COLOR` in UI modules
 
 **Add a new workspace field:**
 1. Update `Workspace` struct in `workspace.rs`
-2. Update `SavedSession` / `AppSession` in `app.rs`
+2. Update `SavedSession` / `AppSession` in `src/app/persistence.rs`
+
+**Add a new keyboard shortcut:**
+1. Add variant to `AppAction` enum in `src/shortcuts.rs`
+2. Add default binding in `src/keybindings.rs`
+3. Handle the action in the appropriate UI module
+
+**Add a new background worker:**
+1. Create new file in `src/app/` following `git_worker.rs` pattern (job queue + background thread)
+2. Register in `worker_manager.rs` for lifecycle management
+3. Start/stop from `App` init/drop
+
+**Add a reusable UI component:**
+- Add to `src/ui_kit/` — buttons, containers, lists, layout, text are the existing categories
 
 **Add platform-specific behavior:**
 - Gate with `#[cfg(target_os = "windows")]` / `#[cfg(not(target_os = "windows"))]`
@@ -163,13 +300,40 @@ Color32::from_rgb(30, 30, 46)
 
 | File | Tests | Coverage |
 |------|-------|---------|
-| `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC 0/2 title, cursor movement, bracketed paste, mouse click/SGR, cursor visibility, bold SGR |
-| `src/pane_tree.rs` | 13 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, update_size, split_rect geometry |
-| `src/workspace.rs` | 11 | store CRUD, find_for_cwd, find_for_path, note store |
-| `src/theme.rs` | 22 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast, ensure_readable |
-| `src/app/feedback.rs` | 6 | trigger/tick, flash expiry, alpha decay, duplicate replacement, color generation, multi-target independence |
-| `src/app.rs` | 8 | title formatting |
-| **Total** | **261** | |
+| `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
+| `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
+| `src/app/pane_state.rs` | 20 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates |
+| `src/app/title.rs` | 20 | title formatting with workspaces, effective title, shell escaping |
+| `src/pane_tree.rs` | 19 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, split_rect geometry |
+| `src/app/diff_parser.rs` | 18 | unified diff parsing, hunk extraction, line kind classification |
+| `src/git/parser.rs` | 17 | git status --porcelain parsing, C-style unquoting, file status kinds |
+| `src/workspace.rs` | 16 | store CRUD, find_for_cwd, find_for_path, note store |
+| `src/app/watcher.rs` | 16 | file system watch, git refresh debounce, directory caching |
+| `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC title, cursor, bracketed paste, mouse SGR |
+| `src/search.rs` | 11 | text search, match finding, index navigation |
+| `src/renderer/terminal_pass.rs` | 10 | terminal geometry, cell rendering, scrollbar hit-testing, selection |
+| `src/pty/reader.rs` | 10 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming |
+| `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
+| `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
+| `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
+| `src/app/persistence.rs` | 9 | session serialization, restore logic |
+| `src/app/pane.rs` | 8 | pane content enum, terminal selection |
+| `src/pty/mod.rs` | 8 | shell detection, session manager operations |
+| `src/app/workspace_git_worker.rs` | 8 | workspace-scoped git state |
+| `src/file_search_worker.rs` | 8 | file fuzzy search, result filtering |
+| `src/app/feedback.rs` | 7 | trigger/tick, flash expiry, alpha decay, duplicate replacement, color generation |
+| `src/app/markdown.rs` | 7 | markdown rendering (headers, code, lists, blockquotes) |
+| `src/md_detector.rs` | 7 | markdown path detection |
+| `src/util.rs` | 7 | atomic write, JSON loading, directory expansion |
+| `src/app/file_browser.rs` | 10 | directory listing, file entry sorting, gitignore parsing |
+| `src/shortcuts.rs` | 6 | keybinding parsing, action resolution |
+| `src/keybindings.rs` | 6 | keybinding config loading, JSON handling |
+| `src/app/settings.rs` | 6 | settings persistence, JSON config |
+| `src/search_worker.rs` | 6 | cross-session fuzzy search |
+| `src/pty/shell_integration.rs` | 5 | shell prompt integration helpers |
+| `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
+| `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
+| **Total** | **333** | |
 
 ## Release Workflow
 
