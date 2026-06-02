@@ -47,6 +47,7 @@ pub(super) fn render_git_diff(
     unpushed: &[(String, String)],
     push_in_progress: bool,
     push_error: Option<&str>,
+    git_refreshing: bool,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -65,18 +66,27 @@ pub(super) fn render_git_diff(
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(theme::SP_2);
-            let btn = ui.add(
-                egui::Button::new(
-                    egui::RichText::new("\u{21BB}")
-                        .size(theme::FONT_UI_MD)
-                        .color(t.text),
-                )
-                .frame(false),
-            );
-            if btn.clicked() {
-                request_refresh = true;
+            if git_refreshing {
+                ui.add(egui::Spinner::new().size(14.0));
+                ui.label(
+                    egui::RichText::new("Refreshing\u{2026}")
+                        .size(theme::FONT_UI_SM)
+                        .color(t.subtext0),
+                );
+            } else {
+                let btn = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{21BB}")
+                            .size(theme::FONT_UI_MD)
+                            .color(t.text),
+                    )
+                    .frame(false),
+                );
+                if btn.clicked() {
+                    request_refresh = true;
+                }
+                btn.on_hover_text("Refresh git status");
             }
-            btn.on_hover_text("Refresh git status");
         });
     });
 

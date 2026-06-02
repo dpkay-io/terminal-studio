@@ -831,6 +831,7 @@ impl App {
             is_git: bool,
             git_status: String,
             git_unpushed: Vec<(String, String)>,
+            git_refreshing: bool,
             dir_entries: Arc<Vec<FileEntry>>,
             md_paths: Vec<PathBuf>,
             md_active_content: Option<Arc<String>>,
@@ -856,6 +857,7 @@ impl App {
                         is_git: d.is_git,
                         git_status: d.git_status.clone(),
                         git_unpushed: d.git_unpushed.clone(),
+                        git_refreshing: self.workers.git_worker.is_git_inflight(cwd),
                         dir_entries: Arc::clone(&d.dir_entries),
                         md_paths,
                         md_active_content,
@@ -877,6 +879,7 @@ impl App {
                         is_git: false,
                         git_status: String::new(),
                         git_unpushed: Vec::new(),
+                        git_refreshing: self.workers.git_worker.is_git_inflight(cwd),
                         dir_entries: Arc::new(Vec::new()),
                         md_paths,
                         md_active_content,
@@ -899,6 +902,7 @@ impl App {
                     is_git: false,
                     git_status: String::new(),
                     git_unpushed: Vec::new(),
+                    git_refreshing: false,
                     dir_entries: Arc::new(Vec::new()),
                     md_paths,
                     md_active_content,
@@ -909,6 +913,7 @@ impl App {
             is_git,
             git_status,
             git_unpushed,
+            git_refreshing,
             dir_entries,
             md_paths,
             md_active_content,
@@ -1252,6 +1257,7 @@ impl App {
                                             &git_unpushed,
                                             self.push_in_progress,
                                             self.push_error.as_deref(),
+                                            git_refreshing,
                                         );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {

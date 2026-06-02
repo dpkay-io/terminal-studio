@@ -365,6 +365,10 @@ impl GitWorker {
         let _ = self.tx.send(Job::GitInfo(path.to_path_buf()));
     }
 
+    pub(super) fn is_git_inflight(&self, path: &Path) -> bool {
+        self.git_inflight.lock().contains(path)
+    }
+
     pub(super) fn take_git(&self, path: &Path) -> Option<(String, String)> {
         self.results.lock().git.remove(path)
     }
