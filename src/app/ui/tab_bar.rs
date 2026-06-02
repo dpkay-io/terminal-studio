@@ -52,17 +52,21 @@ impl App {
                             .map(|&i| (i, self.tab_display_text(i)))
                             .collect();
 
-                        for (i, display) in &display_texts {
+                        let visible_roots: Vec<Option<u32>> = visible_indices
+                            .iter()
+                            .map(|&i| self.pane_state.root_of(self.pane_state.panes[i].id))
+                            .collect();
+
+                        for (vis_pos, (i, display)) in display_texts.iter().enumerate() {
                             let i = *i;
                             let pane_id = self.pane_state.panes[i].id;
-                            let is_active = active_pane_id_snap.is_some_and(|apid| {
-                                pane_id == apid
-                                    || self
-                                        .pane_state
-                                        .pane_trees
-                                        .get(&pane_id)
-                                        .is_some_and(|t| t.leaf_ids().contains(&apid))
-                            });
+                            let is_active = active_pane_id_snap == Some(pane_id);
+                            let is_in_split = visible_roots.get(vis_pos)
+                                .and_then(|r| *r)
+                                .is_some_and(|r| {
+                                    self.pane_state.pane_trees.get(&r)
+                                        .is_some_and(|t| t.leaf_ids().len() > 1)
+                                });
                             let ws_color = ws_colors[i];
 
                             let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
@@ -137,15 +141,35 @@ impl App {
                                 crate::app::feedback::FlashTarget::Tab(pane_id),
                             );
 
-                            // Right-edge separator between tabs
-                            painter.rect_filled(
-                                egui::Rect::from_min_size(
-                                    egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
-                                    egui::vec2(theme::STROKE_THIN, tab_h),
-                                ),
-                                0.0,
-                                theme::active().surface2,
-                            );
+                            // Right-edge separator between tabs.
+                            // Use a subtle connector for tabs in the same split group.
+                            let same_group_next = vis_pos + 1 < visible_roots.len()
+                                && visible_roots[vis_pos] == visible_roots[vis_pos + 1]
+                                && visible_roots[vis_pos].is_some_and(|r| {
+                                    self.pane_state.pane_trees.get(&r)
+                                        .is_some_and(|t| t.leaf_ids().len() > 1)
+                                });
+                            if same_group_next {
+                                let mid_y = tab_rect.center().y;
+                                let dot_h = 4.0;
+                                painter.rect_filled(
+                                    egui::Rect::from_center_size(
+                                        egui::pos2(tab_rect.max.x, mid_y),
+                                        egui::vec2(theme::STROKE_THIN, dot_h),
+                                    ),
+                                    0.0,
+                                    theme::active().surface2.gamma_multiply(0.5),
+                                );
+                            } else {
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(tab_rect.max.x - theme::STROKE_THIN, tab_rect.min.y),
+                                        egui::vec2(theme::STROKE_THIN, tab_h),
+                                    ),
+                                    0.0,
+                                    theme::active().surface2,
+                                );
+                            }
 
                             // Register tab-wide click first (lower z-order); close button
                             // is registered second so it has higher priority in egui's
@@ -173,6 +197,7 @@ impl App {
 
                             // Title text (clipped before close button)
                             let dot_offset = if is_active { 10.0 } else { 0.0 };
+                            let split_icon_offset = if is_in_split { 12.0 } else { 0.0 };
                             let text_x = tab_rect.min.x
                                 + theme::TAB_PAD_X
                                 + if ws_color.is_some() {
@@ -180,7 +205,30 @@ impl App {
                                 } else {
                                     0.0
                                 }
-                                + dot_offset;
+                                + dot_offset
+                                + split_icon_offset;
+
+                            // Split-group icon (two vertical bars)
+                            if is_in_split {
+                                let icon_x = text_x - split_icon_offset;
+                                let icon_y = tab_rect.center().y;
+                                let icon_color = title_color.gamma_multiply(0.6);
+                                let half = 3.0;
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(icon_x + 2.0, icon_y - half),
+                                        egui::pos2(icon_x + 2.0, icon_y + half),
+                                    ],
+                                    egui::Stroke::new(1.0, icon_color),
+                                );
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(icon_x + 5.0, icon_y - half),
+                                        egui::pos2(icon_x + 5.0, icon_y + half),
+                                    ],
+                                    egui::Stroke::new(1.0, icon_color),
+                                );
+                            }
 
                             let is_renaming = self.tab_rename_pane_id == Some(pane_id);
                             if is_renaming {
@@ -281,8 +329,8 @@ impl App {
                                 }
                             }
 
-                            // Tab drag-to-reorder
-                            if tab_resp.drag_started() {
+                            // Tab drag-to-reorder (disabled for split-group leaves)
+                            if tab_resp.drag_started() && !is_in_split {
                                 self.tab_drag_source = Some(i);
                             }
                             if let Some(drag_idx) = self.tab_drag_source {
