@@ -3003,107 +3003,44 @@ impl App {
             }
         }
 
-        // Phase D-2: Handle Ctrl+Shift+W — close the focused split pane
+        // Phase D-2: Handle Ctrl+Shift+W — close the focused pane
         if close_split_pane {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                // Find the root that contains the active pane
-                let root_pid_opt = self
-                    .pane_state
-                    .pane_trees
-                    .iter()
-                    .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
-                    .map(|(&rpid, _)| rpid);
-                if let Some(root_pid) = root_pid_opt {
-                    let is_root_itself = root_pid == active_pid;
-                    // Check if tree has only one leaf (the root itself)
-                    let leaf_count = self
-                        .pane_state
-                        .pane_trees
-                        .get(&root_pid)
-                        .map(|t| t.leaf_ids().len())
-                        .unwrap_or(1);
-                    if is_root_itself || leaf_count <= 1 {
-                        // Closing the only pane in a tab — close the whole tab via close_pane_id
-                        // (handled above already; if close_pane_id was not set, set it now)
-                        // We set close_pane_id to None earlier so we'll handle directly:
-                        if leaf_count <= 1 {
-                            // Kill session if terminal
-                            if let Some(pos) = self
-                                .pane_state
-                                .panes
-                                .iter()
-                                .position(|p| p.id == active_pid)
-                            {
-                                if let PaneContent::Terminal(sid) =
-                                    self.pane_state.panes[pos].content
-                                {
-                                    self.remove_session_and_cleanup(sid);
-                                    if self.session_state.active_id == Some(sid) {
-                                        self.session_state.active_id =
-                                            self.session_state.sessions.first().map(|e| e.id);
-                                        self.update_is_active_flags();
-                                    }
-                                }
-                                self.pane_state.panes.remove(pos);
-                            }
-                            self.pane_state.pane_trees.remove(&root_pid);
-                            self.pane_state.active_pane_id =
-                                self.pane_state.panes.last().map(|p| p.id);
-                            if self.zoomed_pane_id == Some(active_pid) {
-                                self.zoomed_pane_id = None;
-                            }
-                            self.save_session();
-                        }
-                    } else {
-                        // Remove the leaf from the tree, collapsing the parent split
-                        let remove_result =
-                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                tree.remove_pane(active_pid)
-                            } else {
-                                RemoveResult::NotFound
-                            };
-                        if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                *tree = replacement;
-                            }
-                        }
-                        // Kill the session of the removed pane
-                        if let Some(pos) = self
-                            .pane_state
-                            .panes
-                            .iter()
-                            .position(|p| p.id == active_pid)
-                        {
-                            if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
-                                self.remove_session_and_cleanup(sid);
-                                if self.session_state.active_id == Some(sid) {
-                                    self.session_state.active_id =
-                                        self.session_state.sessions.first().map(|e| e.id);
-                                    self.update_is_active_flags();
-                                }
-                            }
-                            self.pane_state.panes.remove(pos);
-                        }
-                        if self.zoomed_pane_id == Some(active_pid) {
-                            self.zoomed_pane_id = None;
-                        }
-                        // Focus sibling — pick the first leaf of the root tree
-                        if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
-                            let leaves = tree.leaf_ids();
-                            self.pane_state.active_pane_id = leaves.first().copied();
-                            if let Some(new_pid) = self.pane_state.active_pane_id {
-                                if let Some(pane) =
-                                    self.pane_state.panes.iter().find(|p| p.id == new_pid)
-                                {
-                                    if let PaneContent::Terminal(sid) = pane.content {
-                                        self.session_state.active_id = Some(sid);
-                                        self.update_is_active_flags();
-                                    }
-                                }
-                            }
+                // Kill session before tree surgery.
+                if let Some(pane) = self.pane_state.find(active_pid) {
+                    if let PaneContent::Terminal(sid) = pane.content {
+                        self.remove_session_and_cleanup(sid);
+                        if self.session_state.active_id == Some(sid) {
+                            self.session_state.active_id =
+                                self.session_state.sessions.first().map(|e| e.id);
+                            self.update_is_active_flags();
                         }
                     }
                 }
+
+                // Find sibling to focus before removing.
+                let sibling_focus = self.pane_state.root_of(active_pid).and_then(|root_id| {
+                    self.pane_state.pane_trees.get(&root_id).and_then(|tree| {
+                        let leaves = tree.leaf_ids();
+                        if leaves.len() > 1 {
+                            leaves.iter().find(|&&lid| lid != active_pid).copied()
+                        } else {
+                            None
+                        }
+                    })
+                });
+
+                self.pane_state.close_leaf(active_pid);
+
+                if self.zoomed_pane_id == Some(active_pid) {
+                    self.zoomed_pane_id = None;
+                }
+                self.pane_state.active_pane_id = sibling_focus
+                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                if let Some(new_pid) = self.pane_state.active_pane_id {
+                    self.activate_pane(new_pid);
+                }
+                self.save_session();
             }
         }
 
@@ -3307,51 +3244,59 @@ impl App {
 
         // 2. Close pane (tab-strip close — kills the entire split tree for that root)
         if let Some(pid) = close_pane_id {
-            // Collect all pane IDs in this root's split tree so we can kill them all.
-            let tree_ids: Vec<u32> = self
-                .pane_state
-                .pane_trees
-                .get(&pid)
-                .map(|t| t.leaf_ids())
-                .unwrap_or_else(|| vec![pid]);
-            // Kill every session belonging to any leaf of this tree.
-            for leaf_pid in &tree_ids {
-                if let Some(pos) = self.pane_state.panes.iter().position(|p| p.id == *leaf_pid) {
-                    if let PaneContent::Terminal(sid) = self.pane_state.panes[pos].content {
-                        self.remove_session_and_cleanup(sid);
-                        if self.session_state.active_id == Some(sid) {
-                            self.session_state.active_id =
-                                self.session_state.sessions.first().map(|e| e.id);
-                            self.update_is_active_flags();
-                        }
+            // Kill session for this pane before tree surgery.
+            if let Some(pane) = self.pane_state.find(pid) {
+                if let PaneContent::Terminal(sid) = pane.content {
+                    self.remove_session_and_cleanup(sid);
+                    if self.session_state.active_id == Some(sid) {
+                        self.session_state.active_id =
+                            self.session_state.sessions.first().map(|e| e.id);
+                        self.update_is_active_flags();
                     }
                 }
             }
-            // Remove all leaf panes from the panes vec.
-            self.pane_state.panes.retain(|p| !tree_ids.contains(&p.id));
-            editor_texts.retain(|(id, _)| !tree_ids.contains(id));
-            // Remove the root's tree entry.
-            self.pane_state.pane_trees.remove(&pid);
-            if self
-                .pane_state
-                .active_pane_id
-                .map(|ap| tree_ids.contains(&ap))
-                .unwrap_or(false)
-            {
-                self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
-                self.active_group = self
-                    .pane_state
-                    .active_pane_id
-                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                    .and_then(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                    });
+            editor_texts.retain(|(id, _)| *id != pid);
+
+            // Determine a sibling to focus before removing from tree.
+            let sibling_focus = self.pane_state.root_of(pid).and_then(|root_id| {
+                self.pane_state.pane_trees.get(&root_id).and_then(|tree| {
+                    let leaves = tree.leaf_ids();
+                    if leaves.len() > 1 {
+                        leaves.iter().find(|&&lid| lid != pid).copied()
+                    } else {
+                        None
+                    }
+                })
+            });
+
+            // close_leaf handles tree surgery + re-keying + pane removal.
+            if let Some(info) = self.pane_state.close_leaf(pid) {
+                if self.pane_state.active_pane_id == Some(pid) {
+                    self.pane_state.active_pane_id = sibling_focus
+                        .or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                    if let Some(new_pid) = self.pane_state.active_pane_id {
+                        self.activate_pane(new_pid);
+                    }
+                    self.active_group = self
+                        .pane_state
+                        .active_pane_id
+                        .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                        .and_then(|p| {
+                            Self::pane_group(
+                                &self.session_state.sessions,
+                                &self.workspace_store,
+                                p,
+                            )
+                        });
+                }
+                if info.tree_removed
+                    && self.pane_state.active_pane_id == Some(pid)
+                {
+                    self.pane_state.active_pane_id =
+                        self.pane_state.panes.last().map(|p| p.id);
+                }
             }
-            if self
-                .zoomed_pane_id
-                .map(|zp| tree_ids.contains(&zp))
-                .unwrap_or(false)
-            {
+            if self.zoomed_pane_id == Some(pid) {
                 self.zoomed_pane_id = None;
             }
             self.save_session();

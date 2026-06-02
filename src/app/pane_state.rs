@@ -5,6 +5,7 @@ use crate::pane_tree::{PaneNode, RemoveResult};
 use super::pane::PaneEntry;
 
 /// Returned by [`PaneState::close_leaf`] so the caller can perform session cleanup.
+#[allow(dead_code)]
 pub(super) struct CloseLeafInfo {
     pub removed_pane_ids: Vec<u32>,
     pub tree_removed: bool,
