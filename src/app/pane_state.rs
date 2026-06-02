@@ -63,6 +63,36 @@ impl PaneState {
         let id = self.active_pane_id?;
         self.find_mut(id)
     }
+
+    /// Compute ordered indices into `self.panes` for all leaf panes that should
+    /// be visible in the tab bar given the active workspace group.
+    ///
+    /// For each root pane (key in `pane_trees`) whose group matches
+    /// `active_group`, emit all leaf pane indices in tree-traversal order.
+    /// Roots are visited in the order they appear in `self.panes`, so tab
+    /// ordering is stable.
+    pub(super) fn visible_leaf_indices(
+        &self,
+        pane_groups: &[Option<u64>],
+        active_group: Option<u64>,
+    ) -> Vec<usize> {
+        let mut indices = Vec::new();
+        for (root_idx, pane) in self.panes.iter().enumerate() {
+            let root_id = pane.id;
+            let Some(tree) = self.pane_trees.get(&root_id) else {
+                continue;
+            };
+            if pane_groups.get(root_idx).copied().flatten() != active_group {
+                continue;
+            }
+            for leaf_id in tree.leaf_ids() {
+                if let Some(leaf_idx) = self.panes.iter().position(|p| p.id == leaf_id) {
+                    indices.push(leaf_idx);
+                }
+            }
+        }
+        indices
+    }
 }
 
 #[cfg(test)]
@@ -197,5 +227,59 @@ mod tests {
         state.pane_trees.insert(1, tree);
         assert_eq!(state.root_of(2), Some(1));
         assert_eq!(state.root_of(3), Some(1));
+    }
+
+    #[test]
+    fn visible_leaf_indices_no_splits() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
+        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        let groups = vec![None, None];
+        let result = state.visible_leaf_indices(&groups, None);
+        assert_eq!(result, vec![0, 1]);
+    }
+
+    #[test]
+    fn visible_leaf_indices_with_split() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.panes.push(make_pane(3));
+        let mut tree1 = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        tree1.split_pane(1, 3, 10, SplitDir::Horizontal);
+        state.pane_trees.insert(1, tree1);
+        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        let groups = vec![None, None, None];
+        let result = state.visible_leaf_indices(&groups, None);
+        assert_eq!(result, vec![0, 2, 1]);
+    }
+
+    #[test]
+    fn visible_leaf_indices_filters_by_group() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
+        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        let groups = vec![Some(100), Some(200)];
+        let result = state.visible_leaf_indices(&groups, Some(100));
+        assert_eq!(result, vec![0]);
+    }
+
+    #[test]
+    fn visible_leaf_indices_split_uses_root_group() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.panes.push(make_pane(3));
+        let mut tree1 = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        tree1.split_pane(1, 3, 10, SplitDir::Horizontal);
+        state.pane_trees.insert(1, tree1);
+        state.pane_trees.insert(2, PaneNode::Leaf { pane_id: 2, last_size: (0, 0) });
+        let groups = vec![Some(100), Some(200), Some(200)];
+        let result = state.visible_leaf_indices(&groups, Some(100));
+        assert_eq!(result, vec![0, 2]);
     }
 }
