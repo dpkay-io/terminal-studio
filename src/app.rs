@@ -1597,18 +1597,8 @@ impl App {
             .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p))
             .collect();
         let active_group_snap = self.active_group;
-        let visible_indices: Vec<usize> = pane_groups
-            .iter()
-            .enumerate()
-            .filter(|(i, g)| {
-                **g == active_group_snap
-                    && self
-                        .pane_state
-                        .pane_trees
-                        .contains_key(&self.pane_state.panes[*i].id)
-            })
-            .map(|(i, _)| i)
-            .collect();
+        let visible_indices: Vec<usize> =
+            self.pane_state.visible_leaf_indices(&pane_groups, active_group_snap);
         // If the focused pane's computed group no longer matches `active_group`, follow it.
         // This happens when the user runs `cd` in a terminal and the new CWD belongs to a
         // different workspace — without this, the user keeps typing into a pane they can't see.
