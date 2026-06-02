@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 
-use crate::pane_tree::PaneNode;
+use crate::pane_tree::{PaneNode, RemoveResult};
 
 use super::pane::PaneEntry;
+
+/// Returned by [`PaneState::close_leaf`] so the caller can perform session cleanup.
+pub(super) struct CloseLeafInfo {
+    pub removed_pane_ids: Vec<u32>,
+    pub tree_removed: bool,
+}
 
 /// Holds pane-related state extracted from `App`.
 ///
@@ -62,6 +68,57 @@ impl PaneState {
     pub(super) fn active_mut(&mut self) -> Option<&mut PaneEntry> {
         let id = self.active_pane_id?;
         self.find_mut(id)
+    }
+
+    /// Remove a leaf pane from its tree, performing all necessary tree surgery.
+    ///
+    /// Returns `None` if the pane is not found. On success returns a
+    /// [`CloseLeafInfo`] describing what was removed so the caller can clean up
+    /// sessions and update focus.
+    ///
+    /// Tree re-keying: `pane_trees` is keyed by the root pane ID (which is also
+    /// a leaf in the tree). When that root pane is removed from a multi-leaf
+    /// tree, the tree must be re-keyed using `first_leaf_id()` of the surviving
+    /// sibling subtree.
+    pub(super) fn close_leaf(&mut self, pane_id: u32) -> Option<CloseLeafInfo> {
+        let root_id = self.root_of(pane_id)?;
+        let tree = self.pane_trees.get(&root_id)?;
+        let leaf_ids = tree.leaf_ids();
+
+        if leaf_ids.len() <= 1 {
+            // Only leaf in the tree — remove the whole tree.
+            self.pane_trees.remove(&root_id);
+            self.panes.retain(|p| p.id != pane_id);
+            return Some(CloseLeafInfo {
+                removed_pane_ids: vec![pane_id],
+                tree_removed: true,
+            });
+        }
+
+        let tree = self.pane_trees.get_mut(&root_id).unwrap();
+        let result = tree.remove_pane(pane_id);
+        match result {
+            RemoveResult::CollapseToSibling(replacement) => {
+                if root_id == pane_id {
+                    // The root pane itself was closed; re-key the tree.
+                    let new_root_id = replacement.first_leaf_id();
+                    self.pane_trees.remove(&root_id);
+                    self.pane_trees.insert(new_root_id, replacement);
+                } else {
+                    self.pane_trees.insert(root_id, replacement);
+                }
+            }
+            RemoveResult::Done => {}
+            RemoveResult::IsTarget | RemoveResult::NotFound => {
+                return None;
+            }
+        }
+
+        self.panes.retain(|p| p.id != pane_id);
+        Some(CloseLeafInfo {
+            removed_pane_ids: vec![pane_id],
+            tree_removed: false,
+        })
     }
 
     /// Compute ordered indices into `self.panes` for all leaf panes that should
@@ -281,5 +338,78 @@ mod tests {
         let groups = vec![Some(100), Some(200), Some(200)];
         let result = state.visible_leaf_indices(&groups, Some(100));
         assert_eq!(result, vec![0, 2]);
+    }
+
+    #[test]
+    fn close_leaf_only_pane_in_tree() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.pane_trees.insert(1, PaneNode::Leaf { pane_id: 1, last_size: (0, 0) });
+        let result = state.close_leaf(1);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.removed_pane_ids, vec![1]);
+        assert!(info.tree_removed);
+        assert!(state.panes.is_empty());
+        assert!(state.pane_trees.is_empty());
+    }
+
+    #[test]
+    fn close_leaf_sibling_survives() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        tree.split_pane(1, 2, 10, SplitDir::Horizontal);
+        state.pane_trees.insert(1, tree);
+        let result = state.close_leaf(2);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.removed_pane_ids, vec![2]);
+        assert!(!info.tree_removed);
+        assert!(state.find(2).is_none());
+        assert!(state.find(1).is_some());
+        assert_eq!(state.pane_trees[&1].leaf_ids(), vec![1]);
+    }
+
+    #[test]
+    fn close_leaf_root_pane_rekeys_tree() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        tree.split_pane(1, 2, 10, SplitDir::Horizontal);
+        state.pane_trees.insert(1, tree);
+        let result = state.close_leaf(1);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.removed_pane_ids, vec![1]);
+        assert!(!info.tree_removed);
+        assert!(state.find(1).is_none());
+        assert!(state.find(2).is_some());
+        assert!(!state.pane_trees.contains_key(&1));
+        assert!(state.pane_trees.contains_key(&2));
+        assert_eq!(state.pane_trees[&2].leaf_ids(), vec![2]);
+    }
+
+    #[test]
+    fn close_leaf_root_pane_complex_tree_rekeys() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        state.panes.push(make_pane(3));
+        let mut tree = PaneNode::Leaf { pane_id: 1, last_size: (0, 0) };
+        tree.split_pane(1, 2, 10, SplitDir::Horizontal);
+        tree.split_pane(2, 3, 11, SplitDir::Vertical);
+        state.pane_trees.insert(1, tree);
+        let result = state.close_leaf(1);
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.removed_pane_ids, vec![1]);
+        assert!(!info.tree_removed);
+        assert!(!state.pane_trees.contains_key(&1));
+        assert!(state.pane_trees.contains_key(&2));
+        let remaining_leaves = state.pane_trees[&2].leaf_ids();
+        assert_eq!(remaining_leaves, vec![2, 3]);
     }
 }
