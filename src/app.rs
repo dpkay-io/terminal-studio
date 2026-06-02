@@ -1608,13 +1608,10 @@ impl App {
         // without changing `active_pane_id` (e.g., `open_workspace_in_new_window`) must clear
         // `active_pane_id` themselves so this fallback path runs instead of the follow path.
         if let Some(pid) = self.pane_state.active_pane_id {
-            let root_id = self.pane_state.root_of(pid);
-            let root_visible = root_id.is_some_and(|rid| {
-                visible_indices
-                    .iter()
-                    .any(|&i| self.pane_state.panes[i].id == rid)
-            });
-            if !root_visible {
+            let pane_visible = visible_indices
+                .iter()
+                .any(|&i| self.pane_state.panes[i].id == pid);
+            if !pane_visible {
                 let pane_idx = self.pane_state.panes.iter().position(|p| p.id == pid);
                 if let Some(idx) = pane_idx {
                     // Pane still exists — its group changed. Follow it.
@@ -2246,16 +2243,18 @@ impl App {
                                     }
                                     AppAction::PreviousTab => {
                                         if nv > 1 {
-                                            let root_id = self.pane_state.active_pane_id.and_then(|pid| self.pane_state.root_of(pid));
-                                            let cur = root_id.and_then(|rid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == rid)).unwrap_or(0);
+                                            let cur = self.pane_state.active_pane_id
+                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
+                                                .unwrap_or(0);
                                             let prev = if cur == 0 { nv - 1 } else { cur - 1 };
                                             clicked_pane_id = Some(self.pane_state.panes[visible_indices[prev]].id);
                                         }
                                     }
                                     AppAction::NextTab => {
                                         if nv > 1 {
-                                            let root_id = self.pane_state.active_pane_id.and_then(|pid| self.pane_state.root_of(pid));
-                                            let cur = root_id.and_then(|rid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == rid)).unwrap_or(0);
+                                            let cur = self.pane_state.active_pane_id
+                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
+                                                .unwrap_or(0);
                                             let next = (cur + 1) % nv;
                                             clicked_pane_id = Some(self.pane_state.panes[visible_indices[next]].id);
                                         }
@@ -2909,18 +2908,25 @@ impl App {
             if let Some(active_pid) = self.pane_state.active_pane_id {
                 // When the user clicks split on the active tab, pick the next
                 // visible tab as the source to merge alongside it.
+                let active_root = self.pane_state.root_of(active_pid);
                 let source_pane_id = if clicked_pane == active_pid {
+                    // Pick the next visible tab that is NOT in the same split tree.
                     let active_vis_pos = visible_indices
                         .iter()
                         .position(|&i| self.pane_state.panes[i].id == active_pid);
                     active_vis_pos.and_then(|pos| {
-                        let next = if pos + 1 < visible_indices.len() {
-                            pos + 1
-                        } else {
-                            pos.checked_sub(1)?
-                        };
-                        Some(self.pane_state.panes[visible_indices[next]].id)
+                        let len = visible_indices.len();
+                        for offset in 1..len {
+                            let idx = (pos + offset) % len;
+                            let pid = self.pane_state.panes[visible_indices[idx]].id;
+                            if self.pane_state.root_of(pid) != active_root {
+                                return Some(pid);
+                            }
+                        }
+                        None
                     })
+                } else if self.pane_state.root_of(clicked_pane) == active_root {
+                    None
                 } else {
                     Some(clicked_pane)
                 };
