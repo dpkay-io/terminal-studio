@@ -3276,31 +3276,25 @@ impl App {
             });
 
             // close_leaf handles tree surgery + re-keying + pane removal.
-            if let Some(info) = self.pane_state.close_leaf(pid) {
-                if self.pane_state.active_pane_id == Some(pid) {
-                    self.pane_state.active_pane_id = sibling_focus
-                        .or_else(|| self.pane_state.panes.last().map(|p| p.id));
-                    if let Some(new_pid) = self.pane_state.active_pane_id {
-                        self.activate_pane(new_pid);
-                    }
-                    self.active_group = self
-                        .pane_state
-                        .active_pane_id
-                        .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                        .and_then(|p| {
-                            Self::pane_group(
-                                &self.session_state.sessions,
-                                &self.workspace_store,
-                                p,
-                            )
-                        });
+            if self.pane_state.close_leaf(pid).is_some()
+                && self.pane_state.active_pane_id == Some(pid)
+            {
+                self.pane_state.active_pane_id = sibling_focus
+                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                if let Some(new_pid) = self.pane_state.active_pane_id {
+                    self.activate_pane(new_pid);
                 }
-                if info.tree_removed
-                    && self.pane_state.active_pane_id == Some(pid)
-                {
-                    self.pane_state.active_pane_id =
-                        self.pane_state.panes.last().map(|p| p.id);
-                }
+                self.active_group = self
+                    .pane_state
+                    .active_pane_id
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .and_then(|p| {
+                        Self::pane_group(
+                            &self.session_state.sessions,
+                            &self.workspace_store,
+                            p,
+                        )
+                    });
             }
             if self.zoomed_pane_id == Some(pid) {
                 self.zoomed_pane_id = None;
