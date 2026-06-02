@@ -41,6 +41,14 @@ impl PaneNode {
         }
     }
 
+    /// Return the first leaf pane ID in traversal order.
+    pub fn first_leaf_id(&self) -> u32 {
+        match self {
+            PaneNode::Leaf { pane_id, .. } => *pane_id,
+            PaneNode::Split { a, .. } => a.first_leaf_id(),
+        }
+    }
+
     /// Update the recorded last_size for a specific leaf.
     pub fn update_size(&mut self, pane_id: u32, size: (u16, u16)) {
         match self {
@@ -362,6 +370,27 @@ mod tests {
         let subtree = leaf(2);
         assert!(root.split_pane_with_node(1, subtree, 10, SplitDir::Horizontal));
         assert_eq!(root.leaf_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn first_leaf_id_single() {
+        assert_eq!(leaf(1).first_leaf_id(), 1);
+    }
+
+    #[test]
+    fn first_leaf_id_split() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        assert_eq!(root.first_leaf_id(), 1);
+    }
+
+    #[test]
+    fn first_leaf_id_nested() {
+        let mut root = leaf(1);
+        root.split_pane(1, 2, 10, SplitDir::Horizontal);
+        root.split_pane(1, 3, 11, SplitDir::Vertical);
+        // Tree: Split{ a: Split{ a: Leaf(1), b: Leaf(3) }, b: Leaf(2) }
+        assert_eq!(root.first_leaf_id(), 1);
     }
 
     #[test]

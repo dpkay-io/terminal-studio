@@ -246,11 +246,6 @@ pub(super) fn render_git_diff(
                     {
                         show_commit_dialog = true;
                     }
-                    ui.label(
-                        egui::RichText::new("right-click for options")
-                            .size(theme::FONT_SYS_SM)
-                            .color(theme::active().overlay0),
-                    );
                 });
             });
             ui.add_space(theme::SP_2);
@@ -284,7 +279,6 @@ pub(super) fn render_git_diff(
                                 .truncate()
                                 .sense(egui::Sense::click()),
                             )
-                            .on_hover_text("Right-click for options")
                         })
                         .inner;
                     if label_resp.double_clicked() {
@@ -359,11 +353,6 @@ pub(super) fn render_git_diff(
                     {
                         action = Some(GitStageAction::StageAll);
                     }
-                    ui.label(
-                        egui::RichText::new("right-click for options")
-                            .size(theme::FONT_SYS_SM)
-                            .color(theme::active().overlay0),
-                    );
                 });
             });
             ui.add_space(theme::SP_2);
@@ -397,7 +386,6 @@ pub(super) fn render_git_diff(
                                 .truncate()
                                 .sense(egui::Sense::click()),
                             )
-                            .on_hover_text("Right-click for options")
                         })
                         .inner;
                     if label_resp.double_clicked() {

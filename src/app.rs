@@ -1091,6 +1091,11 @@ impl App {
                                         if let Some(cwd) = active_cwd.as_ref() {
                                             // ── Workspace name + path ────────────────
                                             ui.horizontal(|ui| {
+                                                let already_saved = self
+                                                    .workspace_store
+                                                    .find_for_path(cwd)
+                                                    .is_some();
+                                                let save_btn_reserve = if already_saved { 0.0 } else { 90.0 };
                                                 if let Some(ws) =
                                                     self.workspace_store.find_for_cwd(cwd)
                                                 {
@@ -1110,17 +1115,19 @@ impl App {
                                                             .color(theme::active().overlay0),
                                                     );
                                                 }
-                                                ui.label(
-                                                    egui::RichText::new(theme::short_path(cwd))
-                                                        .monospace()
-                                                        .size(theme::FONT_UI_SM)
-                                                        .color(theme::active().fg_path),
-                                                )
-                                                .on_hover_text(cwd.display().to_string());
-                                                let already_saved = self
-                                                    .workspace_store
-                                                    .find_for_path(cwd)
-                                                    .is_some();
+                                                let path_max = (ui.available_width() - save_btn_reserve).max(20.0);
+                                                ui.allocate_ui(egui::vec2(path_max, ui.spacing().interact_size.y), |ui| {
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(theme::short_path(cwd))
+                                                                .monospace()
+                                                                .size(theme::FONT_UI_SM)
+                                                                .color(theme::active().fg_path),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(cwd.display().to_string());
+                                                });
                                                 if !already_saved {
                                                     let save_btn = ui.add(
                                                         egui::Button::new(
@@ -1378,26 +1385,6 @@ impl App {
                                         .strong()
                                         .size(theme::FONT_UI_MD),
                                 );
-                                if let Some(ws_id) = self.active_group {
-                                    if let Some(ws) = self
-                                        .workspace_store
-                                        .workspaces
-                                        .iter()
-                                        .find(|w| w.id == ws_id)
-                                    {
-                                        ui.label(
-                                            egui::RichText::new(format!("\u{00b7} {}", ws.name))
-                                                .size(theme::FONT_UI_XS)
-                                                .color(theme::active().fg_secondary),
-                                        );
-                                    }
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new("\u{00b7} Other")
-                                            .size(theme::FONT_UI_XS)
-                                            .color(theme::active().fg_secondary),
-                                    );
-                                }
                                 ui.label(
                                     egui::RichText::new("· autosaved")
                                         .size(theme::FONT_UI_XS)
@@ -2181,6 +2168,36 @@ impl App {
                     self.last_focused_sid = active_session_id;
                 }
 
+                // When a non-terminal widget (e.g. panel resize handle) captures
+                // the pointer, suppress terminal mouse events so clicks/scrolls
+                // don't leak into the terminal during a panel resize drag.
+                let widget_dragging = ctx.input(|inp|
+                    inp.pointer.any_down() && inp.pointer.is_decidedly_dragging()
+                ) && !self.term_selecting
+                  && self.active_term_geo.as_ref()
+                        .map(|g| g.scrollbar_drag_offset.is_none() && !g.scrollbar_hovered)
+                        .unwrap_or(true);
+
+                // Cancel an accidental terminal selection that started from a
+                // click in the panel-resize overlap zone: once a decisive drag
+                // moves the pointer outside the terminal rect, the "selection"
+                // was actually a panel resize — drop it.
+                if self.term_selecting
+                    && ctx.input(|inp| inp.pointer.is_decidedly_dragging())
+                {
+                    let pointer_in_term = ctx.input(|inp| {
+                        inp.pointer.latest_pos()
+                            .zip(self.active_term_geo.as_ref())
+                            .map(|(pos, geo)| geo.rect.contains(pos))
+                            .unwrap_or(true)
+                    });
+                    if !pointer_in_term {
+                        self.term_selecting = false;
+                        self.term_selection = None;
+                        self.term_selection_sid = None;
+                    }
+                }
+
                 let mut events = ctx.input(|inp| inp.events.clone());
                 events.append(&mut self.raw_intercepted_keys);
                 for event in &events {
@@ -2409,7 +2426,7 @@ impl App {
                             let sb_active = self.active_term_geo.as_ref()
                                 .map(|g| g.scrollbar_hovered || g.scrollbar_drag_offset.is_some())
                                 .unwrap_or(false);
-                            if !sb_active {
+                            if !sb_active && !widget_dragging {
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
@@ -2547,7 +2564,11 @@ impl App {
                             } // !sb_active
                         }
                         egui::Event::PointerMoved(pos) if self.term_selecting => {
-                            if let Some(geo) = &self.active_term_geo {
+                            if widget_dragging {
+                                self.term_selecting = false;
+                                self.term_selection = None;
+                                self.term_selection_sid = None;
+                            } else if let Some(geo) = &self.active_term_geo {
                                 let clamped = egui::pos2(
                                     pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
                                     pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
@@ -2560,7 +2581,7 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::PointerMoved(pos) if !self.term_selecting => {
+                        egui::Event::PointerMoved(pos) if !self.term_selecting && !widget_dragging => {
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
@@ -2599,7 +2620,7 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::MouseWheel { unit, delta, .. } => {
+                        egui::Event::MouseWheel { unit, delta, .. } if !widget_dragging => {
                             let mouse_pos = ctx.input(|inp| inp.pointer.latest_pos());
                             let over_term = mouse_pos
                                 .zip(self.active_term_geo.as_ref())

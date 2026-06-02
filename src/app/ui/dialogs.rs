@@ -84,10 +84,10 @@ impl App {
 
         let dialog_w = (screen_rect.width() * 0.95)
             .min(screen_rect.width() - 20.0)
-            .clamp(200.0, 600.0);
+            .max(200.0);
         let dialog_h = (screen_rect.height() * 0.95)
             .min(screen_rect.height() - 20.0)
-            .clamp(200.0, 600.0);
+            .max(200.0);
 
         egui::Area::new(self.vp_id("quick_switcher_dialog"))
             .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
