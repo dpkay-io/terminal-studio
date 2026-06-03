@@ -69,6 +69,7 @@ base64 = "0.22"
 
 # Syntax highlighting (Sublime Text grammars, pure-Rust regex backend)
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "regex-fancy", "plist-load"] }
+zstd = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [

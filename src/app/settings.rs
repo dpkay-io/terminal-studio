@@ -30,6 +30,9 @@ pub(super) struct AppSettings {
     pub(super) default_shell: Option<String>,
     pub(super) show_sys_monitor: bool,
     pub(super) diff_view_mode: DiffViewMode,
+    pub(super) max_closed_sessions: usize,
+    pub(super) save_scrollback_on_close: bool,
+    pub(super) save_scrollback_on_exit: bool,
 }
 
 impl Default for AppSettings {
@@ -49,6 +52,9 @@ impl Default for AppSettings {
             default_shell: None,
             show_sys_monitor: true,
             diff_view_mode: DiffViewMode::Inline,
+            max_closed_sessions: 50,
+            save_scrollback_on_close: true,
+            save_scrollback_on_exit: true,
         }
     }
 }

@@ -370,6 +370,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         SearchTerminal,
         SearchAllSessions,
         ZoomPane,
+        ReopenClosedSession,
     ];
 
     actions

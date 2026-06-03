@@ -68,6 +68,7 @@ pub(super) enum PaneContent {
         cwd: Option<PathBuf>,
         pending_command: Option<String>,
         saved_title: Option<String>,
+        scrollback_file: Option<String>,
     },
     FileEditor(FileEditorState),
     FileDiff(FileDiffState),
@@ -173,6 +174,7 @@ mod tests {
             cwd: Some(PathBuf::from("/home")),
             pending_command: Some("ls".to_string()),
             saved_title: None,
+            scrollback_file: None,
         };
         let editor = PaneContent::FileEditor(FileEditorState {
             path: PathBuf::from("test.txt"),

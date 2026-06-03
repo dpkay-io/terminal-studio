@@ -349,6 +349,15 @@ impl KeybindingsConfig {
                 },
                 AppAction::ZoomPane,
             ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::T,
+                },
+                AppAction::ReopenClosedSession,
+            ),
         ];
 
         defaults

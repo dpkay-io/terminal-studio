@@ -210,6 +210,35 @@ impl App {
                         sw_resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
                     }
 
+                    // Recently Closed Sessions button (macOS, after settings from right)
+                    {
+                        let rc_mac_x = r.max.x - mac_btn_w * 3.0;
+                        let rc_tbr = egui::Rect::from_min_size(
+                            egui::pos2(rc_mac_x, r.min.y),
+                            egui::vec2(mac_btn_w, r.height()),
+                        );
+                        let rc_resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_closed_sessions"),
+                            rc_tbr,
+                            "\u{21BA}",
+                            mac_icon_sz,
+                            tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_closed_sessions,
+                            },
+                        );
+                        if rc_resp.clicked() {
+                            self.show_closed_sessions = !self.show_closed_sessions;
+                            if !self.show_closed_sessions {
+                                self.closed_sessions_query.clear();
+                                self.closed_sessions_selected = 0;
+                                self.closed_sessions_cache = None;
+                            }
+                        }
+                        rc_resp.on_hover_text("Recently closed sessions (Ctrl+Shift+T)");
+                    }
+
                     // Gear / Settings (rightmost on macOS)
                     let gear_mac_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.max.x - mac_btn_w, r.min.y),
@@ -517,6 +546,35 @@ impl App {
                             }
                         }
                         resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
+                    }
+
+                    // Recently Closed Sessions button (after switcher)
+                    {
+                        let rc_x = switcher_end_x;
+                        let rc_br = egui::Rect::from_min_size(
+                            egui::pos2(rc_x, r.min.y),
+                            egui::vec2(btn_w, r.height()),
+                        );
+                        let rc_resp = ui_kit::icon_button(
+                            ui,
+                            self.vp_id("tb_closed_sessions"),
+                            rc_br,
+                            "\u{21BA}",
+                            icon_sz,
+                            tb_fg,
+                            ui_kit::IconButtonStyle::Toggle {
+                                active: self.show_closed_sessions,
+                            },
+                        );
+                        if rc_resp.clicked() {
+                            self.show_closed_sessions = !self.show_closed_sessions;
+                            if !self.show_closed_sessions {
+                                self.closed_sessions_query.clear();
+                                self.closed_sessions_selected = 0;
+                                self.closed_sessions_cache = None;
+                            }
+                        }
+                        rc_resp.on_hover_text("Recently closed sessions (Ctrl+Shift+T)");
                     }
 
                     // Gear / Settings button — just before window controls

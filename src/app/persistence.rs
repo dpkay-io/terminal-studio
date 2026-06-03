@@ -11,6 +11,8 @@ pub(super) struct SavedSession {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) title: Option<String>,
+    #[serde(default)]
+    pub(super) scrollback_file: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,6 +81,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/mydir"),
             command: Some("ls -la".into()),
             title: Some("my session".into()),
+            scrollback_file: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedSession = serde_json::from_str(&json).unwrap();
@@ -179,11 +182,13 @@ mod tests {
                     cwd: PathBuf::from("/home/user"),
                     command: None,
                     title: None,
+                    scrollback_file: None,
                 },
                 SavedSession {
                     cwd: PathBuf::from("/tmp"),
                     command: Some("vim".into()),
                     title: Some("vim session".into()),
+                    scrollback_file: None,
                 },
             ],
             panes: vec![

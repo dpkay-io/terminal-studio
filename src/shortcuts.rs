@@ -66,6 +66,9 @@ pub enum AppAction {
 
     // Command palette
     CommandPalette,
+
+    // Session history
+    ReopenClosedSession,
 }
 
 impl AppAction {
@@ -105,6 +108,7 @@ impl AppAction {
             Self::SearchAllSessions => "search_all_sessions",
             Self::ZoomPane => "zoom_pane",
             Self::CommandPalette => "command_palette",
+            Self::ReopenClosedSession => "reopen_closed_session",
         }
     }
 
@@ -144,6 +148,7 @@ impl AppAction {
             "search_all_sessions" => Some(Self::SearchAllSessions),
             "zoom_pane" => Some(Self::ZoomPane),
             "command_palette" => Some(Self::CommandPalette),
+            "reopen_closed_session" => Some(Self::ReopenClosedSession),
             _ => None,
         }
     }
@@ -184,6 +189,7 @@ impl AppAction {
             Self::SearchAllSessions => "Search all sessions",
             Self::ZoomPane => "Zoom pane",
             Self::CommandPalette => "Command palette",
+            Self::ReopenClosedSession => "Reopen closed session",
         }
     }
 

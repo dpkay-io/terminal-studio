@@ -184,6 +184,10 @@ impl App {
             show_command_palette: false,
             command_palette_query: String::new(),
             command_palette_selected: 0,
+            show_closed_sessions: false,
+            closed_sessions_query: String::new(),
+            closed_sessions_selected: 0,
+            closed_sessions_cache: None,
             shortcut_registry: ShortcutRegistry::new(),
             settings: loaded_settings,
             active_term_geo: None,
@@ -313,10 +317,36 @@ impl App {
         rows: u16,
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
-        match self
-            .session_manager
-            .spawn(cols, rows, cwd, shell, self.settings.scrollback_lines)
-        {
+        self.spawn_session_inner(shell, cols, rows, cwd, None)
+    }
+
+    pub(super) fn spawn_session_with_scrollback(
+        &mut self,
+        shell: &ShellKind,
+        cols: u16,
+        rows: u16,
+        cwd: Option<PathBuf>,
+        scrollback: Option<&[u8]>,
+    ) -> Option<u32> {
+        self.spawn_session_inner(shell, cols, rows, cwd, scrollback)
+    }
+
+    fn spawn_session_inner(
+        &mut self,
+        shell: &ShellKind,
+        cols: u16,
+        rows: u16,
+        cwd: Option<PathBuf>,
+        pre_inject: Option<&[u8]>,
+    ) -> Option<u32> {
+        match self.session_manager.spawn(
+            cols,
+            rows,
+            cwd,
+            shell,
+            self.settings.scrollback_lines,
+            pre_inject,
+        ) {
             Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 let entry = SessionEntry {
                     id,
@@ -954,10 +984,14 @@ impl App {
         rows: u16,
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
-        match self
-            .session_manager
-            .spawn(cols, rows, cwd, shell, self.settings.scrollback_lines)
-        {
+        match self.session_manager.spawn(
+            cols,
+            rows,
+            cwd,
+            shell,
+            self.settings.scrollback_lines,
+            None,
+        ) {
             Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
                 self.session_state.uninit_sessions.insert(id);
                 self.session_state.sessions.push(SessionEntry {
@@ -980,6 +1014,36 @@ impl App {
         }
     }
 
+    pub(super) fn restore_closed_session(&mut self, record_id: u64) {
+        let manifest = super::closed_sessions::ClosedSessionManifest::load();
+        let Some(record) = manifest.records.iter().find(|r| r.id == record_id) else {
+            return;
+        };
+
+        let scrollback = record
+            .scrollback_file
+            .as_ref()
+            .and_then(|f| super::closed_sessions::load_scrollback(f));
+
+        let shell = crate::pty::ShellKind::from_name(&record.shell);
+        let cwd = if record.cwd.as_os_str().is_empty() {
+            None
+        } else {
+            Some(record.cwd.clone())
+        };
+
+        let cols = record.cols;
+        let rows = record.rows;
+
+        if let Some(sid) =
+            self.spawn_session_with_scrollback(&shell, cols, rows, cwd, scrollback.as_deref())
+        {
+            if let Some(entry) = self.session_state.find(sid) {
+                entry.session.read().set_title(record.title.clone());
+            }
+        }
+    }
+
     pub(super) fn update_is_active_flags(&self) {
         let active = self.session_state.active_id;
         for entry in &self.session_state.sessions {
@@ -989,9 +1053,55 @@ impl App {
         }
     }
 
+    fn save_active_scrollbacks(&self) -> HashMap<u32, String> {
+        let mut result = HashMap::new();
+        let Some(dir) = crate::util::data_dir().map(|d| d.join("active_scrollback")) else {
+            return result;
+        };
+        std::fs::create_dir_all(&dir).ok();
+        // Clean up old files first
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                std::fs::remove_file(entry.path()).ok();
+            }
+        }
+        for (idx, entry) in self.session_state.sessions.iter().enumerate() {
+            let session = entry.session.read();
+            let ansi_bytes = super::scrollback_capture::extract_grid_as_ansi(&session.term, None);
+            drop(session);
+            if ansi_bytes.is_empty() {
+                continue;
+            }
+            let filename = format!("{}.zst", idx);
+            let filepath = dir.join(&filename);
+            match zstd::encode_all(ansi_bytes.as_slice(), 3) {
+                Ok(compressed) => {
+                    if std::fs::write(&filepath, &compressed).is_ok() {
+                        result.insert(entry.id, filename);
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Failed to compress scrollback for session {}: {}",
+                        entry.id,
+                        e
+                    );
+                }
+            }
+        }
+        result
+    }
+
     pub(super) fn save_session(&self) {
         let Some(path) = session_data_path() else {
             return;
+        };
+
+        // Save active scrollback if enabled
+        let scrollback_files: HashMap<u32, String> = if self.settings.save_scrollback_on_exit {
+            self.save_active_scrollbacks()
+        } else {
+            HashMap::new()
         };
 
         let session_id_to_index: HashMap<u32, usize> = self
@@ -1051,10 +1161,12 @@ impl App {
                     Some(&e.shell),
                     ws_name.as_deref(),
                 ));
+                let scrollback_file = scrollback_files.get(&e.id).cloned();
                 SavedSession {
                     cwd,
                     command,
                     title,
+                    scrollback_file,
                 }
             })
             .collect();
@@ -1073,6 +1185,7 @@ impl App {
                         cwd,
                         pending_command,
                         saved_title,
+                        ..
                     } => SavedPaneContent::DeferredTerminal {
                         cwd: cwd.clone().unwrap_or_default(),
                         command: pending_command.clone(),
@@ -1160,6 +1273,8 @@ impl App {
                 }
             });
 
+        let scrollback_dir = crate::util::data_dir().map(|d| d.join("active_scrollback"));
+
         let mut eagerly_spawned: HashMap<usize, u32> = HashMap::new();
         if let Some(active_idx) = active_session_idx {
             if let Some(s) = state.sessions.get(active_idx) {
@@ -1168,7 +1283,18 @@ impl App {
                 } else {
                     Some(s.cwd.clone())
                 };
-                if let Some(sid) = self.spawn_session_no_pane(&default_shell(), 80, 24, cwd) {
+                let scrollback = s.scrollback_file.as_ref().and_then(|f| {
+                    let dir = scrollback_dir.as_ref()?;
+                    let compressed = std::fs::read(dir.join(f)).ok()?;
+                    zstd::decode_all(compressed.as_slice()).ok()
+                });
+                if let Some(sid) = self.spawn_session_with_scrollback(
+                    &default_shell(),
+                    80,
+                    24,
+                    cwd,
+                    scrollback.as_deref(),
+                ) {
                     if let Some(entry) = self.session_state.find_mut(sid) {
                         if let Some(cmd) = s.command.clone() {
                             entry.pending_command = Some(cmd);
@@ -1199,10 +1325,12 @@ impl App {
                         });
                         let pending_command = saved.and_then(|s| s.command.clone());
                         let saved_title = saved.and_then(|s| s.title.clone());
+                        let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
                         PaneContent::DeferredTerminal {
                             cwd,
                             pending_command,
                             saved_title,
+                            scrollback_file,
                         }
                     }
                 }
@@ -1218,6 +1346,7 @@ impl App {
                     },
                     pending_command: command.clone(),
                     saved_title: title.clone(),
+                    scrollback_file: None,
                 },
                 SavedPaneContent::FileEditor {
                     path,

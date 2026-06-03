@@ -46,6 +46,31 @@ impl ShellKind {
         }
     }
 
+    pub fn name(&self) -> &str {
+        match self {
+            ShellKind::PowerShell => "powershell",
+            ShellKind::Pwsh => "pwsh",
+            ShellKind::Cmd => "cmd",
+            ShellKind::Bash => "bash",
+            ShellKind::Zsh => "zsh",
+            ShellKind::Fish => "fish",
+            ShellKind::Sh => "sh",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "powershell" => ShellKind::PowerShell,
+            "pwsh" => ShellKind::Pwsh,
+            "cmd" => ShellKind::Cmd,
+            "bash" => ShellKind::Bash,
+            "zsh" => ShellKind::Zsh,
+            "fish" => ShellKind::Fish,
+            "sh" => ShellKind::Sh,
+            _ => default_shell(),
+        }
+    }
+
     fn executable(&self) -> &str {
         match self {
             ShellKind::PowerShell => "powershell.exe",
@@ -166,6 +191,10 @@ impl SessionManager {
     }
 
     /// Spawn a new shell session. Returns (session_id, Arc<RwLock<Session>>, master, writer, shell_pid, alive).
+    ///
+    /// If `pre_inject` is Some, the ANSI bytes are fed into the terminal's VTE
+    /// processor BEFORE the PTY reader thread starts. This allows restoring
+    /// scrollback history without racing against incoming shell output.
     pub fn spawn(
         &mut self,
         cols: u16,
@@ -173,6 +202,7 @@ impl SessionManager {
         cwd: Option<std::path::PathBuf>,
         shell: &ShellKind,
         scrollback_lines: usize,
+        pre_inject: Option<&[u8]>,
     ) -> anyhow::Result<SpawnResult> {
         let id = self.next_id;
         self.next_id += 1;
@@ -241,6 +271,15 @@ impl SessionManager {
             pty_tx.clone(),
             scrollback_lines,
         )));
+
+        // Inject scrollback content before the reader thread starts reading,
+        // so restored history doesn't race with incoming shell output.
+        if let Some(ansi_bytes) = pre_inject {
+            if !ansi_bytes.is_empty() {
+                let mut s = session.write();
+                crate::app::scrollback_inject::inject_scrollback(&mut s.term, ansi_bytes);
+            }
+        }
 
         let alive_for_thread = Arc::clone(&alive);
 

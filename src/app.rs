@@ -18,6 +18,7 @@ use alacritty_terminal::{
 
 // ── Submodules ───────────────────────────────────────────────────────────────
 
+pub(crate) mod closed_sessions;
 mod diff_parser;
 mod feedback;
 mod file_browser;
@@ -29,6 +30,8 @@ mod multi_window;
 mod pane;
 mod pane_state;
 mod persistence;
+pub(crate) mod scrollback_capture;
+pub(crate) mod scrollback_inject;
 mod session_state;
 pub(crate) mod settings;
 mod state;
@@ -103,6 +106,10 @@ pub struct App {
     show_command_palette: bool,
     command_palette_query: String,
     command_palette_selected: usize,
+    show_closed_sessions: bool,
+    closed_sessions_query: String,
+    closed_sessions_selected: usize,
+    closed_sessions_cache: Option<closed_sessions::ClosedSessionManifest>,
     shortcut_registry: ShortcutRegistry,
     settings: AppSettings,
 
@@ -802,11 +809,55 @@ impl App {
     }
 
     fn remove_session_and_cleanup(&mut self, sid: u32) {
+        if self.settings.save_scrollback_on_close {
+            self.capture_closed_session(sid);
+        }
         self.session_state.remove(sid);
         self.command_start_times.remove(&sid);
         self.completed_badges.remove(&sid);
         self.resize_debounce.remove(&sid);
         self.scroll_accum.remove(&sid);
+    }
+
+    fn capture_closed_session(&self, sid: u32) {
+        let Some(entry) = self.session_state.find(sid) else {
+            return;
+        };
+        let session = entry.session.read();
+
+        let ansi_bytes = scrollback_capture::extract_grid_as_ansi(&session.term, None);
+        let cwd = session.cwd.clone();
+        let title = session.title();
+        let shell = entry.shell.name().to_string();
+        let cols = session.term.columns() as u16;
+        let rows = session.term.screen_lines() as u16;
+        let line_count = session.term.grid().history_size() + session.term.screen_lines();
+        let workspace_id = self.workspace_store.find_for_cwd(&cwd).map(|w| w.id);
+        let workspace_name = self
+            .workspace_store
+            .find_for_cwd(&cwd)
+            .map(|w| w.name.clone());
+        let max_sessions = self.settings.max_closed_sessions;
+
+        drop(session);
+
+        std::thread::Builder::new()
+            .name("closed-session-save".into())
+            .spawn(move || {
+                closed_sessions::save_closed_session(
+                    ansi_bytes,
+                    cwd,
+                    title,
+                    shell,
+                    workspace_id,
+                    workspace_name,
+                    cols,
+                    rows,
+                    line_count,
+                    max_sessions,
+                );
+            })
+            .ok();
     }
 
     fn render_window_body(&mut self, ctx: &egui::Context) {
@@ -2045,6 +2096,8 @@ impl App {
                         Some(AppAction::SearchAllSessions)
                     } else if i.consume_key(cs, egui::Key::Z) {
                         Some(AppAction::ZoomPane)
+                    } else if i.consume_key(cs, egui::Key::T) {
+                        Some(AppAction::ReopenClosedSession)
                     } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
                     } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
@@ -2131,6 +2184,13 @@ impl App {
                             self.zoomed_pane_id = None;
                         } else {
                             self.zoomed_pane_id = self.pane_state.active_pane_id;
+                        }
+                    }
+                    Some(AppAction::ReopenClosedSession) => {
+                        self.show_closed_sessions = !self.show_closed_sessions;
+                        if !self.show_closed_sessions {
+                            self.closed_sessions_query.clear();
+                            self.closed_sessions_selected = 0;
                         }
                     }
                     _ => {}
@@ -3356,19 +3416,36 @@ impl App {
                     &self.pane_state.panes[pane_idx].content,
                     PaneContent::DeferredTerminal { .. }
                 ) {
-                    let (cwd, pending_command, saved_title) =
+                    let (cwd, pending_command, saved_title, scrollback_file) =
                         if let PaneContent::DeferredTerminal {
                             cwd,
                             pending_command,
                             saved_title,
+                            scrollback_file,
                         } = &self.pane_state.panes[pane_idx].content
                         {
-                            (cwd.clone(), pending_command.clone(), saved_title.clone())
+                            (
+                                cwd.clone(),
+                                pending_command.clone(),
+                                saved_title.clone(),
+                                scrollback_file.clone(),
+                            )
                         } else {
                             unreachable!()
                         };
+                    let scrollback = scrollback_file.and_then(|f| {
+                        let dir = crate::util::data_dir()?.join("active_scrollback");
+                        let compressed = std::fs::read(dir.join(&f)).ok()?;
+                        zstd::decode_all(compressed.as_slice()).ok()
+                    });
                     let shell = self.configured_shell();
-                    if let Some(sid) = self.spawn_session_no_pane(&shell, 80, 24, cwd) {
+                    if let Some(sid) = self.spawn_session_with_scrollback(
+                        &shell,
+                        80,
+                        24,
+                        cwd,
+                        scrollback.as_deref(),
+                    ) {
                         if let Some(entry) = self.session_state.find_mut(sid) {
                             if let Some(cmd) = pending_command {
                                 entry.pending_command = Some(cmd);
@@ -3739,6 +3816,7 @@ impl App {
                     cwd: Some(dir_path),
                     pending_command: None,
                     saved_title: None,
+                    scrollback_file: None,
                 },
                 manual_width: None,
                 last_size: (0, 0),
@@ -3757,6 +3835,7 @@ impl App {
 
         self.render_quick_switcher(ctx);
         self.render_command_palette(ctx);
+        self.render_closed_sessions_picker(ctx);
 
         self.render_workspace_save_dialog(ctx);
 

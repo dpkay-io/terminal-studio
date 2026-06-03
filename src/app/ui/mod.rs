@@ -1,3 +1,4 @@
+mod closed_sessions_picker;
 mod command_palette;
 pub(crate) mod debounce;
 mod dialogs;

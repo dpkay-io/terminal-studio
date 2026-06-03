@@ -59,6 +59,57 @@ impl App {
 
                             ui.add_space(theme::SP_4);
 
+                            // Save scrollback on exit
+                            {
+                                let mut save_exit = self.settings.save_scrollback_on_exit;
+                                if ui
+                                    .checkbox(&mut save_exit, "Save terminal output on exit")
+                                    .changed()
+                                {
+                                    self.settings.save_scrollback_on_exit = save_exit;
+                                    settings_changed = true;
+                                }
+                                ui.add_space(theme::SP_2);
+                                ui.label(ui_kit::label_muted(
+                                    "Preserves terminal scrollback so it is visible when the app restarts.",
+                                ));
+                            }
+
+                            ui.add_space(theme::SP_4);
+
+                            // Save scrollback on close
+                            {
+                                let mut save_close = self.settings.save_scrollback_on_close;
+                                if ui
+                                    .checkbox(&mut save_close, "Remember closed sessions")
+                                    .changed()
+                                {
+                                    self.settings.save_scrollback_on_close = save_close;
+                                    settings_changed = true;
+                                }
+                                ui.add_space(theme::SP_2);
+                                ui.label(ui_kit::label_muted(
+                                    "Saves closed terminal sessions so they can be restored later (Ctrl+Shift+T).",
+                                ));
+                            }
+
+                            ui.add_space(theme::SP_4);
+
+                            // Max closed sessions
+                            ui.horizontal(|ui| {
+                                ui.label("Max closed sessions to remember:");
+                                let mut max = self.settings.max_closed_sessions;
+                                if ui
+                                    .add(egui::DragValue::new(&mut max).range(5..=100).speed(1.0))
+                                    .changed()
+                                {
+                                    self.settings.max_closed_sessions = max;
+                                    settings_changed = true;
+                                }
+                            });
+
+                            ui.add_space(theme::SP_4);
+
                             // Show system monitor
                             {
                                 let mut show = self.settings.show_sys_monitor;
