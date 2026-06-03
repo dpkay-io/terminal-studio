@@ -317,8 +317,20 @@ fn sync_cwds(
             .find(|(_, v)| **v == dir)
             .map(|(k, _)| k.clone())
         {
-            let _ = state.watcher.unwatch(&gd);
-            state.git_dirs.remove(&gd);
+            // Re-assign the .git watch to another CWD sharing the same repo,
+            // or unwatch if no other CWD needs it.
+            let other = current.iter().find(|d| {
+                **d != dir
+                    && crate::util::find_git_root(d)
+                        .map(|r| r.join(".git") == gd)
+                        .unwrap_or(false)
+            });
+            if let Some(reassign_to) = other {
+                state.git_dirs.insert(gd, reassign_to.clone());
+            } else {
+                let _ = state.watcher.unwatch(&gd);
+                state.git_dirs.remove(&gd);
+            }
         }
         state.watched.remove(&dir);
         is_git.remove(&dir);
@@ -333,17 +345,20 @@ fn sync_cwds(
         .collect();
     for dir in to_add {
         if state.watcher.watch(&dir, RecursiveMode::Recursive).is_ok() {
-            let gd = dir.join(".git");
-            if gd.is_dir()
-                && state
-                    .watcher
-                    .watch(&gd, RecursiveMode::NonRecursive)
-                    .is_ok()
-            {
-                state.git_dirs.insert(gd, dir.clone());
+            let git_root = crate::util::find_git_root(&dir);
+            if let Some(ref root) = git_root {
+                let gd = root.join(".git");
+                if gd.is_dir()
+                    && !state.git_dirs.contains_key(&gd)
+                    && state
+                        .watcher
+                        .watch(&gd, RecursiveMode::NonRecursive)
+                        .is_ok()
+                {
+                    state.git_dirs.insert(gd, dir.clone());
+                }
             }
-            let dir_is_git = dir.join(".git").exists();
-            is_git.insert(dir.clone(), dir_is_git);
+            is_git.insert(dir.clone(), git_root.is_some());
             known_md.insert(dir.clone(), HashSet::new());
 
             let data = DirData::new(&dir);
@@ -370,11 +385,24 @@ fn process_fs_events(
 
     for event in events {
         for path in &event.paths {
-            let dir: PathBuf = if let Some(mut p) = path.parent().map(PathBuf::from) {
+            // If the event is inside a .git directory, resolve to all CWDs
+            // sharing that git root so they all get refreshed.
+            let dirs: Vec<PathBuf> = if let Some(mut p) = path.parent().map(PathBuf::from) {
                 if state.git_dirs.contains_key(&p) {
-                    state.git_dirs[&p].clone()
+                    let git_root = p.parent().unwrap_or(&p).to_path_buf();
+                    state
+                        .watched
+                        .iter()
+                        .filter(|d| is_git.get(*d).copied().unwrap_or(false))
+                        .filter(|d| {
+                            crate::util::find_git_root(d)
+                                .map(|r| r == git_root)
+                                .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect()
                 } else {
-                    loop {
+                    let resolved = loop {
                         if state.watched.contains(&p) {
                             break p;
                         }
@@ -382,56 +410,30 @@ fn process_fs_events(
                             Some(parent) if parent != p => p = parent.to_path_buf(),
                             _ => break p,
                         }
-                    }
+                    };
+                    vec![resolved]
                 }
             } else {
                 continue;
             };
 
-            if !state.watched.contains(&dir) {
-                continue;
-            }
-
-            let dir_is_git = is_git.get(&dir).copied().unwrap_or(false);
-            let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-
-            match &event.kind {
-                EventKind::Create(_) => {
-                    if is_md && path.is_file() {
-                        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                        if size <= 1_048_576 {
-                            let content = std::fs::read_to_string(path).unwrap_or_default();
-                            if let Some(set) = known_md.get_mut(&dir) {
-                                set.insert(path.clone());
-                            }
-                            let _ = result_tx.send(WatchResult::MdCreated {
-                                dir: dir.clone(),
-                                path: path.clone(),
-                                content: Arc::new(content),
-                            });
-                        }
-                    }
-                    dirs_needing_refresh.insert(dir.clone());
-                    if dir_is_git {
-                        git_refresh_pending
-                            .entry(dir.clone())
-                            .or_insert(now + debounce);
-                    }
+            for dir in dirs {
+                if !state.watched.contains(&dir) {
+                    continue;
                 }
-                EventKind::Modify(_) => {
-                    let is_known_md = known_md
-                        .get(&dir)
-                        .map(|s| s.contains(path))
-                        .unwrap_or(false);
-                    if is_md && path.is_file() && is_known_md {
-                        let recently_modified = std::fs::metadata(path)
-                            .and_then(|m| m.modified())
-                            .map(|t| t.elapsed().unwrap_or_default() < Duration::from_millis(50))
-                            .unwrap_or(false);
-                        if !recently_modified {
+
+                let dir_is_git = is_git.get(&dir).copied().unwrap_or(false);
+                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+
+                match &event.kind {
+                    EventKind::Create(_) => {
+                        if is_md && path.is_file() {
                             let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
                             if size <= 1_048_576 {
                                 let content = std::fs::read_to_string(path).unwrap_or_default();
+                                if let Some(set) = known_md.get_mut(&dir) {
+                                    set.insert(path.clone());
+                                }
                                 let _ = result_tx.send(WatchResult::MdCreated {
                                     dir: dir.clone(),
                                     path: path.clone(),
@@ -439,33 +441,64 @@ fn process_fs_events(
                                 });
                             }
                         }
+                        dirs_needing_refresh.insert(dir.clone());
+                        if dir_is_git {
+                            git_refresh_pending
+                                .entry(dir.clone())
+                                .or_insert(now + debounce);
+                        }
                     }
-                    if dir_is_git {
-                        git_refresh_pending
-                            .entry(dir.clone())
-                            .or_insert(now + debounce);
+                    EventKind::Modify(_) => {
+                        let is_known_md = known_md
+                            .get(&dir)
+                            .map(|s| s.contains(path))
+                            .unwrap_or(false);
+                        if is_md && path.is_file() && is_known_md {
+                            let recently_modified = std::fs::metadata(path)
+                                .and_then(|m| m.modified())
+                                .map(|t| {
+                                    t.elapsed().unwrap_or_default() < Duration::from_millis(50)
+                                })
+                                .unwrap_or(false);
+                            if !recently_modified {
+                                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                                if size <= 1_048_576 {
+                                    let content = std::fs::read_to_string(path).unwrap_or_default();
+                                    let _ = result_tx.send(WatchResult::MdCreated {
+                                        dir: dir.clone(),
+                                        path: path.clone(),
+                                        content: Arc::new(content),
+                                    });
+                                }
+                            }
+                        }
+                        if dir_is_git {
+                            git_refresh_pending
+                                .entry(dir.clone())
+                                .or_insert(now + debounce);
+                        }
                     }
+                    EventKind::Remove(_) => {
+                        let was_known = known_md
+                            .get_mut(&dir)
+                            .map(|s| s.remove(path))
+                            .unwrap_or(false);
+                        if was_known {
+                            let _ = result_tx.send(WatchResult::MdRemoved {
+                                dir: dir.clone(),
+                                path: path.clone(),
+                            });
+                        }
+                        dirs_needing_refresh.insert(dir.clone());
+                        if dir_is_git {
+                            git_refresh_pending
+                                .entry(dir.clone())
+                                .or_insert(now + debounce);
+                        }
+                    }
+                    _ => {}
                 }
-                EventKind::Remove(_) => {
-                    let was_known = known_md
-                        .get_mut(&dir)
-                        .map(|s| s.remove(path))
-                        .unwrap_or(false);
-                    if was_known {
-                        let _ = result_tx.send(WatchResult::MdRemoved {
-                            dir: dir.clone(),
-                            path: path.clone(),
-                        });
-                    }
-                    dirs_needing_refresh.insert(dir.clone());
-                    if dir_is_git {
-                        git_refresh_pending
-                            .entry(dir.clone())
-                            .or_insert(now + debounce);
-                    }
-                }
-                _ => {}
-            }
+            } // for dir in dirs
         }
     }
 

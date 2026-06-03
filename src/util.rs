@@ -106,6 +106,20 @@ pub fn data_file(filename: &str) -> Option<PathBuf> {
     data_dir().map(|d| d.join(filename))
 }
 
+/// Walk up from `path` looking for a `.git` directory. Returns the directory
+/// containing `.git` (the repository root), or `None` if not inside a git repo.
+pub fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.join(".git").exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
 /// Case-aware path prefix check. On Windows, uses case-insensitive comparison.
 pub fn path_starts_with(child: &std::path::Path, parent: &std::path::Path) -> bool {
     #[cfg(target_os = "windows")]
@@ -204,5 +218,50 @@ mod tests {
         let child = Path::new("C:\\Users\\Dpk\\Project\\src");
         let parent = Path::new("c:\\users\\dpk\\project");
         assert!(path_starts_with(child, parent));
+    }
+
+    #[test]
+    fn test_find_git_root_at_root() {
+        let dir = std::env::temp_dir().join("ts_test_git_root_at_root");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert_eq!(find_git_root(&dir), Some(dir.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_git_root_in_subdirectory() {
+        let dir = std::env::temp_dir().join("ts_test_git_root_subdir");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        let sub = dir.join("src").join("components");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(find_git_root(&sub), Some(dir.clone()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_git_root_none() {
+        let dir = std::env::temp_dir().join("ts_test_git_root_none");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(find_git_root(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_find_git_root_nested_repos() {
+        let outer = std::env::temp_dir().join("ts_test_git_root_nested");
+        let _ = std::fs::remove_dir_all(&outer);
+        std::fs::create_dir_all(outer.join(".git")).unwrap();
+        let inner = outer.join("vendor").join("dep");
+        std::fs::create_dir_all(inner.join(".git")).unwrap();
+        let sub = inner.join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        // Should find the innermost repo
+        assert_eq!(find_git_root(&sub), Some(inner.clone()));
+        // From inner root itself
+        assert_eq!(find_git_root(&inner), Some(inner.clone()));
+        let _ = std::fs::remove_dir_all(&outer);
     }
 }

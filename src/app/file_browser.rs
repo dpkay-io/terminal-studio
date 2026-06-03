@@ -54,7 +54,7 @@ pub(super) struct DirData {
 
 impl DirData {
     pub(super) fn new(path: &Path) -> Self {
-        let is_git = path.join(".git").exists();
+        let is_git = crate::util::find_git_root(path).is_some();
         DirData {
             is_git,
             git_diff: String::new(),
