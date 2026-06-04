@@ -21,6 +21,7 @@ use alacritty_terminal::{
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
 mod diff_parser;
+mod drag;
 mod feedback;
 mod file_browser;
 mod git_diff;
