@@ -3,9 +3,12 @@ use crate::app::pane::ConflictResolverState;
 use crate::theme;
 
 pub(in crate::app) enum ConflictAction {
-    ResolveBlock { conflict_index: usize, resolution: Resolution },
-    ResolveAllOurs,
-    ResolveAllTheirs,
+    Single {
+        conflict_index: usize,
+        resolution: Resolution,
+    },
+    AllOurs,
+    AllTheirs,
 }
 
 pub(in crate::app) fn render_conflict_resolver(
@@ -40,7 +43,7 @@ pub(in crate::app) fn render_conflict_resolver(
                     )
                     .clicked()
                 {
-                    action = Some(ConflictAction::ResolveAllTheirs);
+                    action = Some(ConflictAction::AllTheirs);
                 }
                 ui.add_space(theme::SP_2);
                 if ui
@@ -54,7 +57,7 @@ pub(in crate::app) fn render_conflict_resolver(
                     )
                     .clicked()
                 {
-                    action = Some(ConflictAction::ResolveAllOurs);
+                    action = Some(ConflictAction::AllOurs);
                 }
                 ui.add_space(theme::SP_4);
             }
@@ -128,12 +131,7 @@ pub(in crate::app) fn render_conflict_resolver(
     action
 }
 
-fn render_context_line(
-    ui: &mut egui::Ui,
-    line_number: usize,
-    content: &str,
-    t: &theme::Theme,
-) {
+fn render_context_line(ui: &mut egui::Ui, line_number: usize, content: &str, t: &theme::Theme) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("{:>4} ", line_number))
@@ -196,6 +194,7 @@ fn render_resolved_block(
         });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_conflict_block(
     ui: &mut egui::Ui,
     conflict_index: usize,
@@ -245,7 +244,7 @@ fn render_conflict_block(
                         )
                         .clicked()
                     {
-                        action = Some(ConflictAction::ResolveBlock {
+                        action = Some(ConflictAction::Single {
                             conflict_index,
                             resolution: Resolution::Both,
                         });
@@ -263,7 +262,7 @@ fn render_conflict_block(
                         )
                         .clicked()
                     {
-                        action = Some(ConflictAction::ResolveBlock {
+                        action = Some(ConflictAction::Single {
                             conflict_index,
                             resolution: Resolution::Theirs,
                         });
@@ -281,7 +280,7 @@ fn render_conflict_block(
                         )
                         .clicked()
                     {
-                        action = Some(ConflictAction::ResolveBlock {
+                        action = Some(ConflictAction::Single {
                             conflict_index,
                             resolution: Resolution::Ours,
                         });

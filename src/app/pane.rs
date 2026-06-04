@@ -67,7 +67,6 @@ pub(super) struct ConflictResolverState {
     pub(super) path: std::path::PathBuf,
     pub(super) content: ConflictFile,
     pub(super) resolved_count: usize,
-    pub(super) scroll_offset: f32,
 }
 
 #[derive(Debug)]
@@ -212,7 +211,6 @@ mod tests {
                 total_conflicts: 0,
             },
             resolved_count: 0,
-            scroll_offset: 0.0,
         });
 
         // All variants implement Debug

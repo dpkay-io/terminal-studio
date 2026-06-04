@@ -18,6 +18,10 @@ pub(in crate::app) enum PaneContextAction {
     Close(u32),
     SplitHorizontal(u32),
     SplitVertical(u32),
+    ConflictResolve {
+        pane_id: u32,
+        action: super::conflict_resolver::ConflictAction,
+    },
 }
 
 /// Mutable context threaded through the recursive pane-tree renderer.
@@ -89,8 +93,16 @@ pub(in crate::app) fn render_node(
                 PaneContent::NoteEditor(ne) => {
                     render_note_editor_leaf(ui, ne, pane_id, rctx);
                 }
-                PaneContent::ConflictResolver(_) => {
-                    // Placeholder: full rendering handled in Task 6
+                PaneContent::ConflictResolver(ref state) => {
+                    let conflict_action =
+                        super::conflict_resolver::render_conflict_resolver(ui, state);
+                    if let Some(ca) = conflict_action {
+                        rctx.pane_context_actions
+                            .push(PaneContextAction::ConflictResolve {
+                                pane_id,
+                                action: ca,
+                            });
+                    }
                 }
             });
 

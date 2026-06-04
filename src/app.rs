@@ -51,8 +51,8 @@ use input::{key_to_pty_bytes, mouse_event_bytes};
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
 use pane::{
-    FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab,
-    TermSelection,
+    ConflictResolverState, FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry,
+    RightTab, TermSelection,
 };
 use pane_state::PaneState;
 use session_state::SessionState;
@@ -985,6 +985,7 @@ impl App {
         let mut git_stage_action: Option<GitStageAction> = None;
         let mut git_open_diff_file: Option<String> = None;
         let mut git_open_file: Option<String> = None;
+        let mut git_open_conflict_file: Option<String> = None;
         let mut git_show_commit_dialog = false;
         let mut git_show_push_dialog = false;
         let mut _git_show_stage_all_confirm = false;
@@ -1323,6 +1324,9 @@ impl App {
                                         }
                                         if result.open_file.is_some() {
                                             git_open_file = result.open_file;
+                                        }
+                                        if result.open_conflict_file.is_some() {
+                                            git_open_conflict_file = result.open_conflict_file;
                                         }
                                         if result.show_commit_dialog {
                                             git_show_commit_dialog = true;
@@ -3312,6 +3316,53 @@ impl App {
                         }
                     }
                 }
+                PaneContextAction::ConflictResolve { pane_id, action } => {
+                    if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::ConflictResolver(ref mut state) = pane.content {
+                            use crate::app::ui::conflict_resolver::ConflictAction;
+                            match action {
+                                ConflictAction::Single {
+                                    conflict_index,
+                                    resolution,
+                                } => {
+                                    state.resolved_count = conflict_parser::resolve_block(
+                                        &mut state.content,
+                                        conflict_index,
+                                        resolution,
+                                    );
+                                }
+                                ConflictAction::AllOurs => {
+                                    state.resolved_count = conflict_parser::resolve_all(
+                                        &mut state.content,
+                                        conflict_parser::Resolution::Ours,
+                                    );
+                                }
+                                ConflictAction::AllTheirs => {
+                                    state.resolved_count = conflict_parser::resolve_all(
+                                        &mut state.content,
+                                        conflict_parser::Resolution::Theirs,
+                                    );
+                                }
+                            }
+                            // Write resolved file to disk
+                            if let Err(e) = conflict_parser::write_resolved_file(
+                                &state.path,
+                                &state.content.blocks,
+                            ) {
+                                log::error!("Failed to write resolved file: {}", e);
+                                self.flash.trigger(
+                                    feedback::FlashTarget::Pane(pane_id),
+                                    feedback::FlashKind::Error,
+                                );
+                            } else if state.resolved_count == state.content.total_conflicts {
+                                self.flash.trigger(
+                                    feedback::FlashTarget::Pane(pane_id),
+                                    feedback::FlashKind::Success,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -3756,6 +3807,67 @@ impl App {
                     self.pending_diff_panes.insert(full_path, pane_id);
                     self.workers.git_worker.enqueue_diff(&cwd, rel_path);
                     self.activate_pane(pane_id);
+                }
+            }
+        }
+
+        // 9b-conflict. Conflicted file clicked → open ConflictResolver pane
+        if let Some(rel_path) = git_open_conflict_file {
+            if let Some(cwd) = self.active_cwd() {
+                let full_path = cwd.join(&rel_path);
+                let existing_id = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| {
+                        matches!(&p.content, PaneContent::ConflictResolver(s) if s.path == full_path)
+                    })
+                    .map(|p| p.id);
+                if let Some(pid) = existing_id {
+                    self.activate_pane(pid);
+                } else {
+                    match std::fs::read_to_string(&full_path) {
+                        Ok(file_content) => {
+                            let conflict_file =
+                                conflict_parser::parse_conflict_file(&full_path, &file_content);
+                            if conflict_file.total_conflicts == 0 {
+                                self.flash.trigger(
+                                    feedback::FlashTarget::Global,
+                                    feedback::FlashKind::Neutral,
+                                );
+                            } else {
+                                let pane_id = self.pane_state.next_pane_id;
+                                self.pane_state.next_pane_id += 1;
+                                self.pane_state.panes.push(PaneEntry {
+                                    id: pane_id,
+                                    content: PaneContent::ConflictResolver(ConflictResolverState {
+                                        path: full_path,
+                                        content: conflict_file,
+                                        resolved_count: 0,
+                                    }),
+                                    manual_width: None,
+                                    last_size: (0, 0),
+                                });
+                                self.pane_state.pane_trees.insert(
+                                    pane_id,
+                                    crate::pane_tree::PaneNode::Leaf {
+                                        pane_id,
+                                        last_size: (0, 0),
+                                    },
+                                );
+                                self.activate_pane(pane_id);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!(
+                                "Failed to read conflict file {}: {}",
+                                full_path.display(),
+                                e
+                            );
+                            self.flash
+                                .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
+                        }
+                    }
                 }
             }
         }

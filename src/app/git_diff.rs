@@ -13,6 +13,7 @@ pub(super) struct GitDiffResult {
     pub(super) stage_action: Option<GitStageAction>,
     pub(super) open_diff_file: Option<String>,
     pub(super) open_file: Option<String>,
+    pub(super) open_conflict_file: Option<String>,
     pub(super) show_commit_dialog: bool,
     pub(super) show_push_dialog: bool,
     pub(super) show_stage_all_confirm: bool,
@@ -55,6 +56,7 @@ pub(super) fn render_git_diff(
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
     let mut open_file: Option<String> = None;
+    let mut open_conflict_file: Option<String> = None;
     let mut show_commit_dialog = false;
     let mut show_push_dialog = false;
     let show_stage_all_confirm = false;
@@ -111,8 +113,18 @@ pub(super) fn render_git_diff(
         };
         let mut staged: Vec<StatusEntry> = Vec::new();
         let mut unstaged: Vec<StatusEntry> = Vec::new();
+        let mut conflicted: Vec<StatusEntry> = Vec::new();
 
         for fs in &parsed {
+            if fs.kind == FileChangeKind::Conflicted {
+                conflicted.push(StatusEntry {
+                    tag: kind_to_tag(fs.kind),
+                    path: fs.path.clone(),
+                    color: kind_to_color(fs.kind),
+                    kind: fs.kind,
+                });
+                continue;
+            }
             let entry = StatusEntry {
                 tag: kind_to_tag(fs.kind),
                 path: fs.path.clone(),
@@ -124,6 +136,62 @@ pub(super) fn render_git_diff(
             } else {
                 unstaged.push(entry);
             }
+        }
+
+        // ── Conflicts section ──────────────────────────────────────
+        if !conflicted.is_empty() {
+            let t = theme::active();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Conflicts ({})", conflicted.len()))
+                        .strong()
+                        .size(theme::FONT_UI_MD)
+                        .color(t.warning),
+                );
+            });
+            ui.add_space(theme::SP_2);
+            for entry in &conflicted {
+                ui.horizontal(|ui| {
+                    ui.set_max_width(panel_width);
+                    let (badge_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 14.0), egui::Sense::hover());
+                    let badge_bg = entry.color.gamma_multiply(0.25);
+                    ui.painter().rect_filled(badge_rect, theme::R_MD, badge_bg);
+                    let badge_bg_rgb = [badge_bg.r(), badge_bg.g(), badge_bg.b()];
+                    let badge_fg_rgb = [entry.color.r(), entry.color.g(), entry.color.b()];
+                    let badge_fg = theme::ensure_readable(badge_fg_rgb, badge_bg_rgb);
+                    ui.painter().text(
+                        badge_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        entry.tag,
+                        egui::FontId::monospace(theme::GIT_FONT_SZ),
+                        badge_fg,
+                    );
+                    let label_max = (ui.available_width()).max(20.0);
+                    let label_resp = ui
+                        .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&entry.path)
+                                        .monospace()
+                                        .size(theme::FONT_UI_MD),
+                                )
+                                .truncate()
+                                .sense(egui::Sense::click()),
+                            )
+                        })
+                        .inner;
+                    if label_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if label_resp.clicked() {
+                        open_conflict_file = Some(entry.path.clone());
+                    }
+                });
+            }
+            ui.add_space(theme::SP_3);
+            ui.separator();
+            ui.add_space(theme::SP_2);
         }
 
         // ── Committed (unpushed) section ────────────────────────────
@@ -475,6 +543,7 @@ pub(super) fn render_git_diff(
         stage_action: action,
         open_diff_file,
         open_file,
+        open_conflict_file,
         show_commit_dialog,
         show_push_dialog,
         show_stage_all_confirm,
