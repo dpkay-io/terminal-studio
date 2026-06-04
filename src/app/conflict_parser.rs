@@ -69,10 +69,14 @@ pub fn parse_conflict_file(path: &Path, content: &str) -> ConflictFile {
                 if let Some(close_i) = close_i {
                     let theirs_label = lines[close_i].get(8..).unwrap_or("").trim().to_string();
 
-                    let ours_lines: Vec<String> =
-                        lines[open_i + 1..sep_i].iter().map(|l| l.to_string()).collect();
-                    let theirs_lines: Vec<String> =
-                        lines[sep_i + 1..close_i].iter().map(|l| l.to_string()).collect();
+                    let ours_lines: Vec<String> = lines[open_i + 1..sep_i]
+                        .iter()
+                        .map(|l| l.to_string())
+                        .collect();
+                    let theirs_lines: Vec<String> = lines[sep_i + 1..close_i]
+                        .iter()
+                        .map(|l| l.to_string())
+                        .collect();
 
                     push_conflict(
                         &mut blocks,
@@ -98,7 +102,11 @@ pub fn parse_conflict_file(path: &Path, content: &str) -> ConflictFile {
     }
 
     let total_conflicts = conflict_index;
-    ConflictFile { path: path.to_path_buf(), blocks, total_conflicts }
+    ConflictFile {
+        path: path.to_path_buf(),
+        blocks,
+        total_conflicts,
+    }
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -107,11 +115,11 @@ pub fn parse_conflict_file(path: &Path, content: &str) -> ConflictFile {
 /// a conflict-open marker.  Stops (returns `None`) if it hits another
 /// `<<<<<<<` first, because that would mean the current conflict is malformed.
 fn find_separator(lines: &[&str], start: usize) -> Option<usize> {
-    for i in start..lines.len() {
-        if lines[i].starts_with("<<<<<<<") {
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        if line.starts_with("<<<<<<<") {
             return None;
         }
-        if lines[i] == "=======" || lines[i].starts_with("=======") && lines[i].trim() == "=======" {
+        if *line == "=======" || line.starts_with("=======") && line.trim() == "=======" {
             return Some(i);
         }
     }
@@ -121,11 +129,11 @@ fn find_separator(lines: &[&str], start: usize) -> Option<usize> {
 /// Search forward from `start` for the first `>>>>>>>` line.  Stops (returns
 /// `None`) if it hits another `<<<<<<<` first.
 fn find_close_marker(lines: &[&str], start: usize) -> Option<usize> {
-    for i in start..lines.len() {
-        if lines[i].starts_with("<<<<<<<") {
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        if line.starts_with("<<<<<<<") {
             return None;
         }
-        if lines[i].starts_with(">>>>>>>") {
+        if line.starts_with(">>>>>>>") {
             return Some(i);
         }
     }
@@ -139,7 +147,9 @@ fn push_context_line(blocks: &mut Vec<ConflictBlock>, line: &str) {
             lines.push(line.to_string());
         }
         _ => {
-            blocks.push(ConflictBlock::Context { lines: vec![line.to_string()] });
+            blocks.push(ConflictBlock::Context {
+                lines: vec![line.to_string()],
+            });
         }
     }
 }
@@ -162,6 +172,128 @@ fn push_conflict(
     });
 }
 
+// ── reconstruction & resolution ───────────────────────────────────────────────
+
+/// Reconstruct file content from a list of `ConflictBlock`s.
+///
+/// Resolved conflicts emit only the chosen side(s); unresolved conflicts emit
+/// the full marker/separator/close syntax so the file remains valid.
+pub fn reconstruct_content(blocks: &[ConflictBlock]) -> String {
+    let mut output = String::new();
+    for block in blocks {
+        match block {
+            ConflictBlock::Context { lines } => {
+                for line in lines {
+                    output.push_str(line);
+                    output.push('\n');
+                }
+            }
+            ConflictBlock::Conflict {
+                ours_lines,
+                theirs_lines,
+                ours_label,
+                theirs_label,
+                resolved,
+                ..
+            } => match resolved {
+                Some(Resolution::Ours) => {
+                    for line in ours_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+                Some(Resolution::Theirs) => {
+                    for line in theirs_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+                Some(Resolution::Both) => {
+                    for line in ours_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                    for line in theirs_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+                None => {
+                    output.push_str(&format!("<<<<<<< {}\n", ours_label));
+                    for line in ours_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                    output.push_str("=======\n");
+                    for line in theirs_lines {
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                    output.push_str(&format!(">>>>>>> {}\n", theirs_label));
+                }
+            },
+        }
+    }
+    output
+}
+
+/// Mark a single conflict block (by its `index`) as resolved with `resolution`.
+/// Returns the total number of resolved conflicts in the file.
+pub fn resolve_block(
+    file: &mut ConflictFile,
+    conflict_index: usize,
+    resolution: Resolution,
+) -> usize {
+    for block in &mut file.blocks {
+        if let ConflictBlock::Conflict {
+            index, resolved, ..
+        } = block
+        {
+            if *index == conflict_index {
+                *resolved = Some(resolution);
+                break;
+            }
+        }
+    }
+    resolved_count(file)
+}
+
+/// Mark every unresolved conflict with `resolution`.
+/// Returns the total number of resolved conflicts in the file.
+pub fn resolve_all(file: &mut ConflictFile, resolution: Resolution) -> usize {
+    for block in &mut file.blocks {
+        if let ConflictBlock::Conflict { resolved, .. } = block {
+            if resolved.is_none() {
+                *resolved = Some(resolution.clone());
+            }
+        }
+    }
+    resolved_count(file)
+}
+
+/// Count how many conflicts currently have a resolution set.
+pub fn resolved_count(file: &ConflictFile) -> usize {
+    file.blocks
+        .iter()
+        .filter(|b| {
+            matches!(
+                b,
+                ConflictBlock::Conflict {
+                    resolved: Some(_),
+                    ..
+                }
+            )
+        })
+        .count()
+}
+
+/// Write the conflict file back to disk, substituting resolved blocks.
+pub fn write_resolved_file(path: &Path, blocks: &[ConflictBlock]) -> anyhow::Result<()> {
+    let content = reconstruct_content(blocks);
+    crate::util::atomic_write(path, &content)?;
+    Ok(())
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -180,7 +312,14 @@ mod tests {
 
     fn conflict_fields(
         block: &ConflictBlock,
-    ) -> (usize, &Vec<String>, &Vec<String>, &str, &str, &Option<Resolution>) {
+    ) -> (
+        usize,
+        &Vec<String>,
+        &Vec<String>,
+        &str,
+        &str,
+        &Option<Resolution>,
+    ) {
         match block {
             ConflictBlock::Conflict {
                 index,
@@ -189,7 +328,14 @@ mod tests {
                 ours_label,
                 theirs_label,
                 resolved,
-            } => (*index, ours_lines, theirs_lines, ours_label, theirs_label, resolved),
+            } => (
+                *index,
+                ours_lines,
+                theirs_lines,
+                ours_label,
+                theirs_label,
+                resolved,
+            ),
             _ => panic!("expected Conflict block"),
         }
     }
@@ -203,7 +349,10 @@ mod tests {
 
         assert_eq!(cf.total_conflicts, 0);
         assert_eq!(cf.blocks.len(), 1);
-        assert_eq!(context_lines(&cf.blocks[0]), &["line one", "line two", "line three"]);
+        assert_eq!(
+            context_lines(&cf.blocks[0]),
+            &["line one", "line two", "line three"]
+        );
     }
 
     #[test]
@@ -370,5 +519,147 @@ ours
         let path = Path::new("/some/repo/file.rs");
         let cf = parse_conflict_file(path, "hello");
         assert_eq!(cf.path, path);
+    }
+
+    // ── reconstruction & resolution tests ────────────────────────────────────
+
+    #[test]
+    fn reconstruct_no_conflicts() {
+        let blocks = vec![ConflictBlock::Context {
+            lines: vec!["line 1".to_string(), "line 2".to_string()],
+        }];
+        assert_eq!(reconstruct_content(&blocks), "line 1\nline 2\n");
+    }
+
+    #[test]
+    fn reconstruct_resolved_ours() {
+        let blocks = vec![
+            ConflictBlock::Context {
+                lines: vec!["before".to_string()],
+            },
+            ConflictBlock::Conflict {
+                index: 0,
+                ours_lines: vec!["kept".to_string()],
+                theirs_lines: vec!["dropped".to_string()],
+                ours_label: "HEAD".to_string(),
+                theirs_label: "br".to_string(),
+                resolved: Some(Resolution::Ours),
+            },
+            ConflictBlock::Context {
+                lines: vec!["after".to_string()],
+            },
+        ];
+        assert_eq!(reconstruct_content(&blocks), "before\nkept\nafter\n");
+    }
+
+    #[test]
+    fn reconstruct_resolved_theirs() {
+        let blocks = vec![ConflictBlock::Conflict {
+            index: 0,
+            ours_lines: vec!["dropped".to_string()],
+            theirs_lines: vec!["kept".to_string()],
+            ours_label: "HEAD".to_string(),
+            theirs_label: "br".to_string(),
+            resolved: Some(Resolution::Theirs),
+        }];
+        assert_eq!(reconstruct_content(&blocks), "kept\n");
+    }
+
+    #[test]
+    fn reconstruct_resolved_both() {
+        let blocks = vec![ConflictBlock::Conflict {
+            index: 0,
+            ours_lines: vec!["ours".to_string()],
+            theirs_lines: vec!["theirs".to_string()],
+            ours_label: "HEAD".to_string(),
+            theirs_label: "br".to_string(),
+            resolved: Some(Resolution::Both),
+        }];
+        assert_eq!(reconstruct_content(&blocks), "ours\ntheirs\n");
+    }
+
+    #[test]
+    fn reconstruct_unresolved_preserves_markers() {
+        let blocks = vec![ConflictBlock::Conflict {
+            index: 0,
+            ours_lines: vec!["ours line".to_string()],
+            theirs_lines: vec!["theirs line".to_string()],
+            ours_label: "HEAD".to_string(),
+            theirs_label: "branch".to_string(),
+            resolved: None,
+        }];
+        let expected = "<<<<<<< HEAD\nours line\n=======\ntheirs line\n>>>>>>> branch\n";
+        assert_eq!(reconstruct_content(&blocks), expected);
+    }
+
+    #[test]
+    fn reconstruct_partial_resolution() {
+        // First conflict resolved (Ours), second still unresolved
+        let blocks = vec![
+            ConflictBlock::Conflict {
+                index: 0,
+                ours_lines: vec!["kept".to_string()],
+                theirs_lines: vec!["not used".to_string()],
+                ours_label: "HEAD".to_string(),
+                theirs_label: "br".to_string(),
+                resolved: Some(Resolution::Ours),
+            },
+            ConflictBlock::Conflict {
+                index: 1,
+                ours_lines: vec!["a".to_string()],
+                theirs_lines: vec!["b".to_string()],
+                ours_label: "HEAD".to_string(),
+                theirs_label: "br".to_string(),
+                resolved: None,
+            },
+        ];
+        let result = reconstruct_content(&blocks);
+        assert!(result.starts_with("kept\n"));
+        assert!(result.contains("<<<<<<< HEAD"));
+        assert!(result.contains(">>>>>>> br"));
+    }
+
+    #[test]
+    fn resolve_block_updates_state() {
+        let content = "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> br";
+        let mut file = parse_conflict_file(Path::new("f"), content);
+        let count = resolve_block(&mut file, 0, Resolution::Theirs);
+        assert_eq!(count, 1);
+        if let ConflictBlock::Conflict { resolved, .. } = &file.blocks[0] {
+            assert_eq!(resolved, &Some(Resolution::Theirs));
+        } else {
+            panic!("expected Conflict block at index 0");
+        }
+    }
+
+    #[test]
+    fn resolve_all_blocks() {
+        let content = "\
+<<<<<<< HEAD
+a1
+=======
+b1
+>>>>>>> br1
+<<<<<<< HEAD
+a2
+=======
+b2
+>>>>>>> br2";
+        let mut file = parse_conflict_file(Path::new("f"), content);
+        let count = resolve_all(&mut file, Resolution::Ours);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn reconstruct_empty_ours_resolved() {
+        let blocks = vec![ConflictBlock::Conflict {
+            index: 0,
+            ours_lines: vec![],
+            theirs_lines: vec!["theirs".to_string()],
+            ours_label: "HEAD".to_string(),
+            theirs_label: "br".to_string(),
+            resolved: Some(Resolution::Ours),
+        }];
+        assert_eq!(reconstruct_content(&blocks), "");
     }
 }
