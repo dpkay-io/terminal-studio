@@ -356,6 +356,14 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
+        // Drag threshold update + grab cursor
+        if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+            self.drag_state.update_threshold(pos);
+        }
+        if self.drag_state.is_active() {
+            ctx.set_cursor_icon(egui::CursorIcon::Grab);
+        }
+
         // Cursor blink — only schedule repaint when a terminal pane is focused.
         {
             let has_active_terminal = self
@@ -1032,7 +1040,7 @@ impl App {
                             .fill(theme::active().surface0)
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
-                                let prev_scroll = ui.style().spacing.scroll.clone();
+                                let prev_scroll = ui.style().spacing.scroll;
                                 ui.style_mut().spacing.scroll.bar_width = 4.0;
                                 ui.style_mut().spacing.scroll.handle_min_length = 12.0;
                                 ui.style_mut().spacing.scroll.bar_inner_margin = 1.0;

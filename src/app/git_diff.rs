@@ -44,6 +44,7 @@ fn kind_to_color(kind: FileChangeKind) -> egui::Color32 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_git_diff(
     ui: &mut egui::Ui,
     status: &str,

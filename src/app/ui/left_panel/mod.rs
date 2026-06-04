@@ -142,16 +142,14 @@ impl App {
 
         // Workspace drag → NewWindow default target (overridden if pointer is
         // over the tab bar or pane area later in the render order).
-        if self.drag_state.is_active() {
-            if matches!(
+        if self.drag_state.is_active()
+            && matches!(
                 &self.drag_state.payload,
                 Some(crate::app::drag::DragPayload::Workspace(_))
-            ) {
-                if ctx.input(|i| i.pointer.hover_pos()).is_some() {
-                    self.drag_state.drop_target =
-                        Some(crate::app::drag::DropTarget::NewWindow);
-                }
-            }
+            )
+            && ctx.input(|i| i.pointer.hover_pos()).is_some()
+        {
+            self.drag_state.drop_target = Some(crate::app::drag::DropTarget::NewWindow);
         }
 
         // ── Process deferred actions ──────────────────────────────────────────
