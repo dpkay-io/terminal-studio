@@ -19,6 +19,7 @@ use alacritty_terminal::{
 // ── Submodules ───────────────────────────────────────────────────────────────
 
 pub(crate) mod closed_sessions;
+pub(super) mod conflict_parser;
 mod diff_parser;
 mod feedback;
 mod file_browser;
@@ -1029,6 +1030,10 @@ impl App {
                             .fill(theme::active().surface0)
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
+                                let prev_scroll = ui.style().spacing.scroll.clone();
+                                ui.style_mut().spacing.scroll.bar_width = 4.0;
+                                ui.style_mut().spacing.scroll.handle_min_length = 12.0;
+                                ui.style_mut().spacing.scroll.bar_inner_margin = 1.0;
                                 let scroll_output = egui::ScrollArea::horizontal()
                                     .id_source(self.vp_id("right_tab_bar"))
                                     .max_height(theme::HEADER_H)
@@ -1102,6 +1107,7 @@ impl App {
                                             }
                                         });
                                     });
+                                ui.style_mut().spacing.scroll = prev_scroll;
                                 {
                                     let inner = scroll_output.inner_rect;
                                     let offset_x = scroll_output.state.offset.x;
@@ -1309,6 +1315,7 @@ impl App {
                                             self.push_in_progress,
                                             self.push_error.as_deref(),
                                             git_refreshing,
+                                            active_cwd.as_deref(),
                                         );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
