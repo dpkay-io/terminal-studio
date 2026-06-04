@@ -290,10 +290,8 @@ impl App {
                 });
                 let note_x = gear_rect.left() - 4.0 - note_galley.size().x;
                 let note_y = full_rect.min.y + (theme::HEADER_H - note_galley.size().y) / 2.0;
-                let note_rect = egui::Rect::from_min_size(
-                    egui::pos2(note_x, note_y),
-                    note_galley.size(),
-                );
+                let note_rect =
+                    egui::Rect::from_min_size(egui::pos2(note_x, note_y), note_galley.size());
                 ui.painter()
                     .galley(egui::pos2(note_x, note_y), note_galley, fg);
                 let note_resp = ui.interact(
@@ -303,10 +301,8 @@ impl App {
                 );
                 if note_resp.drag_started() {
                     let origin = note_resp.interact_pointer_pos().unwrap_or_default();
-                    self.drag_state.set_payload(
-                        crate::app::drag::DragPayload::Note(data.id),
-                        origin,
-                    );
+                    self.drag_state
+                        .set_payload(crate::app::drag::DragPayload::Note(data.id), origin);
                 }
             }
 
@@ -363,10 +359,8 @@ impl App {
         name_resp.clone().on_hover_text(&data.name);
         if name_resp.drag_started() {
             let origin = name_resp.interact_pointer_pos().unwrap_or_default();
-            self.drag_state.set_payload(
-                crate::app::drag::DragPayload::Workspace(data.id),
-                origin,
-            );
+            self.drag_state
+                .set_payload(crate::app::drag::DragPayload::Workspace(data.id), origin);
         }
         if name_resp.clicked() {
             if let Some(vp) = data.other_window_viewport {

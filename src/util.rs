@@ -120,6 +120,67 @@ pub fn find_git_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Open the system file manager showing the parent folder of `path`, with the
+/// file/folder selected if the platform supports it.
+pub fn reveal_in_file_manager(path: &Path) {
+    let path = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => path.to_path_buf(),
+    };
+
+    std::thread::spawn(move || {
+        let _result = reveal_platform(&path);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_platform(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer")
+        .arg("/select,")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_platform(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn reveal_platform(path: &Path) -> std::io::Result<()> {
+    let uri = format!("file://{}", path.display());
+    let dbus = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            "org.freedesktop.FileManager1.ShowItems",
+        ])
+        .arg(format!("array:string:{uri}"))
+        .arg("string:")
+        .spawn();
+    match dbus {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            let dir = if path.is_dir() {
+                path
+            } else {
+                path.parent().unwrap_or(path)
+            };
+            std::process::Command::new("xdg-open")
+                .arg(dir)
+                .spawn()
+                .map(|_| ())
+        }
+    }
+}
+
 /// Case-aware path prefix check. On Windows, uses case-insensitive comparison.
 pub fn path_starts_with(child: &std::path::Path, parent: &std::path::Path) -> bool {
     #[cfg(target_os = "windows")]

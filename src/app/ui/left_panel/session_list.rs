@@ -634,10 +634,8 @@ impl App {
                     if resp.drag_started() {
                         if let PaneContent::Terminal(sid) = &pane.content {
                             let origin = resp.interact_pointer_pos().unwrap_or_default();
-                            self.drag_state.set_payload(
-                                crate::app::drag::DragPayload::Session(*sid),
-                                origin,
-                            );
+                            self.drag_state
+                                .set_payload(crate::app::drag::DragPayload::Session(*sid), origin);
                         }
                     }
                 }

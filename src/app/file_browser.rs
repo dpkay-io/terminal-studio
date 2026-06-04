@@ -187,7 +187,14 @@ pub(super) fn render_dir_tree(
             });
             state.show_body_indented(&resp, ui, |ui| {
                 let children = cache.get_or_read(&entry.path);
-                render_dir_tree(ui, &children, open_editor, open_terminal_at, cache, drag_state);
+                render_dir_tree(
+                    ui,
+                    &children,
+                    open_editor,
+                    open_terminal_at,
+                    cache,
+                    drag_state,
+                );
             });
         } else {
             let ext = entry
@@ -220,10 +227,7 @@ pub(super) fn render_dir_tree(
             }
             if resp.drag_started() {
                 let origin = resp.interact_pointer_pos().unwrap_or_default();
-                drag_state.set_payload(
-                    super::drag::DragPayload::File(entry.path.clone()),
-                    origin,
-                );
+                drag_state.set_payload(super::drag::DragPayload::File(entry.path.clone()), origin);
             }
             resp.context_menu(|ui| {
                 dir_entry_context_menu(ui, &entry.path);
@@ -286,10 +290,7 @@ pub(super) fn render_flat_file_list(
         }
         if resp.drag_started() && !entry.is_dir {
             let origin = resp.interact_pointer_pos().unwrap_or_default();
-            drag_state.set_payload(
-                super::drag::DragPayload::File(entry.path.clone()),
-                origin,
-            );
+            drag_state.set_payload(super::drag::DragPayload::File(entry.path.clone()), origin);
         }
         resp.context_menu(|ui| {
             dir_entry_context_menu(ui, &entry.path);
