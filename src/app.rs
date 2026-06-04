@@ -197,8 +197,8 @@ pub struct App {
     // Content cache for terminal-detected MD files, with associated workspace ID
     terminal_md_content: HashMap<PathBuf, (Arc<String>, Option<u64>)>,
 
-    // Tab drag-to-reorder state
-    tab_drag_source: Option<usize>,
+    // Drag-and-drop state (tab reorder, session/file/diff/note/workspace drag)
+    drag_state: drag::DragState,
 
     // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
     deferred_spawn: Option<ShellKind>,
@@ -3950,6 +3950,21 @@ impl App {
                 },
             );
             self.activate_pane(pane_id);
+        }
+
+        // ── Drag-and-drop resolution ──────────────────────────────────
+        if self.drag_state.is_active() && ctx.input(|i| i.pointer.any_released()) {
+            let action = drag::resolve_drag(&mut self.drag_state, &self.pane_state);
+            self.execute_drag_action(action, ctx);
+        }
+        if self.drag_state.payload.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.drag_state.clear();
+        }
+        if self.drag_state.payload.is_some()
+            && !self.drag_state.threshold_met
+            && ctx.input(|i| i.pointer.any_released())
+        {
+            self.drag_state.clear();
         }
 
         self.render_settings_overlay(ctx);

@@ -1,3 +1,4 @@
+use super::super::drag;
 use super::super::pane::PaneContent;
 use super::super::title::effective_title;
 use super::super::App;
@@ -340,13 +341,32 @@ impl App {
                                 }
                             }
 
-                            // Tab drag-to-reorder (disabled for split-group leaves)
-                            if tab_resp.drag_started() && !is_in_split {
-                                self.tab_drag_source = Some(i);
+                            // Tab drag-to-reorder
+                            if tab_resp.drag_started() {
+                                let origin =
+                                    tab_resp.interact_pointer_pos().unwrap_or(tab_rect.center());
+                                self.drag_state
+                                    .set_payload(drag::DragPayload::Tab(pane_id), origin);
                             }
-                            if let Some(drag_idx) = self.tab_drag_source {
-                                if tab_resp.hovered() && drag_idx != i {
-                                    let indicator_x = if drag_idx < i {
+                            if self.drag_state.is_active() && tab_resp.hovered() {
+                                let accepts = match &self.drag_state.payload {
+                                    Some(drag::DragPayload::Tab(pid)) => *pid != pane_id,
+                                    Some(drag::DragPayload::Workspace(_)) => false,
+                                    Some(_) => true,
+                                    None => false,
+                                };
+                                if accepts {
+                                    let drag_from_left = match &self.drag_state.payload {
+                                        Some(drag::DragPayload::Tab(src_id)) => self
+                                            .pane_state
+                                            .panes
+                                            .iter()
+                                            .position(|p| p.id == *src_id)
+                                            .map(|src_i| src_i < i)
+                                            .unwrap_or(false),
+                                        _ => true,
+                                    };
+                                    let indicator_x = if drag_from_left {
                                         tab_rect.max.x
                                     } else {
                                         tab_rect.min.x
@@ -359,6 +379,7 @@ impl App {
                                         0.0,
                                         theme::active().blue,
                                     );
+                                    self.drag_state.drop_target = Some(drag::DropTarget::TabBar(i));
                                 }
                             }
 
@@ -492,34 +513,6 @@ impl App {
                 self.show_close_all_confirm = true;
             }
         });
-
-        // Tab drag-to-reorder: finalize on pointer release
-        if self.tab_drag_source.is_some() && ui.input(|i| i.pointer.any_released()) {
-            if let Some(drag_idx) = self.tab_drag_source.take() {
-                let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                if let Some(pos) = pointer_pos {
-                    // Find which tab the pointer is over by index
-                    let tab_count = visible_indices.len();
-                    if tab_count > 1 {
-                        let tab_bar_x = tab_bar_rect.min.x;
-                        // Subtract scroll offset so the index is correct
-                        // when the tab bar has been scrolled (H15).
-                        let rel_x = pos.x - tab_bar_x + tab_scroll_offset_x;
-                        let target_i = ((rel_x / theme::TAB_W) as usize).min(tab_count - 1);
-                        let target_vis = visible_indices.get(target_i).copied();
-                        let drag_vis = visible_indices.get(drag_idx).copied();
-                        if let (Some(from), Some(to)) = (drag_vis, target_vis) {
-                            if from != to && from < self.pane_state.panes.len() {
-                                let pane = self.pane_state.panes.remove(from);
-                                let insert_at = if to > from { to - 1 } else { to };
-                                let insert_at = insert_at.min(self.pane_state.panes.len());
-                                self.pane_state.panes.insert(insert_at, pane);
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         TabBarResult {
             close_pane_id,

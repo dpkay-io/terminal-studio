@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use crate::pane_tree::PaneNode;
+use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
 use crate::shortcuts::ShortcutRegistry;
@@ -14,9 +14,10 @@ use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 
 use alacritty_terminal::grid::Dimensions;
 
+use super::drag;
 use super::multi_window::{ExtraWindow, PendingWindowFocus, SavedExtraWindow, WindowView};
 use super::pane::{
-    FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
+    FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
 };
 use super::pane_state::PaneState;
 use super::persistence::{
@@ -246,7 +247,7 @@ impl App {
             detection_lines_hash: 0,
             auto_opened_md: HashSet::new(),
             terminal_md_content: HashMap::new(),
-            tab_drag_source: None,
+            drag_state: drag::DragState::new(),
             deferred_spawn: None,
             deferred_duplicate: false,
             deferred_split: None,
@@ -1621,6 +1622,196 @@ impl App {
             &net_text,
             egui::FontId::monospace(theme::FONT_SYS_XS),
             fg.linear_multiply(0.7),
+        );
+    }
+
+    // ── Drag-and-drop action execution ──────────────────────────────────
+
+    pub(super) fn execute_drag_action(&mut self, action: drag::DragAction, ctx: &egui::Context) {
+        use drag::DragAction;
+        match action {
+            DragAction::Noop => {}
+            DragAction::ReorderTab {
+                from_pane_id,
+                to_index,
+            } => {
+                if let Some(from) = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .position(|p| p.id == from_pane_id)
+                {
+                    let pane = self.pane_state.panes.remove(from);
+                    let insert_at = if to_index > from {
+                        to_index - 1
+                    } else {
+                        to_index
+                    };
+                    let insert_at = insert_at.min(self.pane_state.panes.len());
+                    self.pane_state.panes.insert(insert_at, pane);
+                }
+            }
+            DragAction::ExtractFromSplitAndInsert { pane_id, to_index } => {
+                if let Some(root) = self.pane_state.root_of(pane_id) {
+                    if let Some(tree) = self.pane_state.pane_trees.get_mut(&root) {
+                        let result = tree.remove_pane(pane_id);
+                        if let RemoveResult::CollapseToSibling(replacement) = result {
+                            *tree = replacement;
+                            let new_root = tree.first_leaf_id();
+                            if new_root != root {
+                                if let Some(old_tree) = self.pane_state.pane_trees.remove(&root) {
+                                    self.pane_state.pane_trees.insert(new_root, old_tree);
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(from) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
+                    let pane = self.pane_state.panes.remove(from);
+                    let insert_at = to_index.min(self.pane_state.panes.len());
+                    self.pane_state.panes.insert(insert_at, pane);
+                }
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                self.activate_pane(pane_id);
+            }
+            DragAction::InsertTerminalPane {
+                session_id,
+                at_index,
+            } => {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                let entry = PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::Terminal(session_id),
+                    manual_width: None,
+                    last_size: (0, 0),
+                };
+                self.insert_pane_entry(entry, at_index);
+                self.activate_pane(pane_id);
+            }
+            DragAction::InsertFileEditorPane { path, at_index } => {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+                let entry = PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::FileEditor(FileEditorState {
+                        path: path.clone(),
+                        content: String::new(),
+                        dirty: false,
+                        save_error: false,
+                        workspace_id: self.active_group,
+                        show_preview: is_md && self.md_prefer_preview,
+                    }),
+                    manual_width: None,
+                    last_size: (0, 0),
+                };
+                self.insert_pane_entry(entry, at_index);
+                self.activate_pane(pane_id);
+                let results = std::sync::Arc::clone(&self.file_load_results);
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    let content = std::fs::read_to_string(&path).unwrap_or_default();
+                    results.lock().push((pane_id, content));
+                    ctx_clone.request_repaint();
+                });
+            }
+            DragAction::InsertDiffPane { rel_path, at_index } => {
+                if let Some(cwd) = self.active_cwd() {
+                    let full_path = cwd.join(&rel_path);
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    let entry = PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::FileDiff(FileDiffState {
+                            path: full_path.clone(),
+                            old_content: String::new(),
+                            new_content: String::new(),
+                            hunks: Vec::new(),
+                            diff_mode: self.settings.diff_view_mode,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
+                    };
+                    self.insert_pane_entry(entry, at_index);
+                    self.pending_diff_panes.insert(full_path, pane_id);
+                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                    self.activate_pane(pane_id);
+                }
+            }
+            DragAction::InsertNotePane {
+                workspace_id,
+                at_index,
+            } => {
+                let ws_id = if workspace_id == 0 {
+                    None
+                } else {
+                    Some(workspace_id)
+                };
+                let existing = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| {
+                        matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id)
+                    })
+                    .map(|p| p.id);
+                if let Some(pid) = existing {
+                    self.activate_pane(pid);
+                } else {
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    let entry = PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::NoteEditor(NoteEditorState {
+                            workspace_id: ws_id,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
+                    };
+                    self.insert_pane_entry(entry, at_index);
+                    self.activate_pane(pane_id);
+                }
+            }
+            DragAction::FocusExistingTab { pane_id } => {
+                self.activate_pane(pane_id);
+            }
+            DragAction::OpenWorkspaceWindow { workspace_id } => {
+                if let Some(ew) = self
+                    .extra_windows
+                    .iter()
+                    .find(|w| w.workspace_id == workspace_id)
+                {
+                    ctx.send_viewport_cmd_to(ew.viewport_id, egui::ViewportCommand::Focus);
+                } else {
+                    self.open_workspace_in_new_window(ctx, workspace_id);
+                }
+            }
+        }
+        self.save_session();
+    }
+
+    fn insert_pane_entry(&mut self, entry: PaneEntry, at_index: Option<usize>) {
+        let pane_id = entry.id;
+        match at_index {
+            Some(idx) => {
+                let idx = idx.min(self.pane_state.panes.len());
+                self.pane_state.panes.insert(idx, entry);
+            }
+            None => self.pane_state.panes.push(entry),
+        }
+        self.pane_state.pane_trees.insert(
+            pane_id,
+            PaneNode::Leaf {
+                pane_id,
+                last_size: (0, 0),
+            },
         );
     }
 }
