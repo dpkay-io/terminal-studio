@@ -8,6 +8,7 @@ pub enum FileChangeKind {
     Deleted,
     Renamed,
     Untracked,
+    Conflicted,
 }
 
 /// A single entry from `git status --porcelain` output.
@@ -99,6 +100,22 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
         let Some(raw_path) = line.get(3..) else {
             continue;
         };
+
+        // Unmerged (conflicted) entries — both columns are significant
+        let is_conflict = matches!(
+            (x, y),
+            (b'U', b'U') | (b'A', b'A') | (b'D', b'U') | (b'U', b'D')
+        );
+        if is_conflict {
+            let path = unquote_git_path(raw_path);
+            entries.push(GitFileStatus {
+                kind: FileChangeKind::Conflicted,
+                path,
+                original_path: None,
+                staged: false,
+            });
+            continue;
+        }
 
         // Staged (index) changes -- first column
         match x {
@@ -338,5 +355,47 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, "\u{00e9}new");
         assert_eq!(entries[0].original_path, Some("\u{00e9}old".to_string()));
+    }
+
+    #[test]
+    fn unmerged_both_modified() {
+        let entries = parse_git_status("UU src/conflict.rs\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, FileChangeKind::Conflicted);
+        assert_eq!(entries[0].path, "src/conflict.rs");
+        assert!(!entries[0].staged);
+    }
+
+    #[test]
+    fn unmerged_both_added() {
+        let entries = parse_git_status("AA src/both_added.rs\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, FileChangeKind::Conflicted);
+        assert_eq!(entries[0].path, "src/both_added.rs");
+        assert!(!entries[0].staged);
+    }
+
+    #[test]
+    fn unmerged_delete_modify() {
+        let entries = parse_git_status("DU src/del_mod.rs\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, FileChangeKind::Conflicted);
+    }
+
+    #[test]
+    fn unmerged_modify_delete() {
+        let entries = parse_git_status("UD src/mod_del.rs\n");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, FileChangeKind::Conflicted);
+    }
+
+    #[test]
+    fn conflicted_mixed_with_normal() {
+        let input = "M  src/ok.rs\nUU src/conflict.rs\n?? new.txt\n";
+        let entries = parse_git_status(input);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].kind, FileChangeKind::Modified);
+        assert_eq!(entries[1].kind, FileChangeKind::Conflicted);
+        assert_eq!(entries[2].kind, FileChangeKind::Untracked);
     }
 }

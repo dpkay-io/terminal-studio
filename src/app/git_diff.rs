@@ -28,6 +28,7 @@ fn kind_to_tag(kind: FileChangeKind) -> &'static str {
         FileChangeKind::Deleted => "D",
         FileChangeKind::Renamed => "R",
         FileChangeKind::Untracked => "?",
+        FileChangeKind::Conflicted => "!",
     }
 }
 
@@ -38,6 +39,7 @@ fn kind_to_color(kind: FileChangeKind) -> egui::Color32 {
         FileChangeKind::Deleted => theme::active().git_removed,
         FileChangeKind::Renamed => theme::active().git_renamed,
         FileChangeKind::Untracked => theme::active().git_untracked,
+        FileChangeKind::Conflicted => theme::active().warning,
     }
 }
 
@@ -48,6 +50,7 @@ pub(super) fn render_git_diff(
     push_in_progress: bool,
     push_error: Option<&str>,
     git_refreshing: bool,
+    root_dir: Option<&std::path::Path>,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -305,6 +308,7 @@ pub(super) fn render_git_diff(
                             &entry.path,
                             true,
                             entry.kind,
+                            root_dir,
                             &mut ContextMenuOutputs {
                                 action: &mut action,
                                 open_diff_file: &mut open_diff_file,
@@ -415,6 +419,7 @@ pub(super) fn render_git_diff(
                             &entry.path,
                             false,
                             entry.kind,
+                            root_dir,
                             &mut ContextMenuOutputs {
                                 action: &mut action,
                                 open_diff_file: &mut open_diff_file,
@@ -492,6 +497,7 @@ fn file_context_menu(
     path: &str,
     is_staged: bool,
     kind: FileChangeKind,
+    root_dir: Option<&std::path::Path>,
     out: &mut ContextMenuOutputs,
 ) {
     if kind != FileChangeKind::Untracked && ui.button("View diff").clicked() {
@@ -500,6 +506,24 @@ fn file_context_menu(
     }
     if ui.button("Open file").clicked() {
         *out.open_file = Some(path.to_string());
+        ui.close_menu();
+    }
+    if ui.button("Copy path").clicked() {
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            let copy_text = match root_dir {
+                Some(root) => root.join(path).display().to_string(),
+                None => path.to_string(),
+            };
+            let _ = clip.set_text(copy_text);
+        }
+        ui.close_menu();
+    }
+    if ui.button("Reveal in file manager").clicked() {
+        let full = match root_dir {
+            Some(root) => root.join(path),
+            None => std::path::PathBuf::from(path),
+        };
+        crate::util::reveal_in_file_manager(&full);
         ui.close_menu();
     }
     ui.separator();
