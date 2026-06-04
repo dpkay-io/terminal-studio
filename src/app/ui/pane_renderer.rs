@@ -339,11 +339,12 @@ fn render_terminal_leaf(
         );
         if let Some(target_offset) = geo.scrollbar_drag_offset {
             use alacritty_terminal::grid::Scroll;
-            let mut s = session.write();
-            let current = s.term.grid().display_offset();
-            let delta = target_offset as i32 - current as i32;
-            if delta != 0 {
-                s.term.scroll_display(Scroll::Delta(delta));
+            if let Some(mut s) = session.try_write() {
+                let current = s.term.grid().display_offset();
+                let delta = target_offset as i32 - current as i32;
+                if delta != 0 {
+                    s.term.scroll_display(Scroll::Delta(delta));
+                }
             }
         }
         if geo.scrollbar_hovered || geo.scrollbar_drag_offset.is_some() {

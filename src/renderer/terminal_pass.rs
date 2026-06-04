@@ -130,11 +130,27 @@ impl TerminalView {
         //    the read lock, then drop the lock before painting. This keeps
         //    the PTY reader thread (which takes the write lock) from being
         //    blocked for the full paint duration.
+        //    Uses try_read() to avoid blocking: if the PTY reader thread
+        //    holds the write lock, we skip this frame and repaint soon.
+        let session_guard = self.session.try_read();
+        if session_guard.is_none() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(8));
+            ui.allocate_rect(rect, Sense::hover());
+            return TerminalGeometry {
+                rect,
+                cell_w: cell_width,
+                cell_h: cell_height,
+                scrollbar_drag_offset: None,
+                scrollbar_hovered: false,
+                session_id: None,
+            };
+        }
         let snapshot = RENDER_BUF.with(|buf| {
             let mut buf = buf.borrow_mut();
             buf.clear();
 
-            let session = self.session.read();
+            let session = session_guard.unwrap();
             let term = &session.term;
             let grid = term.grid();
             let term_cols = term.columns();

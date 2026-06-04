@@ -594,13 +594,15 @@ fn file_context_menu(
         ui.close_menu();
     }
     if ui.button("Copy path").clicked() {
-        if let Ok(mut clip) = arboard::Clipboard::new() {
-            let copy_text = match root_dir {
-                Some(root) => root.join(path).display().to_string(),
-                None => path.to_string(),
-            };
-            let _ = clip.set_text(copy_text);
-        }
+        let copy_text = match root_dir {
+            Some(root) => root.join(path).display().to_string(),
+            None => path.to_string(),
+        };
+        std::thread::spawn(move || {
+            if let Ok(mut clip) = arboard::Clipboard::new() {
+                let _ = clip.set_text(copy_text);
+            }
+        });
         ui.close_menu();
     }
     if ui.button("Reveal in file manager").clicked() {

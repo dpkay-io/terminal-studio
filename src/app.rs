@@ -162,6 +162,9 @@ pub struct App {
     /// re-reads disk on every frame for every expanded node.
     /// Entries are refreshed once their TTL expires.
     subdir_cache: HashMap<PathBuf, (Arc<Vec<FileEntry>>, Instant)>,
+    subdir_load_tx: std::sync::mpsc::Sender<(PathBuf, Vec<FileEntry>)>,
+    subdir_load_rx: std::sync::mpsc::Receiver<(PathBuf, Vec<FileEntry>)>,
+    subdir_loading: HashSet<PathBuf>,
     /// Last value sent to `ViewportCommand::Title` for this window. Sending
     /// the title every frame causes a syscall (SetWindowTextW on Windows).
     last_title_sent: Option<String>,
@@ -406,110 +409,136 @@ impl eframe::App for App {
             }
         }
 
-        // Send deferred duplicate commands once the shell signals it is at a prompt (OSC 7).
-        for entry in &mut self.session_state.sessions {
-            if entry.pending_command.is_some() {
-                let ready = entry.session.read().prompt_ready;
-                if ready {
-                    let cmd = entry.pending_command.take().unwrap();
-                    log::debug!("PTY[{}] replaying command: {:?}", entry.id, cmd);
-                    // Windows ConPTY/PSReadLine executes on \r, not \n.
-                    #[cfg(target_os = "windows")]
-                    let _ = entry.pty_tx.try_send(format!("{}\r", cmd).into_bytes());
-                    #[cfg(not(target_os = "windows"))]
-                    let _ = entry.pty_tx.try_send(format!("{}\n", cmd).into_bytes());
-                } else {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                }
-            }
+        // Drain async directory listing results from background threads.
+        while let Ok((path, entries)) = self.subdir_load_rx.try_recv() {
+            self.subdir_cache
+                .insert(path.clone(), (Arc::new(entries), Instant::now()));
+            self.subdir_loading.remove(&path);
         }
 
-        // Track command start/completion for long-running process notifications.
-        for entry in &self.session_state.sessions {
-            let ready = entry.session.read().prompt_ready;
-            let sid = entry.id;
-            if ready {
-                if let Some(start) = self.command_start_times.remove(&sid) {
-                    if start.elapsed() > Duration::from_secs(5) {
-                        let is_active = self.session_state.active_id == Some(sid);
-                        if !is_active {
-                            self.completed_badges.insert(sid);
-                        }
-                    }
-                }
-            } else {
-                self.command_start_times
-                    .entry(sid)
-                    .or_insert_with(Instant::now);
-            }
-        }
-
-        // Check for bell events and trigger visual flash.
-        for entry in &self.session_state.sessions {
-            if entry
-                .session
-                .read()
-                .bell
-                .swap(false, std::sync::atomic::Ordering::Relaxed)
-            {
-                if let Some(pane) =
-                    self.pane_state.panes.iter().find(
-                        |p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == entry.id),
-                    )
-                {
-                    self.flash.trigger(
-                        feedback::FlashTarget::Pane(pane.id),
-                        feedback::FlashKind::Neutral,
-                    );
-                }
-            }
-        }
-
-        // Process OSC 52 clipboard requests queued by reader threads.
-        for entry in &self.session_state.sessions {
-            let text = entry.session.write().pending_clipboard.take();
-            if let Some(text) = text {
-                if let Ok(mut clip) = arboard::Clipboard::new() {
-                    let _ = clip.set_text(text);
-                }
-            }
-        }
-
-        // Poll quickly while any session is still initializing (CWD not set yet).
-        // Only check sessions we know are still uninitialized to avoid per-frame
-        // read locks on all sessions in the steady state.
-        if !self.session_state.uninit_sessions.is_empty() {
-            self.session_state.uninit_sessions.retain(|&id| {
-                self.session_state
-                    .sessions
-                    .iter()
-                    .find(|e| e.id == id)
-                    .map(|e| e.session.read().cwd.as_os_str().is_empty())
-                    .unwrap_or(false)
-            });
-            if !self.session_state.uninit_sessions.is_empty() {
-                ctx.request_repaint_after(std::time::Duration::from_millis(150));
-            }
-        }
-
-        // ── Sync watchers + process FS events ──────────────────────────────
-        if let Some(ws) = &mut self.watch_state {
-            // Send CWDs to worker when sessions change or every 3s for CWD drift.
+        // ── Consolidated session poll ─────────────────────────────────────
+        // Takes ONE write lock per session per frame instead of 5–6 separate
+        // lock-acquisition loops. Dramatically reduces contention with PTY
+        // reader threads and prevents main-thread stalls on Linux.
+        {
             let session_count = self.session_state.sessions.len();
             let now = Instant::now();
-            if session_count != ws.last_session_count
-                || now.duration_since(ws.last_sync) >= Duration::from_secs(3)
-            {
-                let cwds: Vec<PathBuf> = self
-                    .session_state
-                    .sessions
-                    .iter()
-                    .map(|e| e.session.read().cwd.clone())
-                    .collect();
-                ws.request_sync(cwds);
-                ws.last_sync = now;
-                ws.last_session_count = session_count;
+            let needs_cwd_sync = self
+                .watch_state
+                .as_ref()
+                .map(|ws| {
+                    session_count != ws.last_session_count
+                        || now.duration_since(ws.last_sync) >= Duration::from_secs(3)
+                })
+                .unwrap_or(false);
+            let needs_uninit = !self.session_state.uninit_sessions.is_empty();
+            let collect_cwds = needs_cwd_sync || needs_uninit;
+
+            struct Poll {
+                id: u32,
+                prompt_ready: bool,
+                bell_rang: bool,
             }
+            let mut polls = Vec::with_capacity(session_count);
+            let mut clipboard_texts: Vec<String> = Vec::new();
+            let mut cwds: Vec<(u32, PathBuf)> = Vec::new();
+
+            for entry in &mut self.session_state.sessions {
+                let mut s = entry.session.write();
+                let prompt_ready = s.prompt_ready;
+                let bell_rang = s.bell.swap(false, std::sync::atomic::Ordering::Relaxed);
+                if let Some(text) = s.pending_clipboard.take() {
+                    clipboard_texts.push(text);
+                }
+                if collect_cwds {
+                    cwds.push((entry.id, s.cwd.clone()));
+                }
+                drop(s);
+
+                if entry.pending_command.is_some() {
+                    if prompt_ready {
+                        let cmd = entry.pending_command.take().unwrap();
+                        log::debug!("PTY[{}] replaying command: {:?}", entry.id, cmd);
+                        #[cfg(target_os = "windows")]
+                        let _ = entry.pty_tx.try_send(format!("{}\r", cmd).into_bytes());
+                        #[cfg(not(target_os = "windows"))]
+                        let _ = entry.pty_tx.try_send(format!("{}\n", cmd).into_bytes());
+                    } else {
+                        ctx.request_repaint_after(Duration::from_millis(100));
+                    }
+                }
+
+                polls.push(Poll {
+                    id: entry.id,
+                    prompt_ready,
+                    bell_rang,
+                });
+            }
+
+            for poll in &polls {
+                if poll.prompt_ready {
+                    if let Some(start) = self.command_start_times.remove(&poll.id) {
+                        if start.elapsed() > Duration::from_secs(5) {
+                            let is_active = self.session_state.active_id == Some(poll.id);
+                            if !is_active {
+                                self.completed_badges.insert(poll.id);
+                            }
+                        }
+                    }
+                } else {
+                    self.command_start_times
+                        .entry(poll.id)
+                        .or_insert_with(Instant::now);
+                }
+            }
+
+            for poll in &polls {
+                if poll.bell_rang {
+                    if let Some(pane) = self.pane_state.panes.iter().find(
+                        |p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == poll.id),
+                    ) {
+                        self.flash.trigger(
+                            feedback::FlashTarget::Pane(pane.id),
+                            feedback::FlashKind::Neutral,
+                        );
+                    }
+                }
+            }
+
+            if !clipboard_texts.is_empty() {
+                std::thread::spawn(move || {
+                    if let Ok(mut clip) = arboard::Clipboard::new() {
+                        for text in clipboard_texts {
+                            let _ = clip.set_text(text);
+                        }
+                    }
+                });
+            }
+
+            if needs_uninit {
+                self.session_state.uninit_sessions.retain(|&id| {
+                    cwds.iter()
+                        .find(|(cid, _)| *cid == id)
+                        .map(|(_, c)| c.as_os_str().is_empty())
+                        .unwrap_or(false)
+                });
+                if !self.session_state.uninit_sessions.is_empty() {
+                    ctx.request_repaint_after(Duration::from_millis(150));
+                }
+            }
+
+            if needs_cwd_sync {
+                if let Some(ws) = &mut self.watch_state {
+                    let cwd_paths: Vec<PathBuf> = cwds.into_iter().map(|(_, c)| c).collect();
+                    ws.request_sync(cwd_paths);
+                    ws.last_sync = now;
+                    ws.last_session_count = session_count;
+                }
+            }
+        }
+
+        // ── Drain watcher results ──────────────────────────────────────────
+        if let Some(ws) = &mut self.watch_state {
             let (created_md, removed_md) = ws.drain_results();
             for path in created_md {
                 self.shown_md_tabs.insert(path);
@@ -1300,6 +1329,9 @@ impl App {
                                                 let mut cache = SubdirCache {
                                                     map: &mut self.subdir_cache,
                                                     ttl: Duration::from_secs(2),
+                                                    loading: &mut self.subdir_loading,
+                                                    load_tx: &self.subdir_load_tx,
+                                                    ctx: ctx.clone(),
                                                 };
                                                 render_dir_tree(
                                                     ui,
@@ -1835,11 +1867,10 @@ impl App {
             // ── URL detection + search overlay ────────────────────────────
             if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.session_state.active_id) {
                 if let Some(entry) = self.session_state.find(sid) {
-                    {
+                    if let Some(session) = entry.session.try_read() {
                         use alacritty_terminal::grid::Dimensions;
                         use alacritty_terminal::index::{Column, Line};
                         use alacritty_terminal::term::cell::Flags;
-                        let session = entry.session.read();
                         let term = &session.term;
                         let grid = term.grid();
                         let cols = term.columns();

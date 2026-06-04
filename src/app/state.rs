@@ -154,6 +154,7 @@ impl App {
         let loaded_settings = AppSettings::load();
         let last_update_check = loaded_settings.last_update_check;
         let show_sys_monitor = loaded_settings.show_sys_monitor;
+        let (subdir_load_tx, subdir_load_rx) = std::sync::mpsc::channel();
         let mut app = App {
             session_manager: mgr,
             session_state: SessionState::new(),
@@ -224,6 +225,9 @@ impl App {
             current_window_id: None,
             cached_cell_size: None,
             subdir_cache: HashMap::new(),
+            subdir_load_tx,
+            subdir_load_rx,
+            subdir_loading: HashSet::new(),
             last_title_sent: None,
             session_search_query: String::new(),
             session_search_active: false,

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,18 +13,27 @@ pub(super) struct FileEntry {
 pub(super) struct SubdirCache<'a> {
     pub(super) map: &'a mut HashMap<PathBuf, (Arc<Vec<FileEntry>>, Instant)>,
     pub(super) ttl: Duration,
+    pub(super) loading: &'a mut HashSet<PathBuf>,
+    pub(super) load_tx: &'a std::sync::mpsc::Sender<(PathBuf, Vec<FileEntry>)>,
+    pub(super) ctx: egui::Context,
 }
 
 const SUBDIR_CACHE_MAX: usize = 256;
 
 impl<'a> SubdirCache<'a> {
     pub(super) fn get_or_read(&mut self, path: &Path) -> Arc<Vec<FileEntry>> {
-        if let Some((entries, t)) = self.map.get(path) {
+        if let Some((entries, t)) = self.map.get_mut(path) {
             if t.elapsed() < self.ttl {
                 return Arc::clone(entries);
             }
+            // Stale: return old data, dispatch background refresh
+            let stale = Arc::clone(entries);
+            *t = Instant::now();
+            self.dispatch_load(path);
+            return stale;
         }
-        // Evict oldest entries when cache exceeds limit (L2)
+        // Cache miss: dispatch background load, return empty
+        self.dispatch_load(path);
         if self.map.len() >= SUBDIR_CACHE_MAX {
             let oldest = self
                 .map
@@ -35,10 +44,22 @@ impl<'a> SubdirCache<'a> {
                 self.map.remove(&k);
             }
         }
-        let entries = Arc::new(list_dir_entries(path));
-        self.map
-            .insert(path.to_path_buf(), (Arc::clone(&entries), Instant::now()));
-        entries
+        Arc::new(Vec::new())
+    }
+
+    fn dispatch_load(&mut self, path: &Path) {
+        if self.loading.contains(path) {
+            return;
+        }
+        self.loading.insert(path.to_path_buf());
+        let p = path.to_path_buf();
+        let tx = self.load_tx.clone();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let entries = list_dir_entries(&p);
+            let _ = tx.send((p, entries));
+            ctx.request_repaint();
+        });
     }
 }
 
@@ -324,9 +345,12 @@ pub(super) fn is_supported_text_file(_path: &Path, content: &str) -> bool {
 
 fn dir_entry_context_menu(ui: &mut egui::Ui, path: &Path) {
     if ui.button("Copy path").clicked() {
-        if let Ok(mut clip) = arboard::Clipboard::new() {
-            let _ = clip.set_text(path.display().to_string());
-        }
+        let text = path.display().to_string();
+        std::thread::spawn(move || {
+            if let Ok(mut clip) = arboard::Clipboard::new() {
+                let _ = clip.set_text(text);
+            }
+        });
         ui.close_menu();
     }
     if ui.button("Reveal in file manager").clicked() {
