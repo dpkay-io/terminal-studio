@@ -1285,6 +1285,7 @@ impl App {
                                                         cwd,
                                                         &mut open_editor,
                                                         &mut open_terminal_at,
+                                                        &mut self.drag_state,
                                                     );
                                                 }
                                             } else {
@@ -1298,6 +1299,7 @@ impl App {
                                                     &mut open_editor,
                                                     &mut open_terminal_at,
                                                     &mut cache,
+                                                    &mut self.drag_state,
                                                 );
                                             }
                                         } else {
@@ -1318,6 +1320,7 @@ impl App {
                                             self.push_error.as_deref(),
                                             git_refreshing,
                                             active_cwd.as_deref(),
+                                            &mut self.drag_state,
                                         );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {

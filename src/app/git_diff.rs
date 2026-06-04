@@ -52,6 +52,7 @@ pub(super) fn render_git_diff(
     push_error: Option<&str>,
     git_refreshing: bool,
     root_dir: Option<&std::path::Path>,
+    drag_state: &mut super::drag::DragState,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -358,7 +359,7 @@ pub(super) fn render_git_diff(
                                         .size(theme::FONT_UI_MD),
                                 )
                                 .truncate()
-                                .sense(egui::Sense::click()),
+                                .sense(egui::Sense::click_and_drag()),
                             )
                         })
                         .inner;
@@ -369,6 +370,13 @@ pub(super) fn render_git_diff(
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
                         open_diff_file = Some(entry.path.clone());
+                    }
+                    if label_resp.drag_started() {
+                        let origin = label_resp.interact_pointer_pos().unwrap_or_default();
+                        drag_state.set_payload(
+                            super::drag::DragPayload::Diff(entry.path.clone()),
+                            origin,
+                        );
                     }
                     label_resp.context_menu(|ui| {
                         file_context_menu(
@@ -469,7 +477,7 @@ pub(super) fn render_git_diff(
                                         .size(theme::FONT_UI_MD),
                                 )
                                 .truncate()
-                                .sense(egui::Sense::click()),
+                                .sense(egui::Sense::click_and_drag()),
                             )
                         })
                         .inner;
@@ -480,6 +488,13 @@ pub(super) fn render_git_diff(
                         open_file = Some(entry.path.clone());
                     } else if label_resp.clicked() {
                         open_diff_file = Some(entry.path.clone());
+                    }
+                    if label_resp.drag_started() {
+                        let origin = label_resp.interact_pointer_pos().unwrap_or_default();
+                        drag_state.set_payload(
+                            super::drag::DragPayload::Diff(entry.path.clone()),
+                            origin,
+                        );
                     }
                     label_resp.context_menu(|ui| {
                         file_context_menu(

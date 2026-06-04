@@ -510,7 +510,7 @@ impl App {
 
                     let (resp, painter) = ui.allocate_painter(
                         egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
-                        egui::Sense::click(),
+                        egui::Sense::click_and_drag(),
                     );
                     let row_rect = resp.rect;
                     if resp.hovered() {
@@ -579,12 +579,22 @@ impl App {
                             theme::SP_3
                         };
                     let clip_max = quit_rect.min.x - win_icon_w - 3.0;
+                    let is_being_dragged = matches!(
+                        &self.drag_state.payload,
+                        Some(crate::app::drag::DragPayload::Session(sid))
+                            if matches!(&pane.content, PaneContent::Terminal(psid) if *psid == *sid)
+                    );
                     let text_color = if dimmed {
                         theme::active().overlay0
                     } else if is_active {
                         theme::active().text
                     } else {
                         theme::active().subtext0
+                    };
+                    let text_color = if is_being_dragged {
+                        text_color.gamma_multiply(0.4)
+                    } else {
+                        text_color
                     };
                     let available_w = (clip_max - text_x).max(0.0);
                     let mut job = egui::text::LayoutJob::single_section(
@@ -618,6 +628,17 @@ impl App {
                         actions.quit_pane_id = Some(pane.id);
                     } else if resp.clicked() {
                         actions.clicked_sidebar_pane_id = Some(pane.id);
+                    }
+
+                    // Drag source: start dragging this session row
+                    if resp.drag_started() {
+                        if let PaneContent::Terminal(sid) = &pane.content {
+                            let origin = resp.interact_pointer_pos().unwrap_or_default();
+                            self.drag_state.set_payload(
+                                crate::app::drag::DragPayload::Session(*sid),
+                                origin,
+                            );
+                        }
                     }
                 }
             });

@@ -53,6 +53,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub flash: &'a crate::app::feedback::FlashManager,
     pub text_search: &'a mut crate::search::TextSearchState,
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
+    pub drag_state: &'a mut crate::app::drag::DragState,
 }
 
 /// Recursively render a pane tree node into the given rect.
@@ -123,6 +124,33 @@ pub(in crate::app) fn render_node(
                 rect,
                 crate::app::feedback::FlashTarget::Pane(pane_id),
             );
+
+            // Drop target highlight for drag-and-drop
+            if rctx.drag_state.is_active() {
+                let accepts = matches!(
+                    &rctx.drag_state.payload,
+                    Some(crate::app::drag::DragPayload::Session(_))
+                        | Some(crate::app::drag::DragPayload::File(_))
+                        | Some(crate::app::drag::DragPayload::Diff(_))
+                        | Some(crate::app::drag::DragPayload::Note(_))
+                );
+                if accepts {
+                    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                        if rect.contains(pos) {
+                            ui.painter().rect_stroke(
+                                rect.shrink(2.0),
+                                crate::theme::R_SM,
+                                egui::Stroke::new(
+                                    2.0,
+                                    crate::theme::active().blue.gamma_multiply(0.6),
+                                ),
+                            );
+                            rctx.drag_state.drop_target =
+                                Some(crate::app::drag::DropTarget::PaneArea);
+                        }
+                    }
+                }
+            }
 
             // Click to focus pane (ignore clicks during panel resize drags)
             let any_drag = ui
@@ -835,6 +863,7 @@ impl App {
                 flash: &self.flash,
                 text_search: &mut self.text_search,
                 diff_mode_changes: &mut diff_mode_changes,
+                drag_state: &mut self.drag_state,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
 

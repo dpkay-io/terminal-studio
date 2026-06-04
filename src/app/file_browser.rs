@@ -139,6 +139,7 @@ pub(super) fn render_dir_tree(
     open_editor: &mut Option<PathBuf>,
     open_terminal_at: &mut Option<PathBuf>,
     cache: &mut SubdirCache<'_>,
+    drag_state: &mut super::drag::DragState,
 ) {
     use crate::theme;
     if entries.is_empty() {
@@ -181,9 +182,12 @@ pub(super) fn render_dir_tree(
             } else if resp.clicked() {
                 state.toggle(ui);
             }
+            resp.context_menu(|ui| {
+                dir_entry_context_menu(ui, &entry.path);
+            });
             state.show_body_indented(&resp, ui, |ui| {
                 let children = cache.get_or_read(&entry.path);
-                render_dir_tree(ui, &children, open_editor, open_terminal_at, cache);
+                render_dir_tree(ui, &children, open_editor, open_terminal_at, cache, drag_state);
             });
         } else {
             let ext = entry
@@ -205,7 +209,7 @@ pub(super) fn render_dir_tree(
                             .size(theme::FONT_UI_MD),
                     )
                     .truncate()
-                    .sense(egui::Sense::click()),
+                    .sense(egui::Sense::click_and_drag()),
                 )
                 .on_hover_text(&entry.name);
             if resp.hovered() {
@@ -214,6 +218,16 @@ pub(super) fn render_dir_tree(
             if resp.clicked() {
                 *open_editor = Some(entry.path.clone());
             }
+            if resp.drag_started() {
+                let origin = resp.interact_pointer_pos().unwrap_or_default();
+                drag_state.set_payload(
+                    super::drag::DragPayload::File(entry.path.clone()),
+                    origin,
+                );
+            }
+            resp.context_menu(|ui| {
+                dir_entry_context_menu(ui, &entry.path);
+            });
         }
     }
 }
@@ -224,6 +238,7 @@ pub(super) fn render_flat_file_list(
     root: &Path,
     open_editor: &mut Option<PathBuf>,
     open_terminal_at: &mut Option<PathBuf>,
+    drag_state: &mut super::drag::DragState,
 ) {
     use crate::theme;
     let _ = open_terminal_at;
@@ -260,7 +275,7 @@ pub(super) fn render_flat_file_list(
                         .size(theme::FONT_UI_MD),
                 )
                 .truncate()
-                .sense(egui::Sense::click()),
+                .sense(egui::Sense::click_and_drag()),
             )
             .on_hover_text(entry.path.display().to_string());
         if resp.hovered() {
@@ -269,6 +284,16 @@ pub(super) fn render_flat_file_list(
         if resp.clicked() {
             *open_editor = Some(entry.path.clone());
         }
+        if resp.drag_started() && !entry.is_dir {
+            let origin = resp.interact_pointer_pos().unwrap_or_default();
+            drag_state.set_payload(
+                super::drag::DragPayload::File(entry.path.clone()),
+                origin,
+            );
+        }
+        resp.context_menu(|ui| {
+            dir_entry_context_menu(ui, &entry.path);
+        });
     }
 }
 
@@ -294,6 +319,19 @@ pub(super) fn is_supported_text_file(_path: &Path, content: &str) -> bool {
         .count();
     let threshold = check_len / 8;
     control_count <= threshold
+}
+
+fn dir_entry_context_menu(ui: &mut egui::Ui, path: &Path) {
+    if ui.button("Copy path").clicked() {
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            let _ = clip.set_text(path.display().to_string());
+        }
+        ui.close_menu();
+    }
+    if ui.button("Reveal in file manager").clicked() {
+        crate::util::reveal_in_file_manager(path);
+        ui.close_menu();
+    }
 }
 
 pub(super) fn file_icon(ext: &str) -> &'static str {
