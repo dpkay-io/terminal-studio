@@ -1,0 +1,369 @@
+use crate::app::conflict_parser::{ConflictBlock, Resolution};
+use crate::app::pane::ConflictResolverState;
+use crate::theme;
+
+pub(in crate::app) enum ConflictAction {
+    ResolveBlock { conflict_index: usize, resolution: Resolution },
+    ResolveAllOurs,
+    ResolveAllTheirs,
+}
+
+pub(in crate::app) fn render_conflict_resolver(
+    ui: &mut egui::Ui,
+    state: &ConflictResolverState,
+) -> Option<ConflictAction> {
+    let pane_rect = ui.max_rect();
+    let t = theme::active();
+    ui.painter().rect_filled(pane_rect, 0.0, t.bg_term);
+
+    let mut action: Option<ConflictAction> = None;
+
+    // ── Toolbar ──
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("\u{26A0} {}", state.path.display()))
+                .strong()
+                .size(theme::FONT_UI_LG)
+                .color(t.warning),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme::SP_4);
+            if state.resolved_count < state.content.total_conflicts {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("All Theirs")
+                                .size(theme::FONT_UI_SM)
+                                .color(t.error),
+                        )
+                        .rounding(theme::R_SM),
+                    )
+                    .clicked()
+                {
+                    action = Some(ConflictAction::ResolveAllTheirs);
+                }
+                ui.add_space(theme::SP_2);
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("All Ours")
+                                .size(theme::FONT_UI_SM)
+                                .color(t.success),
+                        )
+                        .rounding(theme::R_SM),
+                    )
+                    .clicked()
+                {
+                    action = Some(ConflictAction::ResolveAllOurs);
+                }
+                ui.add_space(theme::SP_4);
+            }
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}/{} resolved",
+                    state.resolved_count, state.content.total_conflicts
+                ))
+                .size(theme::FONT_UI_SM)
+                .color(if state.resolved_count == state.content.total_conflicts {
+                    t.success
+                } else {
+                    t.subtext0
+                }),
+            );
+        });
+    });
+    ui.separator();
+
+    // ── Scrollable content ──
+    egui::ScrollArea::both()
+        .id_source(("conflict_scroll", state.path.display().to_string()))
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            let mut line_number: usize = 1;
+            for block in &state.content.blocks {
+                match block {
+                    ConflictBlock::Context { lines } => {
+                        for line in lines {
+                            render_context_line(ui, line_number, line, t);
+                            line_number += 1;
+                        }
+                    }
+                    ConflictBlock::Conflict {
+                        index,
+                        ours_lines,
+                        theirs_lines,
+                        ours_label,
+                        theirs_label,
+                        resolved,
+                    } => {
+                        if let Some(resolution) = resolved {
+                            render_resolved_block(
+                                ui,
+                                &mut line_number,
+                                ours_lines,
+                                theirs_lines,
+                                resolution,
+                                t,
+                            );
+                        } else {
+                            let block_action = render_conflict_block(
+                                ui,
+                                *index,
+                                ours_lines,
+                                theirs_lines,
+                                ours_label,
+                                theirs_label,
+                                state.content.total_conflicts,
+                                t,
+                            );
+                            if action.is_none() {
+                                action = block_action;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+    action
+}
+
+fn render_context_line(
+    ui: &mut egui::Ui,
+    line_number: usize,
+    content: &str,
+    t: &theme::Theme,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("{:>4} ", line_number))
+                .monospace()
+                .size(theme::FONT_TERM)
+                .color(t.overlay0),
+        );
+        ui.label(
+            egui::RichText::new(content)
+                .monospace()
+                .size(theme::FONT_TERM)
+                .color(t.text),
+        );
+    });
+}
+
+fn render_resolved_block(
+    ui: &mut egui::Ui,
+    line_number: &mut usize,
+    ours_lines: &[String],
+    theirs_lines: &[String],
+    resolution: &Resolution,
+    t: &theme::Theme,
+) {
+    let label = match resolution {
+        Resolution::Ours => "Resolved: Ours",
+        Resolution::Theirs => "Resolved: Theirs",
+        Resolution::Both => "Resolved: Both",
+    };
+    let resolved_bg = theme::blend_colors(t.surface0, t.overlay0, 0.08);
+
+    egui::Frame::none()
+        .fill(resolved_bg)
+        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SP_2);
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(theme::FONT_UI_XS)
+                        .color(t.overlay0)
+                        .italics(),
+                );
+            });
+            let primary_lines = match resolution {
+                Resolution::Ours => ours_lines,
+                Resolution::Theirs => theirs_lines,
+                Resolution::Both => ours_lines,
+            };
+            for line in primary_lines {
+                render_context_line(ui, *line_number, line, t);
+                *line_number += 1;
+            }
+            if matches!(resolution, Resolution::Both) {
+                for line in theirs_lines {
+                    render_context_line(ui, *line_number, line, t);
+                    *line_number += 1;
+                }
+            }
+        });
+}
+
+fn render_conflict_block(
+    ui: &mut egui::Ui,
+    conflict_index: usize,
+    ours_lines: &[String],
+    theirs_lines: &[String],
+    ours_label: &str,
+    theirs_label: &str,
+    total_conflicts: usize,
+    t: &theme::Theme,
+) -> Option<ConflictAction> {
+    let mut action: Option<ConflictAction> = None;
+    let ours_bg = theme::blend_colors(t.surface0, t.success, theme::BLEND_SUBTLE);
+    let theirs_bg = theme::blend_colors(t.surface0, t.error, theme::BLEND_SUBTLE);
+
+    // Floating action bar
+    egui::Frame::none()
+        .fill(t.surface1)
+        .rounding(egui::Rounding {
+            nw: theme::R_SM,
+            ne: theme::R_SM,
+            sw: 0.0,
+            se: 0.0,
+        })
+        .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_1))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "CONFLICT {}/{}",
+                        conflict_index + 1,
+                        total_conflicts
+                    ))
+                    .strong()
+                    .size(theme::FONT_UI_XS)
+                    .color(t.text),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Both")
+                                    .size(theme::FONT_UI_XS)
+                                    .color(t.base),
+                            )
+                            .fill(t.accent)
+                            .rounding(theme::R_SM),
+                        )
+                        .clicked()
+                    {
+                        action = Some(ConflictAction::ResolveBlock {
+                            conflict_index,
+                            resolution: Resolution::Both,
+                        });
+                    }
+                    ui.add_space(theme::SP_1);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Theirs")
+                                    .size(theme::FONT_UI_XS)
+                                    .color(t.base),
+                            )
+                            .fill(t.error)
+                            .rounding(theme::R_SM),
+                        )
+                        .clicked()
+                    {
+                        action = Some(ConflictAction::ResolveBlock {
+                            conflict_index,
+                            resolution: Resolution::Theirs,
+                        });
+                    }
+                    ui.add_space(theme::SP_1);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("Ours")
+                                    .size(theme::FONT_UI_XS)
+                                    .color(t.base),
+                            )
+                            .fill(t.success)
+                            .rounding(theme::R_SM),
+                        )
+                        .clicked()
+                    {
+                        action = Some(ConflictAction::ResolveBlock {
+                            conflict_index,
+                            resolution: Resolution::Ours,
+                        });
+                    }
+                });
+            });
+        });
+
+    // Ours section
+    egui::Frame::none()
+        .fill(ours_bg)
+        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SP_2);
+                ui.label(
+                    egui::RichText::new(format!("\u{25C0} OURS ({})", ours_label))
+                        .size(theme::FONT_UI_XS)
+                        .strong()
+                        .color(t.success),
+                );
+            });
+            for line in ours_lines {
+                ui.horizontal(|ui| {
+                    let (border_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(3.0, ui.spacing().interact_size.y),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(border_rect, 0.0, t.success);
+                    ui.add_space(theme::SP_1);
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(theme::FONT_TERM)
+                            .color(t.success),
+                    );
+                });
+            }
+        });
+
+    // Separator
+    ui.horizontal(|ui| {
+        ui.add_space(theme::SP_2);
+        ui.label(
+            egui::RichText::new("\u{2550}".repeat(30))
+                .monospace()
+                .size(theme::FONT_UI_XS)
+                .color(t.overlay0),
+        );
+    });
+
+    // Theirs section
+    egui::Frame::none()
+        .fill(theirs_bg)
+        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.add_space(theme::SP_2);
+                ui.label(
+                    egui::RichText::new(format!("\u{25B6} THEIRS ({})", theirs_label))
+                        .size(theme::FONT_UI_XS)
+                        .strong()
+                        .color(t.error),
+                );
+            });
+            for line in theirs_lines {
+                ui.horizontal(|ui| {
+                    let (border_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(3.0, ui.spacing().interact_size.y),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(border_rect, 0.0, t.error);
+                    ui.add_space(theme::SP_1);
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(theme::FONT_TERM)
+                            .color(t.error),
+                    );
+                });
+            }
+        });
+
+    action
+}

@@ -1,5 +1,6 @@
 mod closed_sessions_picker;
 mod command_palette;
+pub(super) mod conflict_resolver;
 pub(crate) mod debounce;
 mod dialogs;
 mod left_panel;

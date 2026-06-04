@@ -1581,6 +1581,16 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     )
 }
 
+/// Blend `overlay` over `base` by `factor` (0.0 = all base, 1.0 = all overlay).
+/// Alpha channel is preserved from `base`.
+pub fn blend_colors(base: Color32, overlay: Color32, factor: f32) -> Color32 {
+    let factor = factor.clamp(0.0, 1.0);
+    let r = (base.r() as f32 * (1.0 - factor) + overlay.r() as f32 * factor) as u8;
+    let g = (base.g() as f32 * (1.0 - factor) + overlay.g() as f32 * factor) as u8;
+    let b = (base.b() as f32 * (1.0 - factor) + overlay.b() as f32 * factor) as u8;
+    Color32::from_rgb(r, g, b)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
