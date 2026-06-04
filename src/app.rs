@@ -1650,6 +1650,7 @@ impl App {
                         .find(|w| w.id == id)
                         .map(|w| w.color)
                 }),
+                PaneContent::ConflictResolver(_) => None,
             })
             .collect();
 

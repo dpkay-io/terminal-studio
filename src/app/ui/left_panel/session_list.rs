@@ -463,6 +463,15 @@ impl App {
                             });
                             ("Notes".to_string(), color, false)
                         }
+                        PaneContent::ConflictResolver(cr) => {
+                            let name = cr
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(|s| format!("\u{26a0} {}", s))
+                                .unwrap_or_else(|| "Conflicts".to_string());
+                            (name, None, false)
+                        }
                     };
 
                     if !session_filter.is_empty()

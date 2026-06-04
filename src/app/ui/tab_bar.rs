@@ -600,6 +600,11 @@ impl App {
                 format!("\u{21c4} {fname}")
             }
             PaneContent::NoteEditor(_) => "Notes".to_string(),
+            PaneContent::ConflictResolver(cr) => cr
+                .path
+                .file_name()
+                .map(|n| format!("\u{26a0} {}", n.to_string_lossy()))
+                .unwrap_or_else(|| "Conflicts".to_string()),
         }
     }
 }

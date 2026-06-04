@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::conflict_parser::ConflictFile;
 use super::diff_parser::{DiffHunk, DiffViewMode};
 use crate::pty::ShellKind;
 use crate::terminal::Session;
@@ -61,6 +62,14 @@ pub(super) struct NoteEditorState {
     pub(super) workspace_id: Option<u64>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct ConflictResolverState {
+    pub(super) path: std::path::PathBuf,
+    pub(super) content: ConflictFile,
+    pub(super) resolved_count: usize,
+    pub(super) scroll_offset: f32,
+}
+
 #[derive(Debug)]
 pub(super) enum PaneContent {
     Terminal(u32),
@@ -73,6 +82,7 @@ pub(super) enum PaneContent {
     FileEditor(FileEditorState),
     FileDiff(FileDiffState),
     NoteEditor(NoteEditorState),
+    ConflictResolver(ConflictResolverState),
 }
 
 pub(super) struct PaneEntry {
@@ -194,6 +204,16 @@ mod tests {
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),
         });
+        let conflict = PaneContent::ConflictResolver(ConflictResolverState {
+            path: PathBuf::from("conflict.rs"),
+            content: crate::app::conflict_parser::ConflictFile {
+                path: PathBuf::from("conflict.rs"),
+                blocks: Vec::new(),
+                total_conflicts: 0,
+            },
+            resolved_count: 0,
+            scroll_offset: 0.0,
+        });
 
         // All variants implement Debug
         assert!(!format!("{:?}", terminal).is_empty());
@@ -201,6 +221,7 @@ mod tests {
         assert!(!format!("{:?}", editor).is_empty());
         assert!(!format!("{:?}", diff).is_empty());
         assert!(!format!("{:?}", note).is_empty());
+        assert!(!format!("{:?}", conflict).is_empty());
     }
 
     #[test]

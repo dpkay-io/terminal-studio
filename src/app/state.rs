@@ -452,6 +452,7 @@ impl App {
                     .or_else(|| d.path.parent().map(|p| p.to_path_buf()))
             }
             PaneContent::NoteEditor(ne) => self.workspace_path(ne.workspace_id),
+            PaneContent::ConflictResolver(cr) => cr.path.parent().map(|p| p.to_path_buf()),
         }
     }
 
@@ -484,6 +485,7 @@ impl App {
             PaneContent::FileEditor(ed) => ed.workspace_id,
             PaneContent::FileDiff(d) => ws_store.find_for_cwd(&d.path).map(|w| w.id),
             PaneContent::NoteEditor(ne) => ne.workspace_id,
+            PaneContent::ConflictResolver(cr) => ws_store.find_for_cwd(&cr.path).map(|w| w.id),
         }
     }
 
@@ -1201,6 +1203,7 @@ impl App {
                     PaneContent::NoteEditor(ne) => SavedPaneContent::NoteEditor {
                         workspace_id: ne.workspace_id,
                     },
+                    PaneContent::ConflictResolver(_) => return None,
                 };
                 Some(SavedPane {
                     content,

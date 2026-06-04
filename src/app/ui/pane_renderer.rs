@@ -89,6 +89,9 @@ pub(in crate::app) fn render_node(
                 PaneContent::NoteEditor(ne) => {
                     render_note_editor_leaf(ui, ne, pane_id, rctx);
                 }
+                PaneContent::ConflictResolver(_) => {
+                    // Placeholder: full rendering handled in Task 6
+                }
             });
 
             // Focus border for split panes

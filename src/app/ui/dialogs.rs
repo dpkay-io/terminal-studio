@@ -48,6 +48,15 @@ impl App {
                 Some((format!("diff: {}", name), theme::short_path(&d.path)))
             }
             PaneContent::NoteEditor(_) => Some(("Notes".to_string(), String::new())),
+            PaneContent::ConflictResolver(cr) => {
+                let name = cr
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("conflicts")
+                    .to_string();
+                Some((format!("Conflicts: {}", name), theme::short_path(&cr.path)))
+            }
         }
     }
 
