@@ -7,8 +7,6 @@ pub struct ForegroundProcess {
     /// on platforms where arg retrieval is unavailable.
     pub cmdline: Vec<String>,
     /// OS process ID of the foreground process, if available.
-    // TODO(task-3): consumed by ForegroundWorker for Claude session lookup
-    #[allow(dead_code)]
     pub pid: Option<u32>,
 }
 
