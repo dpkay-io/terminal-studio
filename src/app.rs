@@ -915,6 +915,11 @@ impl App {
             .find_for_cwd(&cwd)
             .map(|w| w.name.clone());
         let max_sessions = self.settings.max_closed_sessions;
+        let claude_session_id = self
+            .workers
+            .foreground_worker
+            .get_claude_session_id(sid)
+            .or_else(|| entry.claude_session_id.clone());
 
         drop(session);
 
@@ -932,6 +937,7 @@ impl App {
                     rows,
                     line_count,
                     max_sessions,
+                    claude_session_id,
                 );
             })
             .ok();

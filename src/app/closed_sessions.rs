@@ -24,6 +24,8 @@ pub struct ClosedSessionRecord {
     pub rows: u16,
     pub line_count: usize,
     pub scrollback_file: Option<String>,
+    #[serde(default)]
+    pub claude_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -125,6 +127,7 @@ pub fn save_closed_session(
     rows: u16,
     line_count: usize,
     max_records: usize,
+    claude_session_id: Option<String>,
 ) {
     let Some(dir) = closed_sessions_dir() else {
         log::warn!("Could not determine closed_sessions directory");
@@ -167,6 +170,7 @@ pub fn save_closed_session(
         rows,
         line_count,
         scrollback_file,
+        claude_session_id,
     };
 
     manifest.push(record, max_records);
@@ -254,6 +258,7 @@ mod tests {
             rows: 24,
             line_count: 100,
             scrollback_file: scrollback_file.map(String::from),
+            claude_session_id: None,
         }
     }
 
@@ -371,6 +376,7 @@ mod tests {
             rows: 30,
             line_count: 5000,
             scrollback_file: Some("sb_00042.zst".to_string()),
+            claude_session_id: Some("abc-def-123".to_string()),
         };
 
         let json = serde_json::to_string(&record).unwrap();

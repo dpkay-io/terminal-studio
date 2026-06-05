@@ -1059,6 +1059,13 @@ impl App {
         {
             if let Some(entry) = self.session_state.find_mut(sid) {
                 entry.restore_title = Some(record.title.clone());
+                if let Some(ref claude_id) = record.claude_session_id {
+                    entry.pending_command = Some(super::claude_session::claude_resume_command(
+                        claude_id,
+                        &record.cwd,
+                    ));
+                    entry.claude_session_id = Some(claude_id.clone());
+                }
             }
             self.session_state.active_id = Some(sid);
 
