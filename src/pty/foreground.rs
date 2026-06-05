@@ -89,9 +89,24 @@ mod platform {
 mod platform {
     use super::ForegroundProcess;
 
+    const SHELL_NAMES: &[&str] = &["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"];
+
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
+        if let Some(proc) = detect_via_tpgid(shell_pid) {
+            return Some(proc);
+        }
+        // WSL interop processes don't update the terminal's tpgid.
+        // Fall back to scanning /proc for direct children of the shell.
+        detect_via_child_scan(shell_pid)
+    }
+
+    fn detect_via_tpgid(shell_pid: u32) -> Option<ForegroundProcess> {
         let fg_pid = find_foreground_pid(shell_pid)?;
-        let cmdline_bytes = std::fs::read(format!("/proc/{}/cmdline", fg_pid)).ok()?;
+        proc_from_pid(fg_pid)
+    }
+
+    fn proc_from_pid(pid: u32) -> Option<ForegroundProcess> {
+        let cmdline_bytes = std::fs::read(format!("/proc/{}/cmdline", pid)).ok()?;
         if cmdline_bytes.is_empty() {
             return None;
         }
@@ -107,8 +122,51 @@ mod platform {
         Some(ForegroundProcess {
             name,
             cmdline: args,
-            pid: Some(fg_pid),
+            pid: Some(pid),
         })
+    }
+
+    /// Scan /proc for direct children of `shell_pid`, skipping known shells
+    /// and infrastructure processes. Returns the first non-shell child found.
+    fn detect_via_child_scan(shell_pid: u32) -> Option<ForegroundProcess> {
+        let entries = std::fs::read_dir("/proc").ok()?;
+        let shell_pid_str = shell_pid.to_string();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            let Ok(pid) = name_str.parse::<u32>() else {
+                continue;
+            };
+            if pid == shell_pid {
+                continue;
+            }
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", pid)) else {
+                continue;
+            };
+            if ppid_from_stat(&stat) != Some(shell_pid_str.as_str()) {
+                continue;
+            }
+            let comm = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if SHELL_NAMES.iter().any(|&s| comm == s) || comm == "init" {
+                continue;
+            }
+            if let Some(proc) = proc_from_pid(pid) {
+                return Some(proc);
+            }
+        }
+        None
+    }
+
+    /// Extract ppid (as string) from a /proc/PID/stat line.
+    fn ppid_from_stat<'a>(stat: &'a str) -> Option<&'a str> {
+        let after = stat.rfind(')')?.checked_add(2)?;
+        let rest = stat.get(after..)?;
+        let mut parts = rest.split_whitespace();
+        parts.next()?; // state
+        Some(parts.next()?) // ppid
     }
 
     fn find_foreground_pid(shell_pid: u32) -> Option<u32> {

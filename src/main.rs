@@ -55,8 +55,27 @@ fn make_icon() -> egui::IconData {
     }
 }
 
+fn force_x11_if_needed() {
+    #[cfg(target_os = "linux")]
+    {
+        let args: Vec<String> = std::env::args().collect();
+        let force_x11 = args.iter().any(|a| a == "--x11");
+        let is_wsl = std::env::var("WSL_DISTRO_NAME").is_ok();
+
+        if force_x11 || is_wsl {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            if is_wsl {
+                log::info!("WSL detected — forcing X11 backend");
+            } else {
+                log::info!("--x11 flag set — forcing X11 backend");
+            }
+        }
+    }
+}
+
 fn main() -> eframe::Result<()> {
     env_logger::init();
+    force_x11_if_needed();
     updater::cleanup_old_binary();
 
     // Single-instance enforcement: exit early if another instance is running.
