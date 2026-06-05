@@ -4342,6 +4342,7 @@ dependencies = [
  "serde_json",
  "syntect",
  "sysinfo",
+ "tempfile",
  "vte 0.13.1",
  "windows-sys 0.52.0",
  "zstd",
