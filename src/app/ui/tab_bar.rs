@@ -345,8 +345,11 @@ impl App {
                             if tab_resp.drag_started() {
                                 let origin =
                                     tab_resp.interact_pointer_pos().unwrap_or(tab_rect.center());
-                                self.drag_state
-                                    .set_payload(drag::DragPayload::Tab(pane_id), origin);
+                                self.drag_state.set_payload(
+                                    drag::DragPayload::Tab(pane_id),
+                                    origin,
+                                    display,
+                                );
                             }
                             if self.drag_state.is_active() && tab_resp.hovered() {
                                 let accepts = match &self.drag_state.payload {

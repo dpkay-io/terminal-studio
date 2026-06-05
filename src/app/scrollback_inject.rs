@@ -14,25 +14,65 @@ const SEPARATOR: &[u8] = b"\x1b[90m\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\
 /// after the injected content.
 ///
 /// Must be called BEFORE the PTY reader thread starts to avoid race conditions.
-pub fn inject_scrollback(term: &mut Term<EventProxy>, ansi_bytes: &[u8]) {
+/// Returns the number of history lines created by the injection (for deferred scroll).
+pub fn inject_scrollback(term: &mut Term<EventProxy>, ansi_bytes: &[u8]) -> usize {
     if ansi_bytes.is_empty() {
-        return;
+        return 0;
+    }
+
+    // Strip trailing empty lines (\r\n sequences) from the input so
+    // restored sessions don't accumulate blank gaps across cycles.
+    let trimmed = trim_trailing_empty_lines(ansi_bytes);
+    if trimmed.is_empty() {
+        return 0;
     }
 
     let mut processor: Processor<StdSyncHandler> = Processor::new();
 
-    // Feed in chunks to avoid holding processor state for too long in case
-    // of very large scrollback buffers
     const CHUNK_SIZE: usize = 65536;
     let mut pos = 0;
-    while pos < ansi_bytes.len() {
-        let end = (pos + CHUNK_SIZE).min(ansi_bytes.len());
-        processor.advance(term, &ansi_bytes[pos..end]);
+    while pos < trimmed.len() {
+        let end = (pos + CHUNK_SIZE).min(trimmed.len());
+        processor.advance(term, &trimmed[pos..end]);
         pos = end;
     }
 
     // Emit separator line
     processor.advance(term, SEPARATOR);
+
+    // Return the number of content lines injected (including separator).
+    // This is used as the scroll-up amount after the shell initializes —
+    // we can't use history size here because with few lines the content
+    // may fit on screen at injection time (no history yet), but the shell
+    // prompt will push it into scrollback later.
+    trimmed.windows(2).filter(|w| w == b"\r\n").count() + 1
+}
+
+fn trim_trailing_empty_lines(data: &[u8]) -> &[u8] {
+    let mut end = data.len();
+    // Walk backwards, removing trailing \r\n pairs that have nothing before them
+    // (or only other \r\n pairs).
+    while end >= 2 && data[end - 2] == b'\r' && data[end - 1] == b'\n' {
+        // Check if the line before this \r\n is also empty
+        let line_start = if end >= 4 {
+            // Find where this line's content starts (after previous \r\n)
+            data[..end - 2]
+                .windows(2)
+                .rposition(|w| w == b"\r\n")
+                .map(|p| p + 2)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        // If the line between line_start and end-2 is all whitespace or empty, trim it
+        let line_content = &data[line_start..end - 2];
+        if line_content.iter().all(|&b| b == b' ' || b == b'\t') {
+            end = line_start;
+        } else {
+            break;
+        }
+    }
+    &data[..end]
 }
 
 #[cfg(test)]

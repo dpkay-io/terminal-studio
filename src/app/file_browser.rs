@@ -248,7 +248,11 @@ pub(super) fn render_dir_tree(
             }
             if resp.drag_started() {
                 let origin = resp.interact_pointer_pos().unwrap_or_default();
-                drag_state.set_payload(super::drag::DragPayload::File(entry.path.clone()), origin);
+                drag_state.set_payload(
+                    super::drag::DragPayload::File(entry.path.clone()),
+                    origin,
+                    &entry.name,
+                );
             }
             resp.context_menu(|ui| {
                 dir_entry_context_menu(ui, &entry.path);
@@ -311,7 +315,11 @@ pub(super) fn render_flat_file_list(
         }
         if resp.drag_started() && !entry.is_dir {
             let origin = resp.interact_pointer_pos().unwrap_or_default();
-            drag_state.set_payload(super::drag::DragPayload::File(entry.path.clone()), origin);
+            drag_state.set_payload(
+                super::drag::DragPayload::File(entry.path.clone()),
+                origin,
+                &display,
+            );
         }
         resp.context_menu(|ui| {
             dir_entry_context_menu(ui, &entry.path);

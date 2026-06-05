@@ -24,9 +24,19 @@ pub fn extract_grid_as_ansi(term: &Term<EventProxy>, max_lines: Option<usize>) -
     let skip_lines = total_lines.saturating_sub(lines_to_capture);
 
     let start_line = -(history_size as i32) + skip_lines as i32;
-    let end_line = screen_lines as i32;
+    let nominal_end = screen_lines as i32;
 
-    let estimated_size = lines_to_capture * cols * 3;
+    // Find last non-empty line to avoid trailing blank lines in the capture.
+    let mut end_line = start_line;
+    for line_idx in (start_line..nominal_end).rev() {
+        if find_line_end(grid, line_idx, cols) > 0 {
+            end_line = line_idx + 1;
+            break;
+        }
+    }
+
+    let actual_lines = (end_line - start_line).max(0) as usize;
+    let estimated_size = actual_lines * cols * 3;
     let mut buf = Vec::with_capacity(estimated_size);
 
     let mut cur_fg = Color::Named(NamedColor::Foreground);
@@ -37,8 +47,19 @@ pub fn extract_grid_as_ansi(term: &Term<EventProxy>, max_lines: Option<usize>) -
     let mut cur_strike = false;
     let mut cur_inverse = false;
 
+    let mut prev_empty = false;
     for line_idx in start_line..end_line {
         let line_end = find_line_end(grid, line_idx, cols);
+
+        // Collapse runs of empty lines to a single blank line.
+        if line_end == 0 {
+            if !prev_empty {
+                buf.extend_from_slice(b"\r\n");
+            }
+            prev_empty = true;
+            continue;
+        }
+        prev_empty = false;
 
         for col in 0..line_end {
             let cell = &grid[Line(line_idx)][Column(col)];
@@ -261,16 +282,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_grid_produces_empty_lines() {
+    fn empty_grid_produces_empty_output() {
         let session = make_session(80, 24);
         let result = extract_grid_as_ansi(&session.term, None);
-        // Should be 24 lines of just \r\n (empty lines trimmed to nothing)
-        let lines: Vec<&[u8]> = result.split(|&b| b == b'\n').collect();
-        // Last split produces an empty trailing element
-        assert_eq!(lines.len(), 25); // 24 lines + trailing empty
-        for line in &lines[..24] {
-            assert_eq!(*line, b"\r");
-        }
+        assert!(result.is_empty());
     }
 
     #[test]

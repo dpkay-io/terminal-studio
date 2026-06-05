@@ -1125,7 +1125,9 @@ impl App {
             }
 
             for sid in &session_ids {
-                self.remove_session_and_cleanup(*sid);
+                if self.pane_state.panes_referencing_session(*sid) == 0 {
+                    self.remove_session_and_cleanup(*sid);
+                }
             }
 
             self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {

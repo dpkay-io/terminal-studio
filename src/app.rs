@@ -351,8 +351,12 @@ impl eframe::App for App {
         theme::clear_contrast_cache();
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.show_quit_confirm = true;
+            if self.session_state.sessions.is_empty() {
+                self.quit_confirmed = true;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.show_quit_confirm = true;
+            }
         }
 
         self.flash.tick();

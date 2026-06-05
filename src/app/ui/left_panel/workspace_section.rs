@@ -301,8 +301,11 @@ impl App {
                 );
                 if note_resp.drag_started() {
                     let origin = note_resp.interact_pointer_pos().unwrap_or_default();
-                    self.drag_state
-                        .set_payload(crate::app::drag::DragPayload::Note(data.id), origin);
+                    self.drag_state.set_payload(
+                        crate::app::drag::DragPayload::Note(data.id),
+                        origin,
+                        format!("\u{1f4dd} {}", &data.name),
+                    );
                 }
             }
 
@@ -359,8 +362,11 @@ impl App {
         name_resp.clone().on_hover_text(&data.name);
         if name_resp.drag_started() {
             let origin = name_resp.interact_pointer_pos().unwrap_or_default();
-            self.drag_state
-                .set_payload(crate::app::drag::DragPayload::Workspace(data.id), origin);
+            self.drag_state.set_payload(
+                crate::app::drag::DragPayload::Workspace(data.id),
+                origin,
+                &data.name,
+            );
         }
         if name_resp.clicked() {
             if let Some(vp) = data.other_window_viewport {

@@ -377,6 +377,7 @@ pub(super) fn render_git_diff(
                         drag_state.set_payload(
                             super::drag::DragPayload::Diff(entry.path.clone()),
                             origin,
+                            &entry.path,
                         );
                     }
                     label_resp.context_menu(|ui| {
@@ -495,6 +496,7 @@ pub(super) fn render_git_diff(
                         drag_state.set_payload(
                             super::drag::DragPayload::Diff(entry.path.clone()),
                             origin,
+                            &entry.path,
                         );
                     }
                     label_resp.context_menu(|ui| {

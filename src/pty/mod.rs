@@ -178,6 +178,7 @@ type SpawnResult = (
     u32,
     Arc<AtomicBool>,
     Arc<AtomicBool>, // is_active: true when this session is the focused pane
+    usize,           // injected scrollback history lines (0 if none)
 );
 
 pub struct SessionManager {
@@ -274,10 +275,12 @@ impl SessionManager {
 
         // Inject scrollback content before the reader thread starts reading,
         // so restored history doesn't race with incoming shell output.
+        let mut injected_history_lines = 0usize;
         if let Some(ansi_bytes) = pre_inject {
             if !ansi_bytes.is_empty() {
                 let mut s = session.write();
-                crate::app::scrollback_inject::inject_scrollback(&mut s.term, ansi_bytes);
+                injected_history_lines =
+                    crate::app::scrollback_inject::inject_scrollback(&mut s.term, ansi_bytes);
             }
         }
 
@@ -309,6 +312,7 @@ impl SessionManager {
             shell_pid,
             alive,
             is_active,
+            injected_history_lines,
         ))
     }
 

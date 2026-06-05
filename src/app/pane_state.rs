@@ -129,6 +129,13 @@ impl PaneState {
     /// `active_group`, emit all leaf pane indices in tree-traversal order.
     /// Roots are visited in the order they appear in `self.panes`, so tab
     /// ordering is stable.
+    pub(super) fn panes_referencing_session(&self, session_id: u32) -> usize {
+        self.panes
+            .iter()
+            .filter(|p| matches!(p.content, super::pane::PaneContent::Terminal(sid) if sid == session_id))
+            .count()
+    }
+
     pub(super) fn visible_leaf_indices(
         &self,
         pane_groups: &[Option<u64>],
@@ -469,5 +476,66 @@ mod tests {
         assert!(state.pane_trees.contains_key(&2));
         let remaining_leaves = state.pane_trees[&2].leaf_ids();
         assert_eq!(remaining_leaves, vec![2, 3]);
+    }
+
+    #[test]
+    fn panes_referencing_session_none() {
+        let state = PaneState::new();
+        assert_eq!(state.panes_referencing_session(42), 0);
+    }
+
+    #[test]
+    fn panes_referencing_session_single() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1)); // PaneContent::Terminal(1)
+        assert_eq!(state.panes_referencing_session(1), 1);
+        assert_eq!(state.panes_referencing_session(99), 0);
+    }
+
+    #[test]
+    fn panes_referencing_session_multiple() {
+        let mut state = PaneState::new();
+        state.panes.push(PaneEntry {
+            id: 1,
+            content: PaneContent::Terminal(5),
+            manual_width: None,
+            last_size: (80, 24),
+        });
+        state.panes.push(PaneEntry {
+            id: 2,
+            content: PaneContent::Terminal(5),
+            manual_width: None,
+            last_size: (80, 24),
+        });
+        state.panes.push(PaneEntry {
+            id: 3,
+            content: PaneContent::Terminal(7),
+            manual_width: None,
+            last_size: (80, 24),
+        });
+        assert_eq!(state.panes_referencing_session(5), 2);
+        assert_eq!(state.panes_referencing_session(7), 1);
+    }
+
+    #[test]
+    fn panes_referencing_session_after_removal() {
+        let mut state = PaneState::new();
+        state.panes.push(PaneEntry {
+            id: 1,
+            content: PaneContent::Terminal(5),
+            manual_width: None,
+            last_size: (80, 24),
+        });
+        state.panes.push(PaneEntry {
+            id: 2,
+            content: PaneContent::Terminal(5),
+            manual_width: None,
+            last_size: (80, 24),
+        });
+        assert_eq!(state.panes_referencing_session(5), 2);
+        state.panes.retain(|p| p.id != 1);
+        assert_eq!(state.panes_referencing_session(5), 1);
+        state.panes.retain(|p| p.id != 2);
+        assert_eq!(state.panes_referencing_session(5), 0);
     }
 }

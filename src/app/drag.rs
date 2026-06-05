@@ -58,6 +58,7 @@ pub(super) struct DragState {
     pub(super) drop_target: Option<DropTarget>,
     pub(super) origin_pos: egui::Pos2,
     pub(super) threshold_met: bool,
+    pub(super) label: String,
 }
 
 impl DragState {
@@ -67,14 +68,21 @@ impl DragState {
             drop_target: None,
             origin_pos: egui::pos2(0.0, 0.0),
             threshold_met: false,
+            label: String::new(),
         }
     }
 
-    pub(super) fn set_payload(&mut self, payload: DragPayload, origin: egui::Pos2) {
+    pub(super) fn set_payload(
+        &mut self,
+        payload: DragPayload,
+        origin: egui::Pos2,
+        label: impl Into<String>,
+    ) {
         self.payload = Some(payload);
         self.origin_pos = origin;
         self.threshold_met = false;
         self.drop_target = None;
+        self.label = label.into();
     }
 
     pub(super) fn update_threshold(&mut self, current_pos: egui::Pos2) {
@@ -94,6 +102,41 @@ impl DragState {
         self.payload = None;
         self.drop_target = None;
         self.threshold_met = false;
+        self.label.clear();
+    }
+
+    pub(super) fn paint_overlay(&self, ctx: &egui::Context) {
+        if !self.is_active() || self.label.is_empty() {
+            return;
+        }
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+
+        use crate::theme;
+        let t = theme::active();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Tooltip,
+            egui::Id::new("drag_overlay"),
+        ));
+
+        let font = egui::FontId::proportional(theme::FONT_UI_SM);
+        let galley = painter.layout_no_wrap(self.label.clone(), font, t.text);
+        let text_size = galley.size();
+        let padding = egui::vec2(theme::SP_3 + theme::SP_2, theme::SP_2);
+        let offset = egui::vec2(12.0, -8.0);
+        let rect = egui::Rect::from_min_size(pos + offset, text_size + padding * 2.0);
+
+        let shadow = egui::epaint::Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 6.0,
+            spread: 0.0,
+            color: egui::Color32::from_black_alpha(60),
+        };
+        painter.add(shadow.as_shape(rect, egui::Rounding::same(theme::R_MD)));
+        painter.rect_filled(rect, theme::R_MD, t.surface1);
+        painter.rect_stroke(rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
+        painter.galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
     }
 }
 
@@ -150,12 +193,26 @@ fn resolve(
         (DragPayload::Tab(_), _) => DragAction::Noop,
 
         (DragPayload::Session(session_id), DropTarget::TabBar(idx)) => {
+            let existing = pane_state
+                .panes
+                .iter()
+                .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id));
+            if let Some(pane) = existing {
+                return DragAction::FocusExistingTab { pane_id: pane.id };
+            }
             DragAction::InsertTerminalPane {
                 session_id,
                 at_index: Some(idx),
             }
         }
         (DragPayload::Session(session_id), DropTarget::PaneArea) => {
+            let existing = pane_state
+                .panes
+                .iter()
+                .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id));
+            if let Some(pane) = existing {
+                return DragAction::FocusExistingTab { pane_id: pane.id };
+            }
             DragAction::InsertTerminalPane {
                 session_id,
                 at_index: None,
@@ -264,7 +321,7 @@ mod tests {
     fn set_payload_and_clear() {
         let mut state = DragState::new();
         assert!(state.payload.is_none());
-        state.set_payload(DragPayload::Tab(1), egui::pos2(10.0, 20.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(10.0, 20.0), "");
         assert!(state.payload.is_some());
         assert!(!state.threshold_met);
         state.clear();
@@ -276,7 +333,7 @@ mod tests {
     #[test]
     fn threshold_not_met_within_5px() {
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(1), egui::pos2(10.0, 10.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(10.0, 10.0), "");
         state.update_threshold(egui::pos2(13.0, 10.0));
         assert!(!state.is_active());
         state.update_threshold(egui::pos2(15.0, 10.0));
@@ -286,9 +343,9 @@ mod tests {
     #[test]
     fn double_set_replaces_payload() {
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
-        state.set_payload(DragPayload::Session(5), egui::pos2(50.0, 50.0));
+        state.set_payload(DragPayload::Session(5), egui::pos2(50.0, 50.0), "");
         assert!(!state.threshold_met);
         assert!(matches!(state.payload, Some(DragPayload::Session(5))));
     }
@@ -302,7 +359,7 @@ mod tests {
             (3, PaneContent::Terminal(30)),
         ]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(2));
         let action = resolve_drag(&mut state, &ps);
@@ -322,7 +379,7 @@ mod tests {
             (2, PaneContent::Terminal(20)),
         ]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
         let action = resolve_drag(&mut state, &ps);
@@ -333,7 +390,7 @@ mod tests {
     fn tab_invalid_pane_id_is_noop() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(999), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Tab(999), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
         let action = resolve_drag(&mut state, &ps);
@@ -352,7 +409,7 @@ mod tests {
         tree.split_pane(1, 2, 1, crate::pane_tree::SplitDir::Horizontal);
         let action = {
             let mut state = DragState::new();
-            state.set_payload(DragPayload::Tab(2), egui::pos2(0.0, 0.0));
+            state.set_payload(DragPayload::Tab(2), egui::pos2(0.0, 0.0), "");
             state.threshold_met = true;
             state.drop_target = Some(DropTarget::TabBar(1));
             resolve_drag(&mut state, &ps)
@@ -371,7 +428,7 @@ mod tests {
     fn session_to_tabbar_creates_pane() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(1));
         let action = resolve_drag(&mut state, &ps);
@@ -388,7 +445,7 @@ mod tests {
     fn session_to_pane_area_creates_appended_pane() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::PaneArea);
         let action = resolve_drag(&mut state, &ps);
@@ -401,6 +458,34 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn session_already_open_focuses_existing_tabbar() {
+        let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
+        let mut state = DragState::new();
+        state.set_payload(DragPayload::Session(10), egui::pos2(0.0, 0.0), "");
+        state.threshold_met = true;
+        state.drop_target = Some(DropTarget::TabBar(0));
+        let action = resolve_drag(&mut state, &ps);
+        assert!(matches!(
+            action,
+            DragAction::FocusExistingTab { pane_id: 1 }
+        ));
+    }
+
+    #[test]
+    fn session_already_open_focuses_existing_pane_area() {
+        let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
+        let mut state = DragState::new();
+        state.set_payload(DragPayload::Session(10), egui::pos2(0.0, 0.0), "");
+        state.threshold_met = true;
+        state.drop_target = Some(DropTarget::PaneArea);
+        let action = resolve_drag(&mut state, &ps);
+        assert!(matches!(
+            action,
+            DragAction::FocusExistingTab { pane_id: 1 }
+        ));
+    }
+
     // File tests
     #[test]
     fn file_to_tabbar_creates_editor_pane() {
@@ -409,6 +494,7 @@ mod tests {
         state.set_payload(
             DragPayload::File(PathBuf::from("/tmp/test.rs")),
             egui::pos2(0.0, 0.0),
+            "",
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
@@ -439,6 +525,7 @@ mod tests {
         state.set_payload(
             DragPayload::File(PathBuf::from("/tmp/test.rs")),
             egui::pos2(0.0, 0.0),
+            "",
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
@@ -457,6 +544,7 @@ mod tests {
         state.set_payload(
             DragPayload::Diff("src/main.rs".to_string()),
             egui::pos2(0.0, 0.0),
+            "",
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::PaneArea);
@@ -472,7 +560,7 @@ mod tests {
     fn note_to_tabbar_creates_note_pane() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Note(100), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Note(100), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
         let action = resolve_drag(&mut state, &ps);
@@ -490,7 +578,7 @@ mod tests {
     fn workspace_to_new_window() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::NewWindow);
         let action = resolve_drag(&mut state, &ps);
@@ -504,7 +592,7 @@ mod tests {
     fn workspace_to_tabbar_is_noop() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
         let action = resolve_drag(&mut state, &ps);
@@ -516,7 +604,7 @@ mod tests {
     fn no_target_is_noop() {
         let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         let action = resolve_drag(&mut state, &ps);
         assert!(matches!(action, DragAction::Noop));
@@ -525,7 +613,7 @@ mod tests {
     #[test]
     fn cancelled_drag_clears_state() {
         let mut state = DragState::new();
-        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0));
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.clear();
         assert!(state.payload.is_none());

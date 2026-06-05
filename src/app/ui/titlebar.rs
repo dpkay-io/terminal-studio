@@ -116,7 +116,16 @@ impl App {
                         painter.circle_filled(pos, 6.0, fill);
                         if resp.clicked() {
                             match idx {
-                                0 => self.show_quit_confirm = true,
+                                0 => {
+                                    if self.current_window_id.is_some() {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    } else if self.session_state.sessions.is_empty() {
+                                        self.quit_confirmed = true;
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    } else {
+                                        self.show_quit_confirm = true;
+                                    }
+                                }
                                 1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
                                 _ => {
                                     let is_max =
@@ -221,7 +230,7 @@ impl App {
                             ui,
                             self.vp_id("tb_closed_sessions"),
                             rc_tbr,
-                            "\u{21BA}",
+                            "\u{23EA}",
                             mac_icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -559,7 +568,7 @@ impl App {
                             ui,
                             self.vp_id("tb_closed_sessions"),
                             rc_br,
-                            "\u{21BA}",
+                            "\u{23EA}",
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -770,7 +779,16 @@ impl App {
                         );
                         if resp.clicked() {
                             match idx {
-                                0 => self.show_quit_confirm = true,
+                                0 => {
+                                    if self.current_window_id.is_some() {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    } else if self.session_state.sessions.is_empty() {
+                                        self.quit_confirmed = true;
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    } else {
+                                        self.show_quit_confirm = true;
+                                    }
+                                }
                                 1 => {
                                     let is_max =
                                         ctx.input(|i| i.viewport().maximized.unwrap_or(false));

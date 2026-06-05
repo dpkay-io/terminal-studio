@@ -37,6 +37,7 @@ pub struct EventProxy {
     #[allow(dead_code)]
     pub id: u32,
     title: Arc<Mutex<String>>,
+    pub title_locked: Arc<AtomicBool>,
     pub ctx: Context,
     pub pty_tx: mpsc::SyncSender<Vec<u8>>,
     bell: Arc<AtomicBool>,
@@ -53,6 +54,7 @@ impl EventProxy {
         EventProxy {
             id,
             title,
+            title_locked: Arc::new(AtomicBool::new(false)),
             ctx,
             pty_tx,
             bell,
@@ -63,9 +65,10 @@ impl EventProxy {
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Title(s) => {
+            Event::Title(s) if !self.title_locked.load(Ordering::Relaxed) => {
                 *self.title.lock() = s;
             }
+            Event::Title(_) => {}
             #[allow(clippy::collapsible_match)]
             Event::PtyWrite(s) => {
                 if self.pty_tx.try_send(s.into_bytes()).is_err() {
@@ -96,6 +99,7 @@ pub struct Session {
     pub cwd: PathBuf,
     pub prompt_ready: bool,
     title: Arc<Mutex<String>>,
+    title_locked: Arc<AtomicBool>,
     pub bell: Arc<AtomicBool>,
     pub pending_clipboard: Option<String>,
 }
@@ -113,6 +117,7 @@ impl Session {
         let title = Arc::new(Mutex::new(format!("Session {}", id)));
         let bell = Arc::new(AtomicBool::new(false));
         let proxy = EventProxy::new(id, title.clone(), ctx, pty_tx, bell.clone());
+        let title_locked = proxy.title_locked.clone();
         let config = Config {
             scrolling_history: scrollback_lines,
             ..Config::default()
@@ -128,6 +133,7 @@ impl Session {
             cwd: cwd.unwrap_or_default(),
             prompt_ready: false,
             title,
+            title_locked,
             bell,
             pending_clipboard: None,
         }
@@ -142,6 +148,7 @@ impl Session {
         let (tx, _rx) = mpsc::sync_channel(64);
         let ctx = Context::default();
         let proxy = EventProxy::new(id, title.clone(), ctx, tx, bell.clone());
+        let title_locked = proxy.title_locked.clone();
         let config = Config {
             scrolling_history: 100_000,
             ..Config::default()
@@ -157,6 +164,7 @@ impl Session {
             cwd: PathBuf::new(),
             prompt_ready: false,
             title,
+            title_locked,
             bell,
             pending_clipboard: None,
         }
@@ -164,6 +172,14 @@ impl Session {
 
     pub fn set_title(&self, title: String) {
         *self.title.lock() = title;
+    }
+
+    pub fn lock_title(&self) {
+        self.title_locked.store(true, Ordering::Relaxed);
+    }
+
+    pub fn unlock_title(&self) {
+        self.title_locked.store(false, Ordering::Relaxed);
     }
 
     pub fn title(&self) -> String {
