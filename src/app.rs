@@ -18,6 +18,7 @@ use alacritty_terminal::{
 
 // ── Submodules ───────────────────────────────────────────────────────────────
 
+pub(crate) mod claude_session;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
 mod diff_parser;
@@ -516,14 +517,51 @@ impl eframe::App for App {
             }
 
             if needs_uninit {
+                let before: std::collections::HashSet<u32> =
+                    self.session_state.uninit_sessions.clone();
                 self.session_state.uninit_sessions.retain(|&id| {
                     cwds.iter()
                         .find(|(cid, _)| *cid == id)
                         .map(|(_, c)| c.as_os_str().is_empty())
                         .unwrap_or(false)
                 });
+                // Sessions that just became initialized — mark ready for
+                // restore-scroll (the actual scroll is applied each frame
+                // until the user interacts, since shell output keeps resetting
+                // display_offset to 0).
+                let newly_init: Vec<u32> = before
+                    .difference(&self.session_state.uninit_sessions)
+                    .copied()
+                    .collect();
+                for sid in newly_init {
+                    if let Some(entry) = self.session_state.find_mut(sid) {
+                        if entry.restore_scroll_lines.is_some() {
+                            entry.restore_scroll_ready = true;
+                        }
+                        if let Some(title) = entry.restore_title.take() {
+                            let s = entry.session.read();
+                            s.set_title(title);
+                            s.lock_title();
+                        }
+                    }
+                }
                 if !self.session_state.uninit_sessions.is_empty() {
                     ctx.request_repaint_after(Duration::from_millis(150));
+                }
+            }
+
+            // Re-apply restore scroll each frame — shell output keeps
+            // resetting display_offset to 0.  Cleared on first user input.
+            for entry in &self.session_state.sessions {
+                if entry.restore_scroll_ready {
+                    if let Some(lines) = entry.restore_scroll_lines {
+                        let current = entry.session.read().term.grid().display_offset();
+                        if current == 0 {
+                            entry.session.write().term.scroll_display(
+                                alacritty_terminal::grid::Scroll::Delta(lines as i32),
+                            );
+                        }
+                    }
                 }
             }
 
@@ -2317,6 +2355,9 @@ impl App {
                                 self.term_selection_sid = None;
                                 self.scroll_accum.remove(&sid);
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                    self.session_state.sessions[idx].restore_scroll_ready = false;
+                                    self.session_state.sessions[idx].restore_scroll_lines = None;
+                                    self.session_state.sessions[idx].session.read().unlock_title();
                                     self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
                                     let _ = self.session_state.sessions[idx].pty_tx.try_send(text.as_bytes().to_vec());
                                 }
@@ -2467,6 +2508,9 @@ impl App {
                                         if let Some(sid) = active_session_id {
                                             self.scroll_accum.remove(&sid);
                                             if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                                self.session_state.sessions[idx].restore_scroll_ready = false;
+                                                self.session_state.sessions[idx].restore_scroll_lines = None;
+                                                self.session_state.sessions[idx].session.read().unlock_title();
                                                 self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
                                                 let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                             }
@@ -2477,6 +2521,9 @@ impl App {
                                 if let Some(sid) = active_session_id {
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                        self.session_state.sessions[idx].restore_scroll_ready = false;
+                                        self.session_state.sessions[idx].restore_scroll_lines = None;
+                                        self.session_state.sessions[idx].session.read().unlock_title();
                                         self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
                                         let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
                                     }
@@ -4036,6 +4083,8 @@ impl App {
         {
             self.drag_state.clear();
         }
+
+        self.drag_state.paint_overlay(ctx);
 
         self.render_settings_overlay(ctx);
 
