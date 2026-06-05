@@ -3419,6 +3419,11 @@ impl App {
 
         // 2. Close pane (tab-strip close — kills the entire split tree for that root)
         if let Some(pid) = close_pane_id {
+            // Capture the closing pane's workspace group before removal.
+            let closing_group = self.pane_state.find(pid).and_then(|p| {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
+            });
+
             // Kill session for this pane before tree surgery.
             if let Some(pane) = self.pane_state.find(pid) {
                 if let PaneContent::Terminal(sid) = pane.content {
@@ -3448,8 +3453,31 @@ impl App {
             if self.pane_state.close_leaf(pid).is_some()
                 && self.pane_state.active_pane_id == Some(pid)
             {
-                self.pane_state.active_pane_id =
-                    sibling_focus.or_else(|| self.pane_state.panes.last().map(|p| p.id));
+                // Focus priority: split sibling → last visited in same workspace
+                // → any pane in same workspace → global fallback.
+                let same_group_fallback = || {
+                    let group = closing_group;
+                    self.last_pane_per_group
+                        .get(&group)
+                        .copied()
+                        .filter(|&lpid| self.pane_state.find(lpid).is_some())
+                        .or_else(|| {
+                            self.pane_state
+                                .panes
+                                .iter()
+                                .find(|p| {
+                                    Self::pane_group(
+                                        &self.session_state.sessions,
+                                        &self.workspace_store,
+                                        p,
+                                    ) == group
+                                })
+                                .map(|p| p.id)
+                        })
+                };
+                self.pane_state.active_pane_id = sibling_focus
+                    .or_else(same_group_fallback)
+                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
                 if let Some(new_pid) = self.pane_state.active_pane_id {
                     self.activate_pane(new_pid);
                 }
