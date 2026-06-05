@@ -352,7 +352,7 @@ impl App {
             self.settings.scrollback_lines,
             pre_inject,
         ) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
+            Ok((id, session, master, pty_tx, shell_pid, alive, is_active, injected_lines)) => {
                 let entry = SessionEntry {
                     id,
                     session,
@@ -363,6 +363,14 @@ impl App {
                     is_active,
                     pending_command: None,
                     shell: shell.clone(),
+                    restore_scroll_ready: false,
+                    restore_scroll_lines: if injected_lines > 0 {
+                        Some(injected_lines)
+                    } else {
+                        None
+                    },
+                    restore_title: None,
+                    claude_session_id: None,
                 };
                 if self.session_state.active_id.is_none() {
                     self.session_state.active_id = Some(id);
@@ -999,7 +1007,7 @@ impl App {
             self.settings.scrollback_lines,
             None,
         ) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active)) => {
+            Ok((id, session, master, pty_tx, shell_pid, alive, is_active, _)) => {
                 self.session_state.uninit_sessions.insert(id);
                 self.session_state.sessions.push(SessionEntry {
                     id,
@@ -1011,6 +1019,10 @@ impl App {
                     is_active,
                     pending_command: None,
                     shell: shell.clone(),
+                    restore_scroll_lines: None,
+                    restore_scroll_ready: false,
+                    restore_title: None,
+                    claude_session_id: None,
                 });
                 Some(id)
             }
@@ -1045,9 +1057,36 @@ impl App {
         if let Some(sid) =
             self.spawn_session_with_scrollback(&shell, cols, rows, cwd, scrollback.as_deref())
         {
-            if let Some(entry) = self.session_state.find(sid) {
-                entry.session.read().set_title(record.title.clone());
+            if let Some(entry) = self.session_state.find_mut(sid) {
+                entry.restore_title = Some(record.title.clone());
             }
+            self.session_state.active_id = Some(sid);
+
+            if !self
+                .pane_state
+                .panes
+                .iter()
+                .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == sid))
+            {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::Terminal(sid),
+                    manual_width: None,
+                    last_size: (cols, rows),
+                });
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (cols, rows),
+                    },
+                );
+                self.activate_pane(pane_id);
+            }
+            self.update_is_active_flags();
+            self.save_session();
         }
     }
 
@@ -1066,7 +1105,6 @@ impl App {
             return result;
         };
         std::fs::create_dir_all(&dir).ok();
-        // Clean up old files first
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 std::fs::remove_file(entry.path()).ok();
@@ -1174,6 +1212,7 @@ impl App {
                     command,
                     title,
                     scrollback_file,
+                    claude_session_id: None,
                 }
             })
             .collect();
@@ -1280,7 +1319,6 @@ impl App {
                     None
                 }
             });
-
         let scrollback_dir = crate::util::data_dir().map(|d| d.join("active_scrollback"));
 
         let mut eagerly_spawned: HashMap<usize, u32> = HashMap::new();
@@ -1296,6 +1334,11 @@ impl App {
                     let compressed = std::fs::read(dir.join(f)).ok()?;
                     zstd::decode_all(compressed.as_slice()).ok()
                 });
+                // Only replay the command if there's no scrollback to restore.
+                // When scrollback exists, the user sees the old session output
+                // above the new prompt — replaying the command would wipe it
+                // (full-screen TUIs like `claude` clear the screen on start).
+                let replay_command = scrollback.is_none() || s.scrollback_file.is_none();
                 if let Some(sid) = self.spawn_session_with_scrollback(
                     &default_shell(),
                     80,
@@ -1304,17 +1347,24 @@ impl App {
                     scrollback.as_deref(),
                 ) {
                     if let Some(entry) = self.session_state.find_mut(sid) {
-                        if let Some(cmd) = s.command.clone() {
-                            entry.pending_command = Some(cmd);
+                        if replay_command {
+                            if let Some(cmd) = s.command.clone() {
+                                entry.pending_command = Some(cmd);
+                            }
                         }
-                        if let Some(t) = s.title.as_ref().filter(|t| !t.is_empty()) {
-                            entry.session.read().set_title(t.clone());
-                        }
+                        entry.restore_title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
                     }
                     eagerly_spawned.insert(active_idx, sid);
                 }
             }
         }
+
+        // Clear any auto-created panes from spawn_session_inner — the
+        // pane list is rebuilt from the persisted state below.
+        self.pane_state.panes.clear();
+        self.pane_state.pane_trees.clear();
+        self.pane_state.active_pane_id = None;
+        self.pane_state.next_pane_id = 0;
 
         let mut pane_ids: Vec<u32> = Vec::new();
         for saved in &state.panes {
@@ -1331,9 +1381,13 @@ impl App {
                                 Some(s.cwd.clone())
                             }
                         });
-                        let pending_command = saved.and_then(|s| s.command.clone());
                         let saved_title = saved.and_then(|s| s.title.clone());
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
+                        let pending_command = if scrollback_file.is_some() {
+                            None
+                        } else {
+                            saved.and_then(|s| s.command.clone())
+                        };
                         PaneContent::DeferredTerminal {
                             cwd,
                             pending_command,

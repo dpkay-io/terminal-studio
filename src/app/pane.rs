@@ -101,6 +101,10 @@ pub(super) struct SessionEntry {
     pub(super) is_active: Arc<AtomicBool>,
     pub(super) pending_command: Option<String>,
     pub(super) shell: ShellKind,
+    pub(super) restore_scroll_lines: Option<usize>,
+    pub(super) restore_scroll_ready: bool,
+    pub(super) restore_title: Option<String>,
+    pub(super) claude_session_id: Option<String>,
 }
 
 #[cfg(test)]

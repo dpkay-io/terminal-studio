@@ -13,6 +13,8 @@ pub(super) struct SavedSession {
     pub(super) title: Option<String>,
     #[serde(default)]
     pub(super) scrollback_file: Option<String>,
+    #[serde(default)]
+    pub(super) claude_session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -82,12 +84,14 @@ mod tests {
             command: Some("ls -la".into()),
             title: Some("my session".into()),
             scrollback_file: None,
+            claude_session_id: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedSession = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.cwd, original.cwd);
         assert_eq!(restored.command, original.command);
         assert_eq!(restored.title, original.title);
+        assert_eq!(restored.claude_session_id, None);
     }
 
     #[test]
@@ -97,6 +101,31 @@ mod tests {
         assert_eq!(s.cwd, PathBuf::from("/home/user"));
         assert_eq!(s.command, None);
         assert_eq!(s.title, None);
+        assert_eq!(s.claude_session_id, None);
+    }
+
+    #[test]
+    fn test_saved_session_with_claude_session_id_roundtrip() {
+        let original = SavedSession {
+            cwd: PathBuf::from("/home/user/project"),
+            command: Some("claude".into()),
+            title: Some("Claude session".into()),
+            scrollback_file: None,
+            claude_session_id: Some("abc-def-123-456".into()),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.claude_session_id,
+            Some("abc-def-123-456".to_string())
+        );
+    }
+
+    #[test]
+    fn test_saved_session_without_claude_session_id_defaults_none() {
+        let json = r#"{"cwd": "/home/user"}"#;
+        let s: SavedSession = serde_json::from_str(json).unwrap();
+        assert_eq!(s.claude_session_id, None);
     }
 
     #[test]
@@ -183,12 +212,14 @@ mod tests {
                     command: None,
                     title: None,
                     scrollback_file: None,
+                    claude_session_id: None,
                 },
                 SavedSession {
                     cwd: PathBuf::from("/tmp"),
                     command: Some("vim".into()),
                     title: Some("vim session".into()),
                     scrollback_file: None,
+                    claude_session_id: None,
                 },
             ],
             panes: vec![
