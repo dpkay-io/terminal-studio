@@ -6,6 +6,10 @@ pub struct ForegroundProcess {
     /// Full command-line arguments as parsed from the OS.  May be just [name]
     /// on platforms where arg retrieval is unavailable.
     pub cmdline: Vec<String>,
+    /// OS process ID of the foreground process, if available.
+    // TODO(task-3): consumed by ForegroundWorker for Claude session lookup
+    #[allow(dead_code)]
+    pub pid: Option<u32>,
 }
 
 /// Detect the first non-shell foreground child of `shell_pid`.
@@ -36,10 +40,11 @@ mod platform {
     ];
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        let (_child_pid, name) = find_child(shell_pid)?;
+        let (child_pid, name) = find_child(shell_pid)?;
         Some(ForegroundProcess {
             cmdline: vec![name.clone()],
             name,
+            pid: Some(child_pid),
         })
     }
 
@@ -104,6 +109,7 @@ mod platform {
         Some(ForegroundProcess {
             name,
             cmdline: args,
+            pid: Some(fg_pid),
         })
     }
 
@@ -139,10 +145,10 @@ mod platform {
     use super::ForegroundProcess;
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        // Single `ps` call: list child processes of shell_pid with their commands.
+        // Single `ps` call: list all processes with parent PID, PID, and full command.
         // `-o ppid=,pid=,command=` gives parent PID, PID, and full command, no header.
         let out = std::process::Command::new("ps")
-            .args(["-eo", "ppid=,command="])
+            .args(["-eo", "ppid=,pid=,command="])
             .output()
             .ok()?;
         let text = String::from_utf8_lossy(&out.stdout);
@@ -152,7 +158,10 @@ mod platform {
             // Check if this process is a child of our shell
             if let Some(rest) = trimmed.strip_prefix(&shell_pid_str) {
                 if rest.starts_with(' ') {
-                    let cmd = rest.trim();
+                    let rest = rest.trim_start();
+                    let (pid_str, cmd) = rest.split_once(' ')?;
+                    let child_pid: u32 = pid_str.trim().parse().ok()?;
+                    let cmd = cmd.trim();
                     if cmd.is_empty() {
                         continue;
                     }
@@ -166,6 +175,7 @@ mod platform {
                     return Some(ForegroundProcess {
                         name,
                         cmdline: args,
+                        pid: Some(child_pid),
                     });
                 }
             }
@@ -181,5 +191,44 @@ mod platform {
     use super::ForegroundProcess;
     pub fn detect_child(_shell_pid: u32) -> Option<ForegroundProcess> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_foreground_process_with_pid() {
+        let proc = ForegroundProcess {
+            name: "claude".into(),
+            cmdline: vec!["claude".into()],
+            pid: Some(12345),
+        };
+        assert_eq!(proc.pid, Some(12345));
+        assert_eq!(proc.name, "claude");
+    }
+
+    #[test]
+    fn test_foreground_process_without_pid() {
+        let proc = ForegroundProcess {
+            name: "vim".into(),
+            cmdline: vec!["vim".into()],
+            pid: None,
+        };
+        assert_eq!(proc.pid, None);
+    }
+
+    #[test]
+    fn test_foreground_process_clone() {
+        let original = ForegroundProcess {
+            name: "ssh".into(),
+            cmdline: vec!["ssh".into(), "user@host".into()],
+            pid: Some(42),
+        };
+        let cloned = original.clone();
+        assert_eq!(cloned.name, original.name);
+        assert_eq!(cloned.cmdline, original.cmdline);
+        assert_eq!(cloned.pid, original.pid);
     }
 }

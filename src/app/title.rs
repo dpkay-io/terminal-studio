@@ -180,6 +180,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "vim".to_string(),
             cmdline: vec!["vim".to_string(), "README.md".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title("bash", cwd, Some(&fg), None, None),
@@ -193,6 +194,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "htop".to_string(),
             cmdline: vec!["htop".to_string()],
+            pid: None,
         };
         assert_eq!(effective_title("bash", cwd, Some(&fg), None, None), "htop");
     }
@@ -203,6 +205,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "node.exe".to_string(),
             cmdline: vec!["node.exe".to_string(), "server.js".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title("bash", cwd, Some(&fg), None, None),
@@ -219,6 +222,7 @@ mod tests {
                 "vim".to_string(),
                 "/home/user/projects/README.md".to_string(),
             ],
+            pid: None,
         };
         assert_eq!(
             effective_title("bash", cwd, Some(&fg), None, None),
@@ -250,6 +254,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "cargo".to_string(),
             cmdline: vec!["cargo".to_string(), "build".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title("bash", cwd, Some(&fg), None, Some("My Project")),
@@ -272,6 +277,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "claude".to_string(),
             cmdline: vec!["claude".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title("claude ~/ws/ai-studio", cwd, Some(&fg), None, None),
@@ -285,6 +291,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "node.exe".to_string(),
             cmdline: vec!["node.exe".to_string(), "server.js".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title(
@@ -304,6 +311,7 @@ mod tests {
         let fg = ForegroundProcess {
             name: "ssh".to_string(),
             cmdline: vec!["ssh".to_string(), "user@host".to_string()],
+            pid: None,
         };
         assert_eq!(
             effective_title("bash", cwd, Some(&fg), None, None),
