@@ -157,19 +157,21 @@ mod platform {
             if let Some(rest) = trimmed.strip_prefix(&shell_pid_str) {
                 if rest.starts_with(' ') {
                     let rest = rest.trim_start();
-                    let (pid_str, cmd) = rest.split_once(' ')?;
-                    let child_pid: u32 = pid_str.trim().parse().ok()?;
+                    let Some((pid_str, cmd)) = rest.split_once(' ') else {
+                        continue;
+                    };
+                    let Ok(child_pid) = pid_str.trim().parse::<u32>() else {
+                        continue;
+                    };
                     let cmd = cmd.trim();
                     if cmd.is_empty() {
                         continue;
                     }
                     let args: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
-                    let name = args
-                        .first()?
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&args[0])
-                        .to_string();
+                    let Some(first) = args.first() else {
+                        continue;
+                    };
+                    let name = first.rsplit('/').next().unwrap_or(first).to_string();
                     return Some(ForegroundProcess {
                         name,
                         cmdline: args,
