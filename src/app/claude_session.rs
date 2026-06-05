@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 /// Returns the platform-appropriate path to the Claude Code sessions directory:
 /// - Windows: `%USERPROFILE%\.claude\sessions`
 /// - Non-Windows: `$HOME/.claude/sessions`
-#[allow(dead_code)]
 fn claude_sessions_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -25,7 +24,6 @@ fn claude_sessions_dir() -> Option<PathBuf> {
 /// - Process named `claude` or `claude.exe` (case-insensitive)
 /// - Process named `node` or `node.exe` (case-insensitive) with `"claude"` anywhere
 ///   in any cmdline argument (case-insensitive)
-#[allow(dead_code)]
 pub(crate) fn is_claude_process(name: &str, cmdline: &[String]) -> bool {
     if name.is_empty() {
         return false;
@@ -49,7 +47,6 @@ pub(crate) fn is_claude_process(name: &str, cmdline: &[String]) -> bool {
 
 /// Reads `{dir}/{pid}.json`, parses JSON, and extracts the `"sessionId"` field.
 /// Returns `None` on any I/O or parse error.
-#[allow(dead_code)]
 fn lookup_claude_session_id_in(dir: &Path, pid: u32) -> Option<String> {
     let path = dir.join(format!("{pid}.json"));
     let text = std::fs::read_to_string(&path).ok()?;
@@ -65,7 +62,6 @@ fn lookup_claude_session_id_in(dir: &Path, pid: u32) -> Option<String> {
 /// Claude Code stores active session info at `~/.claude/sessions/{pid}.json`.
 /// Returns `None` if the sessions directory cannot be determined, the file is
 /// absent, or the JSON is malformed / missing the `"sessionId"` field.
-#[allow(dead_code)]
 pub(crate) fn lookup_claude_session_id(pid: u32) -> Option<String> {
     let dir = claude_sessions_dir()?;
     lookup_claude_session_id_in(&dir, pid)

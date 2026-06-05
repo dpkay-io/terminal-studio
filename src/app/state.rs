@@ -1207,12 +1207,17 @@ impl App {
                     ws_name.as_deref(),
                 ));
                 let scrollback_file = scrollback_files.get(&e.id).cloned();
+                let claude_session_id = self
+                    .workers
+                    .foreground_worker
+                    .get_claude_session_id(e.id)
+                    .or_else(|| e.claude_session_id.clone());
                 SavedSession {
                     cwd,
                     command,
                     title,
                     scrollback_file,
-                    claude_session_id: None,
+                    claude_session_id,
                 }
             })
             .collect();
@@ -1353,6 +1358,11 @@ impl App {
                             }
                         }
                         entry.restore_title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
+                        if let Some(ref claude_id) = s.claude_session_id {
+                            entry.pending_command =
+                                Some(format!("claude --resume \"{}\"", claude_id));
+                            entry.claude_session_id = Some(claude_id.clone());
+                        }
                     }
                     eagerly_spawned.insert(active_idx, sid);
                 }
@@ -1383,7 +1393,12 @@ impl App {
                         });
                         let saved_title = saved.and_then(|s| s.title.clone());
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
-                        let pending_command = if scrollback_file.is_some() {
+                        let claude_session_id = saved.and_then(|s| s.claude_session_id.clone());
+                        let pending_command = if claude_session_id.is_some() {
+                            claude_session_id
+                                .as_ref()
+                                .map(|id| format!("claude --resume \"{}\"", id))
+                        } else if scrollback_file.is_some() {
                             None
                         } else {
                             saved.and_then(|s| s.command.clone())

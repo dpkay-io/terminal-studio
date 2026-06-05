@@ -3641,6 +3641,26 @@ impl App {
             }
         }
 
+        // 5c. Sync Claude session IDs from foreground worker to session entries.
+        {
+            let mut new_claude_capture = false;
+            for entry in &mut self.session_state.sessions {
+                if let Some(id) = self
+                    .workers
+                    .foreground_worker
+                    .get_claude_session_id(entry.id)
+                {
+                    if entry.claude_session_id.as_ref() != Some(&id) {
+                        entry.claude_session_id = Some(id);
+                        new_claude_capture = true;
+                    }
+                }
+            }
+            if new_claude_capture {
+                self.save_session();
+            }
+        }
+
         // 6. Editor text changes
         for (pane_id, new_text) in &editor_texts {
             if let Some(ref new_text) = new_text {
