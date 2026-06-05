@@ -67,6 +67,41 @@ pub(crate) fn lookup_claude_session_id(pid: u32) -> Option<String> {
     lookup_claude_session_id_in(&dir, pid)
 }
 
+fn claude_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("USERPROFILE")
+            .ok()
+            .map(|base| PathBuf::from(base).join(".claude"))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME")
+            .ok()
+            .map(|base| PathBuf::from(base).join(".claude"))
+    }
+}
+
+fn cwd_to_project_dir_name(cwd: &Path) -> String {
+    cwd.to_string_lossy().replace([':', '\\', '/'], "-")
+}
+
+/// Returns the `claude --resume "<id>"` command if the session file exists on
+/// disk, otherwise falls back to `claude --continue`.
+pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> String {
+    if let Some(claude_home) = claude_home_dir() {
+        let project_name = cwd_to_project_dir_name(cwd);
+        let jsonl = claude_home
+            .join("projects")
+            .join(&project_name)
+            .join(format!("{session_id}.jsonl"));
+        if jsonl.exists() {
+            return format!("claude --resume \"{}\"", session_id);
+        }
+    }
+    "claude --continue".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +182,31 @@ mod tests {
         std::fs::write(dir.path().join("42.json"), "not valid json {{{{").unwrap();
         let result = lookup_claude_session_id_in(dir.path(), 42);
         assert_eq!(result, None);
+    }
+
+    // ── cwd_to_project_dir_name ────────────────────────────────────────────
+
+    #[test]
+    fn test_cwd_to_project_dir_name_windows() {
+        let name = cwd_to_project_dir_name(Path::new("C:\\Users\\dpk\\ws\\my-project"));
+        assert_eq!(name, "C--Users-dpk-ws-my-project");
+    }
+
+    #[test]
+    fn test_cwd_to_project_dir_name_unix() {
+        let name = cwd_to_project_dir_name(Path::new("/home/user/project"));
+        assert_eq!(name, "-home-user-project");
+    }
+
+    // ── claude_resume_command ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resume_command_falls_back_when_no_jsonl() {
+        let dir = tempdir().unwrap();
+        let cwd = dir.path().join("project");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let cmd = claude_resume_command("nonexistent-uuid", &cwd);
+        assert_eq!(cmd, "claude --continue");
     }
 
     #[test]

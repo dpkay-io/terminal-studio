@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -1359,8 +1359,9 @@ impl App {
                         }
                         entry.restore_title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
                         if let Some(ref claude_id) = s.claude_session_id {
-                            entry.pending_command =
-                                Some(format!("claude --resume \"{}\"", claude_id));
+                            entry.pending_command = Some(
+                                super::claude_session::claude_resume_command(claude_id, &s.cwd),
+                            );
                             entry.claude_session_id = Some(claude_id.clone());
                         }
                     }
@@ -1394,10 +1395,12 @@ impl App {
                         let saved_title = saved.and_then(|s| s.title.clone());
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
                         let claude_session_id = saved.and_then(|s| s.claude_session_id.clone());
-                        let pending_command = if claude_session_id.is_some() {
-                            claude_session_id
-                                .as_ref()
-                                .map(|id| format!("claude --resume \"{}\"", id))
+                        let pending_command = if let Some(ref cid) = claude_session_id {
+                            let session_cwd = cwd.as_deref().unwrap_or(Path::new(""));
+                            Some(super::claude_session::claude_resume_command(
+                                cid,
+                                session_cwd,
+                            ))
                         } else if scrollback_file.is_some() {
                             None
                         } else {
