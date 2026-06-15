@@ -271,6 +271,9 @@ pub struct App {
 
     // Position where the terminal context menu was opened (captured on right-click)
     context_menu_pos: Option<egui::Pos2>,
+
+    // Last CWD used by the right panel — triggers immediate watcher sync on change
+    last_right_panel_cwd: Option<PathBuf>,
 }
 
 impl eframe::App for App {
@@ -589,6 +592,44 @@ impl eframe::App for App {
                 self.shown_md_tabs.remove(&path);
                 for w in &mut self.extra_windows {
                     w.view.shown_md_tabs.remove(&path);
+                }
+            }
+        }
+
+        // ── Immediate watcher sync when active pane CWD changes ──────────
+        // Without this, switching panes/tabs or `cd`-ing leaves the right
+        // panel blank until the 3-second periodic sync picks up the new CWD.
+        {
+            let current_cwd = self.active_pane_cwd();
+            if current_cwd != self.last_right_panel_cwd {
+                self.last_right_panel_cwd = current_cwd.clone();
+                if let Some(ref new_cwd) = current_cwd {
+                    let missing = self
+                        .watch_state
+                        .as_ref()
+                        .map(|ws| !ws.dir_data.contains_key(new_cwd))
+                        .unwrap_or(false);
+                    if missing {
+                        let mut cwd_paths: Vec<PathBuf> = self
+                            .session_state
+                            .sessions
+                            .iter()
+                            .filter_map(|e| {
+                                let cwd = e.session.read().cwd.clone();
+                                if cwd.as_os_str().is_empty() {
+                                    None
+                                } else {
+                                    Some(cwd)
+                                }
+                            })
+                            .collect();
+                        if !cwd_paths.contains(new_cwd) {
+                            cwd_paths.push(new_cwd.clone());
+                        }
+                        if let Some(ref ws) = self.watch_state {
+                            ws.request_sync(cwd_paths);
+                        }
+                    }
                 }
             }
         }
@@ -957,7 +998,9 @@ impl App {
         self.render_left_panel(ctx);
 
         // ── Snapshot right-panel data before closures capture self ──────────
-        let active_cwd = self.active_cwd();
+        // Use pane-aware CWD so the right panel stays in sync with
+        // non-terminal panes (FileEditor, FileDiff, NoteEditor, etc.).
+        let active_cwd = self.active_pane_cwd();
         let active_tab = self.right_tab.clone();
 
         // Snapshot data from the watch state. Heavy fields (dir_entries,
@@ -1121,6 +1164,7 @@ impl App {
                                 ui.style_mut().spacing.scroll.bar_width = 4.0;
                                 ui.style_mut().spacing.scroll.handle_min_length = 12.0;
                                 ui.style_mut().spacing.scroll.bar_inner_margin = 1.0;
+                                ui.style_mut().spacing.scroll.floating_allocated_width = 0.0;
                                 let scroll_output = egui::ScrollArea::horizontal()
                                     .id_source(self.vp_id("right_tab_bar"))
                                     .max_height(theme::HEADER_H)
@@ -1232,7 +1276,7 @@ impl App {
                         egui::ScrollArea::vertical()
                             .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
-                                let w = ui.available_width() - theme::SCROLLBAR_PAD;
+                                let w = ui.available_width();
                                 ui.set_min_width(w);
                                 ui.set_max_width(w);
                                 match &active_tab {

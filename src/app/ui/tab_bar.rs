@@ -40,6 +40,7 @@ impl App {
         ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
             ui.painter()
                 .rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
+            ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             let scroll_out = egui::ScrollArea::horizontal()
                 .id_source(self.vp_id("tab_bar_scroll"))
                 .auto_shrink([false, false])

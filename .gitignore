@@ -8,3 +8,9 @@ Thumbs.db
 *.bak
 *.stackdump
 AUDIT.md
+docs/superpowers/plans/*
+.superpowers/brainstorm/*
+docs/superpowers/specs/*
+installer/Output/
+tools/*.exe
+*.pdb

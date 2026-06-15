@@ -371,7 +371,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() - theme::SCROLLBAR_PAD);
+                ui.set_max_width(ui.available_width());
                 let matcher = SkimMatcherV2::default();
                 for pane in self.pane_state.panes.iter() {
                     let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane
@@ -536,10 +536,8 @@ impl App {
                         painter.rect_filled(border, 0.0, theme::from_rgb(c));
                     }
 
-                    // Quit button — inset from right edge to avoid scrollbar overlap
-                    let sb_pad = theme::SCROLLBAR_BTN_PAD;
                     let quit_rect = egui::Rect::from_min_size(
-                        egui::pos2(row_rect.max.x - theme::BTN_W - sb_pad, row_rect.min.y),
+                        egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
                         egui::vec2(theme::BTN_W, row_rect.height()),
                     );
                     let quit_resp = ui_kit::icon_button(

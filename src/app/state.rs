@@ -73,7 +73,7 @@ impl App {
                 bar_inner_margin: theme::SP_1,
                 bar_outer_margin: 0.0,
                 floating_width: 4.0,
-                floating_allocated_width: 0.0,
+                floating_allocated_width: 12.0,
                 foreground_color: true,
                 dormant_background_opacity: 0.0,
                 active_background_opacity: 0.4,
@@ -286,6 +286,7 @@ impl App {
             show_stage_all_confirm: false,
             revert_confirm_file: None,
             context_menu_pos: None,
+            last_right_panel_cwd: None,
         };
 
         let (init_cols, init_rows) = {
@@ -1566,7 +1567,7 @@ impl App {
             bar_inner_margin: theme::SP_1,
             bar_outer_margin: 0.0,
             floating_width: 4.0,
-            floating_allocated_width: 0.0,
+            floating_allocated_width: 12.0,
             foreground_color: true,
             dormant_background_opacity: 0.0,
             active_background_opacity: 0.4,

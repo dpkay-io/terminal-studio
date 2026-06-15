@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Terminal Studio
+Upstream-Contact: deepakjha.dpk@gmail.com
+Source: https://github.com/dpkay-io/terminal-studio
+
+Files: *
+Copyright: 2024-2026 Deepak Jha
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0.
+ See /usr/share/common-licenses/Apache-2.0 for the full text.

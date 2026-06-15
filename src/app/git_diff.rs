@@ -468,7 +468,8 @@ pub(super) fn render_git_diff(
                         egui::FontId::monospace(theme::GIT_FONT_SZ),
                         badge_fg,
                     );
-                    let btn_reserve = theme::SP_4 + 20.0;
+                    let can_revert = entry.kind != FileChangeKind::Untracked;
+                    let btn_reserve = theme::SP_4 + if can_revert { 40.0 } else { 20.0 };
                     let label_max = (ui.available_width() - btn_reserve).max(20.0);
                     let label_resp = ui
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
@@ -517,7 +518,7 @@ pub(super) fn render_git_diff(
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(theme::SP_4);
-                        let btn = ui.add(
+                        let stage_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("+")
                                     .monospace()
@@ -526,8 +527,22 @@ pub(super) fn render_git_diff(
                             )
                             .frame(false),
                         );
-                        if btn.on_hover_text("Stage").clicked() {
+                        if stage_btn.on_hover_text("Stage").clicked() {
                             return Some(entry.path.clone());
+                        }
+                        if can_revert {
+                            let revert_btn = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new("\u{21BA}")
+                                        .monospace()
+                                        .size(theme::FONT_TERM)
+                                        .color(theme::active().error),
+                                )
+                                .frame(false),
+                            );
+                            if revert_btn.on_hover_text("Revert changes").clicked() {
+                                revert_file = Some(entry.path.clone());
+                            }
                         }
                         None
                     })

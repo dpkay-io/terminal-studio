@@ -166,7 +166,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width() - theme::SCROLLBAR_PAD);
+                ui.set_max_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = theme::SP_2;
 
                 if has_active_other && search_filter.is_empty() {
@@ -215,10 +215,7 @@ impl App {
         let (full_rect, _) =
             ui.allocate_exact_size(egui::vec2(full_w, card_h), egui::Sense::hover());
         let gear_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                full_rect.max.x - theme::CARD_GEAR_W - theme::SCROLLBAR_BTN_PAD,
-                full_rect.min.y,
-            ),
+            egui::pos2(full_rect.max.x - theme::CARD_GEAR_W, full_rect.min.y),
             egui::vec2(theme::CARD_GEAR_W, theme::HEADER_H),
         );
         let name_rect = egui::Rect::from_min_max(

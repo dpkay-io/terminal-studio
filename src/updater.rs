@@ -194,10 +194,13 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
 }
 
 fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
-    let download_url = {
+    let (download_url, version) = {
         let s = shared.lock();
         match &s.status {
-            UpdateStatus::UpdateAvailable { download_url, .. } => download_url.clone(),
+            UpdateStatus::UpdateAvailable {
+                download_url,
+                version,
+            } => (download_url.clone(), version.clone()),
             _ => return,
         }
     };
@@ -216,8 +219,14 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         }
     };
 
-    if let Err(msg) = preflight_checks(&current_exe) {
-        set_error(shared, ctx, &msg);
+    if preflight_checks(&current_exe).is_err() {
+        set_error(
+            shared,
+            ctx,
+            &format!(
+                "v{version} available \u{2014} download the installer from the releases page to update"
+            ),
+        );
         return;
     }
 

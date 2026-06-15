@@ -42,6 +42,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 .show(ui, |ui| {
                     let avail = ui.available_width();
                     ui.set_min_width(avail);
+                    ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                     egui::ScrollArea::horizontal()
                         .id_source("md_code_scroll")
                         .show(ui, |ui| {

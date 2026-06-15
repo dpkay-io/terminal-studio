@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use alacritty_terminal::grid::Dimensions as _;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use base64::Engine;
 use egui::Context;
@@ -185,7 +186,18 @@ pub fn reader_thread(
             let end = (pos + 4096).min(n);
             {
                 let mut s = session.write();
+                let offset_before = s.term.grid().display_offset();
+                let history_before = s.term.grid().history_size();
                 processor.advance(&mut s.term, &buf[pos..end]);
+                // alacritty's Grid::scroll_up() resets display_offset to 0.
+                // Restore scroll position so the user doesn't snap to the
+                // bottom whenever the shell produces output.
+                if offset_before > 0 && s.term.grid().display_offset() == 0 {
+                    let added = s.term.grid().history_size().saturating_sub(history_before);
+                    let target = (offset_before + added).min(s.term.grid().history_size());
+                    s.term
+                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(target as i32));
+                }
             }
             pos = end;
         }

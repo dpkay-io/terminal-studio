@@ -455,8 +455,6 @@ pub const TAB_ACTION_GAP: f32 = 2.0;
 pub const SCROLLBAR_W_IDLE: f32 = 4.0;
 pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
 pub const SCROLLBAR_HIT_W: f32 = 16.0;
-pub const SCROLLBAR_PAD: f32 = 10.0;
-pub const SCROLLBAR_BTN_PAD: f32 = SCROLLBAR_PAD + SCROLLBAR_W_IDLE;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 
@@ -1852,11 +1850,6 @@ mod tests {
         for i in 1..256 {
             assert!(lut[i] >= lut[i - 1], "LUT must be monotonic at index {i}");
         }
-    }
-
-    #[test]
-    fn test_scrollbar_btn_pad_matches_sum() {
-        assert!((SCROLLBAR_BTN_PAD - (SCROLLBAR_PAD + SCROLLBAR_W_IDLE)).abs() < f32::EPSILON);
     }
 
     #[test]

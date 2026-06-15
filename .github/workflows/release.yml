@@ -11,6 +11,18 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# ┌─────────────────────────────────────────────────────────────────┐
+# │ Optional features (configure via repo Settings → Variables/Secrets): │
+# │                                                                 │
+# │ SignPath code signing (free for OSS — apply at signpath.org):   │
+# │   Variable: SIGNPATH_ORGANIZATION_ID                            │
+# │   Secret:   SIGNPATH_API_TOKEN                                  │
+# │                                                                 │
+# │ Homebrew tap auto-update:                                       │
+# │   Variable: HOMEBREW_TAP_REPO  (e.g. dpkay-io/homebrew-tap)    │
+# │   Secret:   HOMEBREW_TAP_TOKEN (PAT with repo scope for tap)   │
+# └─────────────────────────────────────────────────────────────────┘
+
 jobs:
   build:
     name: Build (${{ matrix.target }})
@@ -31,6 +43,8 @@ jobs:
             target: aarch64-apple-darwin
             binary: terminal-studio
             asset: terminal-studio-macos-arm
+    outputs:
+      windows-bare-artifact-id: ${{ steps.windows-artifact-id.outputs.id }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -44,16 +58,169 @@ jobs:
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-      - name: Rename binary
+
+      # ── macOS: .app bundle + .dmg ──
+      - name: Package macOS
+        if: matrix.os == 'macos-latest'
         shell: bash
-        run: mv target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
-      - uses: actions/upload-artifact@v4
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BINARY="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          APP="Terminal Studio.app"
+
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "$BINARY" "$APP/Contents/MacOS/terminal-studio"
+          chmod +x "$APP/Contents/MacOS/terminal-studio"
+          cp assets/icon.icns "$APP/Contents/Resources/icon.icns"
+          sed "s/VERSION_PLACEHOLDER/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          codesign --sign - --deep --force "$APP"
+          hdiutil create -volname "Terminal Studio" \
+            -srcfolder "$APP" -ov -format UDZO \
+            "terminal-studio-macos-arm.dmg"
+
+      # ── Linux: .deb package ──
+      - name: Package Linux .deb
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BINARY="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          PKG="terminal-studio_${VERSION}_amd64"
+
+          mkdir -p "$PKG/DEBIAN"
+          sed "s/VERSION_PLACEHOLDER/$VERSION/" packaging/linux/control > "$PKG/DEBIAN/control"
+
+          mkdir -p "$PKG/usr/bin"
+          cp "$BINARY" "$PKG/usr/bin/terminal-studio"
+          chmod 755 "$PKG/usr/bin/terminal-studio"
+
+          mkdir -p "$PKG/usr/share/applications"
+          cp packaging/linux/terminal-studio.desktop "$PKG/usr/share/applications/"
+
+          for size in 48 128 256 512; do
+            dir="$PKG/usr/share/icons/hicolor/${size}x${size}/apps"
+            mkdir -p "$dir"
+            cp "assets/icon-${size}.png" "$dir/terminal-studio.png"
+          done
+
+          mkdir -p "$PKG/usr/share/doc/terminal-studio"
+          cp packaging/linux/copyright "$PKG/usr/share/doc/terminal-studio/"
+
+          dpkg-deb --build --root-owner-group "$PKG"
+          mv "${PKG}.deb" "terminal-studio-linux-amd64.deb"
+
+      # ── Upload bare binary (all platforms) ──
+      - name: Prepare bare binary
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
+      - name: Upload bare binary
+        id: upload-bare
+        uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
+      - name: Capture Windows artifact ID
+        if: matrix.os == 'windows-latest'
+        id: windows-artifact-id
+        shell: bash
+        run: echo "id=${{ steps.upload-bare.outputs.artifact-id }}" >> "$GITHUB_OUTPUT"
+
+      # ── Upload platform packages ──
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'macos-latest'
+        with:
+          name: terminal-studio-macos-arm.dmg
+          path: terminal-studio-macos-arm.dmg
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'ubuntu-latest'
+        with:
+          name: terminal-studio-linux-amd64.deb
+          path: terminal-studio-linux-amd64.deb
+
+  # ── Windows installer (Inno Setup) ──
+  installer:
+    name: Windows Installer
+    needs: build
+    runs-on: windows-latest
+    outputs:
+      installer-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-studio-windows.exe
+          path: target/x86_64-pc-windows-msvc/release/
+      - name: Rename artifact
+        shell: bash
+        run: |
+          mv target/x86_64-pc-windows-msvc/release/terminal-studio-windows.exe \
+             target/x86_64-pc-windows-msvc/release/terminal-studio.exe
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DAppVersion="$version" installer\terminal-studio.iss
+      - name: Upload installer
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-studio-setup.exe
+          path: installer/Output/terminal-studio-setup.exe
+
+  # ── SignPath code signing (free for OSS — skipped if not configured) ──
+  sign:
+    name: Sign Windows Artifacts
+    needs: [build, installer]
+    if: vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+      - name: Sign bare exe
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: terminal-studio
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ needs.build.outputs.windows-bare-artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-bare
+      - name: Sign installer
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: terminal-studio
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ needs.installer.outputs.installer-artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed-installer
+      - name: Upload signed bare exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-studio-windows.exe
+          path: signed-bare/terminal-studio-windows.exe
+          overwrite: true
+      - name: Upload signed installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: terminal-studio-setup.exe
+          path: signed-installer/terminal-studio-setup.exe
+          overwrite: true
 
   release:
-    needs: build
+    needs: [build, installer, sign]
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      needs.installer.result == 'success' &&
+      (needs.sign.result == 'success' || needs.sign.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - name: Delete pre-existing release
@@ -71,12 +238,46 @@ jobs:
           generate_release_notes: true
           files: |
             terminal-studio-windows.exe
+            terminal-studio-setup.exe
             terminal-studio-linux
+            terminal-studio-linux-amd64.deb
             terminal-studio-macos-arm
+            terminal-studio-macos-arm.dmg
+
+  # ── Homebrew tap auto-update (skipped if not configured) ──
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: release
+    if: vars.HOMEBREW_TAP_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: terminal-studio-macos-arm.dmg
+      - name: Update cask formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA256=$(sha256sum terminal-studio-macos-arm.dmg | awk '{print $1}')
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
+          cd tap
+          mkdir -p Casks
+          cp "$GITHUB_WORKSPACE/packaging/homebrew/terminal-studio.rb" Casks/terminal-studio.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" Casks/terminal-studio.rb
+          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/" Casks/terminal-studio.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/terminal-studio.rb
+          git diff --cached --quiet || { git commit -m "Update terminal-studio to ${VERSION}" && git push; }
 
   cleanup-on-failure:
-    needs: [build, release]
-    if: ${{ always() && (needs.build.result == 'failure' || needs.release.result == 'failure') }}
+    needs: [build, installer, sign, release]
+    if: >-
+      always() &&
+      (needs.build.result == 'failure' || needs.installer.result == 'failure' || needs.release.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Delete incomplete release

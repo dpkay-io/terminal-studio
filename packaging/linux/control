@@ -1,0 +1,12 @@
+Package: terminal-studio
+Version: VERSION_PLACEHOLDER
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: libxkbcommon0, libwayland-client0, libx11-6, libxcb1, libvulkan1 | libegl1
+Maintainer: Deepak Jha <deepakjha.dpk@gmail.com>
+Homepage: https://github.com/dpkay-io/terminal-studio
+Description: GPU-accelerated terminal multiplexer
+ Terminal Studio is a GPU-accelerated terminal multiplexer built with
+ Rust and egui/wgpu. Features multi-pane terminals, workspaces, file
+ browser, git integration, and markdown preview.

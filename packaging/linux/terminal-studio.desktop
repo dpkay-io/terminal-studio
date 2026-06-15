@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Terminal Studio
+Comment=GPU-accelerated terminal multiplexer with workspaces
+Exec=terminal-studio
+Icon=terminal-studio
+Type=Application
+Categories=System;TerminalEmulator;Development;
+Terminal=false
+StartupWMClass=terminal-studio
+Keywords=terminal;console;shell;multiplexer;
