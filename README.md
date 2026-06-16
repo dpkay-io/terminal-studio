@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/dpkay-io/terminal-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/dpkay-io/terminal-studio/actions/workflows/ci.yml)
 [![Latest Release](https://img.shields.io/github/v/release/dpkay-io/terminal-studio?include_prereleases)](https://github.com/dpkay-io/terminal-studio/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/dpkay-io/terminal-studio/total)](https://github.com/dpkay-io/terminal-studio/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 > **Alpha software** — core features work, but expect bugs and breaking changes between releases. Bug reports are very welcome.
