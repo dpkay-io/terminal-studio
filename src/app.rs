@@ -2913,6 +2913,7 @@ impl App {
                     if !popup_open {
                         self.context_menu_pos = None;
                     }
+                    let mut close_context_menu = false;
                     if popup_open {
                         if let Some(pos) = self.context_menu_pos {
                             let dummy_resp = ui.interact(
@@ -2934,11 +2935,18 @@ impl App {
                                             if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                                 let text = self.extract_selected_text(idx);
                                                 if !text.is_empty() {
-                                                    ui.output_mut(|o| o.copied_text = text);
+                                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                        let _ = cb.set_text(&text);
+                                                    }
+                                                    if let Some(pid) = self.pane_state.active_pane_id {
+                                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
+                                                    }
                                                 }
                                             }
                                         }
-                                        ui.memory_mut(|m| m.close_popup());
+                                        self.term_selection = None;
+                                        self.term_selection_sid = None;
+                                        close_context_menu = true;
                                     }
                                     if ui.button("Paste").clicked() {
                                         if let Some(sid) = active_session_id {
@@ -2947,31 +2955,28 @@ impl App {
                                                     if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }
                                                 })) {
                                                     let _ = self.session_state.sessions[idx].pty_tx.try_send(clip.into_bytes());
-                                                } else {
-                                                    let mut ctx2 = arboard::Clipboard::new();
-                                                    if let Ok(ref mut cb) = ctx2 {
-                                                        if let Ok(text) = cb.get_text() {
-                                                            let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
-                                                            let data = if bp {
-                                                                let mut v = b"\x1b[200~".to_vec();
-                                                                v.extend_from_slice(text.as_bytes());
-                                                                v.extend_from_slice(b"\x1b[201~");
-                                                                v
-                                                            } else {
-                                                                text.into_bytes()
-                                                            };
-                                                            let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
-                                                        }
+                                                } else if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                    if let Ok(text) = cb.get_text() {
+                                                        let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
+                                                        let data = if bp {
+                                                            let mut v = b"\x1b[200~".to_vec();
+                                                            v.extend_from_slice(text.as_bytes());
+                                                            v.extend_from_slice(b"\x1b[201~");
+                                                            v
+                                                        } else {
+                                                            text.into_bytes()
+                                                        };
+                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
                                                     }
                                                 }
                                             }
                                         }
-                                        ui.memory_mut(|m| m.close_popup());
+                                        close_context_menu = true;
                                     }
                                     ui.separator();
                                     if ui.button("Search (Ctrl+F)").clicked() {
                                         self.term_search.active = true;
-                                        ui.memory_mut(|m| m.close_popup());
+                                        close_context_menu = true;
                                     }
                                     if ui.button("Select All").clicked() {
                                         if let Some(geo) = &self.active_term_geo {
@@ -2993,11 +2998,15 @@ impl App {
                                                 }
                                             }
                                         }
-                                        ui.memory_mut(|m| m.close_popup());
+                                        close_context_menu = true;
                                     }
                                 },
                             );
                         }
+                    }
+                    if close_context_menu {
+                        ui.memory_mut(|m| m.close_popup());
+                        self.context_menu_pos = None;
                     }
                 }
 
@@ -3779,8 +3788,10 @@ impl App {
         for (pane_id, width) in pane_widths_snap {
             if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
                 if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
-                    let cols = ((width / resize_cell_w) as u16).max(1);
-                    let rows = (((resize_total_h - theme::HEADER_H) / resize_cell_h) as u16).max(1);
+                    let cols = (((width - theme::TERM_PAD_LEFT) / resize_cell_w) as u16).max(1);
+                    let rows = (((resize_total_h - theme::HEADER_H - theme::TERM_PAD_TOP)
+                        / resize_cell_h) as u16)
+                        .max(1);
                     let target = (cols, rows);
                     if target != self.pane_state.panes[pane_idx].last_size {
                         // Reset debounce timer only if the target itself changed

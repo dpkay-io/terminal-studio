@@ -114,14 +114,22 @@ impl TerminalView {
         font_size: f32,
         cursor_style: CursorStyle,
     ) -> TerminalGeometry {
-        let rect = ui.available_rect_before_wrap();
-        let painter = ui.painter_at(rect);
+        let outer_rect = ui.available_rect_before_wrap();
+        let painter = ui.painter_at(outer_rect);
         let t = theme::active();
-        painter.rect_filled(rect, 0.0, t.bg_term);
+        painter.rect_filled(outer_rect, 0.0, t.bg_term);
 
         let font_id = FontId::monospace(font_size);
         let cell_height = ui.fonts(|f| f.row_height(&font_id));
         let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
+
+        let rect = Rect::from_min_max(
+            egui::pos2(
+                outer_rect.min.x + theme::TERM_PAD_LEFT,
+                outer_rect.min.y + theme::TERM_PAD_TOP,
+            ),
+            outer_rect.max,
+        );
 
         let visible_rows = (rect.height() / cell_height) as usize;
         let visible_cols = (rect.width() / cell_width) as usize;
@@ -136,7 +144,7 @@ impl TerminalView {
         if session_guard.is_none() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(8));
-            ui.allocate_rect(rect, Sense::hover());
+            ui.allocate_rect(outer_rect, Sense::hover());
             return TerminalGeometry {
                 rect,
                 cell_w: cell_width,
@@ -492,8 +500,10 @@ impl TerminalView {
             let bar_w_wide = theme::SCROLLBAR_W_ACTIVE;
             let hit_w = theme::SCROLLBAR_HIT_W;
 
-            let hit_rect =
-                egui::Rect::from_min_max(egui::pos2(rect.max.x - hit_w, rect.min.y), rect.max);
+            let hit_rect = egui::Rect::from_min_max(
+                egui::pos2(outer_rect.max.x - hit_w, outer_rect.min.y),
+                outer_rect.max,
+            );
 
             let (pointer_pos, primary_down, any_down) = ui.input(|i| {
                 (
@@ -507,9 +517,6 @@ impl TerminalView {
 
             let sb_mem_id = ui.id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
-            // If an egui widget (panel resize handle, split divider) has captured
-            // the pointer press, don't let the scrollbar activate. Uses
-            // potential_drag_id which is set immediately on press — no frame delay.
             #[allow(deprecated)]
             let egui_captured = ui.memory(|m| m.is_anything_being_dragged());
             let is_dragging =
@@ -524,16 +531,18 @@ impl TerminalView {
                 bar_w_thin
             };
             let thumb_frac = (visible_rows as f32 / total_lines as f32).min(1.0);
-            let thumb_h = (rect.height() * thumb_frac).max(20.0).min(rect.height());
-            let track_h = (rect.height() - thumb_h).max(0.0);
+            let thumb_h = (outer_rect.height() * thumb_frac)
+                .max(theme::SCROLLBAR_MIN_THUMB)
+                .min(outer_rect.height());
+            let track_h = (outer_rect.height() - thumb_h).max(0.0);
 
             let lines_above = history.saturating_sub(display_offset);
             let top_frac = lines_above as f32 / (total_lines - visible_rows).max(1) as f32;
-            let thumb_y = rect.min.y + track_h * top_frac;
+            let thumb_y = outer_rect.min.y + track_h * top_frac;
 
             if is_dragging {
                 if let Some(pos) = pointer_pos {
-                    let click_y = (pos.y - rect.min.y - thumb_h * 0.5).clamp(0.0, track_h);
+                    let click_y = (pos.y - outer_rect.min.y - thumb_h * 0.5).clamp(0.0, track_h);
                     let frac = if track_h > 0.0 {
                         click_y / track_h
                     } else {
@@ -569,14 +578,28 @@ impl TerminalView {
                 )
             };
 
+            if scrollbar_hovered {
+                let track_rect = egui::Rect::from_min_max(
+                    egui::pos2(outer_rect.max.x - bar_w_wide - 2.0, outer_rect.min.y),
+                    outer_rect.max,
+                );
+                let track_color = egui::Color32::from_rgba_unmultiplied(
+                    t.scrollbar_color.r(),
+                    t.scrollbar_color.g(),
+                    t.scrollbar_color.b(),
+                    30,
+                );
+                painter.rect_filled(track_rect, bar_w_wide * 0.5, track_color);
+            }
+
             let bar_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.max.x - bar_w, thumb_y),
+                egui::pos2(outer_rect.max.x - bar_w, thumb_y),
                 egui::vec2(bar_w, thumb_h),
             );
             painter.rect_filled(bar_rect, bar_w * 0.5, bar_color);
         }
 
-        ui.allocate_rect(rect, Sense::hover());
+        ui.allocate_rect(outer_rect, Sense::hover());
 
         TerminalGeometry {
             rect,

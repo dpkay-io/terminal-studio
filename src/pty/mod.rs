@@ -3,6 +3,7 @@ pub mod foreground_worker;
 pub mod reader;
 pub mod shell_integration;
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -13,6 +14,17 @@ use parking_lot::RwLock;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::terminal::Session;
+
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("USERPROFILE").ok().map(PathBuf::from)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME").ok().map(PathBuf::from)
+    }
+}
 
 // ── Shell kind ────────────────────────────────────────────────────────────────
 
@@ -226,7 +238,8 @@ impl SessionManager {
 
         let mut cmd = self.build_command(shell);
         cmd.env("TERM", "xterm-256color");
-        if let Some(ref dir) = cwd {
+        let effective_cwd = cwd.or_else(home_dir);
+        if let Some(ref dir) = effective_cwd {
             cmd.cwd(dir);
         }
 
@@ -267,7 +280,7 @@ impl SessionManager {
             id,
             cols,
             rows,
-            cwd,
+            effective_cwd,
             self.ctx.clone(),
             pty_tx.clone(),
             scrollback_lines,

@@ -450,11 +450,17 @@ pub const TAB_PAD_X: f32 = 6.0;
 pub const TAB_ACTIONS_W: f32 = 82.0;
 pub const TAB_ACTION_GAP: f32 = 2.0;
 
+// ── Terminal inner padding ──────────────────────────────────────────────────
+
+pub const TERM_PAD_LEFT: f32 = 4.0;
+pub const TERM_PAD_TOP: f32 = 2.0;
+
 // ── Scrollbar ───────────────────────────────────────────────────────────────
 
-pub const SCROLLBAR_W_IDLE: f32 = 4.0;
-pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
-pub const SCROLLBAR_HIT_W: f32 = 16.0;
+pub const SCROLLBAR_W_IDLE: f32 = 6.0;
+pub const SCROLLBAR_W_ACTIVE: f32 = 14.0;
+pub const SCROLLBAR_HIT_W: f32 = 24.0;
+pub const SCROLLBAR_MIN_THUMB: f32 = 32.0;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 
@@ -490,9 +496,9 @@ pub const ALPHA_CURSOR: u8 = 200;
 pub const ALPHA_CURSOR_DIM: u8 = 160;
 pub const ALPHA_SELECTION: u8 = 140;
 pub const ALPHA_OVERLAY_DIM: u8 = 140;
-pub const ALPHA_SCROLLBAR_IDLE: u8 = 140;
-pub const ALPHA_SCROLLBAR_HOVER: u8 = 160;
-pub const ALPHA_SCROLLBAR_DRAG: u8 = 220;
+pub const ALPHA_SCROLLBAR_IDLE: u8 = 160;
+pub const ALPHA_SCROLLBAR_HOVER: u8 = 200;
+pub const ALPHA_SCROLLBAR_DRAG: u8 = 240;
 pub const ALPHA_FLASH: u8 = 120;
 pub const ALPHA_SCROLL_INDICATOR: u8 = 60;
 
