@@ -272,8 +272,10 @@ mod tests {
 
     #[test]
     fn manifest_serde_roundtrip() {
-        let mut manifest = ClosedSessionManifest::default();
-        manifest.next_id = 42;
+        let mut manifest = ClosedSessionManifest {
+            next_id: 42,
+            ..Default::default()
+        };
         manifest.records.push(make_record(1, Some("sb_00001.zst")));
         manifest.records.push(make_record(2, None));
 

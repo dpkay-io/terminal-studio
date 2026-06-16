@@ -48,14 +48,18 @@ impl FlashManager {
         self.flashes.retain(|f| f.start.elapsed() < duration);
     }
 
+    fn alpha_for_progress(t: f32) -> u8 {
+        let t = t.clamp(0.0, 1.0);
+        let smooth = t * t * (3.0 - 2.0 * t);
+        (theme::ALPHA_FLASH as f32 * (1.0 - smooth)) as u8
+    }
+
     pub fn flash_alpha(&self, target: FlashTarget) -> Option<(FlashKind, u8)> {
         let duration_ms = theme::FLASH_DURATION_MS as f32;
         self.flashes.iter().find(|f| f.target == target).map(|f| {
             let elapsed = f.start.elapsed().as_millis() as f32;
             let t = (elapsed / duration_ms).min(1.0);
-            let smooth = t * t * (3.0 - 2.0 * t);
-            let alpha = (theme::ALPHA_FLASH as f32 * (1.0 - smooth)) as u8;
-            (f.kind, alpha)
+            (f.kind, Self::alpha_for_progress(t))
         })
     }
 
@@ -134,14 +138,18 @@ mod tests {
 
     #[test]
     fn test_alpha_easing_holds_brightness() {
-        let mut fm = FlashManager::new();
-        fm.trigger(FlashTarget::Global, FlashKind::Neutral);
-        sleep(Duration::from_millis(theme::FLASH_DURATION_MS / 10));
-        let (_, alpha_early) = fm.flash_alpha(FlashTarget::Global).unwrap();
+        let alpha_early = FlashManager::alpha_for_progress(0.1);
         assert!(
-            alpha_early >= (theme::ALPHA_FLASH as f32 * 0.85) as u8,
-            "eased flash should hold brightness early: got {alpha_early}"
+            alpha_early >= (theme::ALPHA_FLASH as f32 * 0.95) as u8,
+            "eased flash should hold brightness at 10% progress: got {alpha_early}"
         );
+        let alpha_mid = FlashManager::alpha_for_progress(0.5);
+        assert!(
+            alpha_mid >= (theme::ALPHA_FLASH as f32 * 0.40) as u8,
+            "eased flash should still be visible at 50% progress: got {alpha_mid}"
+        );
+        let alpha_end = FlashManager::alpha_for_progress(1.0);
+        assert_eq!(alpha_end, 0, "eased flash should be zero at 100% progress");
     }
 
     #[test]

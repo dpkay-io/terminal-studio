@@ -31,7 +31,7 @@ fn wsl_windows_home() -> Option<PathBuf> {
 
         let mut candidates: Vec<PathBuf> = Vec::new();
         for entry in entries.flatten() {
-            if !entry.file_type().ok().map_or(false, |ft| ft.is_dir()) {
+            if !entry.file_type().ok().is_some_and(|ft| ft.is_dir()) {
                 continue;
             }
             let name = entry.file_name();

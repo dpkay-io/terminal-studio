@@ -161,12 +161,12 @@ mod platform {
     }
 
     /// Extract ppid (as string) from a /proc/PID/stat line.
-    fn ppid_from_stat<'a>(stat: &'a str) -> Option<&'a str> {
+    fn ppid_from_stat(stat: &str) -> Option<&str> {
         let after = stat.rfind(')')?.checked_add(2)?;
         let rest = stat.get(after..)?;
         let mut parts = rest.split_whitespace();
         parts.next()?; // state
-        Some(parts.next()?) // ppid
+        parts.next() // ppid
     }
 
     fn find_foreground_pid(shell_pid: u32) -> Option<u32> {
