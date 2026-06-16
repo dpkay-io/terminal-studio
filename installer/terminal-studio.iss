@@ -54,13 +54,17 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait
 [Code]
 const
   SMTO_ABORTIFHUNG = 2;
+  WM_SETTINGCHANGE = $001A;
+
+function SendMessageTimeoutW(hWnd: LongInt; Msg: Cardinal; wParam: Cardinal; lParam: String; fuFlags: Cardinal; uTimeout: Cardinal; var lpdwResult: Cardinal): Cardinal;
+  external 'SendMessageTimeoutW@user32.dll stdcall';
 
 procedure BroadcastEnvironmentChange();
 var
-  Dummy: DWORD;
+  Dummy: Cardinal;
 begin
   SendMessageTimeoutW(HWND_BROADCAST, WM_SETTINGCHANGE, 0,
-    CastStringToInteger('Environment'), SMTO_ABORTIFHUNG, 5000, Dummy);
+    'Environment', SMTO_ABORTIFHUNG, 5000, Dummy);
 end;
 
 function NeedsAddPath(Param: string): Boolean;
@@ -129,7 +133,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    if IsTaskSelected('addtopath') then
+    if WizardIsTaskSelected('addtopath') then
     begin
       AddToPath();
       BroadcastEnvironmentChange();

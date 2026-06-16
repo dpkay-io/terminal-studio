@@ -515,6 +515,7 @@ impl App {
                 .clicked()
             {
                 self.show_close_all_confirm = true;
+                self.close_all_frames_open = 0;
             }
         });
 

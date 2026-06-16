@@ -7,6 +7,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
     let lines: Vec<&str> = content.lines().collect();
     let len = lines.len();
     let mut i = 0;
+    let mut code_block_idx: usize = 0;
 
     while i < len {
         let line = lines[i];
@@ -44,7 +45,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                     ui.set_min_width(avail);
                     ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                     egui::ScrollArea::horizontal()
-                        .id_source("md_code_scroll")
+                        .id_source(("md_code_scroll", code_block_idx))
                         .show(ui, |ui| {
                             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                             if let Some(syn) = maybe_syntax {
@@ -71,6 +72,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                         });
                 });
             ui.add_space(theme::SP_2);
+            code_block_idx += 1;
             continue;
         }
 

@@ -554,7 +554,12 @@ fn render_file_editor_leaf(
                     .id_source(("editor_scroll", pane_id))
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        let line_count = text.lines().count().max(1);
+                        let line_count = if text.ends_with('\n') {
+                            text.lines().count() + 1
+                        } else {
+                            text.lines().count()
+                        }
+                        .max(1);
                         let digits = ((line_count as f64).log10().floor() as usize) + 1;
                         let char_w = 7.5_f32;
                         let gutter_w = (digits as f32 + 1.5) * char_w;
@@ -622,7 +627,13 @@ fn render_file_editor_leaf(
         }
 
         if is_focused && rctx.text_search.active {
-            render_text_search_bar(ui, pane_rect, &ed.content, rctx.text_search);
+            let current_text = rctx
+                .editor_texts
+                .iter()
+                .find(|(id, _)| *id == pane_id)
+                .and_then(|(_, t)| t.as_ref())
+                .unwrap_or(&ed.content);
+            render_text_search_bar(ui, pane_rect, current_text, rctx.text_search);
         }
 
         if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {

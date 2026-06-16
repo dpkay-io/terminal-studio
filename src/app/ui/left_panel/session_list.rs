@@ -138,9 +138,22 @@ impl App {
                             }
                             ui.separator();
                             if ui.button("Open Folder\u{2026}").clicked() {
-                                if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                    actions.open_folder_path = Some(path);
-                                }
+                                let ctx = ui.ctx().clone();
+                                std::thread::Builder::new()
+                                    .name("folder-picker".into())
+                                    .spawn(move || {
+                                        let result = rfd::FileDialog::new().pick_folder();
+                                        if let Some(path) = result {
+                                            ctx.data_mut(|d| {
+                                                d.insert_temp(
+                                                    egui::Id::new("pending_folder_pick"),
+                                                    path,
+                                                );
+                                            });
+                                            ctx.request_repaint();
+                                        }
+                                    })
+                                    .ok();
                                 ui.close_menu();
                             }
                         },
@@ -179,6 +192,7 @@ impl App {
                             {
                                 self.close_all_target = target;
                                 self.show_close_all_confirm = true;
+                                self.close_all_frames_open = 0;
                             }
                         }
                     }

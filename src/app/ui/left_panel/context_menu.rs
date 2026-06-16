@@ -19,7 +19,12 @@ impl App {
         self.process_workspace_actions(ctx, &ws_actions);
         self.process_quit_pane(sess_actions.quit_pane_id);
         self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
-        self.process_open_folder(sess_actions.open_folder_path.take());
+        // Consume async folder picker result if available
+        let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
+            d.remove_temp::<std::path::PathBuf>(egui::Id::new("pending_folder_pick"))
+        });
+        let folder = sess_actions.open_folder_path.take().or(async_folder);
+        self.process_open_folder(folder);
         self.process_spawn_session(&sess_actions, &active_fg);
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
     }
@@ -87,6 +92,7 @@ impl App {
         if let Some(group) = actions.close_all_workspace_id {
             self.close_all_target = CloseAllTarget::Group(group);
             self.show_close_all_confirm = true;
+            self.close_all_frames_open = 0;
         }
     }
 

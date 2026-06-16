@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,9 @@ pub(super) struct FileEntry {
     pub(super) is_dir: bool,
 }
 
+/// Global counter for in-flight subdir load threads to prevent unbounded spawning.
+static SUBDIR_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
+
 pub(super) struct SubdirCache<'a> {
     pub(super) map: &'a mut HashMap<PathBuf, (Arc<Vec<FileEntry>>, Instant)>,
     pub(super) ttl: Duration,
@@ -19,6 +23,7 @@ pub(super) struct SubdirCache<'a> {
 }
 
 const SUBDIR_CACHE_MAX: usize = 256;
+const MAX_CONCURRENT_LOADS: usize = 8;
 
 impl<'a> SubdirCache<'a> {
     pub(super) fn get_or_read(&mut self, path: &Path) -> Arc<Vec<FileEntry>> {
@@ -51,13 +56,18 @@ impl<'a> SubdirCache<'a> {
         if self.loading.contains(path) {
             return;
         }
+        if SUBDIR_IN_FLIGHT.load(Ordering::Relaxed) >= MAX_CONCURRENT_LOADS {
+            return; // will retry next frame
+        }
         self.loading.insert(path.to_path_buf());
+        SUBDIR_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
         let p = path.to_path_buf();
         let tx = self.load_tx.clone();
         let ctx = self.ctx.clone();
         std::thread::spawn(move || {
             let entries = list_dir_entries(&p);
             let _ = tx.send((p, entries));
+            SUBDIR_IN_FLIGHT.fetch_sub(1, Ordering::Relaxed);
             ctx.request_repaint();
         });
     }

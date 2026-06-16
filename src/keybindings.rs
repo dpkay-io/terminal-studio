@@ -26,13 +26,8 @@ impl KeybindingsConfig {
                 bindings: Self::default_bindings(),
             };
         };
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            return Self {
-                bindings: Self::default_bindings(),
-            };
-        };
-        match serde_json::from_str::<Vec<KeyBinding>>(&text) {
-            Ok(bindings) if !bindings.is_empty() => Self { bindings },
+        match crate::util::safe_json_load::<Vec<KeyBinding>>(&path) {
+            Some(bindings) if !bindings.is_empty() => Self { bindings },
             _ => Self {
                 bindings: Self::default_bindings(),
             },
@@ -325,7 +320,7 @@ impl KeybindingsConfig {
             (
                 Shortcut {
                     ctrl: true,
-                    shift: true,
+                    shift: false,
                     alt: false,
                     key: egui::Key::F,
                 },
@@ -354,7 +349,7 @@ impl KeybindingsConfig {
                     ctrl: true,
                     shift: true,
                     alt: false,
-                    key: egui::Key::T,
+                    key: egui::Key::R,
                 },
                 AppAction::ReopenClosedSession,
             ),

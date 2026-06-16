@@ -241,7 +241,8 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
             return Err(anyhow::anyhow!("Download failed: HTTP {}", resp.status()));
         }
 
-        let total = resp.content_length().unwrap_or(0);
+        let content_length = resp.content_length();
+        let total = content_length.unwrap_or(0);
         let mut bytes = Vec::with_capacity(total as usize);
         let mut downloaded: u64 = 0;
         let mut buf = [0u8; 32768];
@@ -257,6 +258,19 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
                 let mut s = shared.lock();
                 s.status = UpdateStatus::Downloading { progress_pct: pct };
                 ctx.request_repaint();
+            }
+        }
+
+        if bytes.is_empty() {
+            return Err(anyhow::anyhow!("Downloaded update is empty"));
+        }
+        if let Some(expected) = content_length {
+            if bytes.len() as u64 != expected {
+                return Err(anyhow::anyhow!(
+                    "Download truncated: got {} of {} bytes",
+                    bytes.len(),
+                    expected
+                ));
             }
         }
 
@@ -395,9 +409,19 @@ pub fn cleanup_old_binary() {
 }
 
 pub fn restart_app() {
-    if let Ok(exe) = std::env::current_exe() {
-        let args: Vec<String> = std::env::args().skip(1).collect();
-        let _ = std::process::Command::new(&exe).args(&args).spawn();
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            log::error!("Failed to locate current executable for restart: {}", e);
+            return;
+        }
+    };
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match std::process::Command::new(&exe).args(&args).spawn() {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            log::error!("Failed to restart: {}", e);
+            // Don't exit — let the user keep using the current instance
+        }
     }
-    std::process::exit(0);
 }

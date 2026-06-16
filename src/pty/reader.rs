@@ -195,8 +195,9 @@ pub fn reader_thread(
                 if offset_before > 0 && s.term.grid().display_offset() == 0 {
                     let added = s.term.grid().history_size().saturating_sub(history_before);
                     let target = (offset_before + added).min(s.term.grid().history_size());
+                    let delta = target.min(i32::MAX as usize) as i32;
                     s.term
-                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(target as i32));
+                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
                 }
             }
             pos = end;

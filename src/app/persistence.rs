@@ -4,6 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::util;
 
+fn default_panel_ratio() -> f32 {
+    0.35
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedSession {
     pub(super) cwd: PathBuf,
@@ -46,26 +50,39 @@ pub(super) struct SavedPane {
     pub(super) manual_width: Option<f32>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(super) enum SavedRightTab {
+    #[default]
     Directory,
     GitDiff,
     Markdown(PathBuf),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub(super) struct AppSession {
+    #[serde(default)]
     pub(super) sessions: Vec<SavedSession>,
+    #[serde(default)]
     pub(super) panes: Vec<SavedPane>,
+    #[serde(default)]
     pub(super) active_pane_index: Option<usize>,
+    #[serde(default)]
     pub(super) active_session_index: Option<usize>,
+    #[serde(default)]
     pub(super) active_group: Option<u64>,
+    #[serde(default)]
     pub(super) last_pane_per_group: Vec<(Option<u64>, usize)>,
+    #[serde(default = "default_panel_ratio")]
     pub(super) workspace_panel_ratio: f32,
+    #[serde(default)]
     pub(super) workspace_panel_collapsed: bool,
+    #[serde(default = "default_panel_ratio")]
     pub(super) notes_panel_ratio: f32,
+    #[serde(default)]
     pub(super) notes_panel_collapsed: bool,
+    #[serde(default)]
     pub(super) right_tab: SavedRightTab,
+    #[serde(default)]
     pub(super) shown_md_tabs: Vec<PathBuf>,
 }
 

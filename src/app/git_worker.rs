@@ -269,7 +269,7 @@ impl GitWorker {
                                 thread::Builder::new()
                                     .name("git-push".into())
                                     .spawn(move || {
-                                        let mut args = vec!["push"];
+                                        let mut args = vec!["push", "origin", "HEAD"];
                                         if force {
                                             args.push("--force");
                                         }

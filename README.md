@@ -40,7 +40,19 @@ See [FEATURES.md](FEATURES.md) for the full feature list.
 
 ## Installation
 
-### Pre-built binaries (recommended)
+### Download (recommended)
+
+Grab the latest package for your platform from the [**Releases page**](https://github.com/dpkay-io/terminal-studio/releases/latest):
+
+| Platform | Recommended | Bare binary |
+|---|---|---|
+| **Windows** x86-64 | [`terminal-studio-setup.exe`](https://github.com/dpkay-io/terminal-studio/releases/latest/download/terminal-studio-setup.exe) — installer with Start Menu shortcut, optional PATH, and uninstaller | `terminal-studio-windows.exe` |
+| **macOS** Apple Silicon | [`terminal-studio-macos-arm.dmg`](https://github.com/dpkay-io/terminal-studio/releases/latest/download/terminal-studio-macos-arm.dmg) — drag-to-Applications disk image | `terminal-studio-macos-arm` |
+| **Linux** x86-64 (Debian/Ubuntu) | [`terminal-studio-linux-amd64.deb`](https://github.com/dpkay-io/terminal-studio/releases/latest/download/terminal-studio-linux-amd64.deb) — `sudo dpkg -i terminal-studio-linux-amd64.deb` | `terminal-studio-linux` |
+
+> The bare binaries are single-file executables — download, make executable (`chmod +x` on Unix), and run. No installer needed.
+
+### Shell one-liner
 
 **Linux / macOS**
 
@@ -58,15 +70,13 @@ iwr https://raw.githubusercontent.com/dpkay-io/terminal-studio/master/scripts/in
 
 Installs to `%LOCALAPPDATA%\terminal-studio\terminal-studio.exe`.
 
-**Manual download**
+### Homebrew (macOS)
 
-Download the binary for your platform from the [latest release](https://github.com/dpkay-io/terminal-studio/releases/latest), make it executable, and place it on your `PATH`.
+```sh
+brew install --cask dpkay-io/tap/terminal-studio
+```
 
-| Platform | File |
-|---|---|
-| Windows x86-64 | `terminal-studio-windows.exe` |
-| Linux x86-64 | `terminal-studio-linux` |
-| macOS (Apple Silicon + Intel via Rosetta 2) | `terminal-studio-macos-arm` |
+> Requires the [Homebrew tap](https://github.com/dpkay-io/homebrew-tap) to be set up. The tap is auto-updated on each release.
 
 ---
 

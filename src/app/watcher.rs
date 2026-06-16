@@ -350,10 +350,7 @@ fn sync_cwds(
                 let gd = root.join(".git");
                 if gd.is_dir()
                     && !state.git_dirs.contains_key(&gd)
-                    && state
-                        .watcher
-                        .watch(&gd, RecursiveMode::NonRecursive)
-                        .is_ok()
+                    && state.watcher.watch(&gd, RecursiveMode::Recursive).is_ok()
                 {
                     state.git_dirs.insert(gd, dir.clone());
                 }
@@ -454,22 +451,14 @@ fn process_fs_events(
                             .map(|s| s.contains(path))
                             .unwrap_or(false);
                         if is_md && path.is_file() && is_known_md {
-                            let recently_modified = std::fs::metadata(path)
-                                .and_then(|m| m.modified())
-                                .map(|t| {
-                                    t.elapsed().unwrap_or_default() < Duration::from_millis(50)
-                                })
-                                .unwrap_or(false);
-                            if !recently_modified {
-                                let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-                                if size <= 1_048_576 {
-                                    let content = std::fs::read_to_string(path).unwrap_or_default();
-                                    let _ = result_tx.send(WatchResult::MdCreated {
-                                        dir: dir.clone(),
-                                        path: path.clone(),
-                                        content: Arc::new(content),
-                                    });
-                                }
+                            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                            if size <= 1_048_576 {
+                                let content = std::fs::read_to_string(path).unwrap_or_default();
+                                let _ = result_tx.send(WatchResult::MdCreated {
+                                    dir: dir.clone(),
+                                    path: path.clone(),
+                                    content: Arc::new(content),
+                                });
                             }
                         }
                         if dir_is_git {

@@ -29,6 +29,15 @@ use super::title::{effective_title, shell_escape_arg};
 use super::watcher::WatchState;
 use super::{App, CloseAllTarget};
 
+/// Clamp a persisted panel ratio to a safe range, falling back to `default` for NaN/Infinity.
+fn safe_ratio(v: f32, default: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(0.05, 0.95)
+    } else {
+        default
+    }
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let ctx = cc.egui_ctx.clone();
@@ -260,6 +269,7 @@ impl App {
             tab_rename_text: String::new(),
             deferred_open_workspace: None,
             show_close_all_confirm: false,
+            close_all_frames_open: 0,
             close_all_target: CloseAllTarget::default(),
             show_quit_confirm: false,
             quit_confirmed: false,
@@ -1500,9 +1510,9 @@ impl App {
             }
         }
 
-        self.workspace_panel_ratio = state.workspace_panel_ratio;
+        self.workspace_panel_ratio = safe_ratio(state.workspace_panel_ratio, 0.35);
         self.workspace_panel_collapsed = state.workspace_panel_collapsed;
-        self.notes_panel_ratio = state.notes_panel_ratio;
+        self.notes_panel_ratio = safe_ratio(state.notes_panel_ratio, 0.35);
         self.notes_panel_collapsed = state.notes_panel_collapsed;
 
         self.right_tab = match &state.right_tab {
@@ -1594,7 +1604,7 @@ impl App {
         let grid = term.grid();
         let term_cols = term.columns();
         let term_rows = term.screen_lines();
-        let display_offset = grid.display_offset();
+        let display_offset = sel.display_offset;
 
         let mut result = String::new();
         for screen_row in sr..=er {

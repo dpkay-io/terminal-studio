@@ -1057,13 +1057,18 @@ impl App {
             });
         });
 
-        // Enter shortcut
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        // Enter shortcut — require at least one repaint cycle so the user
+        // has time to read the dialog before a stale Enter key fires.
+        self.close_all_frames_open = self.close_all_frames_open.saturating_add(1);
+        if self.close_all_frames_open >= 2
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+        {
             do_close = true;
         }
 
         if do_close {
             self.show_close_all_confirm = false;
+            self.close_all_frames_open = 0;
 
             let target = std::mem::take(&mut self.close_all_target);
 
@@ -1100,10 +1105,8 @@ impl App {
             self.pane_state
                 .panes
                 .retain(|p| !pane_ids_to_close.contains(&p.id));
-            // Remove/prune any split trees that contain panes being closed.
-            // Trees are keyed by root ID, not leaf ID, so we must find which
-            // root trees reference any of the closing panes.
-            let roots_to_remove: Vec<u32> = self
+            // Prune closed panes from split trees, preserving surviving siblings.
+            let affected_roots: Vec<u32> = self
                 .pane_state
                 .pane_trees
                 .iter()
@@ -1114,8 +1117,59 @@ impl App {
                 })
                 .map(|(&rpid, _)| rpid)
                 .collect();
-            for rpid in roots_to_remove {
-                self.pane_state.pane_trees.remove(&rpid);
+            for rpid in affected_roots {
+                let all_leaves_closing = self
+                    .pane_state
+                    .pane_trees
+                    .get(&rpid)
+                    .map(|t| {
+                        t.leaf_ids()
+                            .iter()
+                            .all(|lid| pane_ids_to_close.contains(lid))
+                    })
+                    .unwrap_or(true);
+                if all_leaves_closing {
+                    self.pane_state.pane_trees.remove(&rpid);
+                } else {
+                    // Remove only the closing panes, keeping survivors
+                    let closing_in_tree: Vec<u32> = self
+                        .pane_state
+                        .pane_trees
+                        .get(&rpid)
+                        .map(|t| {
+                            t.leaf_ids()
+                                .into_iter()
+                                .filter(|lid| pane_ids_to_close.contains(lid))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let mut needs_rekey = false;
+                    for pid in closing_in_tree {
+                        if let Some(tree) = self.pane_state.pane_trees.get_mut(&rpid) {
+                            use crate::pane_tree::RemoveResult;
+                            match tree.remove_pane(pid) {
+                                RemoveResult::CollapseToSibling(replacement) => {
+                                    self.pane_state.pane_trees.insert(rpid, replacement);
+                                    if pid == rpid {
+                                        needs_rekey = true;
+                                        break;
+                                    }
+                                }
+                                RemoveResult::IsTarget => {
+                                    self.pane_state.pane_trees.remove(&rpid);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if needs_rekey {
+                        if let Some(tree) = self.pane_state.pane_trees.remove(&rpid) {
+                            let new_key = tree.first_leaf_id();
+                            self.pane_state.pane_trees.insert(new_key, tree);
+                        }
+                    }
+                }
             }
             if self
                 .pane_state
@@ -1170,6 +1224,7 @@ impl App {
             self.save_session();
         } else if resp.dismissed || cancel_clicked {
             self.show_close_all_confirm = false;
+            self.close_all_frames_open = 0;
             self.close_all_target = CloseAllTarget::default();
         }
     }

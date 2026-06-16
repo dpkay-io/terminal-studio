@@ -214,6 +214,7 @@ pub struct App {
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
+    close_all_frames_open: u32,
     /// Which group of sessions to close when the close-all dialog is confirmed.
     close_all_target: CloseAllTarget,
     show_quit_confirm: bool,
@@ -714,6 +715,7 @@ impl eframe::App for App {
                         self.push_error = None;
                         self.flash
                             .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
+                        self.workers.git_worker.enqueue_git(&cwd);
                         self.workers.git_worker.enqueue_unpushed(&cwd);
                     }
                     Err(msg) => {
