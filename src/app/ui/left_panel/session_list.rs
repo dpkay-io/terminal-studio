@@ -540,14 +540,16 @@ impl App {
                     } else {
                         egui::Color32::TRANSPARENT
                     };
-                    painter.rect_filled(row_rect, 0.0, bg);
+                    painter.rect_filled(row_rect, theme::R_MD, bg);
 
                     if let Some(c) = ws_color {
+                        let pill_h = 14.0;
+                        let pill_y = row_rect.center().y - pill_h / 2.0;
                         let border = egui::Rect::from_min_size(
-                            row_rect.min,
-                            egui::vec2(theme::WS_BORDER_W, row_rect.height()),
+                            egui::pos2(row_rect.min.x + theme::SP_1, pill_y),
+                            egui::vec2(theme::WS_BORDER_W - 1.0, pill_h),
                         );
-                        painter.rect_filled(border, 0.0, theme::from_rgb(c));
+                        painter.rect_filled(border, theme::R_SM, theme::from_rgb(c));
                     }
 
                     let quit_rect = egui::Rect::from_min_size(
