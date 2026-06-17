@@ -205,12 +205,9 @@ impl App {
 
         let full_w = ui.available_width();
         let stroke_val = if active {
-            egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
+            egui::Stroke::new(theme::STROKE_THIN, theme::active().border_subtle)
         } else {
-            egui::Stroke::new(
-                1.0,
-                theme::from_rgb(theme::tinted(data.color, theme::TINT_BORDER)),
-            )
+            egui::Stroke::NONE
         };
         let (full_rect, _) =
             ui.allocate_exact_size(egui::vec2(full_w, card_h), egui::Sense::hover());
@@ -256,11 +253,7 @@ impl App {
             }
 
             // Name text
-            let name_str = if active {
-                format!("\u{25b6} {}", data.name)
-            } else {
-                data.name.clone()
-            };
+            let name_str = data.name.clone();
             let name_galley = ui.fonts(|f| {
                 f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_UI_MD), fg)
             });
@@ -270,8 +263,24 @@ impl App {
             } else {
                 full_rect.center().y - name_h / 2.0
             };
+            // Dot indicator
+            let dot_x = full_rect.left() + theme::SP_3 + 2.5;
+            let dot_y = name_y + name_h / 2.0;
+            if active {
+                ui.painter().circle_filled(
+                    egui::pos2(dot_x, dot_y),
+                    2.5,
+                    theme::from_rgb(data.color),
+                );
+            } else {
+                ui.painter().circle_stroke(
+                    egui::pos2(dot_x, dot_y),
+                    2.5,
+                    egui::Stroke::new(theme::STROKE_THIN, fg.gamma_multiply(0.5)),
+                );
+            }
             ui.painter().with_clip_rect(name_rect).galley(
-                egui::pos2(full_rect.left() + theme::SP_3, name_y),
+                egui::pos2(full_rect.left() + theme::SP_3 + 8.0, name_y),
                 name_galley,
                 fg,
             );
@@ -329,29 +338,48 @@ impl App {
 
             // Git info row
             if has_git_row {
-                let mut git_text = String::new();
+                let mut git_job = egui::text::LayoutJob::default();
+                let git_font = egui::FontId::proportional(theme::GIT_FONT_SZ);
+                let muted_fg = fg.gamma_multiply(0.6);
                 if !data.git_branch.is_empty() {
-                    git_text.push_str(&data.git_branch);
+                    git_job.append(
+                        &data.git_branch,
+                        0.0,
+                        egui::TextFormat {
+                            font_id: git_font.clone(),
+                            color: muted_fg,
+                            ..Default::default()
+                        },
+                    );
                 }
                 if data.git_diff_count > 0 {
-                    if !git_text.is_empty() {
-                        git_text.push_str(" \u{00b7} ");
+                    if !data.git_branch.is_empty() {
+                        git_job.append(
+                            " \u{00b7} ",
+                            0.0,
+                            egui::TextFormat {
+                                font_id: git_font.clone(),
+                                color: muted_fg,
+                                ..Default::default()
+                            },
+                        );
                     }
-                    git_text.push_str(&format!("{} changed", data.git_diff_count));
+                    git_job.append(
+                        &format!("{} changed", data.git_diff_count),
+                        0.0,
+                        egui::TextFormat {
+                            font_id: git_font.clone(),
+                            color: theme::active().warning,
+                            ..Default::default()
+                        },
+                    );
                 }
-                let git_fg = fg.linear_multiply(theme::TINT_ACTIVE);
-                let git_galley = ui.fonts(|f| {
-                    f.layout_no_wrap(
-                        git_text,
-                        egui::FontId::proportional(theme::GIT_FONT_SZ),
-                        git_fg,
-                    )
-                });
+                let git_galley = ui.fonts(|f| f.layout_job(git_job));
                 let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
                 ui.painter().with_clip_rect(full_rect).galley(
                     egui::pos2(full_rect.left() + theme::SP_3, git_y),
                     git_galley,
-                    git_fg,
+                    egui::Color32::PLACEHOLDER,
                 );
             }
         }
