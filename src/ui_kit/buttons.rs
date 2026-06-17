@@ -42,14 +42,9 @@ pub fn icon_button(
         }
         IconButtonStyle::Danger => {
             if resp.hovered() {
-                t.danger_bg
+                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 64)
             } else {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.danger_fg.r(),
-                    t.danger_fg.g(),
-                    t.danger_fg.b(),
-                    20,
-                )
+                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 20)
             }
         }
     };
@@ -57,7 +52,7 @@ pub fn icon_button(
     let text_color = match style {
         IconButtonStyle::Danger => {
             if resp.hovered() {
-                t.danger_fg
+                t.error
             } else {
                 fg
             }
@@ -65,7 +60,7 @@ pub fn icon_button(
         _ => fg,
     };
 
-    ui.painter().rect_filled(rect, theme::R_NONE, bg);
+    ui.painter().rect_filled(rect, theme::R_MD, bg);
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -92,17 +87,45 @@ pub fn action_button(
     style: ActionButtonStyle,
 ) -> egui::Response {
     let t = theme::active();
-    let resp = match style {
-        ActionButtonStyle::Primary => ui.add_enabled(
-            enabled,
-            egui::Button::new(egui::RichText::new(label).color(t.accent_strong)),
-        ),
-        ActionButtonStyle::Danger => ui.add_enabled(
-            enabled,
-            egui::Button::new(egui::RichText::new(label).color(t.danger_fg)).fill(t.danger_bg),
-        ),
-        ActionButtonStyle::Cancel => ui.add_enabled(enabled, egui::Button::new(label)),
+    let btn = match style {
+        ActionButtonStyle::Primary => {
+            egui::Button::new(egui::RichText::new(label).color(t.accent_strong))
+                .fill(egui::Color32::from_rgba_unmultiplied(
+                    t.accent.r(),
+                    t.accent.g(),
+                    t.accent.b(),
+                    38,
+                ))
+                .stroke(egui::Stroke::new(
+                    theme::STROKE_THIN,
+                    egui::Color32::from_rgba_unmultiplied(
+                        t.accent.r(),
+                        t.accent.g(),
+                        t.accent.b(),
+                        50,
+                    ),
+                ))
+                .rounding(theme::R_MD)
+        }
+        ActionButtonStyle::Danger => egui::Button::new(egui::RichText::new(label).color(t.error))
+            .fill(egui::Color32::from_rgba_unmultiplied(
+                t.error.r(),
+                t.error.g(),
+                t.error.b(),
+                38,
+            ))
+            .stroke(egui::Stroke::new(
+                theme::STROKE_THIN,
+                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 38),
+            ))
+            .rounding(theme::R_MD),
+        ActionButtonStyle::Cancel => {
+            egui::Button::new(egui::RichText::new(label).color(t.fg_muted))
+                .fill(egui::Color32::TRANSPARENT)
+                .rounding(theme::R_MD)
+        }
     };
+    let resp = ui.add_enabled(enabled, btn);
     if resp.hovered() && enabled {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -119,6 +142,11 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
             .color(if selected { t.base } else { t.text }),
     )
     .fill(if selected { t.accent } else { t.surface1 })
+    .stroke(if selected {
+        egui::Stroke::NONE
+    } else {
+        egui::Stroke::new(theme::STROKE_THIN, t.border_subtle)
+    })
     .rounding(theme::R_MD)
     .min_size(egui::vec2(0.0, theme::BTN_H_ACTION));
     let resp = ui.add(btn);
