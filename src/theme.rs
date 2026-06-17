@@ -468,11 +468,12 @@ pub const TITLEBAR_BTN_W: f32 = 44.0;
 pub const TITLEBAR_ICON_GAP: f32 = 4.0;
 pub const SYSMON_W: f32 = 100.0;
 pub const UPDATE_BTN_W: f32 = 110.0;
-pub const HEADER_H: f32 = 24.0;
+pub const HEADER_H: f32 = 26.0;
 pub const DIVIDER_W: f32 = 6.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const BTN_W: f32 = 24.0;
-pub const SESSION_ROW_H: f32 = 22.0;
+pub const SESSION_ROW_H: f32 = 26.0;
+pub const FILE_ROW_H: f32 = 22.0;
 pub const WS_BORDER_W: f32 = 4.0;
 pub const LEFT_SIDEBAR_W: f32 = 180.0;
 pub const RIGHT_SIDEBAR_W: f32 = 180.0;
@@ -484,7 +485,7 @@ pub const TAB_H: f32 = 26.0;
 pub const TAB_W: f32 = 150.0;
 pub const TAB_COLOR_STRIP_W: f32 = 3.0;
 pub const TAB_ACTIVE_HIGHLIGHT_H: f32 = 2.0;
-pub const TAB_PAD_X: f32 = 6.0;
+pub const TAB_PAD_X: f32 = 8.0;
 pub const TAB_ACTIONS_W: f32 = 82.0;
 pub const TAB_ACTION_GAP: f32 = 2.0;
 
@@ -543,6 +544,18 @@ pub const ALPHA_SHADOW_SM: u8 = 100;
 pub const ALPHA_SHADOW_MD: u8 = 150;
 pub const ALPHA_BORDER_FOCUS: u8 = 100;
 
+// ── Animation durations (seconds) ─────────────────────────────────────────
+pub const ANIM_FAST: f32 = 0.12;
+pub const ANIM_NORMAL: f32 = 0.20;
+pub const ANIM_SMOOTH: f32 = 0.30;
+
+// ── Button alpha tokens ──────────────────────────────────────────────────
+pub const ALPHA_BTN_IDLE: u8 = 20;
+pub const ALPHA_BTN_FILL: u8 = 38;
+pub const ALPHA_BTN_STROKE: u8 = 50;
+pub const ALPHA_BTN_HOVER: u8 = 64;
+pub const ALPHA_SURFACE_OVERLAY: u8 = 200;
+
 // ── Blend factors ───────────────────────────────────────────────────────────
 
 pub const BLEND_SUBTLE: f32 = 0.15;
@@ -562,7 +575,7 @@ pub const BTN_H_ACTION: f32 = 28.0;
 // ── Dialog layout ──────────────────────────────────────────────────────────
 
 pub const DIALOG_MARGIN: f32 = SP_6;
-pub const DIALOG_ITEM_H: f32 = 24.0;
+pub const DIALOG_ITEM_H: f32 = 26.0;
 pub const DIALOG_TOP_OFFSET: f32 = 80.0;
 
 // ── Panel divider ──────────────────────────────────────────────────────────

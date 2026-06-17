@@ -1,3 +1,4 @@
+pub(crate) mod animation;
 mod closed_sessions_picker;
 mod command_palette;
 pub(super) mod conflict_resolver;
