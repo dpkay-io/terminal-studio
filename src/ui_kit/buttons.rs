@@ -42,9 +42,9 @@ pub fn icon_button(
         }
         IconButtonStyle::Danger => {
             if resp.hovered() {
-                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 64)
+                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), theme::ALPHA_BTN_HOVER)
             } else {
-                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 20)
+                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), theme::ALPHA_BTN_IDLE)
             }
         }
     };
@@ -94,7 +94,7 @@ pub fn action_button(
                     t.accent.r(),
                     t.accent.g(),
                     t.accent.b(),
-                    38,
+                    theme::ALPHA_BTN_FILL,
                 ))
                 .stroke(egui::Stroke::new(
                     theme::STROKE_THIN,
@@ -102,7 +102,7 @@ pub fn action_button(
                         t.accent.r(),
                         t.accent.g(),
                         t.accent.b(),
-                        50,
+                        theme::ALPHA_BTN_STROKE,
                     ),
                 ))
                 .rounding(theme::R_MD)
@@ -112,16 +112,22 @@ pub fn action_button(
                 t.error.r(),
                 t.error.g(),
                 t.error.b(),
-                38,
+                theme::ALPHA_BTN_FILL,
             ))
             .stroke(egui::Stroke::new(
                 theme::STROKE_THIN,
-                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), 38),
+                egui::Color32::from_rgba_unmultiplied(
+                    t.error.r(),
+                    t.error.g(),
+                    t.error.b(),
+                    theme::ALPHA_BTN_FILL,
+                ),
             ))
             .rounding(theme::R_MD),
         ActionButtonStyle::Cancel => {
             egui::Button::new(egui::RichText::new(label).color(t.fg_muted))
                 .fill(egui::Color32::TRANSPARENT)
+                .stroke(egui::Stroke::new(theme::STROKE_THIN, t.border_subtle))
                 .rounding(theme::R_MD)
         }
     };
