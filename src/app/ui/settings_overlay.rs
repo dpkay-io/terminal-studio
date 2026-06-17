@@ -159,7 +159,7 @@ impl App {
                                     let available_w = ui.available_width();
                                     let cols = ((available_w / swatch_outer_w).floor() as usize).max(1);
 
-                                    let themes: Vec<_> = theme::ThemeId::ALL.iter().copied().collect();
+                                    let themes: Vec<_> = theme::ThemeId::ALL.to_vec();
                                     for row_themes in themes.chunks(cols) {
                                         ui.horizontal(|ui| {
                                             for &id in row_themes {
