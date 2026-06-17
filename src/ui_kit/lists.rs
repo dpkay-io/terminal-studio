@@ -24,7 +24,7 @@ pub fn list_item(
     } else {
         egui::Color32::TRANSPARENT
     };
-    ui.painter().rect_filled(rect, theme::R_SM, bg);
+    ui.painter().rect_filled(rect, theme::R_MD, bg);
 
     add_contents(ui.painter(), rect);
     resp
