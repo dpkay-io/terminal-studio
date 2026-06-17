@@ -28,3 +28,40 @@ pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::Rou
     let bar = egui::Rect::from_min_size(rect.min, egui::vec2(theme::CARD_BAR_W, rect.height()));
     painter.rect_filled(bar, rounding, theme::active().green);
 }
+
+/// Draws a horizontal gradient separator: transparent → color → transparent.
+pub fn gradient_separator(painter: &egui::Painter, rect: egui::Rect) {
+    let color = theme::active().border_subtle;
+    let mid_x = rect.center().x;
+    let w = rect.width();
+    let steps = 8;
+    let step_w = w / (steps as f32 * 2.0);
+
+    for i in 0..steps {
+        let t = (i + 1) as f32 / steps as f32;
+        let alpha = (color.a() as f32 * t).min(255.0) as u8;
+        let c = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
+
+        // Left half (fade in)
+        let x0 = rect.min.x + (i as f32) * step_w;
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(x0, rect.min.y),
+                egui::vec2(step_w, rect.height()),
+            ),
+            0.0,
+            c,
+        );
+
+        // Right half (fade out)
+        let x1 = mid_x + (mid_x - x0 - step_w);
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                egui::pos2(x1, rect.min.y),
+                egui::vec2(step_w, rect.height()),
+            ),
+            0.0,
+            c,
+        );
+    }
+}
