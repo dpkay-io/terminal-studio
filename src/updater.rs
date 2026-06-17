@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/dpkay-io/terminal-studio/releases/latest";
 const CHECK_INTERVAL_SECS: u64 = 86_400; // 24 hours
+const APPLY_UPDATE_FLAG: &str = "--apply-update";
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateStatus {
@@ -194,7 +195,7 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
 }
 
 fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
-    let (download_url, version) = {
+    let (download_url, _version) = {
         let s = shared.lock();
         match &s.status {
             UpdateStatus::UpdateAvailable {
@@ -219,71 +220,9 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         }
     };
 
-    if preflight_checks(&current_exe).is_err() {
-        set_error(
-            shared,
-            ctx,
-            &format!(
-                "v{version} available \u{2014} download the installer from the releases page to update"
-            ),
-        );
-        return;
-    }
+    let needs_elevation = preflight_checks(&current_exe).is_err();
 
-    let download_result = (|| -> anyhow::Result<Vec<u8>> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("terminal-studio-updater")
-            .timeout(std::time::Duration::from_secs(300))
-            .build()?;
-
-        let mut resp = client.get(&download_url).send()?;
-        if !resp.status().is_success() {
-            return Err(anyhow::anyhow!("Download failed: HTTP {}", resp.status()));
-        }
-
-        let content_length = resp.content_length();
-        let total = content_length.unwrap_or(0);
-        let mut bytes = Vec::with_capacity(total as usize);
-        let mut downloaded: u64 = 0;
-        let mut buf = [0u8; 32768];
-        loop {
-            let n = std::io::Read::read(&mut resp, &mut buf)?;
-            if n == 0 {
-                break;
-            }
-            bytes.extend_from_slice(&buf[..n]);
-            downloaded += n as u64;
-            if total > 0 {
-                let pct = (downloaded as f32 / total as f32) * 100.0;
-                let mut s = shared.lock();
-                s.status = UpdateStatus::Downloading { progress_pct: pct };
-                ctx.request_repaint();
-            }
-        }
-
-        if bytes.is_empty() {
-            return Err(anyhow::anyhow!("Downloaded update is empty"));
-        }
-        if let Some(expected) = content_length {
-            if bytes.len() as u64 != expected {
-                return Err(anyhow::anyhow!(
-                    "Download truncated: got {} of {} bytes",
-                    bytes.len(),
-                    expected
-                ));
-            }
-        }
-
-        {
-            let mut s = shared.lock();
-            s.status = UpdateStatus::Downloading {
-                progress_pct: 100.0,
-            };
-        }
-        ctx.request_repaint();
-
-        Ok(bytes)
-    })();
+    let download_result = download_binary(shared, ctx, &download_url);
 
     let bytes = match download_result {
         Ok(b) => b,
@@ -293,7 +232,12 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         }
     };
 
-    if let Err(msg) = apply_update(&current_exe, &bytes) {
+    if needs_elevation {
+        if let Err(msg) = apply_update_elevated(&current_exe, &bytes) {
+            set_error(shared, ctx, &msg);
+            return;
+        }
+    } else if let Err(msg) = apply_update(&current_exe, &bytes) {
         set_error(shared, ctx, &msg);
         return;
     }
@@ -303,6 +247,90 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
         s.status = UpdateStatus::RestartRequired;
     }
     ctx.request_repaint();
+}
+
+fn download_binary(
+    shared: &Arc<Mutex<UpdateState>>,
+    ctx: &egui::Context,
+    download_url: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("terminal-studio-updater")
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    let mut resp = client.get(download_url).send()?;
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!("HTTP {}", resp.status()));
+    }
+
+    let content_length = resp.content_length();
+    let total = content_length.unwrap_or(0);
+    let mut bytes = Vec::with_capacity(total as usize);
+    let mut downloaded: u64 = 0;
+    let mut buf = [0u8; 32768];
+    loop {
+        let n = std::io::Read::read(&mut resp, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..n]);
+        downloaded += n as u64;
+        if total > 0 {
+            let pct = (downloaded as f32 / total as f32) * 100.0;
+            let mut s = shared.lock();
+            s.status = UpdateStatus::Downloading { progress_pct: pct };
+            ctx.request_repaint();
+        }
+    }
+
+    if bytes.is_empty() {
+        return Err(anyhow::anyhow!("Downloaded update is empty"));
+    }
+    if let Some(expected) = content_length {
+        if bytes.len() as u64 != expected {
+            return Err(anyhow::anyhow!(
+                "Truncated: got {} of {} bytes",
+                bytes.len(),
+                expected
+            ));
+        }
+    }
+
+    {
+        let mut s = shared.lock();
+        s.status = UpdateStatus::Downloading {
+            progress_pct: 100.0,
+        };
+    }
+    ctx.request_repaint();
+
+    Ok(bytes)
+}
+
+fn apply_update_elevated(target_exe: &std::path::Path, new_bytes: &[u8]) -> Result<(), String> {
+    let temp_dir = std::env::temp_dir();
+    let temp_name = if cfg!(target_os = "windows") {
+        "terminal-studio-update.exe"
+    } else {
+        "terminal-studio-update"
+    };
+    let temp_path = temp_dir.join(temp_name);
+    std::fs::write(&temp_path, new_bytes)
+        .map_err(|e| format!("Failed to write update to temp: {e}"))?;
+
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Cannot locate current exe: {e}"))?;
+
+    let args = [
+        APPLY_UPDATE_FLAG.to_string(),
+        temp_path.display().to_string(),
+        target_exe.display().to_string(),
+    ];
+
+    let result = run_elevated(&current_exe, &args);
+    let _ = std::fs::remove_file(&temp_path);
+    result
 }
 
 fn preflight_checks(binary_path: &std::path::Path) -> Result<(), String> {
@@ -416,12 +444,117 @@ pub fn restart_app() {
             return;
         }
     };
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = std::env::args()
+        .skip(1)
+        .filter(|a| a != APPLY_UPDATE_FLAG)
+        .collect();
     match std::process::Command::new(&exe).args(&args).spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
             log::error!("Failed to restart: {}", e);
-            // Don't exit — let the user keep using the current instance
         }
+    }
+}
+
+pub fn handle_apply_update_flag() -> bool {
+    let args: Vec<String> = std::env::args().collect();
+    let flag_pos = args.iter().position(|a| a == APPLY_UPDATE_FLAG);
+    let Some(pos) = flag_pos else {
+        return false;
+    };
+
+    if args.len() < pos + 3 {
+        eprintln!("Usage: --apply-update <source> <target>");
+        return true;
+    }
+
+    let source = std::path::Path::new(&args[pos + 1]);
+    let target = std::path::Path::new(&args[pos + 2]);
+
+    if !source.exists() {
+        eprintln!("Source file not found: {}", source.display());
+        return true;
+    }
+
+    let bytes = match std::fs::read(source) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Failed to read source: {e}");
+            return true;
+        }
+    };
+
+    if let Err(e) = apply_update(target, &bytes) {
+        eprintln!("Apply update failed: {e}");
+    }
+
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn run_elevated(exe: &std::path::Path, args: &[String]) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    let params = args
+        .iter()
+        .map(|a| {
+            if a.contains(' ') {
+                format!("\"{a}\"")
+            } else {
+                a.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let verb: Vec<u16> = "runas\0".encode_utf16().collect();
+    let file: Vec<u16> = exe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let parameters: Vec<u16> = params.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.nShow = SW_HIDE;
+
+    let success = unsafe { ShellExecuteExW(&mut info) };
+    if success == 0 {
+        return Err("UAC elevation was denied or failed".to_string());
+    }
+
+    if info.hProcess != 0 {
+        unsafe {
+            WaitForSingleObject(info.hProcess, INFINITE);
+            CloseHandle(info.hProcess);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn run_elevated(exe: &std::path::Path, args: &[String]) -> Result<(), String> {
+    let status = std::process::Command::new("sudo")
+        .arg(exe)
+        .args(args)
+        .status()
+        .map_err(|e| format!("Failed to run sudo: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Elevated update failed".to_string())
     }
 }

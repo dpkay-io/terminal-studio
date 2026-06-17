@@ -75,6 +75,11 @@ fn force_x11_if_needed() {
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
+
+    if updater::handle_apply_update_flag() {
+        std::process::exit(0);
+    }
+
     force_x11_if_needed();
     updater::cleanup_old_binary();
 

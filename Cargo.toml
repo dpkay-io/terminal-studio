@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.9.12"
+version = "0.9.13"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"
@@ -77,9 +77,11 @@ windows-sys = { version = "0.52", features = [
     "Win32_Graphics_Dwm",
     "Win32_Security",
     "Win32_Storage_FileSystem",
-    "Win32_UI_WindowsAndMessaging",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]

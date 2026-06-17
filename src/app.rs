@@ -363,6 +363,16 @@ impl eframe::App for App {
             }
         }
 
+        if let Some(ref uc) = self.workers.update_checker {
+            if matches!(
+                uc.state().status,
+                crate::updater::UpdateStatus::RestartRequired
+            ) {
+                self.save_session();
+                crate::updater::restart_app();
+            }
+        }
+
         self.flash.tick();
         if self.flash.has_active() {
             ctx.request_repaint();
