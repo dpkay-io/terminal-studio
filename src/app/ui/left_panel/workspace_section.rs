@@ -195,13 +195,11 @@ impl App {
             theme::HEADER_H
         };
 
-        let tint_factor = if active {
+        let base_tint_factor = if active {
             theme::TINT_ACTIVE
         } else {
             theme::TINT_INACTIVE
         };
-        let fill = theme::from_rgb(theme::tinted(data.color, tint_factor));
-        let fg = theme::text_on(theme::tinted(data.color, tint_factor));
 
         let full_w = ui.available_width();
         let stroke_val = if active {
@@ -236,6 +234,15 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
+        // Animated hover tint: brighten card background when hovered
+        let card_hover_id = egui::Id::new(("ws_card_hover", data.id));
+        let card_hovered = name_resp.hovered() || gear_resp.hovered();
+        let hover_t = crate::app::ui::animation::animated_hover(ui.ctx(), card_hover_id, card_hovered);
+        let hover_boost = 0.08_f32;
+        let effective_tint = (base_tint_factor + hover_boost * hover_t).min(1.0);
+        let fill = theme::from_rgb(theme::tinted(data.color, effective_tint));
+        let fg = theme::text_on(theme::tinted(data.color, effective_tint));
+
         if ui.is_rect_visible(full_rect) {
             let rounding = egui::Rounding::same(theme::R_MD);
             ui.painter().rect_filled(full_rect, rounding, fill);
@@ -263,24 +270,9 @@ impl App {
             } else {
                 full_rect.center().y - name_h / 2.0
             };
-            // Dot indicator
-            let dot_x = full_rect.left() + theme::SP_3 + 2.5;
-            let dot_y = name_y + name_h / 2.0;
-            if active {
-                ui.painter().circle_filled(
-                    egui::pos2(dot_x, dot_y),
-                    2.5,
-                    theme::from_rgb(data.color),
-                );
-            } else {
-                ui.painter().circle_stroke(
-                    egui::pos2(dot_x, dot_y),
-                    2.5,
-                    egui::Stroke::new(theme::STROKE_THIN, fg.gamma_multiply(0.5)),
-                );
-            }
+            let name_x = full_rect.left() + theme::SP_4 + theme::CARD_BAR_W;
             ui.painter().with_clip_rect(name_rect).galley(
-                egui::pos2(full_rect.left() + theme::SP_3 + 8.0, name_y),
+                egui::pos2(name_x, name_y),
                 name_galley,
                 fg,
             );
@@ -315,26 +307,36 @@ impl App {
                 }
             }
 
-            // Gear icon
-            let gear_fg = if gear_resp.hovered() {
-                theme::active().text
-            } else {
-                theme::active().subtext0
-            };
-            if gear_resp.hovered() {
-                ui.painter()
-                    .rect_filled(gear_rect, theme::R_SM, theme::active().bg_row_hover);
-            }
-            ui.painter().text(
-                egui::pos2(
-                    gear_rect.center().x,
-                    full_rect.min.y + theme::HEADER_H / 2.0,
-                ),
-                egui::Align2::CENTER_CENTER,
-                "\u{2699}",
-                egui::FontId::proportional(theme::FONT_UI_MD),
-                gear_fg,
+            // Gear icon — fades in on card hover, brightens on direct gear hover
+            let gear_anim_t = crate::app::ui::animation::animated_hover(
+                ui.ctx(),
+                egui::Id::new(("ws_gear_anim", data.id)),
+                card_hovered,
             );
+            if gear_anim_t > 0.01 {
+                let gear_fg = if gear_resp.hovered() {
+                    theme::active().text
+                } else {
+                    theme::active().subtext0
+                };
+                if gear_resp.hovered() {
+                    ui.painter().rect_filled(
+                        gear_rect,
+                        theme::R_SM,
+                        theme::active().bg_row_hover,
+                    );
+                }
+                ui.painter().text(
+                    egui::pos2(
+                        gear_rect.center().x,
+                        full_rect.min.y + theme::HEADER_H / 2.0,
+                    ),
+                    egui::Align2::CENTER_CENTER,
+                    "\u{2699}",
+                    egui::FontId::proportional(theme::FONT_UI_MD),
+                    gear_fg.gamma_multiply(gear_anim_t),
+                );
+            }
 
             // Git info row
             if has_git_row {
