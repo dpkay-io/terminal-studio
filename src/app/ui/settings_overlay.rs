@@ -134,60 +134,139 @@ impl App {
                             }
 
                             ui.add_space(theme::SP_6);
-                            ui.separator();
+                            {
+                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            }
                             ui.add_space(theme::SP_4);
 
                             // Theme picker
-                            ui.label(ui_kit::heading("Theme"));
+                            ui.label(
+                                egui::RichText::new("THEME")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(theme::active().fg_secondary)
+                                    .strong(),
+                            );
                             ui.add_space(theme::SP_2);
                             let current = self.settings.theme_id;
                             egui::ScrollArea::vertical()
                                 .max_height(160.0)
                                 .show(ui, |ui| {
-                                    for &id in theme::ThemeId::ALL {
-                                        let t = &theme::all_themes()[id.index()];
-                                        let is_selected = id == current;
+                                    let swatch_outer_w = 52.0 + theme::SP_2 * 2.0;
+                                    let swatch_color_h = 20.0;
+                                    let label_h = theme::FONT_UI_SM + theme::SP_1;
+                                    let swatch_outer_h = swatch_color_h + label_h + theme::SP_2 * 2.0;
+                                    let available_w = ui.available_width();
+                                    let cols = ((available_w / swatch_outer_w).floor() as usize).max(1);
+
+                                    let themes: Vec<_> = theme::ThemeId::ALL.iter().copied().collect();
+                                    for row_themes in themes.chunks(cols) {
                                         ui.horizontal(|ui| {
-                                            let swatch_size = egui::vec2(48.0, 18.0);
-                                            let (swatch_rect, _) = ui.allocate_exact_size(
-                                                swatch_size,
-                                                egui::Sense::hover(),
-                                            );
-                                            let sw = swatch_rect.width() / 4.0;
-                                            for (i, &color) in [t.base, t.surface0, t.blue, t.green]
-                                                .iter()
-                                                .enumerate()
-                                            {
-                                                let r = egui::Rect::from_min_size(
-                                                    egui::pos2(
-                                                        swatch_rect.min.x + i as f32 * sw,
-                                                        swatch_rect.min.y,
-                                                    ),
-                                                    egui::vec2(sw, swatch_size.y),
+                                            for &id in row_themes {
+                                                let t_data = &theme::all_themes()[id.index()];
+                                                let is_selected = id == current;
+                                                let t_cur = theme::active();
+
+                                                let (outer_rect, resp) = ui.allocate_exact_size(
+                                                    egui::vec2(swatch_outer_w, swatch_outer_h),
+                                                    egui::Sense::click(),
                                                 );
-                                                ui.painter().rect_filled(r, theme::R_SM, color);
-                                            }
-                                            let label = if is_selected {
-                                                egui::RichText::new(id.name()).strong()
-                                            } else {
-                                                egui::RichText::new(id.name())
-                                            };
-                                            if ui.selectable_label(is_selected, label).clicked()
-                                                && !is_selected
-                                            {
-                                                self.settings.theme_id = id;
-                                                theme::set_theme(id);
-                                                settings_changed = true;
+
+                                                let bg_color = if resp.hovered() {
+                                                    t_cur.surface1
+                                                } else {
+                                                    t_cur.surface0
+                                                };
+                                                ui.painter().rect_filled(outer_rect, theme::R_MD, bg_color);
+
+                                                if is_selected {
+                                                    ui.painter().rect_stroke(
+                                                        outer_rect,
+                                                        theme::R_MD,
+                                                        egui::Stroke::new(theme::STROKE_THIN, t_cur.accent),
+                                                    );
+                                                }
+
+                                                let color_rect = egui::Rect::from_min_size(
+                                                    egui::pos2(
+                                                        outer_rect.min.x + theme::SP_2,
+                                                        outer_rect.min.y + theme::SP_2,
+                                                    ),
+                                                    egui::vec2(52.0, swatch_color_h),
+                                                );
+                                                let sw = color_rect.width() / 4.0;
+                                                for (i, &color) in [t_data.base, t_data.surface0, t_data.blue, t_data.green]
+                                                    .iter()
+                                                    .enumerate()
+                                                {
+                                                    let seg = egui::Rect::from_min_size(
+                                                        egui::pos2(
+                                                            color_rect.min.x + i as f32 * sw,
+                                                            color_rect.min.y,
+                                                        ),
+                                                        egui::vec2(sw, swatch_color_h),
+                                                    );
+                                                    let rounding = if i == 0 {
+                                                        egui::Rounding {
+                                                            nw: theme::R_SM,
+                                                            sw: theme::R_SM,
+                                                            ne: 0.0,
+                                                            se: 0.0,
+                                                        }
+                                                    } else if i == 3 {
+                                                        egui::Rounding {
+                                                            nw: 0.0,
+                                                            sw: 0.0,
+                                                            ne: theme::R_SM,
+                                                            se: theme::R_SM,
+                                                        }
+                                                    } else {
+                                                        egui::Rounding::ZERO
+                                                    };
+                                                    ui.painter().rect_filled(seg, rounding, color);
+                                                }
+
+                                                let name_color = if is_selected {
+                                                    t_cur.text
+                                                } else {
+                                                    t_cur.fg_muted
+                                                };
+                                                let name_pos = egui::pos2(
+                                                    color_rect.min.x,
+                                                    color_rect.max.y + theme::SP_1,
+                                                );
+                                                ui.painter().text(
+                                                    name_pos,
+                                                    egui::Align2::LEFT_TOP,
+                                                    id.name(),
+                                                    egui::FontId::proportional(theme::FONT_UI_SM),
+                                                    name_color,
+                                                );
+
+                                                if resp.clicked() && !is_selected {
+                                                    self.settings.theme_id = id;
+                                                    theme::set_theme(id);
+                                                    settings_changed = true;
+                                                }
                                             }
                                         });
+                                        ui.add_space(theme::SP_1);
                                     }
                                 });
 
                             // ── Terminal ──────────────────────────────────────────
                             ui.add_space(theme::SP_6);
-                            ui.separator();
+                            {
+                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            }
                             ui.add_space(theme::SP_4);
-                            ui.label(ui_kit::heading("Terminal"));
+                            ui.label(
+                                egui::RichText::new("TERMINAL")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(theme::active().fg_secondary)
+                                    .strong(),
+                            );
                             ui.add_space(theme::SP_2);
 
                             // Font size
@@ -325,9 +404,17 @@ impl App {
 
                             // ── About / Updates ───────────────────────────────────
                             ui.add_space(theme::SP_6);
-                            ui.separator();
+                            {
+                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            }
                             ui.add_space(theme::SP_4);
-                            ui.label(ui_kit::heading("About"));
+                            ui.label(
+                                egui::RichText::new("ABOUT")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(theme::active().fg_secondary)
+                                    .strong(),
+                            );
                             ui.add_space(theme::SP_2);
                             ui.horizontal(|ui| {
                                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
@@ -505,7 +592,11 @@ impl App {
                             });
 
                             ui.add_space(theme::SP_4);
-                            ui.separator();
+                            {
+                                let sep_rect =
+                                    ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            }
                             ui.add_space(theme::SP_2);
                             ui.horizontal(|ui| {
                                 let t = theme::active();
