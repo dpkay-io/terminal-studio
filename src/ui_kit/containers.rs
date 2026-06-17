@@ -81,7 +81,19 @@ pub fn dialog(
         .fixed_pos(dialog_pos)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
-            egui::Frame::window(&ctx.style())
+            egui::Frame::none()
+                .fill(theme::active().bg_term)
+                .rounding(egui::Rounding::same(theme::R_LG))
+                .stroke(egui::Stroke::new(
+                    theme::STROKE_THIN,
+                    theme::active().surface2,
+                ))
+                .shadow(egui::epaint::Shadow {
+                    offset: egui::vec2(0.0, 2.0),
+                    blur: 12.0,
+                    spread: 4.0,
+                    color: theme::active().shadow_md,
+                })
                 .inner_margin(egui::Margin::same(config.margin))
                 .show(ui, |ui| {
                     ui.set_min_width(dialog_w);
@@ -115,8 +127,13 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
         ui.label(egui::RichText::new(title).strong().size(theme::FONT_UI_LG));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
-                egui::Button::new(egui::RichText::new("\u{00d7}").size(theme::FONT_UI_LG))
-                    .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
+                egui::Button::new(
+                    egui::RichText::new("\u{00d7}")
+                        .size(theme::FONT_UI_LG)
+                        .color(theme::active().fg_muted),
+                )
+                .rounding(theme::R_MD)
+                .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
             );
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -126,7 +143,10 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
             }
         });
     });
-    ui.separator();
+    // Subtle border instead of hard separator
+    let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+    ui.painter()
+        .rect_filled(sep_rect, 0.0, theme::active().border_subtle);
     close
 }
 
