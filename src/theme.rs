@@ -209,6 +209,21 @@ pub struct Theme {
     pub cursor_dim_color: Color32,
     pub selection_bg: Color32,
     pub scrollbar_color: Color32,
+
+    // UI refresh: component backgrounds
+    pub bg_input: Color32,
+    pub bg_tab_active: Color32,
+    pub bg_tab_inactive: Color32,
+    pub bg_toolbar: Color32,
+
+    // UI refresh: borders
+    pub border_panel: Color32,
+    pub border_subtle: Color32,
+    pub border_focus: Color32,
+
+    // UI refresh: shadows (simulated via darker strokes)
+    pub shadow_sm: Color32,
+    pub shadow_md: Color32,
 }
 
 impl ThemeDef {
@@ -242,16 +257,8 @@ impl ThemeDef {
         let flash_success_bg = blend(self.base, self.green, BLEND_SUBTLE);
         let flash_error_bg = blend(self.base, self.red, BLEND_SUBTLE);
 
-        let danger_bg = if self.is_light {
-            [200, 60, 60]
-        } else {
-            [180, 60, 60]
-        };
-        let danger_fg = if self.is_light {
-            [255, 220, 220]
-        } else {
-            [210, 180, 180]
-        };
+        let danger_bg = blend(self.base, self.red, BLEND_SUBTLE);
+        let danger_fg = blend(self.red, self.text, BLEND_LIGHT);
 
         let cursor_color = if self.is_light {
             Color32::from_rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR)
@@ -272,6 +279,10 @@ impl ThemeDef {
 
         let ansi_c32: [Color32; 16] = std::array::from_fn(|i| c(self.ansi[i]));
         let md_bullet = blend(self.green, self.overlay0, BLEND_LIGHT);
+
+        let bg_input = blend(self.base, self.surface0, 0.6);
+        let bg_tab_inactive = blend(self.mantle, self.surface0, BLEND_LIGHT);
+        let border_subtle_rgb = blend(self.surface0, self.surface1, BLEND_MEDIUM);
 
         Theme {
             id: self.id,
@@ -377,6 +388,33 @@ impl ThemeDef {
                 ALPHA_SELECTION,
             ),
             scrollbar_color,
+
+            bg_input: c(bg_input),
+            bg_tab_active: c(self.base),
+            bg_tab_inactive: c(bg_tab_inactive),
+            bg_toolbar: c(self.mantle),
+
+            border_panel: c(self.surface0),
+            border_subtle: c(border_subtle_rgb),
+            border_focus: Color32::from_rgba_unmultiplied(
+                self.blue[0],
+                self.blue[1],
+                self.blue[2],
+                ALPHA_BORDER_FOCUS,
+            ),
+
+            shadow_sm: Color32::from_rgba_unmultiplied(
+                self.crust[0],
+                self.crust[1],
+                self.crust[2],
+                ALPHA_SHADOW_SM,
+            ),
+            shadow_md: Color32::from_rgba_unmultiplied(
+                self.crust[0],
+                self.crust[1],
+                self.crust[2],
+                ALPHA_SHADOW_MD,
+            ),
         }
     }
 }
@@ -419,9 +457,9 @@ pub const SP_6: f32 = 16.0;
 // ── Corner radii ────────────────────────────────────────────────────────────
 
 pub const R_NONE: f32 = 0.0;
-pub const R_SM: f32 = 2.0;
-pub const R_MD: f32 = 4.0;
-pub const R_LG: f32 = 6.0;
+pub const R_SM: f32 = 3.0;
+pub const R_MD: f32 = 6.0;
+pub const R_LG: f32 = 8.0;
 
 // ── Layout dimensions ──────────────────────────────────────────────────────
 
@@ -501,6 +539,9 @@ pub const ALPHA_SCROLLBAR_HOVER: u8 = 200;
 pub const ALPHA_SCROLLBAR_DRAG: u8 = 240;
 pub const ALPHA_FLASH: u8 = 120;
 pub const ALPHA_SCROLL_INDICATOR: u8 = 60;
+pub const ALPHA_SHADOW_SM: u8 = 100;
+pub const ALPHA_SHADOW_MD: u8 = 150;
+pub const ALPHA_BORDER_FOCUS: u8 = 100;
 
 // ── Blend factors ───────────────────────────────────────────────────────────
 
