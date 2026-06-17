@@ -109,8 +109,9 @@ pub(in crate::app) fn render_node(
 
             // Focus border for split panes
             if is_focused && rctx.has_splits {
-                let stroke = egui::Stroke::new(1.5, theme::active().accent);
-                ui.painter().rect_stroke(rect, 0.0, stroke);
+                let stroke = egui::Stroke::new(theme::STROKE_MEDIUM, theme::active().border_focus);
+                let inset_rect = rect.shrink(2.0);
+                ui.painter().rect_stroke(inset_rect, theme::R_SM, stroke);
             }
 
             // Floating 3-dot context menu overlay for split panes
@@ -193,13 +194,56 @@ pub(in crate::app) fn render_node(
             let anim_t = ui
                 .ctx()
                 .animate_bool_with_time(div_id.with("anim"), is_active, 0.15);
-            let div_color = theme::lerp_color(
-                theme::active().divider_idle,
-                theme::active().divider_active,
-                anim_t,
-            );
-            ui.painter()
-                .rect_filled(div_rect, theme::STROKE_THIN, div_color);
+            let t = theme::active();
+            // Thin center line
+            let line_color = theme::lerp_color(t.border_subtle, t.border_focus, anim_t);
+            match dir {
+                SplitDir::Horizontal => {
+                    let cx = div_rect.center().x;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(cx, div_rect.min.y),
+                            egui::pos2(cx, div_rect.max.y),
+                        ],
+                        egui::Stroke::new(theme::STROKE_THIN, line_color),
+                    );
+                }
+                SplitDir::Vertical => {
+                    let cy = div_rect.center().y;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(div_rect.min.x, cy),
+                            egui::pos2(div_rect.max.x, cy),
+                        ],
+                        egui::Stroke::new(theme::STROKE_THIN, line_color),
+                    );
+                }
+            }
+            // Grab handle dots
+            let dot_color = theme::lerp_color(t.overlay0, t.fg_secondary, anim_t);
+            let center = div_rect.center();
+            let dot_r = 1.5;
+            let dot_gap = 4.0;
+            match dir {
+                SplitDir::Horizontal => {
+                    for i in [-1.0_f32, 0.0, 1.0] {
+                        ui.painter().circle_filled(
+                            egui::pos2(center.x, center.y + i * dot_gap),
+                            dot_r,
+                            dot_color,
+                        );
+                    }
+                }
+                SplitDir::Vertical => {
+                    for i in [-1.0_f32, 0.0, 1.0] {
+                        ui.painter().circle_filled(
+                            egui::pos2(center.x + i * dot_gap, center.y),
+                            dot_r,
+                            dot_color,
+                        );
+                    }
+                }
+            }
 
             // Handle drag to resize
             if div_resp.dragged() {
