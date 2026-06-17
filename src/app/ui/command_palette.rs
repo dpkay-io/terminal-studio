@@ -47,10 +47,16 @@ impl App {
             .fixed_pos(dialog_pos)
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
+                egui::Frame::none()
                     .fill(t.bg_term)
                     .rounding(egui::Rounding::same(theme::R_LG))
                     .stroke(egui::Stroke::new(theme::STROKE_THIN, t.surface2))
+                    .shadow(egui::epaint::Shadow {
+                        offset: egui::vec2(0.0, 4.0),
+                        blur: 16.0,
+                        spread: 4.0,
+                        color: t.shadow_md,
+                    })
                     .inner_margin(egui::Margin::same(theme::SP_4))
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w - theme::SP_4 * 2.0);
@@ -98,8 +104,9 @@ impl App {
                         }
 
                         ui.add_space(theme::SP_2);
-                        ui.separator();
-                        ui.add_space(theme::SP_1);
+                        let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                        ui.painter().rect_filled(sep_rect, 0.0, t.border_subtle);
+                        ui.add_space(theme::SP_2);
 
                         // Build filtered action list
                         let query = self.command_palette_query.trim().to_lowercase();
@@ -164,19 +171,44 @@ impl App {
                                                     if is_selected { t.text } else { t.subtext0 },
                                                 );
 
-                                                // Keybinding hint (right-aligned)
+                                                // Keybinding hint (right-aligned pill badge)
                                                 if let Some(ref hint) = entry.shortcut_hint {
-                                                    let hint_pos = egui::pos2(
-                                                        row_rect.max.x - theme::SP_3,
-                                                        row_rect.center().y
-                                                            - theme::FONT_UI_XS * 0.55,
+                                                    let badge_font =
+                                                        egui::FontId::monospace(theme::FONT_SYS_SM);
+                                                    let badge_galley = painter.layout_no_wrap(
+                                                        hint.clone(),
+                                                        badge_font,
+                                                        t.fg_muted,
                                                     );
-                                                    painter.text(
-                                                        hint_pos,
-                                                        egui::Align2::RIGHT_TOP,
-                                                        hint,
-                                                        egui::FontId::monospace(theme::FONT_UI_XS),
-                                                        t.overlay0,
+                                                    let badge_w =
+                                                        badge_galley.size().x + theme::SP_3 * 2.0;
+                                                    let badge_h =
+                                                        badge_galley.size().y + theme::SP_1 * 2.0;
+                                                    let badge_rect = egui::Rect::from_min_size(
+                                                        egui::pos2(
+                                                            row_rect.max.x - theme::SP_3 - badge_w,
+                                                            row_rect.center().y - badge_h / 2.0,
+                                                        ),
+                                                        egui::vec2(badge_w, badge_h),
+                                                    );
+                                                    let badge_bg = if is_selected {
+                                                        t.surface2
+                                                    } else {
+                                                        t.surface0
+                                                    };
+                                                    painter.rect_filled(
+                                                        badge_rect,
+                                                        theme::R_SM,
+                                                        badge_bg,
+                                                    );
+                                                    painter.galley(
+                                                        egui::pos2(
+                                                            badge_rect.min.x + theme::SP_3,
+                                                            badge_rect.center().y
+                                                                - badge_galley.size().y / 2.0,
+                                                        ),
+                                                        badge_galley,
+                                                        t.fg_muted,
                                                     );
                                                 }
                                             },
