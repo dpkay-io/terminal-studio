@@ -13,12 +13,19 @@ pub fn drag_divider(
     if resp.hovered() || resp.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
-    let color = if resp.hovered() || resp.dragged() {
-        active_color
-    } else {
-        idle_color
-    };
-    ui.painter().rect_filled(rect, theme::STROKE_THIN, color);
+    let is_active = resp.hovered() || resp.dragged();
+    let anim_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("div_anim"), is_active, theme::ANIM_FAST);
+    let color = theme::lerp_color(idle_color, active_color, anim_t);
+
+    let line_w = rect.width() * 0.6;
+    let line_x = rect.center().x - line_w * 0.5;
+    let line_y = rect.center().y;
+    ui.painter().line_segment(
+        [egui::pos2(line_x, line_y), egui::pos2(line_x + line_w, line_y)],
+        egui::Stroke::new(theme::STROKE_THIN, color),
+    );
     resp.drag_delta().y
 }
 
