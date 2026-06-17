@@ -119,8 +119,8 @@ impl App {
                         ui,
                         self.vp_id("ws_panel_divider"),
                         div_rect,
-                        theme::active().ws_div_idle,
-                        theme::active().ws_div_active,
+                        theme::active().border_subtle,
+                        theme::active().border_focus,
                     );
                     if !self.workspace_panel_collapsed && delta != 0.0 {
                         let new_ws_h =

@@ -53,7 +53,7 @@ impl App {
             let sb = search_bar(
                 ui,
                 &mut self.global_search_query,
-                "\u{1f50e}",
+                "\u{1f50d}",
                 "Search in all sessions\u{2026}",
                 search_id,
             );
