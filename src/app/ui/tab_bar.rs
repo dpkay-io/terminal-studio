@@ -39,7 +39,7 @@ impl App {
         let mut tab_scroll_offset_x: f32 = 0.0;
         ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
             ui.painter()
-                .rect_filled(tab_bar_rect, 0.0, theme::active().surface0);
+                .rect_filled(tab_bar_rect, 0.0, theme::active().bg_toolbar);
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             let scroll_out = egui::ScrollArea::horizontal()
                 .id_source(self.vp_id("tab_bar_scroll"))
@@ -76,7 +76,6 @@ impl App {
 
                             let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
 
-                            let hbg = theme::header_bg(ws_color, is_active);
                             let title_color = match ws_color {
                                 Some(c) => theme::text_on(theme::tinted(
                                     c,
@@ -92,7 +91,40 @@ impl App {
                             };
 
                             let painter = ui.painter().clone();
-                            painter.rect_filled(tab_rect, 0.0, hbg);
+                            if is_active {
+                                let tab_rounding = egui::Rounding {
+                                    nw: theme::R_MD,
+                                    ne: theme::R_MD,
+                                    sw: 0.0,
+                                    se: 0.0,
+                                };
+                                painter.rect_filled(
+                                    tab_rect,
+                                    tab_rounding,
+                                    theme::active().bg_tab_active,
+                                );
+                                painter.rect_stroke(
+                                    tab_rect,
+                                    tab_rounding,
+                                    egui::Stroke::new(
+                                        theme::STROKE_THIN,
+                                        theme::active().border_subtle,
+                                    ),
+                                );
+                                // Erase bottom border to connect tab to content
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(tab_rect.min.x + 1.0, tab_rect.max.y),
+                                        egui::pos2(tab_rect.max.x - 1.0, tab_rect.max.y),
+                                    ],
+                                    egui::Stroke::new(
+                                        theme::STROKE_THIN + 0.5,
+                                        theme::active().bg_tab_active,
+                                    ),
+                                );
+                            } else {
+                                // Inactive: no fill, just text
+                            }
 
                             // Workspace colour strip on left edge
                             if let Some(c) = ws_color {
@@ -106,20 +138,8 @@ impl App {
                                 );
                             }
 
-                            // Bottom highlight on active tab
+                            // Active indicator dot
                             if is_active {
-                                painter.rect_filled(
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(
-                                            tab_rect.min.x,
-                                            tab_rect.max.y - theme::TAB_ACTIVE_HIGHLIGHT_H,
-                                        ),
-                                        egui::vec2(theme::TAB_W, theme::TAB_ACTIVE_HIGHLIGHT_H),
-                                    ),
-                                    0.0,
-                                    theme::active().accent,
-                                );
-                                // Active indicator dot
                                 let dot_radius = 3.0;
                                 let dot_x = tab_rect.min.x
                                     + theme::TAB_PAD_X
@@ -165,7 +185,7 @@ impl App {
                                         egui::vec2(theme::STROKE_THIN, dot_h),
                                     ),
                                     0.0,
-                                    theme::active().surface2.gamma_multiply(0.5),
+                                    theme::active().border_subtle.gamma_multiply(0.5),
                                 );
                             } else {
                                 painter.rect_filled(
@@ -177,7 +197,7 @@ impl App {
                                         egui::vec2(theme::STROKE_THIN, tab_h),
                                     ),
                                     0.0,
-                                    theme::active().surface2,
+                                    theme::active().border_subtle,
                                 );
                             }
 
@@ -416,7 +436,7 @@ impl App {
         // ── Tab-bar action buttons (split / close-all) ──────────
         ui.allocate_ui_at_rect(tab_actions_rect, |ui| {
             ui.painter()
-                .rect_filled(tab_actions_rect, 0.0, theme::active().surface0);
+                .rect_filled(tab_actions_rect, 0.0, theme::active().bg_toolbar);
             // Left separator
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(
@@ -424,7 +444,7 @@ impl App {
                     egui::vec2(theme::STROKE_THIN, tab_h),
                 ),
                 0.0,
-                theme::active().surface2,
+                theme::active().border_subtle,
             );
             let icon_sz = egui::vec2(theme::BTN_W, tab_h);
             let t = theme::active();
@@ -447,7 +467,7 @@ impl App {
             }
             let sh_stroke = if split_h_resp.hovered() {
                 ui.painter()
-                    .rect_filled(split_h_rect, theme::R_SM, t.surface2);
+                    .rect_filled(split_h_rect, theme::R_MD, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
@@ -479,7 +499,7 @@ impl App {
             }
             let sv_stroke = if split_v_resp.hovered() {
                 ui.painter()
-                    .rect_filled(split_v_rect, theme::R_SM, t.surface2);
+                    .rect_filled(split_v_rect, theme::R_MD, t.surface2);
                 icon_hover_stroke
             } else {
                 icon_stroke
