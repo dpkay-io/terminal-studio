@@ -76,6 +76,32 @@ impl App {
 
                             let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
 
+                            // Register the tab interaction early so hover state is available
+                            // for painting the background and controlling close button visibility.
+                            let tab_resp = ui.interact(
+                                tab_rect,
+                                egui::Id::new(("tab_click", pane_id)),
+                                egui::Sense::click_and_drag(),
+                            );
+                            if tab_resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+
+                            // Animated hover for inactive tabs
+                            let tab_hover_id = egui::Id::new(("tab_hover", pane_id));
+                            let tab_hover_t = crate::app::ui::animation::animated_hover(
+                                ui.ctx(),
+                                tab_hover_id,
+                                tab_resp.hovered(),
+                            );
+
+                            let tab_rounding = egui::Rounding {
+                                nw: theme::R_MD,
+                                ne: theme::R_MD,
+                                sw: 0.0,
+                                se: 0.0,
+                            };
+
                             let title_color = match ws_color {
                                 Some(c) => theme::text_on(theme::tinted(
                                     c,
@@ -85,19 +111,18 @@ impl App {
                                     if is_active {
                                         theme::active().text
                                     } else {
-                                        theme::active().subtext1
+                                        // Brighten slightly on hover for inactive tabs
+                                        theme::lerp_color(
+                                            theme::active().subtext0,
+                                            theme::active().subtext1,
+                                            tab_hover_t,
+                                        )
                                     }
                                 }
                             };
 
                             let painter = ui.painter().clone();
                             if is_active {
-                                let tab_rounding = egui::Rounding {
-                                    nw: theme::R_MD,
-                                    ne: theme::R_MD,
-                                    sw: 0.0,
-                                    se: 0.0,
-                                };
                                 painter.rect_filled(
                                     tab_rect,
                                     tab_rounding,
@@ -122,8 +147,14 @@ impl App {
                                         theme::active().bg_tab_active,
                                     ),
                                 );
-                            } else {
-                                // Inactive: no fill, just text
+                            } else if tab_hover_t > 0.01 {
+                                // Inactive: animated hover background
+                                let hover_bg = theme::lerp_color(
+                                    egui::Color32::TRANSPARENT,
+                                    theme::active().bg_row_hover,
+                                    tab_hover_t,
+                                );
+                                painter.rect_filled(tab_rect, tab_rounding, hover_bg);
                             }
 
                             // Workspace colour strip on left edge
@@ -166,8 +197,9 @@ impl App {
                                 crate::app::feedback::FlashTarget::Tab(pane_id),
                             );
 
-                            // Right-edge separator between tabs.
-                            // Use a subtle connector for tabs in the same split group.
+                            // Right-edge separator between tabs — unified vertical line.
+                            // Same split group: short centred line, low opacity.
+                            // Different groups: full-height line, higher opacity.
                             let same_group_next = vis_pos + 1 < visible_roots.len()
                                 && visible_roots[vis_pos] == visible_roots[vis_pos + 1]
                                 && visible_roots[vis_pos].is_some_and(|r| {
@@ -176,57 +208,61 @@ impl App {
                                         .get(&r)
                                         .is_some_and(|t| t.leaf_ids().len() > 1)
                                 });
+                            let t = theme::active();
                             if same_group_next {
-                                let mid_y = tab_rect.center().y;
-                                let dot_h = 4.0;
-                                painter.rect_filled(
-                                    egui::Rect::from_center_size(
-                                        egui::pos2(tab_rect.max.x, mid_y),
-                                        egui::vec2(theme::STROKE_THIN, dot_h),
-                                    ),
-                                    0.0,
-                                    theme::active().border_subtle.gamma_multiply(0.5),
+                                let line_h = tab_h * 0.5;
+                                let line_y = tab_rect.center().y - line_h * 0.5;
+                                let color = t.border_subtle.gamma_multiply(0.4);
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(tab_rect.max.x, line_y),
+                                        egui::pos2(tab_rect.max.x, line_y + line_h),
+                                    ],
+                                    egui::Stroke::new(theme::STROKE_THIN, color),
                                 );
                             } else {
-                                painter.rect_filled(
-                                    egui::Rect::from_min_size(
-                                        egui::pos2(
-                                            tab_rect.max.x - theme::STROKE_THIN,
-                                            tab_rect.min.y,
-                                        ),
-                                        egui::vec2(theme::STROKE_THIN, tab_h),
-                                    ),
-                                    0.0,
-                                    theme::active().border_subtle,
+                                let color = t.border_subtle.gamma_multiply(0.8);
+                                painter.line_segment(
+                                    [
+                                        egui::pos2(tab_rect.max.x, tab_rect.min.y),
+                                        egui::pos2(tab_rect.max.x, tab_rect.max.y),
+                                    ],
+                                    egui::Stroke::new(theme::STROKE_THIN, color),
                                 );
                             }
 
-                            // Register tab-wide click first (lower z-order); close button
-                            // is registered second so it has higher priority in egui's
-                            // last-registered-wins model for overlapping regions.
-                            let tab_resp = ui.interact(
-                                tab_rect,
-                                egui::Id::new(("tab_click", pane_id)),
-                                egui::Sense::click_and_drag(),
+                            // Close button (x) — always visible on active tab,
+                            // fades in on hover, hidden on idle inactive tabs.
+                            let show_close = is_active || tab_resp.hovered();
+                            let close_t = crate::app::ui::animation::animated_hover(
+                                ui.ctx(),
+                                egui::Id::new(("tab_close_anim", pane_id)),
+                                show_close,
                             );
-                            if tab_resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-
-                            // Close button (x)
                             let close_rect = egui::Rect::from_min_size(
                                 egui::pos2(tab_rect.max.x - theme::BTN_W, tab_rect.min.y),
                                 egui::vec2(theme::BTN_W, tab_h),
                             );
-                            let close_resp = ui_kit::icon_button(
-                                ui,
-                                egui::Id::new(("tab_close", pane_id)),
-                                close_rect,
-                                "\u{00d7}",
-                                theme::FONT_TERM,
-                                theme::active().danger_fg,
-                                ui_kit::IconButtonStyle::Danger,
-                            );
+                            let close_resp = if close_t > 0.01 {
+                                let close_fg = theme::active().danger_fg.gamma_multiply(close_t);
+                                ui_kit::icon_button(
+                                    ui,
+                                    egui::Id::new(("tab_close", pane_id)),
+                                    close_rect,
+                                    "\u{00d7}",
+                                    theme::FONT_TERM,
+                                    close_fg,
+                                    ui_kit::IconButtonStyle::Danger,
+                                )
+                            } else {
+                                // Allocate an inert response so close click handling below
+                                // still compiles without restructuring.
+                                ui.interact(
+                                    close_rect,
+                                    egui::Id::new(("tab_close", pane_id)),
+                                    egui::Sense::hover(),
+                                )
+                            };
 
                             // Title text (clipped before close button)
                             let dot_offset = if is_active { 10.0 } else { 0.0 };
