@@ -67,6 +67,12 @@ impl App {
                 let r = ui.max_rect();
                 let painter = ui.painter().clone();
 
+                // Bottom border
+                painter.line_segment(
+                    [egui::pos2(r.min.x, r.max.y), egui::pos2(r.max.x, r.max.y)],
+                    egui::Stroke::new(theme::STROKE_THIN, theme::active().border_subtle),
+                );
+
                 // Drag the whole bar to move the window; double-click to maximize/restore
                 let drag_resp =
                     ui.interact(r, self.vp_id("tb_drag"), egui::Sense::click_and_drag());
@@ -421,35 +427,41 @@ impl App {
                         egui::pos2(mac_clip_max_x, r.max.y),
                     );
                     let mac_clipped = painter.with_clip_rect(mac_clip_rect);
-                    if let Some(_ws_color) = active_ws_color {
-                        let prefix = "Terminal Studio \u{2014} ";
-                        let ws_name = self
-                            .active_workspace()
-                            .map(|w| w.name.clone())
-                            .unwrap_or_default();
-                        let prefix_galley = ui.fonts(|f| {
+                    let t = theme::active();
+                    if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
+                        let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
+                        let app_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
-                                prefix.to_string(),
-                                egui::FontId::proportional(theme::FONT_UI_MD),
-                                tb_fg.linear_multiply(0.5),
+                                "Terminal Studio".to_string(),
+                                title_font.clone(),
+                                t.fg_muted,
                             )
                         });
-                        let name_galley = ui.fonts(|f| {
+                        let sep_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
-                                ws_name,
-                                egui::FontId::proportional(theme::FONT_UI_LG),
-                                tb_fg,
+                                " \u{00b7} ".to_string(),
+                                title_font.clone(),
+                                t.fg_muted,
                             )
                         });
-                        let total_w = prefix_galley.size().x + name_galley.size().x;
+                        let name_galley =
+                            ui.fonts(|f| f.layout_no_wrap(ws_name, title_font, t.fg_secondary));
+                        let app_w = app_galley.size().x;
+                        let sep_w = sep_galley.size().x;
+                        let name_w = name_galley.size().x;
+                        let total_w = app_w + sep_w + name_w;
                         let start_x = r.center().x - total_w / 2.0;
-                        let text_y = r.center().y - prefix_galley.size().y / 2.0;
-                        mac_clipped.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
-                        let name_y = r.center().y - name_galley.size().y / 2.0;
+                        let text_y = r.center().y - app_galley.size().y / 2.0;
+                        mac_clipped.galley(egui::pos2(start_x, text_y), app_galley, t.fg_muted);
                         mac_clipped.galley(
-                            egui::pos2(start_x + total_w - name_galley.size().x, name_y),
+                            egui::pos2(start_x + app_w, text_y),
+                            sep_galley,
+                            t.fg_muted,
+                        );
+                        mac_clipped.galley(
+                            egui::pos2(start_x + app_w + sep_w, text_y),
                             name_galley,
-                            tb_fg,
+                            t.fg_secondary,
                         );
                     } else {
                         mac_clipped.text(
@@ -457,7 +469,7 @@ impl App {
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
                             egui::FontId::proportional(theme::FONT_UI_MD),
-                            tb_fg.linear_multiply(0.6),
+                            t.fg_muted,
                         );
                     }
                 }
@@ -809,36 +821,38 @@ impl App {
                         egui::pos2(clip_max_x, r.max.y),
                     );
                     let clipped = painter.with_clip_rect(clip_rect);
-                    // "Terminal Studio" is subtle; workspace name is prominent
-                    if let Some(_ws_color) = active_ws_color {
-                        let prefix = "Terminal Studio \u{2014} ";
-                        let ws_name = self
-                            .active_workspace()
-                            .map(|w| w.name.clone())
-                            .unwrap_or_default();
-                        let prefix_galley = ui.fonts(|f| {
+                    // "Terminal Studio" dimmed; workspace name emphasized
+                    let t = theme::active();
+                    if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
+                        let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
+                        let app_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
-                                prefix.to_string(),
-                                egui::FontId::proportional(theme::FONT_UI_MD),
-                                tb_fg.linear_multiply(0.5),
+                                "Terminal Studio".to_string(),
+                                title_font.clone(),
+                                t.fg_muted,
                             )
                         });
-                        let name_galley = ui.fonts(|f| {
+                        let sep_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
-                                ws_name,
-                                egui::FontId::proportional(theme::FONT_UI_LG),
-                                tb_fg,
+                                " \u{00b7} ".to_string(),
+                                title_font.clone(),
+                                t.fg_muted,
                             )
                         });
-                        let total_w = prefix_galley.size().x + name_galley.size().x;
+                        let name_galley =
+                            ui.fonts(|f| f.layout_no_wrap(ws_name, title_font, t.fg_secondary));
+                        let app_w = app_galley.size().x;
+                        let sep_w = sep_galley.size().x;
+                        let name_w = name_galley.size().x;
+                        let total_w = app_w + sep_w + name_w;
                         let start_x = r.center().x - total_w / 2.0;
-                        let text_y = r.center().y - prefix_galley.size().y / 2.0;
-                        clipped.galley(egui::pos2(start_x, text_y), prefix_galley, tb_fg);
-                        let name_y = r.center().y - name_galley.size().y / 2.0;
+                        let text_y = r.center().y - app_galley.size().y / 2.0;
+                        clipped.galley(egui::pos2(start_x, text_y), app_galley, t.fg_muted);
+                        clipped.galley(egui::pos2(start_x + app_w, text_y), sep_galley, t.fg_muted);
                         clipped.galley(
-                            egui::pos2(start_x + total_w - name_galley.size().x, name_y),
+                            egui::pos2(start_x + app_w + sep_w, text_y),
                             name_galley,
-                            tb_fg,
+                            t.fg_secondary,
                         );
                     } else {
                         clipped.text(
@@ -846,7 +860,7 @@ impl App {
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
                             egui::FontId::proportional(theme::FONT_UI_MD),
-                            tb_fg.linear_multiply(0.6),
+                            t.fg_muted,
                         );
                     }
                 }
