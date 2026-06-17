@@ -531,40 +531,64 @@ impl App {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
 
-                    // Paint background first so subsequent elements are visible
+                    // Paint background — animated hover transition
                     let row_hovered = resp.hovered();
+                    let hover_id = egui::Id::new(("sess_row_hover", pane.id));
+                    let hover_t =
+                        crate::app::ui::animation::animated_hover(ui.ctx(), hover_id, row_hovered);
+                    let t = theme::active();
                     let bg = if is_active {
-                        theme::active().bg_row_active
-                    } else if row_hovered {
-                        theme::active().bg_row_hover
+                        t.bg_row_active
                     } else {
-                        egui::Color32::TRANSPARENT
+                        theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
                     };
                     painter.rect_filled(row_rect, theme::R_MD, bg);
 
+                    // Full-height workspace color bar on the left edge
                     if let Some(c) = ws_color {
-                        let pill_h = 14.0;
-                        let pill_y = row_rect.center().y - pill_h / 2.0;
-                        let border = egui::Rect::from_min_size(
-                            egui::pos2(row_rect.min.x + theme::SP_1, pill_y),
-                            egui::vec2(theme::WS_BORDER_W - 1.0, pill_h),
+                        let bar_rect = egui::Rect::from_min_size(
+                            egui::pos2(row_rect.min.x, row_rect.min.y),
+                            egui::vec2(theme::WS_BORDER_W - 1.0, row_rect.height()),
                         );
-                        painter.rect_filled(border, theme::R_SM, theme::from_rgb(c));
+                        let left_rounding = egui::Rounding {
+                            nw: theme::R_MD,
+                            sw: theme::R_MD,
+                            ne: 0.0,
+                            se: 0.0,
+                        };
+                        painter.rect_filled(bar_rect, left_rounding, theme::from_rgb(c));
                     }
 
-                    let quit_rect = egui::Rect::from_min_size(
-                        egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
-                        egui::vec2(theme::BTN_W, row_rect.height()),
+                    // Close button — hidden when row is idle, fades in on hover/active
+                    let show_close = is_active || row_hovered;
+                    let close_anim_t = crate::app::ui::animation::animated_hover(
+                        ui.ctx(),
+                        egui::Id::new(("sess_close_anim", pane.id)),
+                        show_close,
                     );
-                    let quit_resp = ui_kit::icon_button(
-                        ui,
-                        egui::Id::new(("pane_quit", pane.id)),
-                        quit_rect,
-                        "\u{00d7}",
-                        theme::FONT_TERM,
-                        theme::active().danger_fg,
-                        ui_kit::IconButtonStyle::Danger,
-                    );
+                    let quit_resp = if close_anim_t > 0.01 {
+                        let quit_rect = egui::Rect::from_min_size(
+                            egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
+                            egui::vec2(theme::BTN_W, row_rect.height()),
+                        );
+                        let close_color = t.danger_fg.gamma_multiply(close_anim_t);
+                        let result = ui_kit::icon_button(
+                            ui,
+                            egui::Id::new(("pane_quit", pane.id)),
+                            quit_rect,
+                            "\u{00d7}",
+                            theme::FONT_TERM,
+                            close_color,
+                            ui_kit::IconButtonStyle::Danger,
+                        );
+                        Some((result, quit_rect))
+                    } else {
+                        None
+                    };
+                    let (quit_rect_opt, quit_clicked) = match &quit_resp {
+                        Some((r, rect)) => (Some(*rect), r.clicked()),
+                        None => (None, false),
+                    };
 
                     let win_icon_w: f32 = if in_other_window {
                         theme::FONT_TERM
@@ -573,11 +597,12 @@ impl App {
                     };
 
                     if in_other_window {
+                        let icon_x = row_rect.max.x
+                            - quit_rect_opt.map_or(0.0, |_| theme::BTN_W)
+                            - win_icon_w / 2.0
+                            - 1.0;
                         painter.text(
-                            egui::pos2(
-                                quit_rect.min.x - win_icon_w / 2.0 - 1.0,
-                                row_rect.center().y,
-                            ),
+                            egui::pos2(icon_x, row_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             "\u{2197}",
                             egui::FontId::proportional(theme::FONT_UI_SM),
@@ -585,14 +610,10 @@ impl App {
                         );
                     }
 
-                    // Title text clipped to leave room for quit button + window icon
-                    let text_x = row_rect.min.x
-                        + if ws_color.is_some() {
-                            theme::WS_BORDER_W + theme::SP_3
-                        } else {
-                            theme::SP_3
-                        };
-                    let clip_max = quit_rect.min.x - win_icon_w - 3.0;
+                    // Title text: consistent left padding regardless of workspace bar
+                    let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+                    let effective_btn_w = if show_close { theme::BTN_W } else { 0.0 };
+                    let clip_max = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
                     let is_being_dragged = matches!(
                         &self.drag_state.payload,
                         Some(crate::app::drag::DragPayload::Session(sid))
@@ -638,7 +659,7 @@ impl App {
                         resp.on_hover_text(&label)
                     };
 
-                    if quit_resp.clicked() {
+                    if quit_clicked {
                         actions.quit_pane_id = Some(pane.id);
                     } else if resp.clicked() {
                         actions.clicked_sidebar_pane_id = Some(pane.id);
