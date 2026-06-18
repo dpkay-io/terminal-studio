@@ -205,9 +205,11 @@ pub(in crate::app) fn render_node(
                 .animate_bool_with_time(div_id.with("anim"), is_active, 0.15);
             let t = theme::active();
             // Line thickens on drag
-            let drag_t = ui
-                .ctx()
-                .animate_bool_with_time(div_id.with("drag"), div_resp.dragged(), theme::ANIM_FAST);
+            let drag_t = ui.ctx().animate_bool_with_time(
+                div_id.with("drag"),
+                div_resp.dragged(),
+                theme::ANIM_FAST,
+            );
             let line_width =
                 theme::STROKE_THIN + (theme::STROKE_MEDIUM - theme::STROKE_THIN) * drag_t;
             // Thin center line
@@ -319,13 +321,19 @@ fn render_pane_overlay_menu(
     });
 
     let show_btn = pane_hovered || popup_open;
-    if !show_btn {
+    let menu_anim_t = crate::app::ui::animation::animated_hover(
+        ui.ctx(),
+        egui::Id::new(("pane_menu_anim", pane_id)),
+        show_btn,
+    );
+    if menu_anim_t <= 0.01 {
         return;
     }
 
     let t = theme::active();
+    let bg_alpha = (theme::ALPHA_SURFACE_OVERLAY as f32 * menu_anim_t) as u8;
     let bg_pill =
-        egui::Color32::from_rgba_unmultiplied(t.surface0.r(), t.surface0.g(), t.surface0.b(), 200);
+        egui::Color32::from_rgba_unmultiplied(t.surface0.r(), t.surface0.g(), t.surface0.b(), bg_alpha);
     ui.painter()
         .rect_filled(btn_rect.expand(theme::SP_1), theme::R_MD, bg_pill);
 
@@ -463,7 +471,7 @@ fn render_text_search_bar(
         return None;
     }
     let t = theme::active();
-    let bar_w = 320.0_f32;
+    let bar_w = 320.0_f32.min(pane_rect.width() - 24.0);
     let bar_h = 30.0_f32;
     let bar_rect = egui::Rect::from_min_size(
         egui::pos2(pane_rect.max.x - bar_w - 8.0, pane_rect.min.y + 8.0),
@@ -494,6 +502,15 @@ fn render_text_search_bar(
     } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
         search.next_match();
     }
+
+    let controls_x = bar_rect.max.x - 90.0;
+    ui.painter().line_segment(
+        [
+            egui::pos2(controls_x, bar_rect.min.y + theme::SP_2),
+            egui::pos2(controls_x, bar_rect.max.y - theme::SP_2),
+        ],
+        egui::Stroke::new(theme::STROKE_THIN, t.border_subtle),
+    );
 
     let count_text = if search.matches.is_empty() {
         if search.query.is_empty() {
