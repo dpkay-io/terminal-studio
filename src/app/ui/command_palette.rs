@@ -175,10 +175,15 @@ impl App {
                                                 if let Some(ref hint) = entry.shortcut_hint {
                                                     let badge_font =
                                                         egui::FontId::monospace(theme::FONT_SYS_SM);
+                                                    let badge_text_color = if is_selected {
+                                                        t.subtext1
+                                                    } else {
+                                                        t.fg_muted
+                                                    };
                                                     let badge_galley = painter.layout_no_wrap(
                                                         hint.clone(),
                                                         badge_font,
-                                                        t.fg_muted,
+                                                        badge_text_color,
                                                     );
                                                     let badge_w =
                                                         badge_galley.size().x + theme::SP_3 * 2.0;
@@ -208,7 +213,7 @@ impl App {
                                                                 - badge_galley.size().y / 2.0,
                                                         ),
                                                         badge_galley,
-                                                        t.fg_muted,
+                                                        badge_text_color,
                                                     );
                                                 }
                                             },
