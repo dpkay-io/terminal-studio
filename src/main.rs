@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod file_search_worker;
 mod git;
@@ -75,6 +77,22 @@ fn force_x11_if_needed() {
 
 fn main() -> eframe::Result<()> {
     env_logger::init();
+
+    std::panic::set_hook(Box::new(|info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        let location = info
+            .location()
+            .map(|l| format!(" at {}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        log::error!("PANIC{location}: {payload}");
+        eprintln!("Terminal Studio encountered an error{location}: {payload}");
+    }));
 
     if updater::handle_apply_update_flag() {
         std::process::exit(0);

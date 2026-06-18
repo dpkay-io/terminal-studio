@@ -55,6 +55,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
     pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
+    pub scrollbar_dragging: &'a mut bool,
 }
 
 /// Recursively render a pane tree node into the given rect.
@@ -197,10 +198,11 @@ pub(in crate::app) fn render_node(
             render_node(ui, a, rect_a, rctx);
             render_node(ui, b, rect_b, rctx);
 
-            // Draw divider
+            // Draw divider — suppress when a terminal scrollbar owns the drag
             let div_id = egui::Id::new(("split_div", *split_id));
             let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
-            let is_active = div_resp.dragged() || div_resp.hovered();
+            let sb_blocks = *rctx.scrollbar_dragging;
+            let is_active = !sb_blocks && (div_resp.dragged() || div_resp.hovered());
             let anim_t =
                 ui.ctx()
                     .animate_bool_with_time(div_id.with("anim"), is_active, theme::ANIM_FAST);
@@ -208,7 +210,7 @@ pub(in crate::app) fn render_node(
             // Line thickens on drag
             let drag_t = ui.ctx().animate_bool_with_time(
                 div_id.with("drag"),
-                div_resp.dragged(),
+                !sb_blocks && div_resp.dragged(),
                 theme::ANIM_FAST,
             );
             let line_width =
@@ -268,7 +270,7 @@ pub(in crate::app) fn render_node(
             }
 
             // Handle drag to resize
-            if div_resp.dragged() {
+            if div_resp.dragged() && !sb_blocks {
                 let delta = div_resp.drag_delta();
                 let (extent, movement) = match dir {
                     SplitDir::Horizontal => (rect.width(), delta.x / rect.width()),
@@ -289,7 +291,7 @@ pub(in crate::app) fn render_node(
                 SplitDir::Horizontal => egui::CursorIcon::ResizeHorizontal,
                 SplitDir::Vertical => egui::CursorIcon::ResizeVertical,
             };
-            if div_resp.hovered() || div_resp.dragged() {
+            if !sb_blocks && (div_resp.hovered() || div_resp.dragged()) {
                 ui.ctx().set_cursor_icon(cursor);
             }
         }
@@ -423,6 +425,9 @@ fn render_terminal_leaf(
                 }
             }
             rctx.scrollbar_clear_restore.push(sid);
+        }
+        if geo.scrollbar_drag_offset.is_some() {
+            *rctx.scrollbar_dragging = true;
         }
         if geo.scrollbar_hovered || geo.scrollbar_drag_offset.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
@@ -940,6 +945,7 @@ impl App {
             };
             let mut diff_mode_changes = Vec::new();
             let mut scrollbar_clear_restore = Vec::new();
+            let mut scrollbar_dragging = false;
             let mut rctx = RenderCtx {
                 sessions: &self.session_state.sessions,
                 panes: &self.pane_state.panes,
@@ -967,6 +973,7 @@ impl App {
                 diff_mode_changes: &mut diff_mode_changes,
                 drag_state: &mut self.drag_state,
                 scrollbar_clear_restore: &mut scrollbar_clear_restore,
+                scrollbar_dragging: &mut scrollbar_dragging,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
 

@@ -141,20 +141,11 @@ pub(super) fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
 }
 
 pub(super) fn run_git_info(dir: &Path) -> (String, String) {
-    use std::process::Command;
-    let git = |args: &[&str]| -> String {
-        Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .unwrap_or_default()
-    };
+    let git =
+        |args: &[&str]| -> String { super::git_cmd::git_output(args, dir).unwrap_or_default() };
     let staged = git(&["diff", "--cached", "--no-color"]);
     let unstaged = git(&["diff", "--no-color"]);
-    let status = git(&["status", "--porcelain", "-uall"]);
+    let status = git(&["status", "--porcelain", "-u"]);
     let diff = match (staged.is_empty(), unstaged.is_empty()) {
         (true, true) => String::new(),
         (false, true) => format!("=== Staged ===\n{staged}"),

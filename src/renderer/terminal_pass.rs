@@ -506,8 +506,13 @@ impl TerminalView {
             let sb_right = outer_rect.max.x - theme::TERM_PAD_RIGHT;
             let hit_rect = egui::Rect::from_min_max(
                 egui::pos2(sb_right - hit_w, outer_rect.min.y),
-                egui::pos2(sb_right, outer_rect.max.y),
+                egui::pos2(outer_rect.max.x, outer_rect.max.y),
             );
+
+            // Register with egui so the divider's interact_radius (5px)
+            // doesn't steal drags that belong to the scrollbar.
+            let sb_widget_id = ui.id().with("term_sb_widget");
+            ui.interact(hit_rect, sb_widget_id, Sense::drag());
 
             let (pointer_pos, primary_down, any_down) = ui.input(|i| {
                 (
@@ -521,10 +526,9 @@ impl TerminalView {
 
             let sb_mem_id = ui.id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
-            #[allow(deprecated)]
-            let egui_captured = ui.memory(|m| m.is_anything_being_dragged());
-            let is_dragging =
-                !egui_captured && (was_dragging || (pointer_in_hit && primary_down)) && any_down;
+            let other_widget_dragging = ui.ctx().dragged_id().is_some_and(|id| id != sb_widget_id);
+            let is_dragging = (was_dragging && any_down)
+                || (!other_widget_dragging && pointer_in_hit && primary_down);
             ui.data_mut(|d| d.insert_temp(sb_mem_id, is_dragging));
 
             scrollbar_hovered = pointer_in_hit || is_dragging;

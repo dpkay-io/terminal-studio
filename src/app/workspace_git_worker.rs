@@ -47,7 +47,19 @@ impl WorkspaceGitWorker {
                         Err(mpsc::RecvTimeoutError::Timeout) => continue,
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     };
-                    let info = fetch_git_info(&path);
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        fetch_git_info(&path)
+                    }));
+                    let info = match result {
+                        Ok(info) => info,
+                        Err(_) => {
+                            log::error!("panic in workspace-git fetch for {}", path.display());
+                            WorkspaceGitInfo {
+                                branch: String::new(),
+                                diff_count: 0,
+                            }
+                        }
+                    };
                     cache_bg.lock().insert(
                         ws_id,
                         CachedEntry {
@@ -72,16 +84,16 @@ impl WorkspaceGitWorker {
     }
 
     pub(super) fn request_if_stale(&self, ws_id: u64, path: &Path) {
-        let mut inflight = self.inflight.lock();
-        if inflight.contains(&ws_id) {
-            return;
-        }
         let is_fresh = self
             .cache
             .lock()
             .get(&ws_id)
             .is_some_and(|e| e.fetched_at.elapsed() < REFRESH_INTERVAL);
         if is_fresh {
+            return;
+        }
+        let mut inflight = self.inflight.lock();
+        if inflight.contains(&ws_id) {
             return;
         }
         inflight.insert(ws_id);
@@ -106,25 +118,11 @@ impl Drop for WorkspaceGitWorker {
 }
 
 fn fetch_git_info(path: &Path) -> WorkspaceGitInfo {
-    use std::process::Command;
-
-    let branch = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(path)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
+    let branch = super::git_cmd::git_output(&["rev-parse", "--abbrev-ref", "HEAD"], path)
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
 
-    let diff_count = Command::new("git")
-        .args(["status", "--porcelain", "-uall"])
-        .current_dir(path)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
+    let diff_count = super::git_cmd::git_output(&["status", "--porcelain", "-u"], path)
         .map(|s| s.lines().filter(|l| !l.is_empty()).count())
         .unwrap_or(0);
 

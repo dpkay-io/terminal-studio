@@ -186,6 +186,15 @@ impl WatchState {
 
 // ── Worker thread ────────────────────────────────────────────────────────────
 
+fn cached_git_root(cache: &mut HashMap<PathBuf, Option<PathBuf>>, path: &Path) -> Option<PathBuf> {
+    if let Some(cached) = cache.get(path) {
+        return cached.clone();
+    }
+    let result = crate::util::find_git_root(path);
+    cache.insert(path.to_path_buf(), result.clone());
+    result
+}
+
 struct WorkerState {
     watcher: RecommendedWatcher,
     watched: HashSet<PathBuf>,
@@ -203,9 +212,14 @@ fn watcher_thread(
     let ev = Arc::clone(&events);
     let ctx_repaint = ctx.clone();
 
+    const MAX_PENDING_EVENTS: usize = 500;
     let watcher = match notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res {
-            ev.lock().push(event);
+            let mut events = ev.lock();
+            if events.len() < MAX_PENDING_EVENTS {
+                events.push(event);
+            }
+            drop(events);
             ctx_repaint.request_repaint_after(Duration::from_millis(100));
         }
     }) {
@@ -227,13 +241,21 @@ fn watcher_thread(
     let mut is_git: HashMap<PathBuf, bool> = HashMap::new();
     // Track known md files for modify detection.
     let mut known_md: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+    let mut git_root_cache: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
 
     while alive.load(std::sync::atomic::Ordering::Relaxed) {
         // Process commands (non-blocking drain).
         loop {
             match cmd_rx.try_recv() {
                 Ok(WatchCommand::SyncCwds(cwds)) => {
-                    sync_cwds(&mut state, &result_tx, &cwds, &mut is_git, &mut known_md);
+                    sync_cwds(
+                        &mut state,
+                        &result_tx,
+                        &cwds,
+                        &mut is_git,
+                        &mut known_md,
+                        &mut git_root_cache,
+                    );
                 }
                 Ok(WatchCommand::ApplyGitResult { dir, diff, status }) => {
                     // Keep worker-side state consistent (not strictly needed but avoids drift).
@@ -263,6 +285,7 @@ fn watcher_thread(
                 &is_git,
                 &mut known_md,
                 debounce,
+                &mut git_root_cache,
             );
         }
 
@@ -290,6 +313,7 @@ fn sync_cwds(
     cwds: &[PathBuf],
     is_git: &mut HashMap<PathBuf, bool>,
     known_md: &mut HashMap<PathBuf, HashSet<PathBuf>>,
+    git_root_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
 ) {
     let current: HashSet<PathBuf> = cwds
         .iter()
@@ -321,7 +345,7 @@ fn sync_cwds(
             // or unwatch if no other CWD needs it.
             let other = current.iter().find(|d| {
                 **d != dir
-                    && crate::util::find_git_root(d)
+                    && cached_git_root(git_root_cache, d)
                         .map(|r| r.join(".git") == gd)
                         .unwrap_or(false)
             });
@@ -334,6 +358,7 @@ fn sync_cwds(
         }
         state.watched.remove(&dir);
         is_git.remove(&dir);
+        git_root_cache.remove(&dir);
         known_md.remove(&dir);
         let _ = result_tx.send(WatchResult::DirRemoved(dir));
     }
@@ -345,12 +370,15 @@ fn sync_cwds(
         .collect();
     for dir in to_add {
         if state.watcher.watch(&dir, RecursiveMode::Recursive).is_ok() {
-            let git_root = crate::util::find_git_root(&dir);
+            let git_root = cached_git_root(git_root_cache, &dir);
             if let Some(ref root) = git_root {
                 let gd = root.join(".git");
                 if gd.is_dir()
                     && !state.git_dirs.contains_key(&gd)
-                    && state.watcher.watch(&gd, RecursiveMode::Recursive).is_ok()
+                    && state
+                        .watcher
+                        .watch(&gd, RecursiveMode::NonRecursive)
+                        .is_ok()
                 {
                     state.git_dirs.insert(gd, dir.clone());
                 }
@@ -368,6 +396,7 @@ fn sync_cwds(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_fs_events(
     state: &WorkerState,
     result_tx: &mpsc::Sender<WatchResult>,
@@ -376,6 +405,7 @@ fn process_fs_events(
     is_git: &HashMap<PathBuf, bool>,
     known_md: &mut HashMap<PathBuf, HashSet<PathBuf>>,
     debounce: Duration,
+    git_root_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
 ) {
     let now = Instant::now();
     let mut dirs_needing_refresh: HashSet<PathBuf> = HashSet::new();
@@ -392,7 +422,7 @@ fn process_fs_events(
                         .iter()
                         .filter(|d| is_git.get(*d).copied().unwrap_or(false))
                         .filter(|d| {
-                            crate::util::find_git_root(d)
+                            cached_git_root(git_root_cache, d)
                                 .map(|r| r == git_root)
                                 .unwrap_or(false)
                         })
