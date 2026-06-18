@@ -1187,46 +1187,182 @@ impl App {
                                             ui.spacing_mut().item_spacing.x = 0.0;
 
                                             {
+                                                let t = theme::active();
+                                                let is_active_tab =
+                                                    active_tab == RightTab::Directory;
+                                                let tab_hover_t =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new(("right_tab_hover", 0usize)),
+                                                        false,
+                                                    );
+                                                let tab_color = if is_active_tab {
+                                                    t.text
+                                                } else {
+                                                    theme::lerp_color(
+                                                        t.fg_muted,
+                                                        t.fg_secondary,
+                                                        tab_hover_t,
+                                                    )
+                                                };
                                                 let resp = ui.selectable_label(
-                                                    active_tab == RightTab::Directory,
+                                                    is_active_tab,
                                                     egui::RichText::new("Directory")
-                                                        .size(theme::FONT_UI_MD),
+                                                        .size(theme::FONT_UI_MD)
+                                                        .color(tab_color),
                                                 );
+                                                // Update hover animation with actual hovered state
+                                                let _ =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new(("right_tab_hover", 0usize)),
+                                                        resp.hovered(),
+                                                    );
                                                 if resp.clicked() {
                                                     new_tab = Some(RightTab::Directory);
+                                                }
+                                                if is_active_tab {
+                                                    let underline_rect =
+                                                        egui::Rect::from_min_size(
+                                                            egui::pos2(
+                                                                resp.rect.min.x + theme::SP_2,
+                                                                resp.rect.max.y - 2.0,
+                                                            ),
+                                                            egui::vec2(
+                                                                resp.rect.width()
+                                                                    - theme::SP_2 * 2.0,
+                                                                2.0,
+                                                            ),
+                                                        );
+                                                    ui.painter().rect_filled(
+                                                        underline_rect,
+                                                        egui::Rounding::same(1.0),
+                                                        t.accent,
+                                                    );
                                                 }
                                                 resp.on_hover_text("Ctrl+Shift+D");
                                             }
 
                                             if is_git {
+                                                let t = theme::active();
+                                                let is_active_tab =
+                                                    active_tab == RightTab::GitDiff;
+                                                let tab_hover_t =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new(("right_tab_hover", 1usize)),
+                                                        false,
+                                                    );
+                                                let tab_color = if is_active_tab {
+                                                    t.text
+                                                } else {
+                                                    theme::lerp_color(
+                                                        t.fg_muted,
+                                                        t.fg_secondary,
+                                                        tab_hover_t,
+                                                    )
+                                                };
                                                 let resp = ui.selectable_label(
-                                                    active_tab == RightTab::GitDiff,
+                                                    is_active_tab,
                                                     egui::RichText::new("Git Diff")
-                                                        .size(theme::FONT_UI_MD),
+                                                        .size(theme::FONT_UI_MD)
+                                                        .color(tab_color),
                                                 );
+                                                let _ =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new(("right_tab_hover", 1usize)),
+                                                        resp.hovered(),
+                                                    );
                                                 if resp.clicked() {
                                                     new_tab = Some(RightTab::GitDiff);
+                                                }
+                                                if is_active_tab {
+                                                    let underline_rect =
+                                                        egui::Rect::from_min_size(
+                                                            egui::pos2(
+                                                                resp.rect.min.x + theme::SP_2,
+                                                                resp.rect.max.y - 2.0,
+                                                            ),
+                                                            egui::vec2(
+                                                                resp.rect.width()
+                                                                    - theme::SP_2 * 2.0,
+                                                                2.0,
+                                                            ),
+                                                        );
+                                                    ui.painter().rect_filled(
+                                                        underline_rect,
+                                                        egui::Rounding::same(1.0),
+                                                        t.accent,
+                                                    );
                                                 }
                                                 resp.on_hover_text("Ctrl+Shift+G");
                                             }
 
-                                            for path in &md_tabs {
+                                            for (md_idx, path) in md_tabs.iter().enumerate() {
+                                                let t = theme::active();
                                                 let name = path
                                                     .file_name()
                                                     .map(|n| n.to_string_lossy().into_owned())
                                                     .unwrap_or_default();
                                                 let is_active =
                                                     active_tab == RightTab::Markdown(path.clone());
-                                                if ui
-                                                    .selectable_label(
-                                                        is_active,
-                                                        egui::RichText::new(&name)
-                                                            .size(theme::FONT_UI_MD),
+                                                let tab_index = 2 + md_idx;
+                                                let tab_hover_t =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new((
+                                                            "right_tab_hover",
+                                                            tab_index,
+                                                        )),
+                                                        false,
+                                                    );
+                                                let tab_color = if is_active {
+                                                    t.text
+                                                } else {
+                                                    theme::lerp_color(
+                                                        t.fg_muted,
+                                                        t.fg_secondary,
+                                                        tab_hover_t,
                                                     )
-                                                    .clicked()
-                                                {
+                                                };
+                                                let resp = ui.selectable_label(
+                                                    is_active,
+                                                    egui::RichText::new(&name)
+                                                        .size(theme::FONT_UI_MD)
+                                                        .color(tab_color),
+                                                );
+                                                let _ =
+                                                    crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(),
+                                                        egui::Id::new((
+                                                            "right_tab_hover",
+                                                            tab_index,
+                                                        )),
+                                                        resp.hovered(),
+                                                    );
+                                                if resp.clicked() {
                                                     new_tab =
                                                         Some(RightTab::Markdown(path.clone()));
+                                                }
+                                                if is_active {
+                                                    let underline_rect =
+                                                        egui::Rect::from_min_size(
+                                                            egui::pos2(
+                                                                resp.rect.min.x + theme::SP_2,
+                                                                resp.rect.max.y - 2.0,
+                                                            ),
+                                                            egui::vec2(
+                                                                resp.rect.width()
+                                                                    - theme::SP_2 * 2.0,
+                                                                2.0,
+                                                            ),
+                                                        );
+                                                    ui.painter().rect_filled(
+                                                        underline_rect,
+                                                        egui::Rounding::same(1.0),
+                                                        t.accent,
+                                                    );
                                                 }
                                                 ui.add_space(theme::SP_1);
                                                 if ui
@@ -1536,15 +1672,27 @@ impl App {
                     if div_resp.hovered() || div_resp.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
                     }
-                    ui.painter().rect_filled(
-                        div_rect,
-                        0.0,
-                        if div_resp.hovered() || div_resp.dragged() {
-                            theme::active().ws_div_active
-                        } else {
-                            theme::active().ws_div_idle
-                        },
-                    );
+                    {
+                        let t = theme::active();
+                        let div_hovered = div_resp.hovered();
+                        let div_dragged = div_resp.dragged();
+                        let line_w = div_rect.width() * 0.6;
+                        let line_x = div_rect.center().x - line_w * 0.5;
+                        let line_y = div_rect.center().y;
+                        let anim_t = ui.ctx().animate_bool_with_time(
+                            egui::Id::new("right_div_anim"),
+                            div_hovered || div_dragged,
+                            theme::ANIM_FAST,
+                        );
+                        let color = theme::lerp_color(t.border_subtle, t.border_focus, anim_t);
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(line_x, line_y),
+                                egui::pos2(line_x + line_w, line_y),
+                            ],
+                            egui::Stroke::new(theme::STROKE_THIN, color),
+                        );
+                    }
                     if !self.notes_panel_collapsed && div_resp.dragged() {
                         let delta = div_resp.drag_delta().y;
                         // drag down → notes shrinks; drag up → notes grows
@@ -1582,6 +1730,17 @@ impl App {
                             0.0,
                             theme::active().bg_workspace_fill,
                         );
+                        {
+                            let border_rect = egui::Rect::from_min_size(
+                                egui::pos2(notes_rect.min.x, header_rect.max.y - 1.0),
+                                egui::vec2(notes_rect.width(), 1.0),
+                            );
+                            ui.painter().rect_filled(
+                                border_rect,
+                                0.0,
+                                theme::active().border_subtle,
+                            );
+                        }
 
                         if !self.notes_panel_collapsed {
                             let content_rect = egui::Rect::from_min_max(
