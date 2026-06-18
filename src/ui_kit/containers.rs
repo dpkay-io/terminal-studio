@@ -65,11 +65,8 @@ pub fn dialog(
                 }
             }
             let dim_alpha = (theme::ALPHA_OVERLAY_DIM as f32 * open_t) as u8;
-            ui.painter().rect_filled(
-                screen_rect,
-                0.0,
-                egui::Color32::from_black_alpha(dim_alpha),
-            );
+            ui.painter()
+                .rect_filled(screen_rect, 0.0, egui::Color32::from_black_alpha(dim_alpha));
         });
 
     let dialog_w = match config.width {

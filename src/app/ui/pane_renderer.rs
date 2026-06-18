@@ -332,8 +332,12 @@ fn render_pane_overlay_menu(
 
     let t = theme::active();
     let bg_alpha = (theme::ALPHA_SURFACE_OVERLAY as f32 * menu_anim_t) as u8;
-    let bg_pill =
-        egui::Color32::from_rgba_unmultiplied(t.surface0.r(), t.surface0.g(), t.surface0.b(), bg_alpha);
+    let bg_pill = egui::Color32::from_rgba_unmultiplied(
+        t.surface0.r(),
+        t.surface0.g(),
+        t.surface0.b(),
+        bg_alpha,
+    );
     ui.painter()
         .rect_filled(btn_rect.expand(theme::SP_1), theme::R_MD, bg_pill);
 
