@@ -237,7 +237,8 @@ impl App {
         // Animated hover tint: brighten card background when hovered
         let card_hover_id = egui::Id::new(("ws_card_hover", data.id));
         let card_hovered = name_resp.hovered() || gear_resp.hovered();
-        let hover_t = crate::app::ui::animation::animated_hover(ui.ctx(), card_hover_id, card_hovered);
+        let hover_t =
+            crate::app::ui::animation::animated_hover(ui.ctx(), card_hover_id, card_hovered);
         let hover_boost = 0.08_f32;
         let effective_tint = (base_tint_factor + hover_boost * hover_t).min(1.0);
         let fill = theme::from_rgb(theme::tinted(data.color, effective_tint));
@@ -320,11 +321,8 @@ impl App {
                     theme::active().subtext0
                 };
                 if gear_resp.hovered() {
-                    ui.painter().rect_filled(
-                        gear_rect,
-                        theme::R_SM,
-                        theme::active().bg_row_hover,
-                    );
+                    ui.painter()
+                        .rect_filled(gear_rect, theme::R_SM, theme::active().bg_row_hover);
                 }
                 ui.painter().text(
                     egui::pos2(

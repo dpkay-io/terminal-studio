@@ -42,9 +42,19 @@ pub fn icon_button(
         }
         IconButtonStyle::Danger => {
             if resp.hovered() {
-                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), theme::ALPHA_BTN_HOVER)
+                egui::Color32::from_rgba_unmultiplied(
+                    t.error.r(),
+                    t.error.g(),
+                    t.error.b(),
+                    theme::ALPHA_BTN_HOVER,
+                )
             } else {
-                egui::Color32::from_rgba_unmultiplied(t.error.r(), t.error.g(), t.error.b(), theme::ALPHA_BTN_IDLE)
+                egui::Color32::from_rgba_unmultiplied(
+                    t.error.r(),
+                    t.error.g(),
+                    t.error.b(),
+                    theme::ALPHA_BTN_IDLE,
+                )
             }
         }
     };

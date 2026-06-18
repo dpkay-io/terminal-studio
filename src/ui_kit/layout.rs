@@ -23,7 +23,10 @@ pub fn drag_divider(
     let line_x = rect.center().x - line_w * 0.5;
     let line_y = rect.center().y;
     ui.painter().line_segment(
-        [egui::pos2(line_x, line_y), egui::pos2(line_x + line_w, line_y)],
+        [
+            egui::pos2(line_x, line_y),
+            egui::pos2(line_x + line_w, line_y),
+        ],
         egui::Stroke::new(theme::STROKE_THIN, color),
     );
     resp.drag_delta().y
