@@ -187,22 +187,31 @@ impl App {
                         if sw_resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
+                        let sw_hover_t = crate::app::ui::animation::animated_hover(
+                            ui.ctx(),
+                            self.vp_id("tb_switcher"),
+                            sw_resp.hovered(),
+                        );
                         let sw_bg = if self.show_quick_switcher {
                             theme::active().surface2
-                        } else if sw_resp.hovered() {
-                            theme::active().surface1
                         } else {
-                            egui::Color32::TRANSPARENT
+                            theme::lerp_color(
+                                egui::Color32::TRANSPARENT,
+                                theme::active().surface1,
+                                sw_hover_t,
+                            )
                         };
                         painter.rect_filled(sw_tbr, theme::R_MD, sw_bg);
                         let icon_center =
                             egui::pos2(sw_tbr.min.x + mac_btn_w * 0.5, sw_tbr.center().y);
+                        let sw_icon_color =
+                            theme::lerp_color(tb_fg, theme::active().fg_secondary, sw_hover_t);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
                             "\u{21C6}",
                             egui::FontId::proportional(mac_icon_sz),
-                            tb_fg,
+                            sw_icon_color,
                         );
                         if !self.show_quick_switcher {
                             let hint_x = sw_tbr.min.x + mac_btn_w + theme::SP_1;
@@ -320,20 +329,31 @@ impl App {
                         );
                         let kb_resp =
                             ui.interact(kb_tbr, self.vp_id("tb_shortcuts"), egui::Sense::click());
-                        let bg = if kb_resp.hovered() || self.show_shortcut_help {
+                        let kb_hover_t = crate::app::ui::animation::animated_hover(
+                            ui.ctx(),
+                            self.vp_id("tb_shortcuts"),
+                            kb_resp.hovered(),
+                        );
+                        let bg = if self.show_shortcut_help {
                             theme::active().surface1
                         } else {
-                            egui::Color32::TRANSPARENT
+                            theme::lerp_color(
+                                egui::Color32::TRANSPARENT,
+                                theme::active().surface1,
+                                kb_hover_t,
+                            )
                         };
                         painter.rect_filled(kb_tbr, theme::R_MD, bg);
                         let icon_center =
                             egui::pos2(kb_tbr.max.x - mac_btn_w * 0.5, kb_tbr.center().y);
+                        let kb_icon_color =
+                            theme::lerp_color(tb_fg, theme::active().fg_secondary, kb_hover_t);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
                             "⌨",
                             egui::FontId::proportional(mac_icon_sz),
-                            tb_fg,
+                            kb_icon_color,
                         );
                         if !self.show_shortcut_help {
                             let hint_x = kb_tbr.min.x + theme::SP_2;
@@ -428,20 +448,21 @@ impl App {
                     );
                     let mac_clipped = painter.with_clip_rect(mac_clip_rect);
                     let t = theme::active();
+                    let title_color = t.surface2;
                     if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
                         let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
                         let app_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 "Terminal Studio".to_string(),
                                 title_font.clone(),
-                                t.fg_muted,
+                                title_color,
                             )
                         });
                         let sep_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 " \u{00b7} ".to_string(),
                                 title_font.clone(),
-                                t.fg_muted,
+                                title_color,
                             )
                         });
                         let name_galley =
@@ -452,11 +473,11 @@ impl App {
                         let total_w = app_w + sep_w + name_w;
                         let start_x = r.center().x - total_w / 2.0;
                         let text_y = r.center().y - app_galley.size().y / 2.0;
-                        mac_clipped.galley(egui::pos2(start_x, text_y), app_galley, t.fg_muted);
+                        mac_clipped.galley(egui::pos2(start_x, text_y), app_galley, title_color);
                         mac_clipped.galley(
                             egui::pos2(start_x + app_w, text_y),
                             sep_galley,
-                            t.fg_muted,
+                            title_color,
                         );
                         mac_clipped.galley(
                             egui::pos2(start_x + app_w + sep_w, text_y),
@@ -469,7 +490,7 @@ impl App {
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
                             egui::FontId::proportional(theme::FONT_UI_MD),
-                            t.fg_muted,
+                            title_color,
                         );
                     }
                 }
@@ -532,21 +553,30 @@ impl App {
                         if resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
+                        let sw_hover_t = crate::app::ui::animation::animated_hover(
+                            ui.ctx(),
+                            self.vp_id("tb_switcher"),
+                            resp.hovered(),
+                        );
                         let bg = if self.show_quick_switcher {
                             theme::active().surface2
-                        } else if resp.hovered() {
-                            theme::active().surface1
                         } else {
-                            egui::Color32::TRANSPARENT
+                            theme::lerp_color(
+                                egui::Color32::TRANSPARENT,
+                                theme::active().surface1,
+                                sw_hover_t,
+                            )
                         };
                         painter.rect_filled(br, theme::R_MD, bg);
                         let icon_center = egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
+                        let sw_icon_color =
+                            theme::lerp_color(tb_fg, theme::active().fg_secondary, sw_hover_t);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
                             "\u{21C6}",
                             egui::FontId::proportional(icon_sz),
-                            tb_fg,
+                            sw_icon_color,
                         );
                         if !self.show_quick_switcher {
                             let hint_x = br.min.x + btn_w + theme::SP_1;
@@ -670,19 +700,30 @@ impl App {
                         if resp.hovered() {
                             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
-                        let bg = if resp.hovered() || self.show_shortcut_help {
+                        let kb_hover_t = crate::app::ui::animation::animated_hover(
+                            ui.ctx(),
+                            self.vp_id("tb_shortcuts"),
+                            resp.hovered(),
+                        );
+                        let bg = if self.show_shortcut_help {
                             theme::active().surface1
                         } else {
-                            egui::Color32::TRANSPARENT
+                            theme::lerp_color(
+                                egui::Color32::TRANSPARENT,
+                                theme::active().surface1,
+                                kb_hover_t,
+                            )
                         };
                         painter.rect_filled(br, theme::R_MD, bg);
                         let icon_center = egui::pos2(br.max.x - btn_w * 0.5, br.center().y);
+                        let kb_icon_color =
+                            theme::lerp_color(tb_fg, theme::active().fg_secondary, kb_hover_t);
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
                             "⌨",
                             egui::FontId::proportional(icon_sz),
-                            tb_fg,
+                            kb_icon_color,
                         );
                         if !self.show_shortcut_help {
                             let hint_x = br.min.x + theme::SP_2;
@@ -823,20 +864,21 @@ impl App {
                     let clipped = painter.with_clip_rect(clip_rect);
                     // "Terminal Studio" dimmed; workspace name emphasized
                     let t = theme::active();
+                    let title_color = t.surface2;
                     if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
                         let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
                         let app_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 "Terminal Studio".to_string(),
                                 title_font.clone(),
-                                t.fg_muted,
+                                title_color,
                             )
                         });
                         let sep_galley = ui.fonts(|f| {
                             f.layout_no_wrap(
                                 " \u{00b7} ".to_string(),
                                 title_font.clone(),
-                                t.fg_muted,
+                                title_color,
                             )
                         });
                         let name_galley =
@@ -847,8 +889,12 @@ impl App {
                         let total_w = app_w + sep_w + name_w;
                         let start_x = r.center().x - total_w / 2.0;
                         let text_y = r.center().y - app_galley.size().y / 2.0;
-                        clipped.galley(egui::pos2(start_x, text_y), app_galley, t.fg_muted);
-                        clipped.galley(egui::pos2(start_x + app_w, text_y), sep_galley, t.fg_muted);
+                        clipped.galley(egui::pos2(start_x, text_y), app_galley, title_color);
+                        clipped.galley(
+                            egui::pos2(start_x + app_w, text_y),
+                            sep_galley,
+                            title_color,
+                        );
                         clipped.galley(
                             egui::pos2(start_x + app_w + sep_w, text_y),
                             name_galley,
@@ -860,7 +906,7 @@ impl App {
                             egui::Align2::CENTER_CENTER,
                             "Terminal Studio",
                             egui::FontId::proportional(theme::FONT_UI_MD),
-                            t.fg_muted,
+                            title_color,
                         );
                     }
                 }

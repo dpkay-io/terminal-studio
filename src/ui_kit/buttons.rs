@@ -22,52 +22,47 @@ pub fn icon_button(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let t = theme::active();
+    let hover_t =
+        ui.ctx()
+            .animate_bool_with_time(id.with("hover_anim"), resp.hovered(), theme::ANIM_FAST);
 
     let bg = match style {
         IconButtonStyle::Default => {
-            if resp.hovered() {
-                t.surface1
-            } else {
-                egui::Color32::TRANSPARENT
-            }
+            theme::lerp_color(egui::Color32::TRANSPARENT, t.surface1, hover_t)
         }
         IconButtonStyle::Toggle { active } => {
             if active {
-                t.surface2
-            } else if resp.hovered() {
-                t.surface1
+                egui::Color32::from_rgba_unmultiplied(
+                    t.accent.r(),
+                    t.accent.g(),
+                    t.accent.b(),
+                    theme::ALPHA_BTN_FILL,
+                )
             } else {
-                egui::Color32::TRANSPARENT
+                theme::lerp_color(egui::Color32::TRANSPARENT, t.surface1, hover_t)
             }
         }
         IconButtonStyle::Danger => {
-            if resp.hovered() {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.error.r(),
-                    t.error.g(),
-                    t.error.b(),
-                    theme::ALPHA_BTN_HOVER,
-                )
-            } else {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.error.r(),
-                    t.error.g(),
-                    t.error.b(),
-                    theme::ALPHA_BTN_IDLE,
-                )
-            }
+            let idle = egui::Color32::from_rgba_unmultiplied(
+                t.error.r(),
+                t.error.g(),
+                t.error.b(),
+                theme::ALPHA_BTN_IDLE,
+            );
+            let hovered = egui::Color32::from_rgba_unmultiplied(
+                t.error.r(),
+                t.error.g(),
+                t.error.b(),
+                theme::ALPHA_BTN_HOVER,
+            );
+            theme::lerp_color(idle, hovered, hover_t)
         }
     };
 
     let text_color = match style {
-        IconButtonStyle::Danger => {
-            if resp.hovered() {
-                t.error
-            } else {
-                fg
-            }
-        }
-        _ => fg,
+        IconButtonStyle::Toggle { active: true } => t.accent,
+        IconButtonStyle::Danger => theme::lerp_color(fg, t.error, hover_t),
+        _ => theme::lerp_color(t.fg_muted, t.fg_secondary, hover_t),
     };
 
     ui.painter().rect_filled(rect, theme::R_MD, bg);
