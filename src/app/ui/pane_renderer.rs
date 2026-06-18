@@ -54,6 +54,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub text_search: &'a mut crate::search::TextSearchState,
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
     pub drag_state: &'a mut crate::app::drag::DragState,
+    pub scrollbar_clear_restore: &'a mut Vec<u32>,
 }
 
 /// Recursively render a pane tree node into the given rect.
@@ -200,9 +201,9 @@ pub(in crate::app) fn render_node(
             let div_id = egui::Id::new(("split_div", *split_id));
             let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
             let is_active = div_resp.dragged() || div_resp.hovered();
-            let anim_t = ui
-                .ctx()
-                .animate_bool_with_time(div_id.with("anim"), is_active, 0.15);
+            let anim_t =
+                ui.ctx()
+                    .animate_bool_with_time(div_id.with("anim"), is_active, theme::ANIM_FAST);
             let t = theme::active();
             // Line thickens on drag
             let drag_t = ui.ctx().animate_bool_with_time(
@@ -421,6 +422,7 @@ fn render_terminal_leaf(
                     s.term.scroll_display(Scroll::Delta(delta));
                 }
             }
+            rctx.scrollbar_clear_restore.push(sid);
         }
         if geo.scrollbar_hovered || geo.scrollbar_drag_offset.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
@@ -475,7 +477,10 @@ fn render_text_search_bar(
         return None;
     }
     let t = theme::active();
-    let bar_w = 320.0_f32.min(pane_rect.width() - 24.0);
+    let bar_w = 320.0_f32.min(pane_rect.width() - 24.0).max(120.0);
+    if pane_rect.width() < 148.0 {
+        return None;
+    }
     let bar_h = 30.0_f32;
     let bar_rect = egui::Rect::from_min_size(
         egui::pos2(pane_rect.max.x - bar_w - 8.0, pane_rect.min.y + 8.0),
@@ -934,6 +939,7 @@ impl App {
                 (t, s)
             };
             let mut diff_mode_changes = Vec::new();
+            let mut scrollbar_clear_restore = Vec::new();
             let mut rctx = RenderCtx {
                 sessions: &self.session_state.sessions,
                 panes: &self.pane_state.panes,
@@ -960,12 +966,20 @@ impl App {
                 text_search: &mut self.text_search,
                 diff_mode_changes: &mut diff_mode_changes,
                 drag_state: &mut self.drag_state,
+                scrollbar_clear_restore: &mut scrollbar_clear_restore,
             };
             render_node(ui, &tree, content_rect, &mut rctx);
 
             // Global flash overlay (rare — PTY spawn errors)
             self.flash
                 .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
+
+            for sid in scrollbar_clear_restore {
+                if let Some(entry) = self.session_state.sessions.iter_mut().find(|e| e.id == sid) {
+                    entry.restore_scroll_ready = false;
+                    entry.restore_scroll_lines = None;
+                }
+            }
 
             for (pane_id, new_mode) in diff_mode_changes {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {

@@ -493,6 +493,8 @@ pub const TAB_ACTION_GAP: f32 = 2.0;
 
 pub const TERM_PAD_LEFT: f32 = 4.0;
 pub const TERM_PAD_TOP: f32 = 2.0;
+pub const TERM_PAD_RIGHT: f32 = 4.0;
+pub const TERM_PAD_BOTTOM: f32 = 2.0;
 
 // ── Scrollbar ───────────────────────────────────────────────────────────────
 

@@ -1680,7 +1680,7 @@ impl App {
                         let line_x = div_rect.center().x - line_w * 0.5;
                         let line_y = div_rect.center().y;
                         let anim_t = ui.ctx().animate_bool_with_time(
-                            egui::Id::new("right_div_anim"),
+                            self.vp_id("right_div_anim"),
                             div_hovered || div_dragged,
                             theme::ANIM_FAST,
                         );

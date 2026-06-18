@@ -125,7 +125,7 @@ pub fn action_button(
                     t.error.r(),
                     t.error.g(),
                     t.error.b(),
-                    theme::ALPHA_BTN_FILL,
+                    theme::ALPHA_BTN_STROKE,
                 ),
             ))
             .rounding(theme::R_MD),

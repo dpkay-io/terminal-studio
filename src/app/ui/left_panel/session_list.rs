@@ -612,7 +612,11 @@ impl App {
 
                     // Title text: consistent left padding regardless of workspace bar
                     let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
-                    let effective_btn_w = if show_close { theme::BTN_W } else { 0.0 };
+                    let effective_btn_w = if close_anim_t > 0.01 {
+                        theme::BTN_W
+                    } else {
+                        0.0
+                    };
                     let clip_max = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
                     let is_being_dragged = matches!(
                         &self.drag_state.payload,

@@ -308,22 +308,13 @@ impl App {
                 }
             }
 
-            // Gear icon — fades in on card hover, brightens on direct gear hover
-            let gear_anim_t = crate::app::ui::animation::animated_hover(
-                ui.ctx(),
-                egui::Id::new(("ws_gear_anim", data.id)),
-                card_hovered,
-            );
-            if gear_anim_t > 0.01 {
+            // Gear icon — always visible (muted), brightens on hover
+            {
                 let gear_fg = if gear_resp.hovered() {
                     theme::active().text
                 } else {
-                    theme::active().subtext0
+                    fg.gamma_multiply(0.4)
                 };
-                if gear_resp.hovered() {
-                    ui.painter()
-                        .rect_filled(gear_rect, theme::R_SM, theme::active().bg_row_hover);
-                }
                 ui.painter().text(
                     egui::pos2(
                         gear_rect.center().x,
@@ -332,7 +323,7 @@ impl App {
                     egui::Align2::CENTER_CENTER,
                     "\u{2699}",
                     egui::FontId::proportional(theme::FONT_UI_MD),
-                    gear_fg.gamma_multiply(gear_anim_t),
+                    gear_fg,
                 );
             }
 
@@ -377,7 +368,7 @@ impl App {
                 let git_galley = ui.fonts(|f| f.layout_job(git_job));
                 let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
                 ui.painter().with_clip_rect(full_rect).galley(
-                    egui::pos2(full_rect.left() + theme::SP_3, git_y),
+                    egui::pos2(full_rect.left() + theme::SP_4 + theme::CARD_BAR_W, git_y),
                     git_galley,
                     egui::Color32::PLACEHOLDER,
                 );

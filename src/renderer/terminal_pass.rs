@@ -128,7 +128,10 @@ impl TerminalView {
                 outer_rect.min.x + theme::TERM_PAD_LEFT,
                 outer_rect.min.y + theme::TERM_PAD_TOP,
             ),
-            outer_rect.max,
+            egui::pos2(
+                outer_rect.max.x - theme::TERM_PAD_RIGHT,
+                outer_rect.max.y - theme::TERM_PAD_BOTTOM,
+            ),
         );
 
         let visible_rows = (rect.height() / cell_height) as usize;
@@ -500,9 +503,10 @@ impl TerminalView {
             let bar_w_wide = theme::SCROLLBAR_W_ACTIVE;
             let hit_w = theme::SCROLLBAR_HIT_W;
 
+            let sb_right = outer_rect.max.x - theme::TERM_PAD_RIGHT;
             let hit_rect = egui::Rect::from_min_max(
-                egui::pos2(outer_rect.max.x - hit_w, outer_rect.min.y),
-                outer_rect.max,
+                egui::pos2(sb_right - hit_w, outer_rect.min.y),
+                egui::pos2(sb_right, outer_rect.max.y),
             );
 
             let (pointer_pos, primary_down, any_down) = ui.input(|i| {
@@ -580,8 +584,8 @@ impl TerminalView {
 
             if scrollbar_hovered {
                 let track_rect = egui::Rect::from_min_max(
-                    egui::pos2(outer_rect.max.x - bar_w_wide - 2.0, outer_rect.min.y),
-                    outer_rect.max,
+                    egui::pos2(sb_right - bar_w_wide - 2.0, outer_rect.min.y),
+                    egui::pos2(sb_right, outer_rect.max.y),
                 );
                 let track_color = egui::Color32::from_rgba_unmultiplied(
                     t.scrollbar_color.r(),
@@ -593,7 +597,7 @@ impl TerminalView {
             }
 
             let bar_rect = egui::Rect::from_min_size(
-                egui::pos2(outer_rect.max.x - bar_w, thumb_y),
+                egui::pos2(sb_right - bar_w, thumb_y),
                 egui::vec2(bar_w, thumb_h),
             );
             painter.rect_filled(bar_rect, bar_w * 0.5, bar_color);

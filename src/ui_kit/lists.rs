@@ -4,6 +4,7 @@ use crate::theme;
 
 pub fn list_item(
     ui: &mut egui::Ui,
+    id: egui::Id,
     width: f32,
     selected: bool,
     add_contents: impl FnOnce(&egui::Painter, egui::Rect),
@@ -17,13 +18,12 @@ pub fn list_item(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
-    let item_id = egui::Id::new(("list_item", rect.min.x as i32, rect.min.y as i32));
     let sel_t = ui
         .ctx()
-        .animate_bool_with_time(item_id.with("sel"), selected, theme::ANIM_FAST);
+        .animate_bool_with_time(id.with("sel"), selected, theme::ANIM_FAST);
     let hover_t =
         ui.ctx()
-            .animate_bool_with_time(item_id.with("hover"), resp.hovered(), theme::ANIM_FAST);
+            .animate_bool_with_time(id.with("hover"), resp.hovered(), theme::ANIM_FAST);
 
     let bg = if sel_t > 0.01 {
         theme::lerp_color(egui::Color32::TRANSPARENT, t.surface1, sel_t)
