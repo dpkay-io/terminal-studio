@@ -44,6 +44,12 @@ pub fn dialog(
     let screen_rect = ctx.screen_rect();
     let mut dismissed = false;
 
+    let open_t = ctx.animate_bool_with_time(
+        egui::Id::new(("dialog_fade", id_base)),
+        true,
+        theme::ANIM_NORMAL,
+    );
+
     egui::Area::new(id_base.with("_dim"))
         .fixed_pos(screen_rect.min)
         .order(egui::Order::Foreground)
@@ -58,10 +64,11 @@ pub fn dialog(
                     dismissed = true;
                 }
             }
+            let dim_alpha = (theme::ALPHA_OVERLAY_DIM as f32 * open_t) as u8;
             ui.painter().rect_filled(
                 screen_rect,
                 0.0,
-                egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
+                egui::Color32::from_black_alpha(dim_alpha),
             );
         });
 
@@ -81,8 +88,16 @@ pub fn dialog(
         .fixed_pos(dialog_pos)
         .order(egui::Order::Tooltip)
         .show(ctx, |ui| {
+            let base = theme::active().bg_term;
+            let frame_fill = egui::Color32::from_rgba_unmultiplied(
+                base.r(),
+                base.g(),
+                base.b(),
+                (255.0 * open_t) as u8,
+            );
+
             egui::Frame::none()
-                .fill(theme::active().bg_term)
+                .fill(frame_fill)
                 .rounding(egui::Rounding::same(theme::R_LG))
                 .stroke(egui::Stroke::new(
                     theme::STROKE_THIN,
