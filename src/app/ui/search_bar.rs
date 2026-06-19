@@ -42,9 +42,10 @@ fn search_bar_inner(
     let t = theme::active();
 
     let container_w = ui.available_width();
-    let container_h = theme::SESSION_ROW_H + theme::SP_1 * 2.0;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(container_w, container_h), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(container_w, theme::SEARCH_BAR_H),
+        egui::Sense::hover(),
+    );
 
     let has_focus = ui.memory(|m| m.has_focus(id));
     let border_color = if has_focus {
@@ -53,25 +54,26 @@ fn search_bar_inner(
         t.border_subtle
     };
 
-    ui.painter().rect_filled(rect, theme::R_MD, t.bg_input);
+    ui.painter().rect_filled(rect, theme::R_SM, t.bg_input);
     ui.painter().rect_stroke(
         rect,
-        theme::R_MD,
+        theme::R_SM,
         egui::Stroke::new(theme::STROKE_THIN, border_color),
     );
 
-    let inner_rect = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_1));
+    let inner_rect = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
     ui.allocate_ui_at_rect(inner_rect, |ui| {
-        ui.horizontal(|ui| {
+        ui.horizontal_centered(|ui| {
+            ui.spacing_mut().item_spacing.x = theme::SP_2;
             ui.label(
                 egui::RichText::new(icon)
-                    .size(theme::FONT_UI_SM)
+                    .size(theme::FONT_UI_XS)
                     .color(t.fg_muted),
             );
             let te = egui::TextEdit::singleline(query)
                 .desired_width(ui.available_width())
                 .hint_text(hint)
-                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                .font(egui::FontId::proportional(theme::FONT_UI_SM))
                 .frame(false)
                 .id(id);
             let r = ui.add(te);

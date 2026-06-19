@@ -99,7 +99,7 @@ impl App {
             .max(200.0);
 
         egui::Area::new(self.vp_id("quick_switcher_dialog"))
-            .fixed_pos(screen_rect.center() - egui::vec2(dialog_w / 2.0, dialog_h / 2.0))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 egui::Frame::window(&ctx.style())

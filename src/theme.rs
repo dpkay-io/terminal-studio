@@ -473,6 +473,7 @@ pub const DIVIDER_W: f32 = 6.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const BTN_W: f32 = 24.0;
 pub const SESSION_ROW_H: f32 = 26.0;
+pub const SEARCH_BAR_H: f32 = 22.0;
 pub const FILE_ROW_H: f32 = 22.0;
 pub const WS_BORDER_W: f32 = 4.0;
 pub const LEFT_SIDEBAR_W: f32 = 180.0;
@@ -493,15 +494,34 @@ pub const TAB_ACTION_GAP: f32 = 2.0;
 
 pub const TERM_PAD_LEFT: f32 = 4.0;
 pub const TERM_PAD_TOP: f32 = 2.0;
-pub const TERM_PAD_RIGHT: f32 = 4.0;
+pub const TERM_PAD_RIGHT: f32 = 8.0;
 pub const TERM_PAD_BOTTOM: f32 = 2.0;
 
 // ── Scrollbar ───────────────────────────────────────────────────────────────
 
-pub const SCROLLBAR_W_IDLE: f32 = 6.0;
-pub const SCROLLBAR_W_ACTIVE: f32 = 14.0;
-pub const SCROLLBAR_HIT_W: f32 = 24.0;
+pub const SCROLLBAR_W_IDLE: f32 = 4.0;
+pub const SCROLLBAR_W_ACTIVE: f32 = 8.0;
+pub const SCROLLBAR_HIT_W: f32 = TERM_PAD_RIGHT;
 pub const SCROLLBAR_MIN_THUMB: f32 = 32.0;
+
+pub fn scroll_style() -> egui::style::ScrollStyle {
+    egui::style::ScrollStyle {
+        floating: true,
+        bar_width: SCROLLBAR_W_ACTIVE,
+        handle_min_length: SCROLLBAR_MIN_THUMB,
+        bar_inner_margin: SP_0,
+        bar_outer_margin: 0.0,
+        floating_width: SCROLLBAR_W_IDLE,
+        floating_allocated_width: SCROLLBAR_W_ACTIVE,
+        foreground_color: true,
+        dormant_background_opacity: 0.0,
+        active_background_opacity: ALPHA_SCROLLBAR_IDLE as f32 / 255.0,
+        interact_background_opacity: ALPHA_SCROLLBAR_HOVER as f32 / 255.0,
+        dormant_handle_opacity: 0.0,
+        active_handle_opacity: ALPHA_SCROLLBAR_HOVER as f32 / 255.0,
+        interact_handle_opacity: ALPHA_SCROLLBAR_DRAG as f32 / 255.0,
+    }
+}
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 

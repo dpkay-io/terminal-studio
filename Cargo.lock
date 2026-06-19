@@ -4318,7 +4318,7 @@ dependencies = [
 
 [[package]]
 name = "terminal-studio"
-version = "0.9.17"
+version = "0.10.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",

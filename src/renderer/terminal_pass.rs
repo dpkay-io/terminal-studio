@@ -129,8 +129,10 @@ impl TerminalView {
                 outer_rect.min.y + theme::TERM_PAD_TOP,
             ),
             egui::pos2(
-                outer_rect.max.x - theme::TERM_PAD_RIGHT,
-                outer_rect.max.y - theme::TERM_PAD_BOTTOM,
+                (outer_rect.max.x - theme::TERM_PAD_RIGHT)
+                    .max(outer_rect.min.x + theme::TERM_PAD_LEFT),
+                (outer_rect.max.y - theme::TERM_PAD_BOTTOM)
+                    .max(outer_rect.min.y + theme::TERM_PAD_TOP),
             ),
         );
 
@@ -503,10 +505,10 @@ impl TerminalView {
             let bar_w_wide = theme::SCROLLBAR_W_ACTIVE;
             let hit_w = theme::SCROLLBAR_HIT_W;
 
-            let sb_right = outer_rect.max.x - theme::TERM_PAD_RIGHT;
+            let sb_right = outer_rect.max.x;
             let hit_rect = egui::Rect::from_min_max(
                 egui::pos2(sb_right - hit_w, outer_rect.min.y),
-                egui::pos2(outer_rect.max.x, outer_rect.max.y),
+                egui::pos2(sb_right, outer_rect.max.y),
             );
 
             // Register with egui so the divider's interact_radius (5px)
@@ -514,10 +516,10 @@ impl TerminalView {
             let sb_widget_id = ui.id().with("term_sb_widget");
             ui.interact(hit_rect, sb_widget_id, Sense::drag());
 
-            let (pointer_pos, primary_down, any_down) = ui.input(|i| {
+            let (pointer_pos, primary_pressed, any_down) = ui.input(|i| {
                 (
                     i.pointer.latest_pos(),
-                    i.pointer.primary_down(),
+                    i.pointer.primary_pressed(),
                     i.pointer.any_down(),
                 )
             });
@@ -528,7 +530,7 @@ impl TerminalView {
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
             let other_widget_dragging = ui.ctx().dragged_id().is_some_and(|id| id != sb_widget_id);
             let is_dragging = (was_dragging && any_down)
-                || (!other_widget_dragging && pointer_in_hit && primary_down);
+                || (!other_widget_dragging && pointer_in_hit && primary_pressed);
             ui.data_mut(|d| d.insert_temp(sb_mem_id, is_dragging));
 
             scrollbar_hovered = pointer_in_hit || is_dragging;
@@ -588,7 +590,7 @@ impl TerminalView {
 
             if scrollbar_hovered {
                 let track_rect = egui::Rect::from_min_max(
-                    egui::pos2(sb_right - bar_w_wide - 2.0, outer_rect.min.y),
+                    egui::pos2(sb_right - bar_w_wide, outer_rect.min.y),
                     egui::pos2(sb_right, outer_rect.max.y),
                 );
                 let track_color = egui::Color32::from_rgba_unmultiplied(

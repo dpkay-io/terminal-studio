@@ -1210,8 +1210,8 @@ impl App {
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
                                 let prev_scroll = ui.style().spacing.scroll;
-                                ui.style_mut().spacing.scroll.bar_width = 4.0;
-                                ui.style_mut().spacing.scroll.handle_min_length = 12.0;
+                                ui.style_mut().spacing.scroll.bar_width = theme::SCROLLBAR_W_IDLE;
+                                ui.style_mut().spacing.scroll.handle_min_length = theme::SCROLLBAR_MIN_THUMB * 0.5;
                                 ui.style_mut().spacing.scroll.bar_inner_margin = 1.0;
                                 ui.style_mut().spacing.scroll.floating_allocated_width = 0.0;
                                 let scroll_output = egui::ScrollArea::horizontal()
@@ -1461,9 +1461,11 @@ impl App {
                         egui::ScrollArea::vertical()
                             .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
-                                let w = ui.available_width();
-                                ui.set_min_width(w);
-                                ui.set_max_width(w);
+                                let margin = egui::Margin::symmetric(theme::SP_3, 0.0);
+                                egui::Frame::none().inner_margin(margin).show(ui, |ui| {
+                                    let w = ui.available_width();
+                                    ui.set_min_width(w);
+                                    ui.set_max_width(w);
                                 match &active_tab {
                                     RightTab::Directory => {
                                         if let Some(cwd) = active_cwd.as_ref() {
@@ -1692,6 +1694,7 @@ impl App {
                                         render_markdown(ui, content);
                                     }
                                 }
+                                });
                             });
                     });
 

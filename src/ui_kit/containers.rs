@@ -74,45 +74,41 @@ pub fn dialog(
         DialogWidth::Responsive { pct, min, max } => (screen_rect.width() * pct).clamp(min, max),
     };
 
-    let dialog_pos = match config.anchor {
-        DialogAnchor::Center => {
-            let h_offset = (config.max_height / 2.0).min(screen_rect.height() / 2.0 - 10.0);
-            screen_rect.center() - egui::vec2(dialog_w / 2.0, h_offset)
-        }
+    let area = egui::Area::new(id_base.with("_dialog")).order(egui::Order::Tooltip);
+
+    let area = match config.anchor {
+        DialogAnchor::Center => area.anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)),
     };
 
-    egui::Area::new(id_base.with("_dialog"))
-        .fixed_pos(dialog_pos)
-        .order(egui::Order::Tooltip)
-        .show(ctx, |ui| {
-            let base = theme::active().bg_term;
-            let frame_fill = egui::Color32::from_rgba_unmultiplied(
-                base.r(),
-                base.g(),
-                base.b(),
-                (255.0 * open_t) as u8,
-            );
+    area.show(ctx, |ui| {
+        let base = theme::active().bg_term;
+        let frame_fill = egui::Color32::from_rgba_unmultiplied(
+            base.r(),
+            base.g(),
+            base.b(),
+            (255.0 * open_t) as u8,
+        );
 
-            egui::Frame::none()
-                .fill(frame_fill)
-                .rounding(egui::Rounding::same(theme::R_LG))
-                .stroke(egui::Stroke::new(
-                    theme::STROKE_THIN,
-                    theme::active().surface2,
-                ))
-                .shadow(egui::epaint::Shadow {
-                    offset: egui::vec2(0.0, 2.0),
-                    blur: 12.0,
-                    spread: 4.0,
-                    color: theme::active().shadow_md,
-                })
-                .inner_margin(egui::Margin::same(config.margin))
-                .show(ui, |ui| {
-                    ui.set_min_width(dialog_w);
-                    ui.set_max_height(config.max_height);
-                    add_contents(ui);
-                });
-        });
+        egui::Frame::none()
+            .fill(frame_fill)
+            .rounding(egui::Rounding::same(theme::R_LG))
+            .stroke(egui::Stroke::new(
+                theme::STROKE_THIN,
+                theme::active().surface2,
+            ))
+            .shadow(egui::epaint::Shadow {
+                offset: egui::vec2(0.0, 2.0),
+                blur: 12.0,
+                spread: 4.0,
+                color: theme::active().shadow_md,
+            })
+            .inner_margin(egui::Margin::same(config.margin))
+            .show(ui, |ui| {
+                ui.set_min_width(dialog_w);
+                ui.set_max_height(config.max_height);
+                add_contents(ui);
+            });
+    });
 
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         dismissed = true;

@@ -80,22 +80,7 @@ impl App {
             cc.egui_ctx.set_visuals(vis);
 
             let mut style = (*cc.egui_ctx.style()).clone();
-            style.spacing.scroll = egui::style::ScrollStyle {
-                floating: true,
-                bar_width: 12.0,
-                handle_min_length: 20.0,
-                bar_inner_margin: theme::SP_1,
-                bar_outer_margin: 0.0,
-                floating_width: 4.0,
-                floating_allocated_width: 12.0,
-                foreground_color: true,
-                dormant_background_opacity: 0.0,
-                active_background_opacity: 0.4,
-                interact_background_opacity: 0.7,
-                dormant_handle_opacity: 0.0,
-                active_handle_opacity: 0.7,
-                interact_handle_opacity: 1.0,
-            };
+            style.spacing.scroll = theme::scroll_style();
             style.always_scroll_the_only_direction = true;
             cc.egui_ctx.set_style(style);
         }
@@ -1587,22 +1572,7 @@ impl App {
         ctx.set_visuals(vis);
 
         let mut style = (*ctx.style()).clone();
-        style.spacing.scroll = egui::style::ScrollStyle {
-            floating: true,
-            bar_width: 12.0,
-            handle_min_length: 20.0,
-            bar_inner_margin: theme::SP_1,
-            bar_outer_margin: 0.0,
-            floating_width: 4.0,
-            floating_allocated_width: 12.0,
-            foreground_color: true,
-            dormant_background_opacity: 0.0,
-            active_background_opacity: 0.4,
-            interact_background_opacity: 0.7,
-            dormant_handle_opacity: 0.0,
-            active_handle_opacity: 0.7,
-            interact_handle_opacity: 1.0,
-        };
+        style.spacing.scroll = theme::scroll_style();
         style.always_scroll_the_only_direction = true;
         ctx.set_style(style);
     }
