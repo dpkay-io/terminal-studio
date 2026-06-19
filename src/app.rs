@@ -280,6 +280,9 @@ pub struct App {
 
     // Spawn rate limiter — timestamps of recent session spawns
     spawn_timestamps: std::collections::VecDeque<Instant>,
+    // Circuit breaker: if rate limit is hit this many times, stop all spawning permanently
+    spawn_rate_limit_strikes: usize,
+    spawn_circuit_broken: bool,
 
     // Set once when restart_app() is attempted — prevents retrying every frame
     restart_attempted: bool,

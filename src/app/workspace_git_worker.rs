@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(15);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug)]
 pub(super) struct WorkspaceGitInfo {

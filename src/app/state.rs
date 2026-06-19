@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-const MAX_SESSIONS: usize = 50;
-const SPAWN_RATE_WINDOW: Duration = Duration::from_secs(3);
-const MAX_SPAWNS_IN_WINDOW: usize = 8;
+const MAX_SESSIONS: usize = 30;
+const SPAWN_RATE_WINDOW: Duration = Duration::from_secs(5);
+const MAX_SPAWNS_IN_WINDOW: usize = 5;
+const RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK: usize = 3;
 
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground_worker::ForegroundWorker;
@@ -302,6 +303,8 @@ impl App {
             context_menu_pos: None,
             last_right_panel_cwd: None,
             spawn_timestamps: VecDeque::new(),
+            spawn_rate_limit_strikes: 0,
+            spawn_circuit_broken: false,
             restart_attempted: false,
         };
 
@@ -361,6 +364,11 @@ impl App {
         cwd: Option<PathBuf>,
         pre_inject: Option<&[u8]>,
     ) -> Option<u32> {
+        if self.spawn_circuit_broken {
+            log::error!("spawn circuit breaker tripped — all session spawning disabled");
+            return None;
+        }
+
         let live_count = self.session_state.sessions.len();
         if live_count >= MAX_SESSIONS {
             log::error!("session cap reached ({live_count}/{MAX_SESSIONS}), refusing to spawn");
@@ -375,11 +383,18 @@ impl App {
         self.spawn_timestamps
             .retain(|t| now.duration_since(*t) < SPAWN_RATE_WINDOW);
         if self.spawn_timestamps.len() >= MAX_SPAWNS_IN_WINDOW {
+            self.spawn_rate_limit_strikes += 1;
             log::error!(
-                "spawn rate limit hit ({} spawns in {:?}), refusing to spawn",
+                "spawn rate limit hit ({} spawns in {:?}), strike {}/{}",
                 self.spawn_timestamps.len(),
                 SPAWN_RATE_WINDOW,
+                self.spawn_rate_limit_strikes,
+                RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK,
             );
+            if self.spawn_rate_limit_strikes >= RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK {
+                self.spawn_circuit_broken = true;
+                log::error!("CIRCUIT BREAKER TRIPPED — disabling all session spawning");
+            }
             self.flash.trigger(
                 super::feedback::FlashTarget::Global,
                 super::feedback::FlashKind::Error,
@@ -1043,38 +1058,7 @@ impl App {
         rows: u16,
         cwd: Option<PathBuf>,
     ) -> Option<u32> {
-        match self.session_manager.spawn(
-            cols,
-            rows,
-            cwd,
-            shell,
-            self.settings.scrollback_lines,
-            None,
-        ) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active, _)) => {
-                self.session_state.uninit_sessions.insert(id);
-                self.session_state.sessions.push(SessionEntry {
-                    id,
-                    session,
-                    pty_tx,
-                    master,
-                    shell_pid,
-                    alive,
-                    is_active,
-                    pending_command: None,
-                    shell: shell.clone(),
-                    restore_scroll_lines: None,
-                    restore_scroll_ready: false,
-                    restore_title: None,
-                    claude_session_id: None,
-                });
-                Some(id)
-            }
-            Err(e) => {
-                log::error!("Failed to restore session: {e}");
-                None
-            }
-        }
+        self.spawn_session_inner(shell, cols, rows, cwd, None)
     }
 
     pub(super) fn restore_closed_session(&mut self, record_id: u64) {

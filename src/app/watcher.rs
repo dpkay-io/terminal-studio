@@ -234,7 +234,7 @@ fn watcher_thread(
         events,
     };
 
-    let debounce = Duration::from_millis(500);
+    let debounce = Duration::from_millis(1000);
     // Track git_refresh_at per dir on the worker side for debouncing.
     let mut git_refresh_pending: HashMap<PathBuf, Instant> = HashMap::new();
     // Track which dirs are git repos.

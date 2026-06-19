@@ -37,13 +37,20 @@ pub(super) fn git_stderr_on_fail(args: &[&str], dir: &Path) -> Result<Output, St
 }
 
 fn run_git(args: &[&str], dir: &Path, timeout: Duration) -> Option<Output> {
-    let mut child = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .ok()?;
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().ok()?;
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();

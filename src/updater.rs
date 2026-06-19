@@ -451,7 +451,17 @@ pub fn restart_app() -> bool {
         .skip(1)
         .filter(|a| a != APPLY_UPDATE_FLAG)
         .collect();
-    match std::process::Command::new(&exe).args(&args).spawn() {
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.args(&args);
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    match cmd.spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
             log::error!("Failed to restart: {}", e);
