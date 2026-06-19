@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -276,6 +277,12 @@ pub struct App {
 
     // Last CWD used by the right panel — triggers immediate watcher sync on change
     last_right_panel_cwd: Option<PathBuf>,
+
+    // Spawn rate limiter — timestamps of recent session spawns
+    spawn_timestamps: std::collections::VecDeque<Instant>,
+
+    // Set once when restart_app() is attempted — prevents retrying every frame
+    restart_attempted: bool,
 }
 
 impl eframe::App for App {
@@ -364,13 +371,39 @@ impl eframe::App for App {
             }
         }
 
-        if let Some(ref uc) = self.workers.update_checker {
-            if matches!(
-                uc.state().status,
-                crate::updater::UpdateStatus::RestartRequired
-            ) {
-                self.save_session();
-                crate::updater::restart_app();
+        if !self.restart_attempted {
+            if let Some(ref uc) = self.workers.update_checker {
+                if matches!(
+                    uc.state().status,
+                    crate::updater::UpdateStatus::RestartRequired
+                ) {
+                    self.restart_attempted = true;
+                    self.save_session();
+                    crate::updater::restart_app();
+                }
+            }
+        }
+
+        // Reap dead sessions whose PTY process has exited. Keeps the session
+        // count from growing unboundedly if something spawns sessions faster
+        // than they are used. Only reap sessions that have NO pane pointing at
+        // them (orphans) — user-visible dead sessions are handled by the
+        // existing close flow.
+        {
+            let orphan_dead: Vec<u32> =
+                self.session_state
+                    .sessions
+                    .iter()
+                    .filter(|e| !e.alive.load(Ordering::Relaxed))
+                    .filter(|e| {
+                        !self.pane_state.panes.iter().any(
+                            |p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == e.id),
+                        )
+                    })
+                    .map(|e| e.id)
+                    .collect();
+            for sid in orphan_dead {
+                self.remove_session_and_cleanup(sid);
             }
         }
 
@@ -3851,26 +3884,49 @@ impl App {
                         zstd::decode_all(compressed.as_slice()).ok()
                     });
                     let shell = self.configured_shell();
-                    if let Some(sid) = self.spawn_session_with_scrollback(
+                    match self.spawn_session_with_scrollback(
                         &shell,
                         80,
                         24,
-                        cwd,
+                        cwd.clone(),
                         scrollback.as_deref(),
                     ) {
-                        if let Some(entry) = self.session_state.find_mut(sid) {
-                            if let Some(cmd) = pending_command {
-                                entry.pending_command = Some(cmd);
+                        Some(sid) => {
+                            if let Some(entry) = self.session_state.find_mut(sid) {
+                                if let Some(cmd) = pending_command {
+                                    entry.pending_command = Some(cmd);
+                                }
+                                if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
+                                    entry.session.read().set_title(t);
+                                }
                             }
-                            if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
-                                entry.session.read().set_title(t);
-                            }
+                            self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
+                            self.pane_state.panes[pane_idx].last_size = (0, 0);
+                            self.session_state.active_id = Some(sid);
+                            self.update_is_active_flags();
+                            ctx.request_repaint();
                         }
-                        self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
-                        self.pane_state.panes[pane_idx].last_size = (0, 0); // force resize next frame
-                        self.session_state.active_id = Some(sid);
-                        self.update_is_active_flags();
-                        ctx.request_repaint();
+                        None => {
+                            log::error!("failed to materialize deferred terminal, converting to plain terminal placeholder");
+                            let fallback_shell = self.configured_shell();
+                            if let Some(sid) = self.spawn_session(&fallback_shell, 80, 24, cwd) {
+                                self.pane_state.panes[pane_idx].content =
+                                    PaneContent::Terminal(sid);
+                                self.pane_state.panes[pane_idx].last_size = (0, 0);
+                                self.session_state.active_id = Some(sid);
+                                self.update_is_active_flags();
+                            } else {
+                                log::error!("fallback spawn also failed, removing pane");
+                                let pane_id = self.pane_state.panes[pane_idx].id;
+                                self.pane_state.panes.remove(pane_idx);
+                                self.pane_state.pane_trees.remove(&pane_id);
+                                if self.pane_state.active_pane_id == Some(pane_id) {
+                                    self.pane_state.active_pane_id =
+                                        self.pane_state.panes.first().map(|p| p.id);
+                                }
+                            }
+                            ctx.request_repaint();
+                        }
                     }
                 }
             }

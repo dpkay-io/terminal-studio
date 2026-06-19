@@ -436,12 +436,15 @@ pub fn cleanup_old_binary() {
     }
 }
 
-pub fn restart_app() {
+/// Spawn a new copy of ourselves and exit. Returns `true` if the spawn
+/// succeeded (the process is about to exit) or `false` on failure. Callers
+/// must stop retrying after a failure to avoid spawning processes every frame.
+pub fn restart_app() -> bool {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(e) => {
             log::error!("Failed to locate current executable for restart: {}", e);
-            return;
+            return false;
         }
     };
     let args: Vec<String> = std::env::args()
@@ -452,6 +455,7 @@ pub fn restart_app() {
         Ok(_) => std::process::exit(0),
         Err(e) => {
             log::error!("Failed to restart: {}", e);
+            false
         }
     }
 }

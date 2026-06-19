@@ -1,7 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+
+const MAX_SESSIONS: usize = 50;
+const SPAWN_RATE_WINDOW: Duration = Duration::from_secs(3);
+const MAX_SPAWNS_IN_WINDOW: usize = 8;
 
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground_worker::ForegroundWorker;
@@ -297,6 +301,8 @@ impl App {
             revert_confirm_file: None,
             context_menu_pos: None,
             last_right_panel_cwd: None,
+            spawn_timestamps: VecDeque::new(),
+            restart_attempted: false,
         };
 
         let (init_cols, init_rows) = {
@@ -355,6 +361,33 @@ impl App {
         cwd: Option<PathBuf>,
         pre_inject: Option<&[u8]>,
     ) -> Option<u32> {
+        let live_count = self.session_state.sessions.len();
+        if live_count >= MAX_SESSIONS {
+            log::error!("session cap reached ({live_count}/{MAX_SESSIONS}), refusing to spawn");
+            self.flash.trigger(
+                super::feedback::FlashTarget::Global,
+                super::feedback::FlashKind::Error,
+            );
+            return None;
+        }
+
+        let now = Instant::now();
+        self.spawn_timestamps
+            .retain(|t| now.duration_since(*t) < SPAWN_RATE_WINDOW);
+        if self.spawn_timestamps.len() >= MAX_SPAWNS_IN_WINDOW {
+            log::error!(
+                "spawn rate limit hit ({} spawns in {:?}), refusing to spawn",
+                self.spawn_timestamps.len(),
+                SPAWN_RATE_WINDOW,
+            );
+            self.flash.trigger(
+                super::feedback::FlashTarget::Global,
+                super::feedback::FlashKind::Error,
+            );
+            return None;
+        }
+        self.spawn_timestamps.push_back(now);
+
         match self.session_manager.spawn(
             cols,
             rows,
