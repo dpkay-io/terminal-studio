@@ -27,7 +27,7 @@ impl App {
             let keep = match &self.right_tab {
                 RightTab::Directory => true,
                 RightTab::GitDiff => self
-                    .active_cwd()
+                    .active_pane_cwd()
                     .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
                     .map(|d| d.is_git)
                     .unwrap_or(false),

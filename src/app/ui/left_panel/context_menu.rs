@@ -350,7 +350,7 @@ impl App {
             .find(|e| Some(e.id) == self.session_state.active_id)
             .map(|e| e.shell.clone())
             .unwrap_or_else(default_shell);
-        let cwd = self.active_cwd().or_else(|| {
+        let cwd = self.active_pane_cwd().or_else(|| {
             self.active_group.and_then(|gid| {
                 self.workspace_store
                     .workspaces

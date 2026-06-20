@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"

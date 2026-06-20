@@ -136,6 +136,20 @@ impl PaneState {
             .count()
     }
 
+    pub(super) fn find_file_editor(
+        &self,
+        path: &std::path::Path,
+        active_group: Option<u64>,
+    ) -> Option<u32> {
+        use super::pane::PaneContent;
+        self.panes
+            .iter()
+            .find(|p| {
+                matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path && ed.workspace_id == active_group)
+            })
+            .map(|p| p.id)
+    }
+
     pub(super) fn visible_leaf_indices(
         &self,
         pane_groups: &[Option<u64>],
@@ -537,5 +551,132 @@ mod tests {
         assert_eq!(state.panes_referencing_session(5), 1);
         state.panes.retain(|p| p.id != 2);
         assert_eq!(state.panes_referencing_session(5), 0);
+    }
+
+    fn make_file_editor_pane(id: u32, path: &str, workspace_id: Option<u64>) -> PaneEntry {
+        PaneEntry {
+            id,
+            content: PaneContent::FileEditor(super::super::pane::FileEditorState {
+                path: std::path::PathBuf::from(path),
+                content: String::new(),
+                dirty: false,
+                save_error: false,
+                workspace_id,
+                show_preview: false,
+                stale: false,
+                loading: false,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+        }
+    }
+
+    #[test]
+    fn find_file_editor_same_workspace_matches() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", Some(42)));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(42));
+        assert_eq!(found, Some(1));
+    }
+
+    #[test]
+    fn find_file_editor_different_workspace_no_match() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", Some(42)));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(99));
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn find_file_editor_none_workspace_no_match_when_active_is_some() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", None));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(42));
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn find_file_editor_some_workspace_no_match_when_active_is_none() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", Some(42)));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), None);
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn find_file_editor_both_none_matches() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", None));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), None);
+        assert_eq!(found, Some(1));
+    }
+
+    #[test]
+    fn find_file_editor_different_path_no_match() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", Some(42)));
+        let found = state.find_file_editor(std::path::Path::new("/project/bar.rs"), Some(42));
+        assert_eq!(found, None);
+    }
+
+    #[test]
+    fn find_file_editor_picks_correct_among_multiple() {
+        let mut state = PaneState::new();
+        state
+            .panes
+            .push(make_file_editor_pane(1, "/project/foo.rs", Some(10)));
+        state
+            .panes
+            .push(make_file_editor_pane(2, "/project/foo.rs", Some(20)));
+        state
+            .panes
+            .push(make_file_editor_pane(3, "/project/bar.rs", Some(20)));
+
+        assert_eq!(
+            state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(10)),
+            Some(1)
+        );
+        assert_eq!(
+            state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(20)),
+            Some(2)
+        );
+        assert_eq!(
+            state.find_file_editor(std::path::Path::new("/project/bar.rs"), Some(20)),
+            Some(3)
+        );
+        assert_eq!(
+            state.find_file_editor(std::path::Path::new("/project/bar.rs"), Some(10)),
+            None
+        );
+    }
+
+    #[test]
+    fn find_file_editor_ignores_terminal_panes() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state
+            .panes
+            .push(make_file_editor_pane(2, "/project/foo.rs", Some(42)));
+        let found = state.find_file_editor(std::path::Path::new("/project/foo.rs"), Some(42));
+        assert_eq!(found, Some(2));
+    }
+
+    #[test]
+    fn find_file_editor_empty_panes_returns_none() {
+        let state = PaneState::new();
+        let found = state.find_file_editor(std::path::Path::new("/any/path.rs"), Some(1));
+        assert_eq!(found, None);
     }
 }

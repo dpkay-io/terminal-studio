@@ -143,6 +143,7 @@ impl DragState {
 pub(super) fn resolve_drag(
     state: &mut DragState,
     pane_state: &super::pane_state::PaneState,
+    active_group: Option<u64>,
 ) -> DragAction {
     let payload = match state.payload.take() {
         Some(p) => p,
@@ -156,13 +157,14 @@ pub(super) fn resolve_drag(
         }
     };
     state.clear();
-    resolve(payload, target, pane_state)
+    resolve(payload, target, pane_state, active_group)
 }
 
 fn resolve(
     payload: DragPayload,
     target: DropTarget,
     pane_state: &super::pane_state::PaneState,
+    active_group: Option<u64>,
 ) -> DragAction {
     use super::pane::PaneContent;
 
@@ -224,7 +226,7 @@ fn resolve(
             let existing = pane_state
                 .panes
                 .iter()
-                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path));
+                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path && ed.workspace_id == active_group));
             if let Some(pane) = existing {
                 return DragAction::FocusExistingTab { pane_id: pane.id };
             }
@@ -237,7 +239,7 @@ fn resolve(
             let existing = pane_state
                 .panes
                 .iter()
-                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path));
+                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path && ed.workspace_id == active_group));
             if let Some(pane) = existing {
                 return DragAction::FocusExistingTab { pane_id: pane.id };
             }
@@ -362,7 +364,7 @@ mod tests {
         state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(2));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::ReorderTab {
@@ -382,7 +384,7 @@ mod tests {
         state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(action, DragAction::Noop));
     }
 
@@ -393,7 +395,7 @@ mod tests {
         state.set_payload(DragPayload::Tab(999), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(action, DragAction::Noop));
     }
 
@@ -412,7 +414,7 @@ mod tests {
             state.set_payload(DragPayload::Tab(2), egui::pos2(0.0, 0.0), "");
             state.threshold_met = true;
             state.drop_target = Some(DropTarget::TabBar(1));
-            resolve_drag(&mut state, &ps)
+            resolve_drag(&mut state, &ps, None)
         };
         assert!(matches!(
             action,
@@ -431,7 +433,7 @@ mod tests {
         state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(1));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::InsertTerminalPane {
@@ -448,7 +450,7 @@ mod tests {
         state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::PaneArea);
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::InsertTerminalPane {
@@ -465,7 +467,7 @@ mod tests {
         state.set_payload(DragPayload::Session(10), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::FocusExistingTab { pane_id: 1 }
@@ -479,7 +481,7 @@ mod tests {
         state.set_payload(DragPayload::Session(10), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::PaneArea);
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::FocusExistingTab { pane_id: 1 }
@@ -498,7 +500,7 @@ mod tests {
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::InsertFileEditorPane {
@@ -520,6 +522,7 @@ mod tests {
                 workspace_id: None,
                 show_preview: false,
                 stale: false,
+                loading: false,
             }),
         )]);
         let mut state = DragState::new();
@@ -530,7 +533,7 @@ mod tests {
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::FocusExistingTab { pane_id: 1 }
@@ -549,7 +552,7 @@ mod tests {
         );
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::PaneArea);
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::InsertDiffPane { at_index: None, .. }
@@ -564,7 +567,7 @@ mod tests {
         state.set_payload(DragPayload::Note(100), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::InsertNotePane {
@@ -582,7 +585,7 @@ mod tests {
         state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::NewWindow);
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(
             action,
             DragAction::OpenWorkspaceWindow { workspace_id: 42 }
@@ -596,7 +599,7 @@ mod tests {
         state.set_payload(DragPayload::Workspace(42), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
         state.drop_target = Some(DropTarget::TabBar(0));
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(action, DragAction::Noop));
     }
 
@@ -607,7 +610,7 @@ mod tests {
         let mut state = DragState::new();
         state.set_payload(DragPayload::Session(20), egui::pos2(0.0, 0.0), "");
         state.threshold_met = true;
-        let action = resolve_drag(&mut state, &ps);
+        let action = resolve_drag(&mut state, &ps, None);
         assert!(matches!(action, DragAction::Noop));
     }
 

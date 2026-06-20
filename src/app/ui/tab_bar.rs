@@ -76,6 +76,11 @@ impl App {
 
                             let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
 
+                            if self.tab_scroll_to_pane == Some(pane_id) {
+                                ui.scroll_to_rect(tab_rect, Some(egui::Align::Center));
+                                self.tab_scroll_to_pane = None;
+                            }
+
                             // Register the tab interaction early so hover state is available
                             // for painting the background and controlling close button visibility.
                             let tab_resp = ui.interact(

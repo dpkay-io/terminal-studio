@@ -580,6 +580,10 @@ fn render_file_editor_leaf(
     let pane_rect = ui.max_rect();
     ui.painter()
         .rect_filled(pane_rect, 0.0, theme::active().bg_term);
+    if ed.loading {
+        render_loading_indicator(ui, &ed.path);
+        return;
+    }
     if !file_browser::is_supported_text_file(&ed.path, &ed.content) {
         ui.centered_and_justified(|ui| {
             ui.label(
@@ -865,6 +869,7 @@ fn render_note_editor_leaf(
     }
 }
 
+#[derive(Default)]
 struct DiffLeafResult {
     mode_change: Option<super::super::diff_parser::DiffViewMode>,
     hunk_navigation: Option<usize>,
@@ -879,6 +884,10 @@ fn render_file_diff_leaf(
     let pane_rect = ui.max_rect();
     ui.painter()
         .rect_filled(pane_rect, 0.0, theme::active().bg_term);
+    if d.loading {
+        render_loading_indicator(ui, &d.path);
+        return DiffLeafResult::default();
+    }
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!("\u{21c4} {}", d.path.display()))
@@ -1114,4 +1123,29 @@ impl App {
             );
         }
     }
+}
+
+fn render_loading_indicator(ui: &mut egui::Ui, path: &std::path::Path) {
+    let t = theme::active();
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy())
+        .unwrap_or_default();
+    ui.vertical_centered(|ui| {
+        ui.add_space(ui.available_height() * 0.35);
+        let elapsed = ui.input(|i| i.time) as f32;
+        let dots = match ((elapsed * 2.0) as usize) % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        };
+        ui.label(
+            egui::RichText::new(format!("Loading {filename}{dots}"))
+                .size(theme::FONT_STATUS)
+                .color(t.overlay0),
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    });
 }

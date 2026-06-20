@@ -363,8 +363,12 @@ impl GitWorker {
         self.manual_git_inflight.lock().contains(path)
     }
 
-    pub(super) fn take_git(&self, path: &Path) -> Option<(String, String)> {
-        self.results.lock().git.remove(path)
+    pub(super) fn take_all_git(&self) -> HashMap<PathBuf, (String, String)> {
+        std::mem::take(&mut self.results.lock().git)
+    }
+
+    pub(super) fn take_all_unpushed(&self) -> HashMap<PathBuf, Vec<(String, String)>> {
+        std::mem::take(&mut self.results.lock().unpushed)
     }
 
     pub(super) fn enqueue_stage(&self, cwd: &Path, path: String) {
@@ -403,10 +407,6 @@ impl GitWorker {
 
     pub(super) fn enqueue_unpushed(&self, cwd: &Path) {
         let _ = self.tx.send(Job::UnpushedCommits(cwd.to_path_buf()));
-    }
-
-    pub(super) fn take_unpushed(&self, path: &Path) -> Option<Vec<(String, String)>> {
-        self.results.lock().unpushed.remove(path)
     }
 
     pub(super) fn enqueue_commit(&self, cwd: &Path, message: String, amend: bool) {
@@ -482,10 +482,10 @@ mod tests {
     }
 
     #[test]
-    fn test_take_git_empty() {
+    fn test_take_all_git_empty() {
         let worker = GitWorker::spawn(egui::Context::default());
-        let result = worker.take_git(Path::new("/nonexistent/path"));
-        assert!(result.is_none());
+        let results = worker.take_all_git();
+        assert!(results.is_empty());
     }
 
     #[test]
@@ -513,8 +513,9 @@ mod tests {
         let mut result = None;
         for _ in 0..60 {
             std::thread::sleep(Duration::from_millis(50));
-            if let Some(r) = worker.take_git(&cwd) {
-                result = Some(r);
+            let results = worker.take_all_git();
+            if let Some(r) = results.into_iter().find(|(p, _)| *p == cwd) {
+                result = Some(r.1);
                 break;
             }
         }

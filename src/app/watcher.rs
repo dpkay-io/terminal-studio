@@ -116,7 +116,12 @@ impl WatchState {
 
         while let Ok(result) = self.result_rx.try_recv() {
             match result {
-                WatchResult::DirAdded { path, data } => {
+                WatchResult::DirAdded { path, mut data } => {
+                    if let Some(existing) = self.dir_data.get(&path) {
+                        data.git_diff = existing.git_diff.clone();
+                        data.git_status = existing.git_status.clone();
+                        data.git_unpushed = existing.git_unpushed.clone();
+                    }
                     self.dir_data.insert(path, data);
                 }
                 WatchResult::DirRemoved(path) => {
@@ -192,6 +197,24 @@ impl WatchState {
             dir: dir.to_path_buf(),
             commits,
         });
+    }
+}
+
+#[cfg(test)]
+impl WatchState {
+    fn new_for_test() -> (Self, mpsc::Sender<WatchResult>) {
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<WatchCommand>();
+        let (result_tx, result_rx) = mpsc::channel::<WatchResult>();
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let ws = WatchState {
+            cmd_tx,
+            result_rx,
+            _alive: alive,
+            dir_data: HashMap::new(),
+            last_sync: Instant::now(),
+            last_session_count: 0,
+        };
+        (ws, result_tx)
     }
 }
 
@@ -341,11 +364,13 @@ fn sync_cwds(
         .cloned()
         .collect();
 
-    // Remove dirs no longer in session set or deleted from disk.
+    // Remove dirs no longer in session set. Directories still in the desired
+    // set are kept even if is_dir() temporarily fails (e.g. Windows I/O race)
+    // to avoid evict-and-re-add cycles that reset populated git data.
     let to_remove: Vec<PathBuf> = state
         .watched
         .iter()
-        .filter(|d| !current.contains(*d) || !d.is_dir())
+        .filter(|d| !current.contains(*d))
         .cloned()
         .collect();
     for dir in to_remove {
@@ -549,5 +574,162 @@ fn process_fs_events(
     for dir in dirs_needing_refresh {
         let entries = Arc::new(list_dir_entries(&dir));
         let _ = result_tx.send(WatchResult::DirEntriesRefreshed { dir, entries });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_dir_data() -> DirData {
+        DirData {
+            is_git: true,
+            git_diff: String::new(),
+            git_status: String::new(),
+            git_unpushed: Vec::new(),
+            git_refresh_at: None,
+            md_files: HashMap::new(),
+            dir_entries: Arc::new(Vec::new()),
+        }
+    }
+
+    #[test]
+    fn dir_added_inserts_new_entry() {
+        let (mut ws, tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+        let mut data = empty_dir_data();
+        data.git_status = "M file.rs".to_string();
+        tx.send(WatchResult::DirAdded {
+            path: path.clone(),
+            data,
+        })
+        .unwrap();
+        ws.drain_results();
+        assert_eq!(ws.dir_data[&path].git_status, "M file.rs");
+    }
+
+    #[test]
+    fn dir_added_preserves_existing_git_data() {
+        let (mut ws, tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+
+        let mut existing = empty_dir_data();
+        existing.git_status = "M src/main.rs".to_string();
+        existing.git_diff = "diff --git a/src/main.rs".to_string();
+        existing.git_unpushed = vec![("abc123".into(), "fix bug".into())];
+        ws.dir_data.insert(path.clone(), existing);
+
+        let fresh = empty_dir_data();
+        assert!(fresh.git_status.is_empty());
+        tx.send(WatchResult::DirAdded {
+            path: path.clone(),
+            data: fresh,
+        })
+        .unwrap();
+        ws.drain_results();
+
+        assert_eq!(ws.dir_data[&path].git_status, "M src/main.rs");
+        assert_eq!(ws.dir_data[&path].git_diff, "diff --git a/src/main.rs");
+        assert_eq!(ws.dir_data[&path].git_unpushed.len(), 1);
+    }
+
+    #[test]
+    fn dir_added_updates_non_git_fields() {
+        let (mut ws, tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+
+        let mut existing = empty_dir_data();
+        existing.git_status = "M old.rs".to_string();
+        existing.is_git = false;
+        ws.dir_data.insert(path.clone(), existing);
+
+        let mut fresh = empty_dir_data();
+        fresh.is_git = true;
+        tx.send(WatchResult::DirAdded {
+            path: path.clone(),
+            data: fresh,
+        })
+        .unwrap();
+        ws.drain_results();
+
+        assert!(ws.dir_data[&path].is_git);
+        assert_eq!(ws.dir_data[&path].git_status, "M old.rs");
+    }
+
+    #[test]
+    fn dir_removed_then_added_starts_fresh() {
+        let (mut ws, tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+
+        let mut existing = empty_dir_data();
+        existing.git_status = "M old.rs".to_string();
+        ws.dir_data.insert(path.clone(), existing);
+
+        tx.send(WatchResult::DirRemoved(path.clone())).unwrap();
+        let fresh = empty_dir_data();
+        tx.send(WatchResult::DirAdded {
+            path: path.clone(),
+            data: fresh,
+        })
+        .unwrap();
+        ws.drain_results();
+
+        assert!(ws.dir_data[&path].git_status.is_empty());
+    }
+
+    #[test]
+    fn apply_git_result_populates_data() {
+        let (mut ws, _tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+        ws.dir_data.insert(path.clone(), empty_dir_data());
+
+        ws.apply_git_result(&path, "staged diff".into(), "M file.rs".into());
+
+        assert_eq!(ws.dir_data[&path].git_status, "M file.rs");
+        assert_eq!(ws.dir_data[&path].git_diff, "staged diff");
+    }
+
+    #[test]
+    fn apply_git_result_ignores_missing_dir() {
+        let (mut ws, _tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/nonexistent");
+        ws.apply_git_result(&path, "diff".into(), "status".into());
+        assert!(!ws.dir_data.contains_key(&path));
+    }
+
+    #[test]
+    fn take_pending_git_refreshes_consumes_once() {
+        let (mut ws, _tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+        let mut data = empty_dir_data();
+        data.git_refresh_at = Some(Instant::now());
+        ws.dir_data.insert(path.clone(), data);
+
+        let pending = ws.take_pending_git_refreshes();
+        assert_eq!(pending, vec![path.clone()]);
+
+        let pending2 = ws.take_pending_git_refreshes();
+        assert!(pending2.is_empty());
+    }
+
+    #[test]
+    fn dir_added_after_apply_preserves_git_data() {
+        let (mut ws, tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+        ws.dir_data.insert(path.clone(), empty_dir_data());
+
+        ws.apply_git_result(&path, "real diff".into(), "M real.rs".into());
+        assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
+
+        let fresh = empty_dir_data();
+        tx.send(WatchResult::DirAdded {
+            path: path.clone(),
+            data: fresh,
+        })
+        .unwrap();
+        ws.drain_results();
+
+        assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
+        assert_eq!(ws.dir_data[&path].git_diff, "real diff");
     }
 }

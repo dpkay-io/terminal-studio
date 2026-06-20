@@ -213,6 +213,9 @@ pub struct App {
     deferred_close_pane: bool,
     tab_rename_pane_id: Option<u32>,
     tab_rename_text: String,
+    /// Pane ID to scroll into view in the tab bar. Set when opening a
+    /// file/diff/conflict pane, consumed by the tab bar renderer.
+    pub(super) tab_scroll_to_pane: Option<u32>,
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
@@ -230,6 +233,11 @@ pub struct App {
 
     // Maps full file path → pane_id for FileDiff panes awaiting async diff results.
     pending_diff_panes: HashMap<PathBuf, u32>,
+
+    // Pending single-click on a git diff file entry. Deferred so we can
+    // distinguish single-click (open diff) from double-click (open editor).
+    // Consumed after 350ms if no double-click cancels it first.
+    pending_diff_click: Option<(String, Instant)>,
 
     // Async file load results buffer: spawned threads push (pane_id, content) here,
     // drained at the start of each update() frame.
@@ -453,6 +461,7 @@ impl eframe::App for App {
                         if !ed.dirty {
                             ed.content = content;
                         }
+                        ed.loading = false;
                     }
                 }
             }
@@ -626,8 +635,14 @@ impl eframe::App for App {
             }
 
             if needs_cwd_sync {
+                let pane_cwd = self.active_pane_cwd();
                 if let Some(ws) = &mut self.watch_state {
-                    let cwd_paths: Vec<PathBuf> = cwds.into_iter().map(|(_, c)| c).collect();
+                    let mut cwd_paths: Vec<PathBuf> = cwds.into_iter().map(|(_, c)| c).collect();
+                    if let Some(pc) = pane_cwd {
+                        if !cwd_paths.contains(&pc) {
+                            cwd_paths.push(pc);
+                        }
+                    }
                     ws.request_sync(cwd_paths);
                     ws.last_sync = now;
                     ws.last_session_count = session_count;
@@ -731,6 +746,8 @@ impl eframe::App for App {
                             ws.request_sync(cwd_paths);
                         }
                     }
+                    self.workers.git_worker.enqueue_git(new_cwd);
+                    self.workers.git_worker.enqueue_unpushed(new_cwd);
                 }
             }
         }
@@ -747,24 +764,8 @@ impl eframe::App for App {
                 self.workers.git_worker.enqueue_unpushed(dir);
             }
 
-            let watched_dirs: Vec<PathBuf> = self
-                .watch_state
-                .as_ref()
-                .map(|ws| ws.dir_data.keys().cloned().collect())
-                .unwrap_or_default();
-            let completed: Vec<(PathBuf, (String, String))> = watched_dirs
-                .iter()
-                .filter_map(|d| self.workers.git_worker.take_git(d).map(|r| (d.clone(), r)))
-                .collect();
-            let completed_unpushed: Vec<(PathBuf, Vec<(String, String)>)> = watched_dirs
-                .iter()
-                .filter_map(|d| {
-                    self.workers
-                        .git_worker
-                        .take_unpushed(d)
-                        .map(|r| (d.clone(), r))
-                })
-                .collect();
+            let completed = self.workers.git_worker.take_all_git();
+            let completed_unpushed = self.workers.git_worker.take_all_unpushed();
             if let Some(ws) = &mut self.watch_state {
                 for (dir, (diff, status)) in completed {
                     ws.apply_git_result(&dir, diff, status);
@@ -787,6 +788,7 @@ impl eframe::App for App {
                             d.old_highlights = dr.old_highlights;
                             d.new_highlights = dr.new_highlights;
                             d.highlight_theme = dr.highlight_theme;
+                            d.loading = false;
                         }
                     }
                 }
@@ -885,7 +887,7 @@ impl eframe::App for App {
             }
 
             // Drain last commit message result (for amend pre-fill)
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 if let Some(msg) = self.workers.git_worker.take_last_commit_msg(&cwd) {
                     if self.show_commit_dialog && self.commit_amend {
                         self.commit_message = msg;
@@ -2111,7 +2113,6 @@ impl App {
             if !pane_visible {
                 let pane_idx = self.pane_state.panes.iter().position(|p| p.id == pid);
                 if let Some(idx) = pane_idx {
-                    // Pane still exists — its group changed. Follow it.
                     self.active_group = pane_groups[idx];
                 } else {
                     // Pane was removed — fall back to first pane in the current group.
@@ -4154,14 +4155,9 @@ impl App {
 
         // 9. File opened from right panel → add FileEditor pane (or focus existing)
         if let Some(path) = pending_open_editor {
-            let existing_id = self
-                .pane_state
-                .panes
-                .iter()
-                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
-                .map(|p| p.id);
+            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
             if let Some(pid) = existing_id {
-                self.activate_pane(pid);
+                self.activate_and_scroll_to_pane(pid);
             } else {
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
@@ -4176,6 +4172,7 @@ impl App {
                         workspace_id: self.active_group,
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
+                        loading: true,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4187,7 +4184,7 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
-                self.activate_pane(pane_id);
+                self.activate_and_scroll_to_pane(pane_id);
                 {
                     let results = Arc::clone(&self.file_load_results);
                     let ctx_clone = ctx.clone();
@@ -4207,14 +4204,9 @@ impl App {
 
         // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
         if let Some(path) = open_md_in_editor {
-            let existing_id = self
-                .pane_state
-                .panes
-                .iter()
-                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
-                .map(|p| p.id);
+            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
             if let Some(pid) = existing_id {
-                self.activate_pane(pid);
+                self.activate_and_scroll_to_pane(pid);
             } else {
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
@@ -4228,6 +4220,7 @@ impl App {
                         workspace_id: self.active_group,
                         show_preview: true,
                         stale: false,
+                        loading: true,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4239,7 +4232,7 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
-                self.activate_pane(pane_id);
+                self.activate_and_scroll_to_pane(pane_id);
                 {
                     let results = Arc::clone(&self.file_load_results);
                     let ctx_clone = ctx.clone();
@@ -4266,7 +4259,7 @@ impl App {
                 .find(|p| matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id))
                 .map(|p| p.id);
             if let Some(pid) = existing_id {
-                self.activate_pane(pid);
+                self.activate_and_scroll_to_pane(pid);
             } else {
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
@@ -4285,58 +4278,71 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
-                self.activate_pane(pane_id);
+                self.activate_and_scroll_to_pane(pane_id);
             }
         }
 
-        // 9b. Git diff file double-clicked → open FileDiff pane (non-blocking)
+        // 9b. Git diff file single-clicked → defer open to distinguish from double-click.
+        // Store as pending; it will be consumed after 350ms if no double-click cancels it.
         if let Some(rel_path) = git_open_diff_file {
-            if let Some(cwd) = self.active_cwd() {
-                let full_path = cwd.join(&rel_path);
-                let existing_id = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .find(|p| matches!(&p.content, PaneContent::FileDiff(d) if d.path == full_path))
-                    .map(|p| p.id);
-                if let Some(pid) = existing_id {
-                    self.activate_pane(pid);
-                } else {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    self.pane_state.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::FileDiff(FileDiffState {
-                            path: full_path.clone(),
-                            old_content: String::new(),
-                            new_content: String::new(),
-                            hunks: Vec::new(),
-                            diff_mode: self.settings.diff_view_mode,
-                            current_hunk: 0,
-                            old_highlights: None,
-                            new_highlights: None,
-                            highlight_theme: theme::active().id,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                    });
-                    self.pane_state.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
+            self.pending_diff_click = Some((rel_path, Instant::now()));
+            ctx.request_repaint_after(std::time::Duration::from_millis(350));
+        }
+
+        // 9b-mature. Pending single-click matured → open FileDiff pane.
+        const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(350);
+        if let Some((ref path, clicked_at)) = self.pending_diff_click {
+            if clicked_at.elapsed() >= DOUBLE_CLICK_WINDOW {
+                let rel_path = path.clone();
+                self.pending_diff_click = None;
+                if let Some(cwd) = self.active_pane_cwd() {
+                    let full_path = cwd.join(&rel_path);
+                    let existing_id = self
+                        .pane_state
+                        .panes
+                        .iter()
+                        .find(|p| matches!(&p.content, PaneContent::FileDiff(d) if d.path == full_path))
+                        .map(|p| p.id);
+                    if let Some(pid) = existing_id {
+                        self.activate_and_scroll_to_pane(pid);
+                    } else {
+                        let pane_id = self.pane_state.next_pane_id;
+                        self.pane_state.next_pane_id += 1;
+                        self.pane_state.panes.push(PaneEntry {
+                            id: pane_id,
+                            content: PaneContent::FileDiff(FileDiffState {
+                                path: full_path.clone(),
+                                old_content: String::new(),
+                                new_content: String::new(),
+                                hunks: Vec::new(),
+                                diff_mode: self.settings.diff_view_mode,
+                                current_hunk: 0,
+                                old_highlights: None,
+                                new_highlights: None,
+                                highlight_theme: theme::active().id,
+                                loading: true,
+                            }),
+                            manual_width: None,
                             last_size: (0, 0),
-                        },
-                    );
-                    self.pending_diff_panes.insert(full_path, pane_id);
-                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
-                    self.activate_pane(pane_id);
+                        });
+                        self.pane_state.pane_trees.insert(
+                            pane_id,
+                            PaneNode::Leaf {
+                                pane_id,
+                                last_size: (0, 0),
+                            },
+                        );
+                        self.pending_diff_panes.insert(full_path, pane_id);
+                        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                        self.activate_and_scroll_to_pane(pane_id);
+                    }
                 }
             }
         }
 
         // 9b-conflict. Conflicted file clicked → open ConflictResolver pane
         if let Some(rel_path) = git_open_conflict_file {
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 let full_path = cwd.join(&rel_path);
                 let existing_id = self
                     .pane_state
@@ -4347,7 +4353,7 @@ impl App {
                     })
                     .map(|p| p.id);
                 if let Some(pid) = existing_id {
-                    self.activate_pane(pid);
+                    self.activate_and_scroll_to_pane(pid);
                 } else {
                     match std::fs::read_to_string(&full_path) {
                         Ok(file_content) => {
@@ -4378,7 +4384,7 @@ impl App {
                                         last_size: (0, 0),
                                     },
                                 );
-                                self.activate_pane(pane_id);
+                                self.activate_and_scroll_to_pane(pane_id);
                             }
                         }
                         Err(e) => {
@@ -4395,17 +4401,21 @@ impl App {
             }
         }
 
-        // 9b2. Git file double-clicked → open file in editor
+        // 9b2. Git file double-clicked → cancel pending diff click and open file in editor
         if let Some(rel_path) = git_open_file {
-            if let Some(cwd) = self.active_cwd() {
+            // Cancel any pending single-click for this file so the diff doesn't open.
+            if let Some((ref pending_path, _)) = self.pending_diff_click {
+                if *pending_path == rel_path {
+                    self.pending_diff_click = None;
+                }
+            }
+            if let Some(cwd) = self.active_pane_cwd() {
                 let full_path = cwd.join(&rel_path);
                 let existing_id = self
-                    .pane_state.panes
-                    .iter()
-                    .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == full_path))
-                    .map(|p| p.id);
+                    .pane_state
+                    .find_file_editor(&full_path, self.active_group);
                 if let Some(pid) = existing_id {
-                    self.activate_pane(pid);
+                    self.activate_and_scroll_to_pane(pid);
                 } else {
                     let pane_id = self.pane_state.next_pane_id;
                     self.pane_state.next_pane_id += 1;
@@ -4420,6 +4430,7 @@ impl App {
                             workspace_id: self.active_group,
                             show_preview: is_md && self.md_prefer_preview,
                             stale: false,
+                            loading: true,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
@@ -4431,7 +4442,7 @@ impl App {
                             last_size: (0, 0),
                         },
                     );
-                    self.activate_pane(pane_id);
+                    self.activate_and_scroll_to_pane(pane_id);
                     {
                         let results = Arc::clone(&self.file_load_results);
                         let ctx_clone = ctx.clone();
@@ -4472,12 +4483,13 @@ impl App {
                     last_size: (0, 0),
                 },
             );
-            self.activate_pane(pane_id);
+            self.activate_and_scroll_to_pane(pane_id);
         }
 
         // ── Drag-and-drop resolution ──────────────────────────────────
         if self.drag_state.is_active() && ctx.input(|i| i.pointer.any_released()) {
-            let action = drag::resolve_drag(&mut self.drag_state, &self.pane_state);
+            let action =
+                drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
             self.execute_drag_action(action, ctx);
         }
         if self.drag_state.payload.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {

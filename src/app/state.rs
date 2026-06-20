@@ -257,6 +257,7 @@ impl App {
             deferred_close_pane: false,
             tab_rename_pane_id: None,
             tab_rename_text: String::new(),
+            tab_scroll_to_pane: None,
             deferred_open_workspace: None,
             show_close_all_confirm: false,
             close_all_frames_open: 0,
@@ -266,6 +267,7 @@ impl App {
             session_workspace_filter: None,
             pending_window_focus: None,
             pending_diff_panes: HashMap::new(),
+            pending_diff_click: None,
             file_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
             md_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
             flash: super::feedback::FlashManager::new(),
@@ -462,21 +464,6 @@ impl App {
                 .unwrap_or_else(default_shell)
         } else {
             default_shell()
-        }
-    }
-
-    pub(super) fn active_session_index(&self) -> Option<usize> {
-        let id = self.session_state.active_id?;
-        self.session_state.sessions.iter().position(|e| e.id == id)
-    }
-
-    pub(super) fn active_cwd(&self) -> Option<PathBuf> {
-        let idx = self.active_session_index()?;
-        let p = self.session_state.sessions[idx].session.read().cwd.clone();
-        if p.as_os_str().is_empty() {
-            None
-        } else {
-            Some(p)
         }
     }
 
@@ -776,6 +763,11 @@ impl App {
                 self.update_is_active_flags();
             }
         }
+    }
+
+    pub(super) fn activate_and_scroll_to_pane(&mut self, pid: u32) {
+        self.activate_pane(pid);
+        self.tab_scroll_to_pane = Some(pid);
     }
 
     pub(super) fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
@@ -1181,7 +1173,7 @@ impl App {
             .pane_state
             .panes
             .iter()
-            .filter(|p| !matches!(p.content, PaneContent::FileDiff(_)))
+            .filter(|p| !matches!(p.content, PaneContent::ConflictResolver(_)))
             .map(|p| p.id)
             .collect();
         let pane_id_to_index: HashMap<u32, usize> = saved_pane_ids
@@ -1269,7 +1261,9 @@ impl App {
                         dirty: ed.dirty,
                         workspace_id: ed.workspace_id,
                     },
-                    PaneContent::FileDiff(_) => return None,
+                    PaneContent::FileDiff(d) => SavedPaneContent::FileDiff {
+                        path: d.path.clone(),
+                    },
                     PaneContent::NoteEditor(ne) => SavedPaneContent::NoteEditor {
                         workspace_id: ne.workspace_id,
                     },
@@ -1464,6 +1458,24 @@ impl App {
                         workspace_id: *workspace_id,
                         show_preview: is_md,
                         stale: false,
+                        loading: false,
+                    })
+                }
+                SavedPaneContent::FileDiff { path } => {
+                    if !path.exists() {
+                        continue;
+                    }
+                    PaneContent::FileDiff(FileDiffState {
+                        path: path.clone(),
+                        old_content: String::new(),
+                        new_content: String::new(),
+                        hunks: Vec::new(),
+                        diff_mode: self.settings.diff_view_mode,
+                        current_hunk: 0,
+                        old_highlights: None,
+                        new_highlights: None,
+                        highlight_theme: crate::theme::active().id,
+                        loading: true,
                     })
                 }
                 SavedPaneContent::NoteEditor { workspace_id } => {
@@ -1488,6 +1500,22 @@ impl App {
                     last_size: (0, 0),
                 },
             );
+        }
+
+        for pane in &self.pane_state.panes {
+            if let PaneContent::FileDiff(d) = &pane.content {
+                let ws = self.workspace_store.find_for_cwd(&d.path);
+                let cwd = ws
+                    .map(|w| w.path.clone())
+                    .or_else(|| d.path.parent().map(|p| p.to_path_buf()));
+                if let Some(cwd) = cwd {
+                    if let Ok(rel) = d.path.strip_prefix(&cwd) {
+                        let rel_path = rel.to_string_lossy().to_string();
+                        self.pending_diff_panes.insert(d.path.clone(), pane.id);
+                        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                    }
+                }
+            }
         }
 
         if let Some(idx) = state.active_pane_index {
@@ -1792,6 +1820,7 @@ impl App {
                         workspace_id: self.active_group,
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
+                        loading: true,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -1807,7 +1836,7 @@ impl App {
                 });
             }
             DragAction::InsertDiffPane { rel_path, at_index } => {
-                if let Some(cwd) = self.active_cwd() {
+                if let Some(cwd) = self.active_pane_cwd() {
                     let full_path = cwd.join(&rel_path);
                     let pane_id = self.pane_state.next_pane_id;
                     self.pane_state.next_pane_id += 1;
@@ -1823,6 +1852,7 @@ impl App {
                             old_highlights: None,
                             new_highlights: None,
                             highlight_theme: crate::theme::active().id,
+                            loading: true,
                         }),
                         manual_width: None,
                         last_size: (0, 0),

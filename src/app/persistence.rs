@@ -39,6 +39,9 @@ pub(super) enum SavedPaneContent {
         dirty: bool,
         workspace_id: Option<u64>,
     },
+    FileDiff {
+        path: PathBuf,
+    },
     NoteEditor {
         workspace_id: Option<u64>,
     },
@@ -202,6 +205,21 @@ mod tests {
                 assert_eq!(workspace_id, Some(99));
             }
             _ => panic!("expected FileEditor variant"),
+        }
+    }
+
+    #[test]
+    fn test_saved_pane_content_file_diff_roundtrip() {
+        let original = SavedPaneContent::FileDiff {
+            path: PathBuf::from("/tmp/changed.rs"),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
+        match restored {
+            SavedPaneContent::FileDiff { path } => {
+                assert_eq!(path, PathBuf::from("/tmp/changed.rs"));
+            }
+            _ => panic!("expected FileDiff variant"),
         }
     }
 

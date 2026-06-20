@@ -48,6 +48,8 @@ pub(super) struct FileEditorState {
     pub(super) show_preview: bool,
     /// File was modified on disk; re-read needed before next render.
     pub(super) stale: bool,
+    /// Content is being loaded from a background thread.
+    pub(super) loading: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +63,8 @@ pub(super) struct FileDiffState {
     pub(super) old_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
     pub(super) new_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
     pub(super) highlight_theme: crate::theme::ThemeId,
+    /// Diff content is being loaded from the git worker thread.
+    pub(super) loading: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -176,6 +180,7 @@ mod tests {
             workspace_id: Some(42),
             show_preview: false,
             stale: false,
+            loading: false,
         };
         let cloned = state.clone();
         assert_eq!(cloned.path, state.path);
@@ -185,6 +190,7 @@ mod tests {
         assert_eq!(cloned.workspace_id, state.workspace_id);
         assert_eq!(cloned.show_preview, state.show_preview);
         assert_eq!(cloned.stale, state.stale);
+        assert_eq!(cloned.loading, state.loading);
     }
 
     #[test]
@@ -205,6 +211,7 @@ mod tests {
             workspace_id: None,
             show_preview: false,
             stale: false,
+            loading: false,
         });
         let diff = PaneContent::FileDiff(FileDiffState {
             path: PathBuf::from("file.rs"),
@@ -216,6 +223,7 @@ mod tests {
             old_highlights: None,
             new_highlights: None,
             highlight_theme: crate::theme::active().id,
+            loading: false,
         });
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),

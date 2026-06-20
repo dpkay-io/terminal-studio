@@ -1320,7 +1320,7 @@ impl App {
             let prev_amend = self.commit_amend;
             ui.checkbox(&mut self.commit_amend, "Amend last commit");
             if self.commit_amend && !prev_amend {
-                if let Some(cwd) = self.active_cwd() {
+                if let Some(cwd) = self.active_pane_cwd() {
                     self.workers.git_worker.enqueue_last_commit_msg(&cwd);
                 }
             }
@@ -1356,7 +1356,7 @@ impl App {
         if do_commit {
             let message = self.commit_message.trim().to_string();
             let amend = self.commit_amend;
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 self.workers.git_worker.enqueue_commit(&cwd, message, amend);
             }
             self.show_commit_dialog = false;
@@ -1437,7 +1437,7 @@ impl App {
 
         if do_push {
             let force = self.push_force;
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 self.push_in_progress = true;
                 self.push_error = None;
                 self.workers.git_worker.enqueue_push(&cwd, force);
@@ -1488,7 +1488,7 @@ impl App {
         }
 
         if do_stage {
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 self.workers.git_worker.enqueue_stage_all(&cwd);
             }
             self.show_stage_all_confirm = false;
@@ -1540,7 +1540,7 @@ impl App {
         });
 
         if do_revert {
-            if let Some(cwd) = self.active_cwd() {
+            if let Some(cwd) = self.active_pane_cwd() {
                 self.workers.git_worker.enqueue_revert(&cwd, file_path);
             }
             self.revert_confirm_file = None;
