@@ -235,17 +235,84 @@ impl App {
                     "All Workspaces".to_string()
                 }),
         };
-        egui::ComboBox::from_id_source(self.vp_id("ws_session_filter"))
-            .width(ui.available_width() - 12.0)
-            .selected_text(egui::RichText::new(&selected_label).size(theme::FONT_UI_MD))
-            .show_ui(ui, |ui| {
-                for (val, name) in &ws_names {
-                    let is_selected = self.session_workspace_filter == *val;
-                    if ui.selectable_label(is_selected, name).clicked() {
-                        self.session_workspace_filter = *val;
+
+        let t = theme::active();
+        let full_w = ui.available_width();
+        let popup_id = self.vp_id("ws_filter_popup");
+        let is_open = ui.memory(|m| m.is_popup_open(popup_id));
+
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(full_w, theme::SEARCH_BAR_H),
+            egui::Sense::click(),
+        );
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        let border_color = if is_open {
+            t.border_focus
+        } else {
+            t.border_subtle
+        };
+        ui.painter().rect_filled(rect, theme::R_SM, t.bg_input);
+        ui.painter().rect_stroke(
+            rect,
+            theme::R_SM,
+            egui::Stroke::new(theme::STROKE_THIN, border_color),
+        );
+
+        let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
+        let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
+        let chevron_galley = ui.fonts(|f| {
+            f.layout_no_wrap(
+                chevron.to_string(),
+                egui::FontId::proportional(theme::FONT_UI_XS),
+                t.fg_muted,
+            )
+        });
+        let chevron_w = chevron_galley.size().x;
+        let chevron_x = inner.right() - chevron_w;
+        let chevron_y = inner.center().y - chevron_galley.size().y / 2.0;
+        ui.painter()
+            .galley(egui::pos2(chevron_x, chevron_y), chevron_galley, t.fg_muted);
+
+        let text_clip =
+            egui::Rect::from_min_max(inner.min, egui::pos2(chevron_x - theme::SP_2, inner.max.y));
+        let text_galley = ui.fonts(|f| {
+            f.layout_no_wrap(
+                selected_label,
+                egui::FontId::proportional(theme::FONT_UI_MD),
+                t.text,
+            )
+        });
+        let text_y = inner.center().y - text_galley.size().y / 2.0;
+        ui.painter().with_clip_rect(text_clip).galley(
+            egui::pos2(inner.left(), text_y),
+            text_galley,
+            t.text,
+        );
+
+        if is_open {
+            egui::popup::popup_below_widget(
+                ui,
+                popup_id,
+                &resp,
+                egui::PopupCloseBehavior::CloseOnClick,
+                |ui: &mut egui::Ui| {
+                    ui.set_min_width(full_w - 2.0 * theme::SP_3);
+                    for (val, name) in &ws_names {
+                        let is_selected = self.session_workspace_filter == *val;
+                        if ui.selectable_label(is_selected, name).clicked() {
+                            self.session_workspace_filter = *val;
+                        }
                     }
-                }
-            });
+                },
+            );
+        }
+
         ui.add_space(theme::SP_1);
     }
 
@@ -382,10 +449,15 @@ impl App {
         session_filter: &str,
         actions: &mut SessionListActions,
     ) {
+        let outer_w = ui.available_width();
+        ui.spacing_mut().scroll.bar_width = 0.0;
+        ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+        ui.spacing_mut().scroll.floating_width = 0.0;
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
+                ui.set_min_width(outer_w);
+                ui.set_max_width(outer_w);
                 let matcher = SkimMatcherV2::default();
                 for pane in self.pane_state.panes.iter() {
                     let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane

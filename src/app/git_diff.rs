@@ -1,4 +1,4 @@
-use super::diff_parser::DiffViewMode;
+use super::diff_parser::{DiffLineKind, DiffViewMode};
 use crate::git::parser::{parse_git_status, FileChangeKind};
 use crate::theme;
 
@@ -655,11 +655,19 @@ fn file_context_menu(
     }
 }
 
+pub(super) struct DiffToolbarResult {
+    pub(super) mode_change: Option<DiffViewMode>,
+    pub(super) scroll_to_hunk: Option<usize>,
+}
+
 pub(super) fn render_diff_toolbar(
     ui: &mut egui::Ui,
     current_mode: DiffViewMode,
-) -> Option<DiffViewMode> {
-    let mut new_mode = None;
+    hunk_count: usize,
+    current_hunk: usize,
+) -> DiffToolbarResult {
+    let mut mode_change = None;
+    let mut scroll_to_hunk = None;
     let t = theme::active();
 
     ui.horizontal(|ui| {
@@ -690,12 +698,140 @@ pub(super) fn render_diff_toolbar(
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if btn.clicked() && !is_active {
-                new_mode = Some(*mode);
+                mode_change = Some(*mode);
+            }
+        }
+
+        if hunk_count > 0 {
+            ui.add_space(theme::SP_4);
+            ui.add(egui::Separator::default().vertical().spacing(theme::SP_2));
+            ui.add_space(theme::SP_2);
+
+            let has_prev = current_hunk > 0;
+            let has_next = current_hunk + 1 < hunk_count;
+
+            let prev_btn = ui.add_enabled(
+                has_prev,
+                egui::Button::new(
+                    egui::RichText::new("\u{2191}")
+                        .size(theme::FONT_UI_MD)
+                        .color(if has_prev { t.text } else { t.overlay0 }),
+                )
+                .frame(false),
+            );
+            if prev_btn.hovered() && has_prev {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if prev_btn.on_hover_text("Previous change").clicked() && has_prev {
+                scroll_to_hunk = Some(current_hunk - 1);
+            }
+
+            ui.label(
+                egui::RichText::new(format!("{}/{}", current_hunk + 1, hunk_count))
+                    .size(theme::FONT_UI_SM)
+                    .color(t.subtext0),
+            );
+
+            let next_btn = ui.add_enabled(
+                has_next,
+                egui::Button::new(
+                    egui::RichText::new("\u{2193}")
+                        .size(theme::FONT_UI_MD)
+                        .color(if has_next { t.text } else { t.overlay0 }),
+                )
+                .frame(false),
+            );
+            if next_btn.hovered() && has_next {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if next_btn.on_hover_text("Next change").clicked() && has_next {
+                scroll_to_hunk = Some(current_hunk + 1);
             }
         }
     });
 
-    new_mode
+    DiffToolbarResult {
+        mode_change,
+        scroll_to_hunk,
+    }
+}
+
+fn diff_bg_rgb(kind: DiffLineKind, t: &theme::Theme) -> [u8; 3] {
+    match kind {
+        DiffLineKind::Added => {
+            let bg = t.git_added.gamma_multiply(0.12);
+            [bg.r(), bg.g(), bg.b()]
+        }
+        DiffLineKind::Removed => {
+            let bg = t.git_removed.gamma_multiply(0.12);
+            [bg.r(), bg.g(), bg.b()]
+        }
+        DiffLineKind::Context => [t.bg_term.r(), t.bg_term.g(), t.bg_term.b()],
+    }
+}
+
+fn paint_highlighted_line(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    content: &str,
+    segments: Option<&[(egui::Color32, String)]>,
+    kind: DiffLineKind,
+    t: &theme::Theme,
+    font: &egui::FontId,
+) {
+    let bg_rgb = diff_bg_rgb(kind, t);
+
+    if let Some(segs) = segments {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = f32::INFINITY;
+        for (raw_color, text) in segs {
+            let fg = theme::ensure_readable([raw_color.r(), raw_color.g(), raw_color.b()], bg_rgb);
+            job.append(text, 0.0, egui::TextFormat::simple(font.clone(), fg));
+        }
+        let galley = ui.fonts(|f| f.layout_job(job));
+        let y = rect.center().y - galley.size().y / 2.0;
+        ui.painter()
+            .galley(egui::pos2(rect.min.x + 4.0, y), galley, t.text);
+    } else {
+        let fg = match kind {
+            DiffLineKind::Added => t.git_added,
+            DiffLineKind::Removed => t.git_removed,
+            DiffLineKind::Context => t.text,
+        };
+        let fg = theme::ensure_readable([fg.r(), fg.g(), fg.b()], bg_rgb);
+        ui.painter().text(
+            egui::pos2(rect.min.x + 4.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            content,
+            font.clone(),
+            fg,
+        );
+    }
+}
+
+fn compute_hunk_start_indices(
+    lines: &[super::diff_parser::DiffLine],
+    hunks: &[super::diff_parser::DiffHunk],
+) -> Vec<usize> {
+    let mut starts = Vec::new();
+    let mut hunk_idx = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if hunk_idx >= hunks.len() {
+            break;
+        }
+        let Some(first) = hunks[hunk_idx].lines.first() else {
+            hunk_idx += 1;
+            continue;
+        };
+        if line.kind == first.kind
+            && line.old_lineno == first.old_lineno
+            && line.new_lineno == first.new_lineno
+        {
+            starts.push(i);
+            hunk_idx += 1;
+        }
+    }
+    starts
 }
 
 pub(super) fn render_inline_diff_full(
@@ -703,21 +839,43 @@ pub(super) fn render_inline_diff_full(
     old_content: &str,
     new_content: &str,
     hunks: &[super::diff_parser::DiffHunk],
+    old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    scroll_to_hunk: Option<usize>,
 ) {
-    use super::diff_parser::{build_full_diff_lines, DiffLineKind};
+    use super::diff_parser::build_full_diff_lines;
 
     let lines = build_full_diff_lines(old_content, new_content, hunks);
     let t = theme::active();
     let gutter_w = 36.0_f32;
+    let indicator_w = 16.0_f32;
     let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
     let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
-    for line in &lines {
-        let (text_color, bg_color) = match line.kind {
-            DiffLineKind::Added => (t.git_added, Some(t.git_added.gamma_multiply(0.12))),
-            DiffLineKind::Removed => (t.git_removed, Some(t.git_removed.gamma_multiply(0.12))),
-            DiffLineKind::Context => (t.text, None),
+    let hunk_starts = compute_hunk_start_indices(&lines, hunks);
+    let scroll_target_line = scroll_to_hunk.and_then(|idx| hunk_starts.get(idx).copied());
+
+    let line_count = lines.len();
+    let spacing = ui.spacing().item_spacing.y;
+    let row_h = line_h + spacing;
+    let content_top = ui.cursor().top();
+    let clip = ui.clip_rect();
+    let buffer = 5_usize;
+    let first_visible = ((clip.min.y - content_top) / row_h).floor().max(0.0) as usize;
+    let first_visible = first_visible.saturating_sub(buffer);
+    let last_visible = ((clip.max.y - content_top) / row_h).ceil().max(0.0) as usize;
+    let last_visible = (last_visible + buffer).min(line_count);
+
+    if first_visible > 0 {
+        ui.add_space(first_visible as f32 * row_h);
+    }
+
+    for line in lines.iter().take(last_visible).skip(first_visible) {
+        let bg_color = match line.kind {
+            DiffLineKind::Added => Some(t.git_added.gamma_multiply(0.12)),
+            DiffLineKind::Removed => Some(t.git_removed.gamma_multiply(0.12)),
+            DiffLineKind::Context => None,
         };
 
         ui.horizontal(|ui| {
@@ -743,21 +901,93 @@ pub(super) fn render_inline_diff_full(
                 t.overlay0,
             );
 
+            let (ind_rect, _) =
+                ui.allocate_exact_size(egui::vec2(indicator_w, line_h), egui::Sense::hover());
+            let (ind_char, ind_color) = match line.kind {
+                DiffLineKind::Added => ("+", t.git_added),
+                DiffLineKind::Removed => ("\u{2212}", t.git_removed),
+                DiffLineKind::Context => ("", t.overlay0),
+            };
+            if !ind_char.is_empty() {
+                if let Some(bg) = bg_color {
+                    ui.painter().rect_filled(ind_rect, 0.0, bg);
+                }
+                ui.painter().text(
+                    ind_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    ind_char,
+                    font_mono.clone(),
+                    ind_color,
+                );
+            }
+
             let avail = ui.available_width();
             let (content_rect, _) =
                 ui.allocate_exact_size(egui::vec2(avail.max(200.0), line_h), egui::Sense::hover());
             if let Some(bg) = bg_color {
                 ui.painter().rect_filled(content_rect, 0.0, bg);
             }
-            ui.painter().text(
-                egui::pos2(content_rect.min.x + 4.0, content_rect.center().y),
-                egui::Align2::LEFT_CENTER,
+
+            let segments = match line.kind {
+                DiffLineKind::Removed => line
+                    .old_lineno
+                    .and_then(|n| old_highlights.and_then(|h| h.get(n - 1))),
+                _ => line
+                    .new_lineno
+                    .and_then(|n| new_highlights.and_then(|h| h.get(n - 1))),
+            };
+
+            paint_highlighted_line(
+                ui,
+                content_rect,
                 &line.content,
-                font_mono.clone(),
-                text_color,
+                segments.map(|v| v.as_slice()),
+                line.kind,
+                t,
+                &font_mono,
             );
         });
     }
+
+    let remaining = line_count.saturating_sub(last_visible);
+    if remaining > 0 {
+        ui.add_space(remaining as f32 * row_h);
+    }
+
+    if let Some(target_idx) = scroll_target_line {
+        let target_y = content_top + target_idx as f32 * row_h;
+        let target_rect =
+            egui::Rect::from_min_size(egui::pos2(0.0, target_y), egui::vec2(1.0, row_h));
+        ui.scroll_to_rect(target_rect, Some(egui::Align::Center));
+    }
+}
+
+fn compute_sbs_hunk_start_indices(
+    left: &[super::diff_parser::SideBySideLine],
+    right: &[super::diff_parser::SideBySideLine],
+    hunks: &[super::diff_parser::DiffHunk],
+) -> Vec<usize> {
+    let mut starts = Vec::new();
+    for hunk in hunks {
+        let Some(first) = hunk.lines.first() else {
+            continue;
+        };
+        let pos = match first.kind {
+            DiffLineKind::Removed => left
+                .iter()
+                .position(|l| l.lineno == first.old_lineno && l.kind == DiffLineKind::Removed),
+            DiffLineKind::Added => right
+                .iter()
+                .position(|r| r.lineno == first.new_lineno && r.kind == DiffLineKind::Added),
+            DiffLineKind::Context => left
+                .iter()
+                .position(|l| l.lineno == first.old_lineno && l.kind == DiffLineKind::Context),
+        };
+        if let Some(idx) = pos {
+            starts.push(idx);
+        }
+    }
+    starts
 }
 
 pub(super) fn render_side_by_side_diff(
@@ -765,6 +995,9 @@ pub(super) fn render_side_by_side_diff(
     old_content: &str,
     new_content: &str,
     hunks: &[super::diff_parser::DiffHunk],
+    old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    scroll_to_hunk: Option<usize>,
 ) {
     use super::diff_parser::{build_full_diff_lines, build_side_by_side_lines};
 
@@ -775,6 +1008,7 @@ pub(super) fn render_side_by_side_diff(
     let total_w = ui.available_width();
     let half_w = (total_w / 2.0 - 1.0).max(100.0);
     let gutter_w = 36.0_f32;
+    let indicator_w = 16.0_f32;
     let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
     let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
@@ -807,29 +1041,69 @@ pub(super) fn render_side_by_side_diff(
     let lay = SbsLayout {
         panel_w: half_w,
         gutter_w,
+        indicator_w,
         line_h,
         font_mono: &font_mono,
         gutter_font: &gutter_font,
     };
-    for i in 0..left_lines.len() {
+
+    let sbs_hunk_starts = compute_sbs_hunk_start_indices(&left_lines, &right_lines, hunks);
+    let scroll_target_line = scroll_to_hunk.and_then(|idx| sbs_hunk_starts.get(idx).copied());
+
+    let line_count = left_lines.len();
+    let spacing = ui.spacing().item_spacing.y;
+    let row_h = line_h + spacing;
+    let content_top = ui.cursor().top();
+    let clip = ui.clip_rect();
+    let buffer = 5_usize;
+    let first_visible = ((clip.min.y - content_top) / row_h).floor().max(0.0) as usize;
+    let first_visible = first_visible.saturating_sub(buffer);
+    let last_visible = ((clip.max.y - content_top) / row_h).ceil().max(0.0) as usize;
+    let last_visible = (last_visible + buffer).min(line_count);
+
+    if first_visible > 0 {
+        ui.add_space(first_visible as f32 * row_h);
+    }
+
+    for i in first_visible..last_visible {
         let left = &left_lines[i];
         let right = &right_lines[i];
 
+        let left_segs = left
+            .lineno
+            .and_then(|n| old_highlights.and_then(|h| h.get(n - 1)));
+        let right_segs = right
+            .lineno
+            .and_then(|n| new_highlights.and_then(|h| h.get(n - 1)));
+
         ui.horizontal(|ui| {
-            render_sbs_cell(ui, left, &lay, t);
+            render_sbs_cell(ui, left, &lay, t, left_segs.map(|v| v.as_slice()));
 
             let (sep_rect, _) =
                 ui.allocate_exact_size(egui::vec2(2.0, line_h), egui::Sense::hover());
             ui.painter().rect_filled(sep_rect, 0.0, t.surface2);
 
-            render_sbs_cell(ui, right, &lay, t);
+            render_sbs_cell(ui, right, &lay, t, right_segs.map(|v| v.as_slice()));
         });
+    }
+
+    let remaining = line_count.saturating_sub(last_visible);
+    if remaining > 0 {
+        ui.add_space(remaining as f32 * row_h);
+    }
+
+    if let Some(target_idx) = scroll_target_line {
+        let target_y = content_top + target_idx as f32 * row_h;
+        let target_rect =
+            egui::Rect::from_min_size(egui::pos2(0.0, target_y), egui::vec2(1.0, row_h));
+        ui.scroll_to_rect(target_rect, Some(egui::Align::Center));
     }
 }
 
 struct SbsLayout<'a> {
     panel_w: f32,
     gutter_w: f32,
+    indicator_w: f32,
     line_h: f32,
     font_mono: &'a egui::FontId,
     gutter_font: &'a egui::FontId,
@@ -840,17 +1114,16 @@ fn render_sbs_cell(
     line: &super::diff_parser::SideBySideLine,
     lay: &SbsLayout,
     t: &theme::Theme,
+    segments: Option<&[(egui::Color32, String)]>,
 ) {
-    use super::diff_parser::DiffLineKind;
-
-    let (text_color, bg_color) = match line.kind {
-        DiffLineKind::Added => (t.git_added, Some(t.git_added.gamma_multiply(0.12))),
-        DiffLineKind::Removed => (t.git_removed, Some(t.git_removed.gamma_multiply(0.12))),
+    let bg_color = match line.kind {
+        DiffLineKind::Added => Some(t.git_added.gamma_multiply(0.12)),
+        DiffLineKind::Removed => Some(t.git_removed.gamma_multiply(0.12)),
         DiffLineKind::Context => {
             if line.content.is_none() {
-                (t.overlay0, Some(t.surface0))
+                Some(t.surface0)
             } else {
-                (t.text, None)
+                None
             }
         }
     };
@@ -866,18 +1139,45 @@ fn render_sbs_cell(
         t.overlay0,
     );
 
-    let content_w = (lay.panel_w - lay.gutter_w).max(50.0);
+    let (ind_rect, _) = ui.allocate_exact_size(
+        egui::vec2(lay.indicator_w, lay.line_h),
+        egui::Sense::hover(),
+    );
+    let (ind_char, ind_color) = match line.kind {
+        DiffLineKind::Added => ("+", t.git_added),
+        DiffLineKind::Removed => ("\u{2212}", t.git_removed),
+        DiffLineKind::Context => ("", t.overlay0),
+    };
+    if !ind_char.is_empty() {
+        if let Some(bg) = bg_color {
+            ui.painter().rect_filled(ind_rect, 0.0, bg);
+        }
+        ui.painter().text(
+            ind_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            ind_char,
+            lay.font_mono.clone(),
+            ind_color,
+        );
+    }
+
+    let content_w = (lay.panel_w - lay.gutter_w - lay.indicator_w).max(50.0);
     let (content_rect, _) =
         ui.allocate_exact_size(egui::vec2(content_w, lay.line_h), egui::Sense::hover());
     if let Some(bg) = bg_color {
         ui.painter().rect_filled(content_rect, 0.0, bg);
     }
     let display = line.content.as_deref().unwrap_or("");
-    ui.painter().text(
-        egui::pos2(content_rect.min.x + 4.0, content_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        display,
-        lay.font_mono.clone(),
-        text_color,
-    );
+
+    if line.content.is_some() {
+        paint_highlighted_line(
+            ui,
+            content_rect,
+            display,
+            segments,
+            line.kind,
+            t,
+            lay.font_mono,
+        );
+    }
 }

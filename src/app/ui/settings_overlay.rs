@@ -39,6 +39,7 @@ impl App {
                     }
 
                     egui::ScrollArea::vertical()
+                        .id_source("settings_main_scroll")
                         .max_height(dialog_h - 60.0)
                         .show(ui, |ui| {
                             ui.add_space(theme::SP_4);
@@ -150,6 +151,7 @@ impl App {
                             ui.add_space(theme::SP_2);
                             let current = self.settings.theme_id;
                             egui::ScrollArea::vertical()
+                                .id_source("settings_theme_scroll")
                                 .max_height(160.0)
                                 .show(ui, |ui| {
                                     let swatch_outer_w = 52.0 + theme::SP_2 * 2.0;
@@ -538,6 +540,7 @@ impl App {
                     ui.add_space(theme::SP_2);
 
                     egui::ScrollArea::vertical()
+                        .id_source("shortcuts_scroll")
                         .max_height(dialog_h - 60.0)
                         .show(ui, |ui| {
                             let t = theme::active();

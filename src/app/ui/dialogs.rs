@@ -460,6 +460,7 @@ impl App {
                         let scroll_h = (dialog_h - 120.0).max(60.0);
                         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                         egui::ScrollArea::horizontal()
+                            .id_source("quick_switcher_scroll")
                             .min_scrolled_height(scroll_h)
                             .max_height(scroll_h)
                             .show(ui, |ui| {

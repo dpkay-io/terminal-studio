@@ -723,15 +723,45 @@ impl eframe::App for App {
 
             // Drain completed diff results and update pending FileDiff panes
             let diff_results = self.workers.git_worker.take_diff_results();
-            for (full_path, old_content, new_content, raw_diff) in diff_results {
-                let hunks = diff_parser::parse_diff(&raw_diff);
-                if let Some(pane_id) = self.pending_diff_panes.remove(&full_path) {
+            for dr in diff_results {
+                let hunks = diff_parser::parse_diff(&dr.raw_diff);
+                if let Some(pane_id) = self.pending_diff_panes.remove(&dr.path) {
                     if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                         if let PaneContent::FileDiff(ref mut d) = pane.content {
-                            d.old_content = old_content;
-                            d.new_content = new_content;
+                            d.old_content = dr.old_content;
+                            d.new_content = dr.new_content;
                             d.hunks = hunks;
+                            d.old_highlights = dr.old_highlights;
+                            d.new_highlights = dr.new_highlights;
+                            d.highlight_theme = dr.highlight_theme;
                         }
+                    }
+                }
+            }
+
+            // Recompute diff syntax highlights when theme changed since they were computed
+            let current_theme = theme::active().id;
+            for pane in &mut self.pane_state.panes {
+                if let PaneContent::FileDiff(ref mut d) = pane.content {
+                    if d.highlight_theme != current_theme
+                        && (d.old_highlights.is_some() || d.new_highlights.is_some())
+                    {
+                        let syntax = crate::syntax::find_syntax_for_file(&d.path);
+                        d.old_highlights = syntax.and_then(|syn| {
+                            if d.old_content.is_empty() {
+                                None
+                            } else {
+                                Some(crate::syntax::highlighted_lines(&d.old_content, syn))
+                            }
+                        });
+                        d.new_highlights = syntax.and_then(|syn| {
+                            if d.new_content.is_empty() {
+                                None
+                            } else {
+                                Some(crate::syntax::highlighted_lines(&d.new_content, syn))
+                            }
+                        });
+                        d.highlight_theme = current_theme;
                     }
                 }
             }
@@ -1230,7 +1260,7 @@ impl App {
                                                 let tab_hover_t =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new(("right_tab_hover", 0usize)),
+                                                        self.vp_id("right_tab_hover").with(0usize),
                                                         false,
                                                     );
                                                 let tab_color = if is_active_tab {
@@ -1252,7 +1282,7 @@ impl App {
                                                 let _ =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new(("right_tab_hover", 0usize)),
+                                                        self.vp_id("right_tab_hover").with(0usize),
                                                         resp.hovered(),
                                                     );
                                                 if resp.clicked() {
@@ -1287,7 +1317,7 @@ impl App {
                                                 let tab_hover_t =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new(("right_tab_hover", 1usize)),
+                                                        self.vp_id("right_tab_hover").with(1usize),
                                                         false,
                                                     );
                                                 let tab_color = if is_active_tab {
@@ -1308,7 +1338,7 @@ impl App {
                                                 let _ =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new(("right_tab_hover", 1usize)),
+                                                        self.vp_id("right_tab_hover").with(1usize),
                                                         resp.hovered(),
                                                     );
                                                 if resp.clicked() {
@@ -1345,13 +1375,11 @@ impl App {
                                                 let is_active =
                                                     active_tab == RightTab::Markdown(path.clone());
                                                 let tab_index = 2 + md_idx;
+                                                let md_tab_id = self.vp_id("right_tab_hover").with(tab_index);
                                                 let tab_hover_t =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new((
-                                                            "right_tab_hover",
-                                                            tab_index,
-                                                        )),
+                                                        md_tab_id,
                                                         false,
                                                     );
                                                 let tab_color = if is_active {
@@ -1372,10 +1400,7 @@ impl App {
                                                 let _ =
                                                     crate::app::ui::animation::animated_hover(
                                                         ui.ctx(),
-                                                        egui::Id::new((
-                                                            "right_tab_hover",
-                                                            tab_index,
-                                                        )),
+                                                        md_tab_id,
                                                         resp.hovered(),
                                                     );
                                                 if resp.clicked() {
@@ -1691,7 +1716,9 @@ impl App {
                                             .as_deref()
                                             .map(|s| s.as_str())
                                             .unwrap_or("(file not found)");
-                                        render_markdown(ui, content);
+                                        ui.push_id("right_panel_md", |ui| {
+                                            render_markdown(ui, content);
+                                        });
                                     }
                                 }
                                 });
@@ -2878,7 +2905,7 @@ impl App {
                                         if let Some(geo) = &self.active_term_geo {
                                             if geo.rect.contains(*pos) {
                                                 self.context_menu_pos = Some(*pos);
-                                                let popup_id = egui::Id::new("term_context_menu");
+                                                let popup_id = self.vp_id("term_context_menu");
                                                 ui.memory_mut(|m| m.open_popup(popup_id));
                                             }
                                         }
@@ -3117,7 +3144,7 @@ impl App {
 
                 // ── Terminal right-click context menu ─────────────────────
                 {
-                    let popup_id = egui::Id::new("term_context_menu");
+                    let popup_id = self.vp_id("term_context_menu");
                     let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
                     if !popup_open {
                         self.context_menu_pos = None;
@@ -4230,6 +4257,10 @@ impl App {
                             new_content: String::new(),
                             hunks: Vec::new(),
                             diff_mode: self.settings.diff_view_mode,
+                            current_hunk: 0,
+                            old_highlights: None,
+                            new_highlights: None,
+                            highlight_theme: theme::active().id,
                         }),
                         manual_width: None,
                         last_size: (0, 0),

@@ -155,7 +155,7 @@ impl App {
 
                                         let resp = ui_kit::list_item(
                                             ui,
-                                            egui::Id::new(("cmd_item", idx)),
+                                            egui::Id::new(("cmd_item", entry.action)),
                                             item_w,
                                             is_selected,
                                             |painter, row_rect| {

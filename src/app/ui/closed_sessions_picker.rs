@@ -160,6 +160,7 @@ impl App {
                             );
                         } else {
                             egui::ScrollArea::vertical()
+                                .id_source("closed_sessions_scroll")
                                 .max_height(dialog_h - 60.0)
                                 .show(ui, |ui| {
                                     for (list_idx, &record_idx) in filtered.iter().enumerate() {

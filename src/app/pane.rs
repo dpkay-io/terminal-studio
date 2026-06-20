@@ -55,6 +55,10 @@ pub(super) struct FileDiffState {
     pub(super) new_content: String,
     pub(super) hunks: Vec<DiffHunk>,
     pub(super) diff_mode: DiffViewMode,
+    pub(super) current_hunk: usize,
+    pub(super) old_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
+    pub(super) new_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
+    pub(super) highlight_theme: crate::theme::ThemeId,
 }
 
 #[derive(Clone, Debug)]
@@ -203,6 +207,10 @@ mod tests {
             new_content: "+added line".to_string(),
             hunks: Vec::new(),
             diff_mode: DiffViewMode::Inline,
+            current_hunk: 0,
+            old_highlights: None,
+            new_highlights: None,
+            highlight_theme: crate::theme::active().id,
         });
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),

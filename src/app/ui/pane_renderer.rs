@@ -12,6 +12,20 @@ use crate::syntax;
 use crate::theme;
 use crate::ui_kit;
 
+fn text_fingerprint(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
+#[derive(Clone)]
+struct SyntaxGalleyCache {
+    text_hash: u64,
+    theme_id: crate::theme::ThemeId,
+    galley: std::sync::Arc<egui::Galley>,
+}
+
 /// Actions emitted by the 3-dot context menu on split panes.
 pub(in crate::app) enum PaneContextAction {
     MoveToTab(u32),
@@ -53,6 +67,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub flash: &'a crate::app::feedback::FlashManager,
     pub text_search: &'a mut crate::search::TextSearchState,
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
+    pub diff_hunk_navigations: &'a mut Vec<(u32, usize)>,
     pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
@@ -77,36 +92,42 @@ pub(in crate::app) fn render_node(
 
             let content_rect = rect;
 
-            ui.allocate_ui_at_rect(content_rect, |ui| match &pane.content {
-                PaneContent::Terminal(sid) => {
-                    render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
-                }
-                PaneContent::DeferredTerminal { .. } => {
-                    ui.painter()
-                        .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                }
-                PaneContent::FileEditor(ed) => {
-                    render_file_editor_leaf(ui, ed, pane_id, rctx);
-                }
-                PaneContent::FileDiff(d) => {
-                    if let Some(new_mode) = render_file_diff_leaf(ui, d, pane_id, rctx) {
-                        rctx.diff_mode_changes.push((pane_id, new_mode));
+            ui.allocate_ui_at_rect(content_rect, |ui| {
+                ui.push_id(pane_id, |ui| match &pane.content {
+                    PaneContent::Terminal(sid) => {
+                        render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
                     }
-                }
-                PaneContent::NoteEditor(ne) => {
-                    render_note_editor_leaf(ui, ne, pane_id, rctx);
-                }
-                PaneContent::ConflictResolver(ref state) => {
-                    let conflict_action =
-                        super::conflict_resolver::render_conflict_resolver(ui, state);
-                    if let Some(ca) = conflict_action {
-                        rctx.pane_context_actions
-                            .push(PaneContextAction::ConflictResolve {
-                                pane_id,
-                                action: ca,
-                            });
+                    PaneContent::DeferredTerminal { .. } => {
+                        ui.painter()
+                            .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
                     }
-                }
+                    PaneContent::FileEditor(ed) => {
+                        render_file_editor_leaf(ui, ed, pane_id, rctx);
+                    }
+                    PaneContent::FileDiff(d) => {
+                        let result = render_file_diff_leaf(ui, d, pane_id, rctx);
+                        if let Some(new_mode) = result.mode_change {
+                            rctx.diff_mode_changes.push((pane_id, new_mode));
+                        }
+                        if let Some(hunk_idx) = result.hunk_navigation {
+                            rctx.diff_hunk_navigations.push((pane_id, hunk_idx));
+                        }
+                    }
+                    PaneContent::NoteEditor(ne) => {
+                        render_note_editor_leaf(ui, ne, pane_id, rctx);
+                    }
+                    PaneContent::ConflictResolver(ref state) => {
+                        let conflict_action =
+                            super::conflict_resolver::render_conflict_resolver(ui, state);
+                        if let Some(ca) = conflict_action {
+                            rctx.pane_context_actions
+                                .push(PaneContextAction::ConflictResolve {
+                                    pane_id,
+                                    action: ca,
+                                });
+                        }
+                    }
+                });
             });
 
             // Focus border for split panes — animated fade in/out
@@ -659,26 +680,45 @@ fn render_file_editor_leaf(
                         let gutter_w = (digits as f32 + 1.5) * char_w;
                         let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
+                        let gutter_total_h = theme::SP_1 + line_count as f32 * line_h;
                         ui.horizontal_top(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
+
+                            // Virtual line-number gutter: allocate full height,
+                            // paint only visible numbers.
                             ui.vertical(|ui| {
                                 ui.set_min_width(gutter_w);
-                                ui.add_space(theme::SP_1);
-                                for n in 1..=line_count {
-                                    let num_str = format!("{:>width$}", n, width = digits);
-                                    ui.add_sized(
-                                        egui::vec2(gutter_w, line_h),
-                                        egui::Label::new(
-                                            egui::RichText::new(num_str)
-                                                .monospace()
-                                                .color(theme::active().overlay0),
-                                        ),
+                                let (gutter_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(gutter_w, gutter_total_h),
+                                    egui::Sense::hover(),
+                                );
+                                let clip = ui.clip_rect();
+                                let base_y = gutter_rect.min.y + theme::SP_1;
+                                let first =
+                                    ((clip.min.y - base_y) / line_h).floor().max(0.0) as usize;
+                                let last = ((clip.max.y - base_y) / line_h)
+                                    .ceil()
+                                    .min(line_count as f32)
+                                    as usize;
+                                let gutter_font = egui::FontId::monospace(
+                                    ui.style().text_styles[&egui::TextStyle::Monospace].size,
+                                );
+                                let gutter_color = theme::active().overlay0;
+                                for n in (first + 1)..=(last.min(line_count)) {
+                                    let y = base_y + (n - 1) as f32 * line_h + line_h / 2.0;
+                                    ui.painter().text(
+                                        egui::pos2(gutter_rect.max.x - 4.0, y),
+                                        egui::Align2::RIGHT_CENTER,
+                                        format!("{:>width$}", n, width = digits),
+                                        gutter_font.clone(),
+                                        gutter_color,
                                     );
                                 }
                             });
+
                             let sep_rect = ui
                                 .allocate_exact_size(
-                                    egui::vec2(1.0, line_h * line_count as f32 + 4.0),
+                                    egui::vec2(1.0, gutter_total_h),
                                     egui::Sense::hover(),
                                 )
                                 .0;
@@ -687,9 +727,30 @@ fn render_file_editor_leaf(
                             ui.add_space(theme::SP_2);
 
                             if let Some(syn) = maybe_syntax {
+                                let cache_id = egui::Id::new(("syn_galley_cache", pane_id));
                                 let mut layouter = |ui: &egui::Ui, s: &str, wrap_width: f32| {
+                                    let hash = text_fingerprint(s);
+                                    let current_theme = theme::active().id;
+                                    let cached: Option<SyntaxGalleyCache> =
+                                        ui.ctx().data(|d| d.get_temp(cache_id));
+                                    if let Some(c) = cached {
+                                        if c.text_hash == hash && c.theme_id == current_theme {
+                                            return c.galley;
+                                        }
+                                    }
                                     let job = syntax::highlight_layout_job(ui, s, syn, wrap_width);
-                                    ui.fonts(|f| f.layout_job(job))
+                                    let galley = ui.fonts(|f| f.layout_job(job));
+                                    ui.ctx().data_mut(|d| {
+                                        d.insert_temp(
+                                            cache_id,
+                                            SyntaxGalleyCache {
+                                                text_hash: hash,
+                                                theme_id: current_theme,
+                                                galley: galley.clone(),
+                                            },
+                                        )
+                                    });
+                                    galley
                                 };
                                 ui.add(
                                     egui::TextEdit::multiline(text)
@@ -804,12 +865,17 @@ fn render_note_editor_leaf(
     }
 }
 
+struct DiffLeafResult {
+    mode_change: Option<super::super::diff_parser::DiffViewMode>,
+    hunk_navigation: Option<usize>,
+}
+
 fn render_file_diff_leaf(
     ui: &mut egui::Ui,
     d: &super::super::pane::FileDiffState,
     pane_id: u32,
     rctx: &mut RenderCtx<'_>,
-) -> Option<super::super::diff_parser::DiffViewMode> {
+) -> DiffLeafResult {
     let pane_rect = ui.max_rect();
     ui.painter()
         .rect_filled(pane_rect, 0.0, theme::active().bg_term);
@@ -823,21 +889,16 @@ fn render_file_diff_leaf(
     });
     ui.separator();
 
-    let mode_change = super::super::git_diff::render_diff_toolbar(ui, d.diff_mode);
+    let toolbar =
+        super::super::git_diff::render_diff_toolbar(ui, d.diff_mode, d.hunks.len(), d.current_hunk);
     ui.separator();
 
     let is_focused = rctx.focused_pane_id == Some(pane_id);
-    let scroll_target = if is_focused {
-        rctx.text_search.current_match().map(|m| m.line)
-    } else {
-        None
-    };
 
     egui::ScrollArea::both()
         .id_source(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
-            let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
             match d.diff_mode {
                 super::super::diff_parser::DiffViewMode::Inline => {
                     super::super::git_diff::render_inline_diff_full(
@@ -845,6 +906,9 @@ fn render_file_diff_leaf(
                         &d.old_content,
                         &d.new_content,
                         &d.hunks,
+                        d.old_highlights.as_deref(),
+                        d.new_highlights.as_deref(),
+                        toolbar.scroll_to_hunk,
                     );
                 }
                 super::super::diff_parser::DiffViewMode::SideBySide => {
@@ -853,14 +917,23 @@ fn render_file_diff_leaf(
                         &d.old_content,
                         &d.new_content,
                         &d.hunks,
+                        d.old_highlights.as_deref(),
+                        d.new_highlights.as_deref(),
+                        toolbar.scroll_to_hunk,
                     );
                 }
             }
-            if let Some(target_line) = scroll_target {
-                let target_y = target_line as f32 * line_h;
-                let scroll_rect =
-                    egui::Rect::from_min_size(egui::pos2(0.0, target_y), egui::vec2(1.0, line_h));
-                ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+            if is_focused {
+                if let Some(m) = rctx.text_search.current_match() {
+                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                    let spacing = ui.spacing().item_spacing.y;
+                    let target_y = m.line as f32 * (line_h + spacing);
+                    let scroll_rect = egui::Rect::from_min_size(
+                        egui::pos2(0.0, target_y),
+                        egui::vec2(1.0, line_h),
+                    );
+                    ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+                }
             }
         });
 
@@ -868,7 +941,10 @@ fn render_file_diff_leaf(
         render_text_search_bar(ui, pane_rect, &d.new_content, rctx.text_search);
     }
 
-    mode_change
+    DiffLeafResult {
+        mode_change: toolbar.mode_change,
+        hunk_navigation: toolbar.scroll_to_hunk,
+    }
 }
 
 impl App {
@@ -944,6 +1020,7 @@ impl App {
                 (t, s)
             };
             let mut diff_mode_changes = Vec::new();
+            let mut diff_hunk_navigations: Vec<(u32, usize)> = Vec::new();
             let mut scrollbar_clear_restore = Vec::new();
             let mut scrollbar_dragging = false;
             let mut rctx = RenderCtx {
@@ -971,6 +1048,7 @@ impl App {
                 flash: &self.flash,
                 text_search: &mut self.text_search,
                 diff_mode_changes: &mut diff_mode_changes,
+                diff_hunk_navigations: &mut diff_hunk_navigations,
                 drag_state: &mut self.drag_state,
                 scrollbar_clear_restore: &mut scrollbar_clear_restore,
                 scrollbar_dragging: &mut scrollbar_dragging,
@@ -996,6 +1074,14 @@ impl App {
                 }
                 self.settings.diff_view_mode = new_mode;
                 self.settings.save();
+            }
+
+            for (pane_id, hunk_idx) in diff_hunk_navigations {
+                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                    if let PaneContent::FileDiff(ref mut d) = pane.content {
+                        d.current_hunk = hunk_idx;
+                    }
+                }
             }
         }
 

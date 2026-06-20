@@ -163,10 +163,15 @@ impl App {
             workspaces.retain(|w| w.name.to_lowercase().contains(&search_filter));
         }
 
+        let outer_w = ui.available_width();
+        ui.spacing_mut().scroll.bar_width = 0.0;
+        ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+        ui.spacing_mut().scroll.floating_width = 0.0;
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
+                ui.set_min_width(outer_w);
+                ui.set_max_width(outer_w);
                 ui.spacing_mut().item_spacing.y = theme::SP_2;
 
                 if has_active_other && search_filter.is_empty() {

@@ -46,9 +46,19 @@ enum Job {
     },
 }
 
+pub(super) struct DiffResult {
+    pub(super) path: PathBuf,
+    pub(super) old_content: String,
+    pub(super) new_content: String,
+    pub(super) raw_diff: String,
+    pub(super) old_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
+    pub(super) new_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
+    pub(super) highlight_theme: crate::theme::ThemeId,
+}
+
 pub(super) struct WorkerResults {
     pub(super) git: HashMap<PathBuf, (String, String)>,
-    pub(super) diff_results: Vec<(PathBuf, String, String, String)>,
+    pub(super) diff_results: Vec<DiffResult>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
     pub(super) commit_results: Vec<Result<PathBuf, String>>,
     pub(super) push_results: Vec<Result<PathBuf, String>>,
@@ -153,12 +163,32 @@ impl GitWorker {
                                 let new_content = std::fs::read_to_string(cwd.join(&rel_path))
                                     .unwrap_or_default();
                                 let full_path = cwd.join(&rel_path);
-                                results_bg.lock().diff_results.push((
-                                    full_path,
+
+                                let syntax = crate::syntax::find_syntax_for_file(&full_path);
+                                let old_highlights = syntax.and_then(|syn| {
+                                    if old_content.is_empty() {
+                                        None
+                                    } else {
+                                        Some(crate::syntax::highlighted_lines(&old_content, syn))
+                                    }
+                                });
+                                let new_highlights = syntax.and_then(|syn| {
+                                    if new_content.is_empty() {
+                                        None
+                                    } else {
+                                        Some(crate::syntax::highlighted_lines(&new_content, syn))
+                                    }
+                                });
+
+                                results_bg.lock().diff_results.push(DiffResult {
+                                    path: full_path,
                                     old_content,
                                     new_content,
                                     raw_diff,
-                                ));
+                                    old_highlights,
+                                    new_highlights,
+                                    highlight_theme: crate::theme::active().id,
+                                });
                             }
                             Job::UnpushedCommits(cwd) => {
                                 let parse_log = |s: String| -> Vec<(String, String)> {
@@ -366,7 +396,7 @@ impl GitWorker {
         });
     }
 
-    pub(super) fn take_diff_results(&self) -> Vec<(PathBuf, String, String, String)> {
+    pub(super) fn take_diff_results(&self) -> Vec<DiffResult> {
         let mut lock = self.results.lock();
         std::mem::take(&mut lock.diff_results)
     }
