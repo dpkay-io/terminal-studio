@@ -463,6 +463,7 @@ impl App {
                                                         .button("Restart to finish update")
                                                         .clicked()
                                                     {
+                                                        self.save_session();
                                                         crate::updater::restart_app();
                                                     }
                                                 }

@@ -30,6 +30,8 @@ pub(super) enum WatchResult {
     },
     /// A markdown file was removed.
     MdRemoved { dir: PathBuf, path: PathBuf },
+    /// An open editor file was modified on disk (notification only, no content).
+    FileModified(PathBuf),
     /// A directory needs a git refresh (debounced).
     GitRefreshNeeded(PathBuf),
 }
@@ -48,6 +50,7 @@ enum WatchCommand {
         dir: PathBuf,
         commits: Vec<(String, String)>,
     },
+    SyncEditorFiles(HashSet<PathBuf>),
     Shutdown,
 }
 
@@ -99,12 +102,17 @@ impl WatchState {
         let _ = self.cmd_tx.send(WatchCommand::SyncCwds(cwds));
     }
 
+    pub(super) fn sync_editor_files(&self, paths: HashSet<PathBuf>) {
+        let _ = self.cmd_tx.send(WatchCommand::SyncEditorFiles(paths));
+    }
+
     /// Drain all pending results from the worker thread.
-    /// Returns (created_md_paths, removed_md_paths).
-    pub(super) fn drain_results(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    /// Returns (created_md_paths, removed_md_paths, modified_editor_paths).
+    pub(super) fn drain_results(&mut self) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
         let mut created_md = Vec::new();
         let mut removed_md = Vec::new();
         let mut git_refreshes = Vec::new();
+        let mut modified_files = Vec::new();
 
         while let Ok(result) = self.result_rx.try_recv() {
             match result {
@@ -131,6 +139,9 @@ impl WatchState {
                     }
                     removed_md.push(path);
                 }
+                WatchResult::FileModified(path) => {
+                    modified_files.push(path);
+                }
                 WatchResult::GitRefreshNeeded(dir) => {
                     git_refreshes.push(dir);
                 }
@@ -146,7 +157,7 @@ impl WatchState {
             }
         }
 
-        (created_md, removed_md)
+        (created_md, removed_md, modified_files)
     }
 
     pub(super) fn take_pending_git_refreshes(&mut self) -> Vec<PathBuf> {
@@ -242,6 +253,7 @@ fn watcher_thread(
     // Track known md files for modify detection.
     let mut known_md: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
     let mut git_root_cache: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
+    let mut editor_files: HashSet<PathBuf> = HashSet::new();
 
     while alive.load(std::sync::atomic::Ordering::Relaxed) {
         // Process commands (non-blocking drain).
@@ -258,11 +270,13 @@ fn watcher_thread(
                     );
                 }
                 Ok(WatchCommand::ApplyGitResult { dir, diff, status }) => {
-                    // Keep worker-side state consistent (not strictly needed but avoids drift).
                     let _ = (&dir, &diff, &status);
                 }
                 Ok(WatchCommand::ApplyUnpushedResult { dir, commits }) => {
                     let _ = (&dir, &commits);
+                }
+                Ok(WatchCommand::SyncEditorFiles(paths)) => {
+                    editor_files = paths;
                 }
                 Ok(WatchCommand::Shutdown) => return,
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -286,6 +300,7 @@ fn watcher_thread(
                 &mut known_md,
                 debounce,
                 &mut git_root_cache,
+                &editor_files,
             );
         }
 
@@ -406,12 +421,21 @@ fn process_fs_events(
     known_md: &mut HashMap<PathBuf, HashSet<PathBuf>>,
     debounce: Duration,
     git_root_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
+    editor_files: &HashSet<PathBuf>,
 ) {
     let now = Instant::now();
     let mut dirs_needing_refresh: HashSet<PathBuf> = HashSet::new();
+    let mut editor_files_sent: HashSet<PathBuf> = HashSet::new();
 
     for event in events {
         for path in &event.paths {
+            if matches!(&event.kind, EventKind::Modify(_) | EventKind::Create(_))
+                && editor_files.contains(path)
+                && !editor_files_sent.contains(path)
+            {
+                editor_files_sent.insert(path.clone());
+                let _ = result_tx.send(WatchResult::FileModified(path.clone()));
+            }
             // If the event is inside a .git directory, resolve to all CWDs
             // sharing that git root so they all get refreshed.
             let dirs: Vec<PathBuf> = if let Some(mut p) = path.parent().map(PathBuf::from) {

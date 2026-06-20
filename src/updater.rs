@@ -7,6 +7,11 @@ const GITHUB_RELEASES_URL: &str =
     "https://api.github.com/repos/dpkay-io/terminal-studio/releases/latest";
 const CHECK_INTERVAL_SECS: u64 = 86_400; // 24 hours
 const APPLY_UPDATE_FLAG: &str = "--apply-update";
+const RESTARTING_FLAG: &str = "--restarting";
+
+pub fn is_restarting() -> bool {
+    std::env::args().any(|a| a == RESTARTING_FLAG)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UpdateStatus {
@@ -449,16 +454,17 @@ pub fn restart_app() -> bool {
     };
     let args: Vec<String> = std::env::args()
         .skip(1)
-        .filter(|a| a != APPLY_UPDATE_FLAG)
+        .filter(|a| a != APPLY_UPDATE_FLAG && a != RESTARTING_FLAG)
         .collect();
     let mut cmd = std::process::Command::new(&exe);
     cmd.args(&args);
+    cmd.arg(RESTARTING_FLAG);
 
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        cmd.creation_flags(DETACHED_PROCESS);
     }
 
     match cmd.spawn() {

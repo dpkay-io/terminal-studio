@@ -269,6 +269,7 @@ impl App {
             file_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
             md_load_results: std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())),
             flash: super::feedback::FlashManager::new(),
+            last_synced_editor_paths: std::collections::HashSet::new(),
             last_click_time: Instant::now(),
             last_click_cell: (0, 0),
             click_count: 0,
@@ -1462,6 +1463,7 @@ impl App {
                         save_error: false,
                         workspace_id: *workspace_id,
                         show_preview: is_md,
+                        stale: false,
                     })
                 }
                 SavedPaneContent::NoteEditor { workspace_id } => {
@@ -1789,6 +1791,7 @@ impl App {
                         save_error: false,
                         workspace_id: self.active_group,
                         show_preview: is_md && self.md_prefer_preview,
+                        stale: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),

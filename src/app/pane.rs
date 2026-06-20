@@ -46,6 +46,8 @@ pub(super) struct FileEditorState {
     pub(super) save_error: bool,
     pub(super) workspace_id: Option<u64>,
     pub(super) show_preview: bool,
+    /// File was modified on disk; re-read needed before next render.
+    pub(super) stale: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -173,6 +175,7 @@ mod tests {
             save_error: false,
             workspace_id: Some(42),
             show_preview: false,
+            stale: false,
         };
         let cloned = state.clone();
         assert_eq!(cloned.path, state.path);
@@ -181,6 +184,7 @@ mod tests {
         assert_eq!(cloned.save_error, state.save_error);
         assert_eq!(cloned.workspace_id, state.workspace_id);
         assert_eq!(cloned.show_preview, state.show_preview);
+        assert_eq!(cloned.stale, state.stale);
     }
 
     #[test]
@@ -200,6 +204,7 @@ mod tests {
             save_error: false,
             workspace_id: None,
             show_preview: false,
+            stale: false,
         });
         let diff = PaneContent::FileDiff(FileDiffState {
             path: PathBuf::from("file.rs"),

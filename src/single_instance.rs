@@ -25,6 +25,36 @@ impl SingleInstanceGuard {
             return Ok(Self::dummy());
         }
 
+        if crate::updater::is_restarting() {
+            const MAX_RETRIES: u32 = 15;
+            const RETRY_DELAY_MS: u64 = 200;
+            for attempt in 1..=MAX_RETRIES {
+                match Self::platform_acquire() {
+                    Ok(guard) => {
+                        if attempt > 1 {
+                            log::info!(
+                                "single_instance: acquired lock on restart attempt {attempt}/{MAX_RETRIES}"
+                            );
+                        }
+                        return Ok(guard);
+                    }
+                    Err(()) if attempt < MAX_RETRIES => {
+                        log::info!(
+                            "single_instance: waiting for old instance to exit ({attempt}/{MAX_RETRIES})"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS));
+                    }
+                    Err(()) => {
+                        log::warn!(
+                            "single_instance: old instance did not exit after {}ms",
+                            MAX_RETRIES as u64 * RETRY_DELAY_MS
+                        );
+                        return Err(());
+                    }
+                }
+            }
+        }
+
         Self::platform_acquire()
     }
 

@@ -519,6 +519,7 @@ mod tests {
                 save_error: false,
                 workspace_id: None,
                 show_preview: false,
+                stale: false,
             }),
         )]);
         let mut state = DragState::new();

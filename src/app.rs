@@ -241,6 +241,9 @@ pub struct App {
     // Flash feedback manager for subtle UI feedback
     flash: feedback::FlashManager,
 
+    // Last set of open editor file paths synced to the watcher thread.
+    last_synced_editor_paths: std::collections::HashSet<PathBuf>,
+
     // Multi-click tracking for double/triple-click selection
     last_click_time: Instant,
     last_click_cell: (u16, u16),
@@ -447,7 +450,9 @@ impl eframe::App for App {
             for (pane_id, content) in results.drain(..) {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                     if let PaneContent::FileEditor(ref mut ed) = pane.content {
-                        ed.content = content;
+                        if !ed.dirty {
+                            ed.content = content;
+                        }
                     }
                 }
             }
@@ -630,9 +635,26 @@ impl eframe::App for App {
             }
         }
 
+        // ── Sync open editor file paths to watcher ───────────────────────
+        if let Some(ws) = &self.watch_state {
+            let editor_paths: std::collections::HashSet<PathBuf> = self
+                .pane_state
+                .panes
+                .iter()
+                .filter_map(|p| match &p.content {
+                    PaneContent::FileEditor(ed) => Some(ed.path.clone()),
+                    _ => None,
+                })
+                .collect();
+            if editor_paths != self.last_synced_editor_paths {
+                ws.sync_editor_files(editor_paths.clone());
+                self.last_synced_editor_paths = editor_paths;
+            }
+        }
+
         // ── Drain watcher results ──────────────────────────────────────────
         if let Some(ws) = &mut self.watch_state {
-            let (created_md, removed_md) = ws.drain_results();
+            let (created_md, removed_md, modified_files) = ws.drain_results();
             for path in created_md {
                 self.shown_md_tabs.insert(path);
             }
@@ -640,6 +662,37 @@ impl eframe::App for App {
                 self.shown_md_tabs.remove(&path);
                 for w in &mut self.extra_windows {
                     w.view.shown_md_tabs.remove(&path);
+                }
+            }
+            for path in &modified_files {
+                for pane in &mut self.pane_state.panes {
+                    if let PaneContent::FileEditor(ref mut ed) = pane.content {
+                        if ed.path == *path && !ed.dirty {
+                            ed.stale = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Reload stale editor files (file was modified on disk) ────────
+        for pane in &mut self.pane_state.panes {
+            if let PaneContent::FileEditor(ref mut ed) = pane.content {
+                if ed.stale {
+                    ed.stale = false;
+                    let pane_id = pane.id;
+                    let path = ed.path.clone();
+                    let results = Arc::clone(&self.file_load_results);
+                    let ctx_clone = ctx.clone();
+                    std::thread::spawn(move || {
+                        if let Ok(bytes) = std::fs::read(&path) {
+                            let content = String::from_utf8(bytes).unwrap_or_else(|e| {
+                                String::from_utf8_lossy(e.as_bytes()).into_owned()
+                            });
+                            results.lock().push((pane_id, content));
+                            ctx_clone.request_repaint();
+                        }
+                    });
                 }
             }
         }
@@ -4122,6 +4175,7 @@ impl App {
                         save_error: false,
                         workspace_id: self.active_group,
                         show_preview: is_md && self.md_prefer_preview,
+                        stale: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4173,6 +4227,7 @@ impl App {
                         save_error: false,
                         workspace_id: self.active_group,
                         show_preview: true,
+                        stale: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4364,6 +4419,7 @@ impl App {
                             save_error: false,
                             workspace_id: self.active_group,
                             show_preview: is_md && self.md_prefer_preview,
+                            stale: false,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
