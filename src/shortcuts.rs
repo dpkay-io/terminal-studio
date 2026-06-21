@@ -470,7 +470,7 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::E), AppAction::ToggleRightSidebar),
             (Shortcut::cs(egui::Key::Backtick), AppAction::FocusTerminal),
             // Tab management
-            (Shortcut::cs(egui::Key::T), AppAction::NewTerminalTab),
+            (Shortcut::cs(egui::Key::N), AppAction::NewTerminalTab),
             (Shortcut::cs(egui::Key::W), AppAction::CloseCurrentPane),
             (Shortcut::cs(egui::Key::Num1), AppAction::SwitchToTab1),
             (Shortcut::cs(egui::Key::Num2), AppAction::SwitchToTab2),
@@ -522,9 +522,11 @@ impl ShortcutRegistry {
                 AppAction::SearchTerminal,
             ),
             // Global search across all sessions
-            (Shortcut::cs(egui::Key::N), AppAction::SearchAllSessions),
+            (Shortcut::cs(egui::Key::T), AppAction::SearchAllSessions),
             // Pane zoom
             (Shortcut::cs(egui::Key::Z), AppAction::ZoomPane),
+            // Reopen closed session
+            (Shortcut::cs(egui::Key::R), AppAction::ReopenClosedSession),
         ]
     }
 
@@ -590,7 +592,11 @@ impl ShortcutRegistry {
             ),
             (
                 "Session",
-                &[AppAction::DuplicateSession, AppAction::CopySelection],
+                &[
+                    AppAction::DuplicateSession,
+                    AppAction::CopySelection,
+                    AppAction::ReopenClosedSession,
+                ],
             ),
             (
                 "Search",

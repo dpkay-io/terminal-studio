@@ -186,6 +186,7 @@ mod tests {
             content: PaneContent::Terminal(id),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         }
     }
 
@@ -514,18 +515,21 @@ mod tests {
             content: PaneContent::Terminal(5),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         });
         state.panes.push(PaneEntry {
             id: 2,
             content: PaneContent::Terminal(5),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         });
         state.panes.push(PaneEntry {
             id: 3,
             content: PaneContent::Terminal(7),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         });
         assert_eq!(state.panes_referencing_session(5), 2);
         assert_eq!(state.panes_referencing_session(7), 1);
@@ -539,12 +543,14 @@ mod tests {
             content: PaneContent::Terminal(5),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         });
         state.panes.push(PaneEntry {
             id: 2,
             content: PaneContent::Terminal(5),
             manual_width: None,
             last_size: (80, 24),
+            labels: vec![],
         });
         assert_eq!(state.panes_referencing_session(5), 2);
         state.panes.retain(|p| p.id != 1);
@@ -568,6 +574,7 @@ mod tests {
             }),
             manual_width: None,
             last_size: (0, 0),
+            labels: vec![],
         }
     }
 

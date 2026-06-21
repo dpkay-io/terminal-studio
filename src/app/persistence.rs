@@ -51,6 +51,8 @@ pub(super) enum SavedPaneContent {
 pub(super) struct SavedPane {
     pub(super) content: SavedPaneContent,
     pub(super) manual_width: Option<f32>,
+    #[serde(default)]
+    pub(super) labels: Vec<u32>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -261,6 +263,7 @@ mod tests {
                 SavedPane {
                     content: SavedPaneContent::Terminal { session_index: 0 },
                     manual_width: None,
+                    labels: vec![],
                 },
                 SavedPane {
                     content: SavedPaneContent::FileEditor {
@@ -270,10 +273,12 @@ mod tests {
                         workspace_id: Some(1),
                     },
                     manual_width: Some(400.0),
+                    labels: vec![],
                 },
                 SavedPane {
                     content: SavedPaneContent::NoteEditor { workspace_id: None },
                     manual_width: None,
+                    labels: vec![],
                 },
             ],
             active_pane_index: Some(1),
@@ -330,5 +335,24 @@ mod tests {
 
         let result2 = serde_json::from_str::<AppSession>("{\"sessions\": 123}");
         assert!(result2.is_err(), "invalid schema should return Err");
+    }
+
+    #[test]
+    fn saved_pane_labels_roundtrip() {
+        let pane = SavedPane {
+            content: SavedPaneContent::Terminal { session_index: 0 },
+            manual_width: None,
+            labels: vec![1, 9, 100],
+        };
+        let json = serde_json::to_string(&pane).unwrap();
+        let loaded: SavedPane = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.labels, vec![1, 9, 100]);
+    }
+
+    #[test]
+    fn saved_pane_labels_default_empty() {
+        let json = r#"{"content":{"Terminal":{"session_index":0}},"manual_width":null}"#;
+        let loaded: SavedPane = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.labels, Vec::<u32>::new());
     }
 }

@@ -98,14 +98,111 @@ impl App {
 
         let session_filter = self.session_search_query.clone();
 
-        // ── Workspace filter dropdown ────────────────────────────────
-        self.render_workspace_filter_dropdown(ui);
+        // ── Filter dropdowns ─────────────────────────────────────────
+        let show_label_filter = self.pane_state.panes.iter().any(|p| !p.labels.is_empty())
+            || self.session_label_filter.is_some();
+        let filters_w = ui.available_width();
+        if show_label_filter {
+            let gap = theme::SP_2;
+            let half_w = (filters_w - gap) / 2.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                self.render_workspace_filter_dropdown(ui, half_w);
+                self.render_label_filter_dropdown(ui, half_w);
+            });
+        } else {
+            self.render_workspace_filter_dropdown(ui, filters_w);
+        }
+        ui.add_space(theme::SP_1);
 
         // ── Session content (global search results or normal list) ───
         if self.show_global_search {
             self.render_global_search_results(ctx, ui, actions);
         } else {
             self.render_normal_session_list(ui, &session_filter, actions);
+        }
+
+        // ── New custom label dialog ──────────────────────────────
+        if let Some(target_pane_id) = self.show_new_label_dialog {
+            // Use egui::Id-keyed booleans to communicate button results out of the closure.
+            let create_id = egui::Id::new("new_label_dialog_create");
+            let cancel_id = egui::Id::new("new_label_dialog_cancel");
+
+            egui::Window::new("New Label")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.new_label_name);
+                    });
+                    ui.add_space(theme::SP_2);
+                    ui.label("Icon:");
+                    ui.horizontal_wrapped(|ui| {
+                        for (i, &icon) in crate::app::labels::CUSTOM_ICON_PALETTE.iter().enumerate()
+                        {
+                            let is_selected = self.new_label_icon_idx == i;
+                            let btn = ui.selectable_label(
+                                is_selected,
+                                egui::RichText::new(icon).size(theme::FONT_HEADING_2),
+                            );
+                            if btn.clicked() {
+                                self.new_label_icon_idx = i;
+                            }
+                        }
+                    });
+                    ui.add_space(theme::SP_3);
+                    ui.horizontal(|ui| {
+                        let can_create = !ui
+                            .data(|d| d.get_temp::<String>(create_id))
+                            .as_deref()
+                            .unwrap_or("")
+                            .is_empty();
+                        let _ = can_create;
+                        if ui.button("Create").clicked() && !self.new_label_name.trim().is_empty() {
+                            ui.data_mut(|d| d.insert_temp(create_id, true));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            ui.data_mut(|d| d.insert_temp(cancel_id, true));
+                        }
+                    });
+                });
+
+            let created = ctx
+                .data_mut(|d| d.remove_temp::<bool>(create_id))
+                .unwrap_or(false);
+            let cancelled = ctx
+                .data_mut(|d| d.remove_temp::<bool>(cancel_id))
+                .unwrap_or(false);
+
+            if created {
+                let name = self.new_label_name.trim().to_string();
+                let icon = crate::app::labels::CUSTOM_ICON_PALETTE
+                    .get(self.new_label_icon_idx)
+                    .unwrap_or(&"\u{25CF}")
+                    .to_string();
+                let id = self
+                    .label_registry
+                    .add_custom(name, icon, theme::active().accent);
+                self.label_registry.save();
+                if let Some(pane) = self
+                    .pane_state
+                    .panes
+                    .iter_mut()
+                    .find(|p| p.id == target_pane_id)
+                {
+                    pane.labels.push(id);
+                }
+                self.save_session();
+                self.show_new_label_dialog = None;
+                self.new_label_name.clear();
+                self.new_label_icon_idx = 0;
+            } else if cancelled {
+                self.show_new_label_dialog = None;
+                self.new_label_name.clear();
+                self.new_label_icon_idx = 0;
+            }
         }
     }
 
@@ -127,13 +224,32 @@ impl App {
                         .size(theme::FONT_UI_MD),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let default_shell = self.configured_shell();
+                    let shortcut_label = self
+                        .shortcut_registry
+                        .find_shortcut(crate::shortcuts::AppAction::NewTerminalTab)
+                        .map(|s| s.label());
                     ui.menu_button(
                         egui::RichText::new("+ New \u{25be}").size(theme::FONT_UI_MD),
                         |ui| {
-                            for shell in shells {
-                                if ui.button(shell.display_name()).clicked() {
-                                    actions.spawn_new_session = Some(shell.clone());
-                                    ui.close_menu();
+                            let label = if let Some(ref key) = shortcut_label {
+                                format!("{}    {}", default_shell.display_name(), key)
+                            } else {
+                                default_shell.display_name().to_string()
+                            };
+                            if ui.button(label).clicked() {
+                                actions.spawn_new_session = Some(default_shell.clone());
+                                ui.close_menu();
+                            }
+                            let others: Vec<_> =
+                                shells.iter().filter(|s| *s != &default_shell).collect();
+                            if !others.is_empty() {
+                                ui.separator();
+                                for shell in others {
+                                    if ui.button(shell.display_name()).clicked() {
+                                        actions.spawn_new_session = Some(shell.clone());
+                                        ui.close_menu();
+                                    }
                                 }
                             }
                             ui.separator();
@@ -159,7 +275,7 @@ impl App {
                         },
                     )
                     .response
-                    .on_hover_text("New terminal (Ctrl+Shift+T)");
+                    .on_hover_text("New terminal");
                     {
                         let (target, visible_count) =
                             if let Some(ws_filter) = self.session_workspace_filter {
@@ -211,7 +327,7 @@ impl App {
     }
 
     /// Render the workspace filter dropdown at the top of the session list.
-    fn render_workspace_filter_dropdown(&mut self, ui: &mut egui::Ui) {
+    fn render_workspace_filter_dropdown(&mut self, ui: &mut egui::Ui, width: f32) {
         let ws_names: Vec<(Option<Option<u64>>, String)> = {
             let mut items: Vec<(Option<Option<u64>>, String)> =
                 vec![(None, "All Workspaces".to_string())];
@@ -237,7 +353,7 @@ impl App {
         };
 
         let t = theme::active();
-        let full_w = ui.available_width();
+        let full_w = width;
         let popup_id = self.vp_id("ws_filter_popup");
         let is_open = ui.memory(|m| m.is_popup_open(popup_id));
 
@@ -312,8 +428,120 @@ impl App {
                 },
             );
         }
+    }
 
-        ui.add_space(theme::SP_1);
+    fn render_label_filter_dropdown(&mut self, ui: &mut egui::Ui, width: f32) {
+        let assigned: std::collections::HashSet<u32> = self
+            .pane_state
+            .panes
+            .iter()
+            .flat_map(|p| p.labels.iter().copied())
+            .collect();
+
+        let selected_label_text = match self.session_label_filter {
+            None => "All Labels".to_string(),
+            Some(id) => self
+                .label_registry
+                .get(id)
+                .map(|l| format!("{} {}", l.icon, l.name))
+                .unwrap_or_else(|| {
+                    self.session_label_filter = None;
+                    "All Labels".to_string()
+                }),
+        };
+
+        let t = theme::active();
+        let full_w = width;
+        let popup_id = self.vp_id("label_filter_popup");
+        let is_open = ui.memory(|m| m.is_popup_open(popup_id));
+
+        let (rect, resp) = ui.allocate_exact_size(
+            egui::vec2(full_w, theme::SEARCH_BAR_H),
+            egui::Sense::click(),
+        );
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+
+        let border_color = if is_open {
+            t.border_focus
+        } else {
+            t.border_subtle
+        };
+        ui.painter().rect_filled(rect, theme::R_SM, t.bg_input);
+        ui.painter().rect_stroke(
+            rect,
+            theme::R_SM,
+            egui::Stroke::new(theme::STROKE_THIN, border_color),
+        );
+
+        let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
+        let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
+        let chevron_galley = ui.fonts(|f| {
+            f.layout_no_wrap(
+                chevron.to_string(),
+                egui::FontId::proportional(theme::FONT_UI_XS),
+                t.fg_muted,
+            )
+        });
+        let chevron_w = chevron_galley.size().x;
+        let chevron_x = inner.right() - chevron_w;
+        let chevron_y = inner.center().y - chevron_galley.size().y / 2.0;
+        ui.painter()
+            .galley(egui::pos2(chevron_x, chevron_y), chevron_galley, t.fg_muted);
+
+        let text_clip =
+            egui::Rect::from_min_max(inner.min, egui::pos2(chevron_x - theme::SP_2, inner.max.y));
+        let text_galley = ui.fonts(|f| {
+            f.layout_no_wrap(
+                selected_label_text,
+                egui::FontId::proportional(theme::FONT_UI_MD),
+                t.text,
+            )
+        });
+        let text_y = inner.center().y - text_galley.size().y / 2.0;
+        ui.painter().with_clip_rect(text_clip).galley(
+            egui::pos2(inner.left(), text_y),
+            text_galley,
+            t.text,
+        );
+
+        if is_open {
+            egui::popup::popup_below_widget(
+                ui,
+                popup_id,
+                &resp,
+                egui::PopupCloseBehavior::CloseOnClick,
+                |ui: &mut egui::Ui| {
+                    ui.set_min_width(full_w - 2.0 * theme::SP_3);
+                    let is_all = self.session_label_filter.is_none();
+                    if ui.selectable_label(is_all, "All Labels").clicked() {
+                        self.session_label_filter = None;
+                    }
+                    let popup_bg = t.base_rgb;
+                    for ldef in self.label_registry.all() {
+                        if !assigned.contains(&ldef.id) {
+                            continue;
+                        }
+                        let is_selected = self.session_label_filter == Some(ldef.id);
+                        let color = theme::ensure_readable(
+                            [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                            popup_bg,
+                        );
+                        let text = format!("{} {}", ldef.icon, ldef.name);
+                        if ui
+                            .selectable_label(is_selected, egui::RichText::new(text).color(color))
+                            .clicked()
+                        {
+                            self.session_label_filter = Some(ldef.id);
+                        }
+                    }
+                },
+            );
+        }
     }
 
     /// Render the global search results list with keyboard navigation.
@@ -560,10 +788,22 @@ impl App {
                         }
                     };
 
-                    if !session_filter.is_empty()
-                        && matcher.fuzzy_match(&label, session_filter).is_none()
-                    {
-                        continue;
+                    if !session_filter.is_empty() {
+                        let label_names: String = pane
+                            .labels
+                            .iter()
+                            .filter_map(|&lid| self.label_registry.get(lid))
+                            .map(|l| l.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let searchable = if label_names.is_empty() {
+                            label.clone()
+                        } else {
+                            format!("{} {}", label, label_names)
+                        };
+                        if matcher.fuzzy_match(&searchable, session_filter).is_none() {
+                            continue;
+                        }
                     }
 
                     let pane_ws =
@@ -571,6 +811,12 @@ impl App {
 
                     if let Some(ws_filter) = self.session_workspace_filter {
                         if pane_ws != ws_filter {
+                            continue;
+                        }
+                    }
+
+                    if let Some(label_filter) = self.session_label_filter {
+                        if !pane.labels.contains(&label_filter) {
                             continue;
                         }
                     }
@@ -682,14 +928,104 @@ impl App {
                         );
                     }
 
-                    // Title text: consistent left padding regardless of workspace bar
-                    let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+                    // ── Label icons ──────────────────────────────────────
                     let effective_btn_w = if close_anim_t > 0.01 {
                         theme::BTN_W
                     } else {
                         0.0
                     };
-                    let clip_max = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
+                    let max_visible_labels: usize = 4;
+                    let label_icon_size = theme::ICON_SM;
+                    let label_gap = theme::SP_1;
+                    let pane_labels = &pane.labels;
+                    let has_overflow = pane_labels.len() > max_visible_labels;
+                    let icons_to_show = if has_overflow {
+                        max_visible_labels - 1
+                    } else {
+                        pane_labels.len()
+                    };
+                    let rendered_slots = icons_to_show + if has_overflow { 1 } else { 0 };
+                    let labels_total_w = if rendered_slots > 0 {
+                        rendered_slots as f32 * (label_icon_size + label_gap) + label_gap
+                    } else {
+                        0.0
+                    };
+                    let labels_right = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
+
+                    if !pane_labels.is_empty() {
+                        let row_bg_rgb = if is_active {
+                            t.surface0_rgb
+                        } else {
+                            t.base_rgb
+                        };
+                        for (i, &lid) in pane_labels.iter().take(icons_to_show).enumerate() {
+                            if let Some(ldef) = self.label_registry.get(lid) {
+                                let x = labels_right - labels_total_w
+                                    + (i as f32) * (label_icon_size + label_gap)
+                                    + label_gap;
+                                let icon_pos = egui::pos2(x, row_rect.center().y);
+                                let color = theme::ensure_readable(
+                                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                                    row_bg_rgb,
+                                );
+                                painter.text(
+                                    icon_pos,
+                                    egui::Align2::LEFT_CENTER,
+                                    &ldef.icon,
+                                    egui::FontId::proportional(label_icon_size),
+                                    color,
+                                );
+                                let icon_rect = egui::Rect::from_min_size(
+                                    egui::pos2(x, row_rect.min.y),
+                                    egui::vec2(label_icon_size + label_gap, row_rect.height()),
+                                );
+                                if ui.rect_contains_pointer(icon_rect) {
+                                    egui::show_tooltip_at_pointer(
+                                        ui.ctx(),
+                                        ui.layer_id(),
+                                        egui::Id::new(("label_tip", pane.id, lid)),
+                                        |ui| {
+                                            ui.label(&ldef.name);
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                        if has_overflow {
+                            let x = labels_right - label_icon_size - label_gap;
+                            painter.text(
+                                egui::pos2(x, row_rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                "\u{2026}",
+                                egui::FontId::proportional(label_icon_size),
+                                theme::active().subtext0,
+                            );
+                            let overflow_rect = egui::Rect::from_min_size(
+                                egui::pos2(x, row_rect.min.y),
+                                egui::vec2(label_icon_size + label_gap, row_rect.height()),
+                            );
+                            if ui.rect_contains_pointer(overflow_rect) {
+                                let remaining: Vec<String> = pane_labels
+                                    .iter()
+                                    .skip(icons_to_show)
+                                    .filter_map(|&lid| self.label_registry.get(lid))
+                                    .map(|l| format!("{} {}", l.icon, l.name))
+                                    .collect();
+                                egui::show_tooltip_at_pointer(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    egui::Id::new(("label_overflow_tip", pane.id)),
+                                    |ui| {
+                                        ui.label(remaining.join("\n"));
+                                    },
+                                );
+                            }
+                        }
+                    }
+
+                    // Title text: consistent left padding regardless of workspace bar
+                    let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+                    let clip_max = labels_right - labels_total_w;
                     let is_being_dragged = matches!(
                         &self.drag_state.payload,
                         Some(crate::app::drag::DragPayload::Session(sid))
@@ -740,6 +1076,79 @@ impl App {
                     } else if resp.clicked() {
                         actions.clicked_sidebar_pane_id = Some(pane.id);
                     }
+
+                    // ── Right-click context menu ────────────────────────
+                    let pane_id = pane.id;
+                    let pane_labels_snapshot = pane.labels.clone();
+                    resp.context_menu(|ui| {
+                        if ui.button("Duplicate").clicked() {
+                            actions.duplicate_session = true;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+
+                        ui.menu_button("Labels", |ui| {
+                            ui.set_min_width(160.0);
+                            let mut current_cat: Option<crate::app::labels::LabelCategory> = None;
+                            for ldef in self.label_registry.all() {
+                                if current_cat.as_ref() != Some(&ldef.category) {
+                                    if current_cat.is_some() {
+                                        ui.separator();
+                                    }
+                                    let header = match &ldef.category {
+                                        crate::app::labels::LabelCategory::Status => "Status",
+                                        crate::app::labels::LabelCategory::Intent => "Intent",
+                                        crate::app::labels::LabelCategory::Priority => "Priority",
+                                        crate::app::labels::LabelCategory::Custom => "Custom",
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(header)
+                                            .size(theme::FONT_UI_XS)
+                                            .strong()
+                                            .color(theme::active().subtext0),
+                                    );
+                                    current_cat = Some(ldef.category.clone());
+                                }
+                                let is_set = pane_labels_snapshot.contains(&ldef.id);
+                                let check = if is_set { "\u{2713} " } else { "    " };
+                                let menu_bg = theme::active().base_rgb;
+                                let color = theme::ensure_readable(
+                                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                                    menu_bg,
+                                );
+                                let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
+                                let btn = ui.button(
+                                    egui::RichText::new(label_text)
+                                        .size(theme::FONT_UI_MD)
+                                        .color(color),
+                                );
+                                if btn.clicked() {
+                                    actions.toggle_label = Some((pane_id, ldef.id));
+                                }
+                            }
+                            ui.separator();
+                            if ui
+                                .button(
+                                    egui::RichText::new("+ New label\u{2026}")
+                                        .size(theme::FONT_UI_MD)
+                                        .color(theme::active().accent),
+                                )
+                                .clicked()
+                            {
+                                actions.show_new_label_for_pane = Some(pane_id);
+                                ui.close_menu();
+                            }
+                        });
+
+                        ui.separator();
+                        if ui
+                            .button(egui::RichText::new("Close").color(theme::active().danger_fg))
+                            .clicked()
+                        {
+                            actions.quit_pane_id = Some(pane_id);
+                            ui.close_menu();
+                        }
+                    });
 
                     // Drag source: start dragging this session row
                     if resp.drag_started() {

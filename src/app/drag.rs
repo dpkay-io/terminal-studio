@@ -299,6 +299,7 @@ mod tests {
                     content,
                     manual_width: None,
                     last_size: (80, 24),
+                    labels: vec![],
                 })
                 .collect(),
             active_pane_id: first_id,

@@ -18,6 +18,10 @@ impl App {
     ) {
         self.process_workspace_actions(ctx, &ws_actions);
         self.process_quit_pane(sess_actions.quit_pane_id);
+        self.process_label_toggle(sess_actions.toggle_label);
+        if let Some(pane_id) = sess_actions.show_new_label_for_pane {
+            self.show_new_label_dialog = Some(pane_id);
+        }
         self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
         // Consume async folder picker result if available
         let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
@@ -185,6 +189,7 @@ impl App {
                     content: PaneContent::Terminal(new_sid),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -316,6 +321,7 @@ impl App {
                     content: PaneContent::Terminal(new_id),
                     manual_width: None,
                     last_size: (cols, rows),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -409,6 +415,7 @@ impl App {
                         content: PaneContent::Terminal(new_id),
                         manual_width: None,
                         last_size: (cols, rows),
+                        labels: vec![],
                     },
                 );
                 self.pane_state.pane_trees.insert(
@@ -429,6 +436,20 @@ impl App {
                     entry.pending_command = Some(cmd);
                 }
             }
+        }
+    }
+
+    fn process_label_toggle(&mut self, toggle: Option<(u32, u32)>) {
+        let Some((pane_id, label_id)) = toggle else {
+            return;
+        };
+        if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+            if let Some(pos) = pane.labels.iter().position(|&l| l == label_id) {
+                pane.labels.remove(pos);
+            } else {
+                pane.labels.push(label_id);
+            }
+            self.save_session();
         }
     }
 }

@@ -85,12 +85,26 @@ fn build_theme(t: &theme::Theme) -> Theme {
     }
 }
 
+fn fallback_extension(ext: &str) -> Option<&'static str> {
+    match ext {
+        "kt" | "kts" => Some("java"),
+        "ts" | "tsx" | "jsx" | "mjs" | "cjs" | "mts" | "cts" => Some("js"),
+        "h" | "hpp" | "hxx" | "cc" | "cxx" => Some("cpp"),
+        "gradle" => Some("groovy"),
+        _ => None,
+    }
+}
+
 pub fn find_syntax_for_file(path: &Path) -> Option<&'static SyntaxReference> {
     let ss = syntax_set();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        let syn = ss.find_syntax_by_extension(ext);
-        if syn.is_some() {
-            return syn;
+        if let Some(syn) = ss.find_syntax_by_extension(ext) {
+            return Some(syn);
+        }
+        if let Some(fallback) = fallback_extension(ext) {
+            if let Some(syn) = ss.find_syntax_by_extension(fallback) {
+                return Some(syn);
+            }
         }
     }
     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
@@ -271,6 +285,75 @@ mod tests {
         let lines = highlighted_lines("fn main() {}\n", syn);
         assert_eq!(lines.len(), 1);
         assert!(!lines[0].is_empty());
+    }
+
+    #[test]
+    fn find_syntax_for_kotlin() {
+        let syn = find_syntax_for_file(&PathBuf::from("Main.kt"));
+        assert!(syn.is_some(), ".kt should fall back to Java");
+    }
+
+    #[test]
+    fn find_syntax_for_kotlin_script() {
+        let syn = find_syntax_for_file(&PathBuf::from("build.gradle.kts"));
+        assert!(syn.is_some(), ".kts should fall back to Java");
+    }
+
+    #[test]
+    fn find_syntax_for_gradle() {
+        let syn = find_syntax_for_file(&PathBuf::from("build.gradle"));
+        assert!(syn.is_some(), ".gradle should fall back to Groovy");
+    }
+
+    #[test]
+    fn find_syntax_for_tsx() {
+        let syn = find_syntax_for_file(&PathBuf::from("App.tsx"));
+        assert!(syn.is_some(), ".tsx should resolve");
+    }
+
+    #[test]
+    fn find_syntax_common_extensions() {
+        let cases = [
+            ("file.rs", true),
+            ("file.py", true),
+            ("file.js", true),
+            ("file.ts", true),
+            ("file.java", true),
+            ("file.c", true),
+            ("file.cpp", true),
+            ("file.h", true),
+            ("file.cs", true),
+            ("file.go", true),
+            ("file.rb", true),
+            ("file.php", true),
+            ("file.swift", false),
+            ("file.sh", true),
+            ("file.bash", true),
+            ("file.json", true),
+            ("file.xml", true),
+            ("file.html", true),
+            ("file.css", true),
+            ("file.sql", true),
+            ("file.md", true),
+            ("file.yaml", true),
+            ("file.yml", true),
+            ("file.toml", false),
+            ("file.kt", true),
+            ("file.kts", true),
+            ("file.mjs", true),
+            ("file.cjs", true),
+            ("Makefile", true),
+            ("Dockerfile", false),
+        ];
+        for (name, expected) in cases {
+            let result = find_syntax_for_file(&PathBuf::from(name));
+            assert_eq!(
+                result.is_some(),
+                expected,
+                "{name}: expected syntax={expected}, got {:?}",
+                result.map(|s| &s.name)
+            );
+        }
     }
 
     #[test]

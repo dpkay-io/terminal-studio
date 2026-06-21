@@ -99,6 +99,7 @@ pub(super) struct PaneEntry {
     pub(super) content: PaneContent,
     pub(super) manual_width: Option<f32>,
     pub(super) last_size: (u16, u16),
+    pub(super) labels: Vec<u32>,
 }
 
 pub(super) struct SessionEntry {

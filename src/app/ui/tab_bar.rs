@@ -107,23 +107,14 @@ impl App {
                                 se: 0.0,
                             };
 
-                            let title_color = match ws_color {
-                                Some(c) => theme::text_on(theme::tinted(
-                                    c,
-                                    if is_active { 0.75 } else { 0.35 },
-                                )),
-                                None => {
-                                    if is_active {
-                                        theme::active().text
-                                    } else {
-                                        // Brighten slightly on hover for inactive tabs
-                                        theme::lerp_color(
-                                            theme::active().subtext0,
-                                            theme::active().subtext1,
-                                            tab_hover_t,
-                                        )
-                                    }
-                                }
+                            let title_color = if is_active {
+                                theme::active().text
+                            } else {
+                                theme::lerp_color(
+                                    theme::active().subtext0,
+                                    theme::active().subtext1,
+                                    tab_hover_t,
+                                )
                             };
 
                             let painter = ui.painter().clone();
@@ -185,14 +176,20 @@ impl App {
                                         0.0
                                     }
                                     + dot_radius;
-                                let dot_color = ws_color
+                                let raw_dot = ws_color
                                     .map(theme::from_rgb)
                                     .unwrap_or(theme::active().accent);
-                                painter.circle_filled(
-                                    egui::pos2(dot_x, tab_rect.center().y),
-                                    dot_radius,
-                                    dot_color,
+                                let tab_bg = theme::active().bg_tab_active;
+                                let dot_color = theme::ensure_term_contrast(raw_dot, tab_bg);
+                                let dot_center = egui::pos2(dot_x, tab_rect.center().y);
+                                let ring_color =
+                                    theme::text_on([tab_bg.r(), tab_bg.g(), tab_bg.b()]);
+                                painter.circle_stroke(
+                                    dot_center,
+                                    dot_radius + 1.0,
+                                    egui::Stroke::new(1.0, ring_color.gamma_multiply(0.35)),
                                 );
+                                painter.circle_filled(dot_center, dot_radius, dot_color);
                             }
 
                             // Flash feedback overlay on tab

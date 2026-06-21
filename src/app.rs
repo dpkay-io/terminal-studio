@@ -30,6 +30,7 @@ mod git_cmd;
 mod git_diff;
 mod git_worker;
 mod input;
+mod labels;
 mod markdown;
 mod multi_window;
 mod pane;
@@ -52,6 +53,7 @@ mod workspace_ui;
 use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, SubdirCache};
 use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
+use labels::LabelRegistry;
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
 use pane::{
@@ -96,6 +98,7 @@ pub struct App {
     workspace_search_query: String,
 
     note_store: NoteStore,
+    label_registry: LabelRegistry,
     notes_panel_ratio: f32,
     notes_panel_collapsed: bool,
 
@@ -185,7 +188,7 @@ pub struct App {
     // Text content search for file editors, notes, diffs (Ctrl+F)
     text_search: crate::search::TextSearchState,
 
-    // Global search across all sessions (Ctrl+Shift+N)
+    // Global search across all sessions (Ctrl+Shift+T)
     show_global_search: bool,
     global_search_query: String,
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
@@ -227,6 +230,12 @@ pub struct App {
 
     // Workspace filter for the session list: None = All, Some(None) = Other, Some(Some(id)) = specific workspace
     session_workspace_filter: Option<Option<u64>>,
+    // Label filter for the session list: None = no filter
+    session_label_filter: Option<labels::LabelId>,
+    // New-label dialog state: Some(pane_id) when open
+    show_new_label_dialog: Option<u32>,
+    new_label_name: String,
+    new_label_icon_idx: usize,
 
     // Pending cross-window focus request set by sidebar click, processed after viewports render.
     pending_window_focus: Option<PendingWindowFocus>,
@@ -2532,10 +2541,12 @@ impl App {
                     } else if i.consume_key(cs, egui::Key::Space) {
                         Some(AppAction::OpenQuickSwitcher)
                     } else if i.consume_key(cs, egui::Key::N) {
-                        Some(AppAction::SearchAllSessions)
+                        Some(AppAction::NewTerminalTab)
                     } else if i.consume_key(cs, egui::Key::Z) {
                         Some(AppAction::ZoomPane)
                     } else if i.consume_key(cs, egui::Key::T) {
+                        Some(AppAction::SearchAllSessions)
+                    } else if i.consume_key(cs, egui::Key::R) {
                         Some(AppAction::ReopenClosedSession)
                     } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
@@ -2624,6 +2635,9 @@ impl App {
                         } else {
                             self.zoomed_pane_id = self.pane_state.active_pane_id;
                         }
+                    }
+                    Some(AppAction::NewTerminalTab) => {
+                        self.deferred_spawn = Some(self.configured_shell());
                     }
                     Some(AppAction::ReopenClosedSession) => {
                         self.show_closed_sessions = !self.show_closed_sessions;
@@ -2720,12 +2734,10 @@ impl App {
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
                                     }
-                                    AppAction::NewTerminalTab => {
-                                        self.deferred_spawn = Some(self.configured_shell());
-                                    }
+                                    AppAction::NewTerminalTab => { /* handled in global shortcuts block above */ }
                                     AppAction::OpenSettings => { /* handled in global shortcuts block above */ }
-                                                    AppAction::ToggleShortcutHelp => { /* handled in global shortcuts block above */ }
-                                                    AppAction::OpenQuickSwitcher => { /* handled in global shortcuts block above */ }
+                                    AppAction::ToggleShortcutHelp => { /* handled in global shortcuts block above */ }
+                                    AppAction::OpenQuickSwitcher => { /* handled in global shortcuts block above */ }
                                     AppAction::CopySelection => {
                                         if let Some(sid) = active_session_id {
                                             if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
@@ -2741,15 +2753,8 @@ impl App {
                                         }
                                     }
                                     AppAction::DuplicateSession => self.deferred_duplicate = true,
-                                    AppAction::FocusSessionSearch => {
-                                        self.show_left_panel = true;
-                                        self.session_search_active = true;
-                                    }
-                                    AppAction::FocusFileSearch => {
-                                        self.show_right_panel = true;
-                                        self.right_tab = RightTab::Directory;
-                                        self.dir_search_active = true;
-                                    }
+                                    AppAction::FocusSessionSearch => { /* handled in global shortcuts block above */ }
+                                    AppAction::FocusFileSearch => { /* handled in global shortcuts block above */ }
                                     AppAction::PreviousTab => {
                                         if nv > 1 {
                                             let cur = self.pane_state.active_pane_id
@@ -3408,6 +3413,7 @@ impl App {
                             content: PaneContent::Terminal(new_sid),
                             manual_width: None,
                             last_size: (cols, rows),
+                            labels: vec![],
                         });
                         // Modify the tree to split the active leaf
                         if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
@@ -3750,6 +3756,7 @@ impl App {
                                 content: PaneContent::Terminal(new_sid),
                                 manual_width: None,
                                 last_size: (cols, rows),
+                                labels: vec![],
                             });
                             if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
                                 tree.split_pane(pid, new_pane_id, split_id, dir);
@@ -4176,6 +4183,7 @@ impl App {
                     }),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4224,6 +4232,7 @@ impl App {
                     }),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4270,6 +4279,7 @@ impl App {
                     }),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4324,6 +4334,7 @@ impl App {
                             }),
                             manual_width: None,
                             last_size: (0, 0),
+                            labels: vec![],
                         });
                         self.pane_state.pane_trees.insert(
                             pane_id,
@@ -4376,6 +4387,7 @@ impl App {
                                     }),
                                     manual_width: None,
                                     last_size: (0, 0),
+                                    labels: vec![],
                                 });
                                 self.pane_state.pane_trees.insert(
                                     pane_id,
@@ -4434,6 +4446,7 @@ impl App {
                         }),
                         manual_width: None,
                         last_size: (0, 0),
+                        labels: vec![],
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -4475,6 +4488,7 @@ impl App {
                 },
                 manual_width: None,
                 last_size: (0, 0),
+                labels: vec![],
             });
             self.pane_state.pane_trees.insert(
                 pane_id,

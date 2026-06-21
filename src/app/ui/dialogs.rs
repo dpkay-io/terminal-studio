@@ -1210,6 +1210,7 @@ impl App {
                         content: PaneContent::Terminal(sid),
                         manual_width: None,
                         last_size: (0, 0),
+                        labels: vec![],
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -1845,6 +1846,7 @@ impl App {
                             content: PaneContent::Terminal(new_id),
                             manual_width: None,
                             last_size: (cols, rows),
+                            labels: vec![],
                         });
                         self.pane_state.pane_trees.insert(
                             pane_id,

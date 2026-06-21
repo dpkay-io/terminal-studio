@@ -20,6 +20,7 @@ use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
 use alacritty_terminal::grid::Dimensions;
 
 use super::drag;
+use super::labels::LabelRegistry;
 use super::multi_window::{ExtraWindow, PendingWindowFocus, SavedExtraWindow, WindowView};
 use super::pane::{
     FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
@@ -171,6 +172,7 @@ impl App {
             workspace_panel_collapsed: false,
             workspace_search_query: String::new(),
             note_store: NoteStore::load(),
+            label_registry: LabelRegistry::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
             show_left_panel: true,
@@ -265,6 +267,10 @@ impl App {
             show_quit_confirm: false,
             quit_confirmed: false,
             session_workspace_filter: None,
+            session_label_filter: None,
+            show_new_label_dialog: None,
+            new_label_name: String::new(),
+            new_label_icon_idx: 0,
             pending_window_focus: None,
             pending_diff_panes: HashMap::new(),
             pending_diff_click: None,
@@ -432,6 +438,7 @@ impl App {
                         content: PaneContent::Terminal(id),
                         manual_width: None,
                         last_size: (cols, rows),
+                        labels: vec![],
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -833,6 +840,7 @@ impl App {
                     content: PaneContent::Terminal(sid),
                     manual_width: None,
                     last_size: (cols, rows),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1088,6 +1096,7 @@ impl App {
                     content: PaneContent::Terminal(sid),
                     manual_width: None,
                     last_size: (cols, rows),
+                    labels: vec![],
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1272,6 +1281,7 @@ impl App {
                 Some(SavedPane {
                     content,
                     manual_width: p.manual_width,
+                    labels: p.labels.clone(),
                 })
             })
             .collect();
@@ -1492,6 +1502,7 @@ impl App {
                 content,
                 manual_width: saved.manual_width,
                 last_size: (0, 0),
+                labels: saved.labels.clone(),
             });
             self.pane_state.pane_trees.insert(
                 pane_id,
@@ -1500,6 +1511,10 @@ impl App {
                     last_size: (0, 0),
                 },
             );
+        }
+
+        for pane in &mut self.pane_state.panes {
+            self.label_registry.strip_orphans(&mut pane.labels);
         }
 
         for pane in &self.pane_state.panes {
@@ -1802,6 +1817,7 @@ impl App {
                     content: PaneContent::Terminal(session_id),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.activate_pane(pane_id);
@@ -1824,6 +1840,7 @@ impl App {
                     }),
                     manual_width: None,
                     last_size: (0, 0),
+                    labels: vec![],
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.activate_pane(pane_id);
@@ -1856,6 +1873,7 @@ impl App {
                         }),
                         manual_width: None,
                         last_size: (0, 0),
+                        labels: vec![],
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.pending_diff_panes.insert(full_path, pane_id);
@@ -1892,6 +1910,7 @@ impl App {
                         }),
                         manual_width: None,
                         last_size: (0, 0),
+                        labels: vec![],
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.activate_pane(pane_id);
