@@ -956,6 +956,7 @@ impl eframe::App for App {
             let builder = egui::ViewportBuilder::default()
                 .with_title(&title)
                 .with_inner_size(inner_size)
+                .with_min_inner_size([theme::MIN_WINDOW_W, theme::MIN_WINDOW_H])
                 .with_decorations(false);
             ctx.show_viewport_immediate(viewport_id, builder, |vp_ctx, _class| {
                 // Swap this extra window's view into App's per-window fields,
@@ -1131,10 +1132,58 @@ impl App {
             .ok();
     }
 
+    fn handle_frameless_resize(ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+            return;
+        }
+
+        let hover_pos = match ctx.input(|i| i.pointer.hover_pos()) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let rect = ctx.screen_rect();
+        if !rect.contains(hover_pos) {
+            return;
+        }
+
+        let b = theme::RESIZE_BORDER;
+        let near_left = hover_pos.x - rect.min.x < b;
+        let near_right = rect.max.x - hover_pos.x < b;
+        let near_bottom = rect.max.y - hover_pos.y < b;
+
+        use egui::viewport::ResizeDirection;
+        let direction = match (near_left, near_right, near_bottom) {
+            (true, _, true) => Some(ResizeDirection::SouthWest),
+            (_, true, true) => Some(ResizeDirection::SouthEast),
+            (true, _, _) => Some(ResizeDirection::West),
+            (_, true, _) => Some(ResizeDirection::East),
+            (_, _, true) => Some(ResizeDirection::South),
+            _ => None,
+        };
+
+        if let Some(dir) = direction {
+            let cursor = match dir {
+                ResizeDirection::South => egui::CursorIcon::ResizeVertical,
+                ResizeDirection::East | ResizeDirection::West => egui::CursorIcon::ResizeHorizontal,
+                ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
+                ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
+                _ => return,
+            };
+            ctx.set_cursor_icon(cursor);
+
+            if ctx.input(|i| i.pointer.any_pressed()) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            }
+        }
+    }
+
     fn render_window_body(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
             return;
         }
+
+        Self::handle_frameless_resize(ctx);
 
         self.render_titlebar(ctx);
 

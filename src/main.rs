@@ -179,6 +179,7 @@ fn main() -> eframe::Result<()> {
 
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1280.0, 800.0])
+        .with_min_inner_size([theme::MIN_WINDOW_W, theme::MIN_WINDOW_H])
         .with_resizable(true)
         .with_decorations(false)
         .with_icon(std::sync::Arc::new(make_icon()));
