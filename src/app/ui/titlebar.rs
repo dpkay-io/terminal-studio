@@ -1,11 +1,18 @@
 use super::super::pane::RightTab;
 use super::super::App;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
 
 impl App {
+    fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
+        match self.shortcut_registry.label_for(action) {
+            Some(label) => format!("{desc} ({label})"),
+            None => desc.to_string(),
+        }
+    }
     pub(in crate::app) fn render_titlebar(&mut self, ctx: &egui::Context) {
         // Request an extra repaint the frame after the window gains focus so that
         // any stale wgpu surface frames (visible as a distorted first frame after
@@ -164,11 +171,16 @@ impl App {
                     if left_resp.clicked() {
                         self.show_left_panel = !self.show_left_panel;
                     }
-                    left_resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
+                    left_resp.on_hover_text(
+                        self.shortcut_tooltip("Toggle sidebar", AppAction::ToggleLeftSidebar),
+                    );
 
                     // Switcher button (after left toggle)
                     {
-                        let hint_text = "Ctrl+Shift+Space";
+                        let hint_text = self
+                            .shortcut_registry
+                            .label_for(AppAction::OpenQuickSwitcher)
+                            .unwrap_or("");
                         let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
@@ -231,7 +243,9 @@ impl App {
                                 self.quick_switcher_search_active = false;
                             }
                         }
-                        sw_resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
+                        sw_resp.on_hover_text(
+                            self.shortcut_tooltip("Switcher", AppAction::OpenQuickSwitcher),
+                        );
                     }
 
                     // Recently Closed Sessions button (macOS, after settings from right)
@@ -260,7 +274,10 @@ impl App {
                                 self.closed_sessions_cache = None;
                             }
                         }
-                        rc_resp.on_hover_text("Recently closed sessions (Ctrl+Shift+T)");
+                        rc_resp.on_hover_text(self.shortcut_tooltip(
+                            "Recently closed sessions",
+                            AppAction::ReopenClosedSession,
+                        ));
                     }
 
                     // Gear / Settings (rightmost on macOS)
@@ -282,7 +299,8 @@ impl App {
                     if gear_mac_resp.clicked() {
                         self.show_settings = !self.show_settings;
                     }
-                    gear_mac_resp.on_hover_text("Settings (Ctrl+Shift+,)");
+                    gear_mac_resp
+                        .on_hover_text(self.shortcut_tooltip("Settings", AppAction::OpenSettings));
 
                     // Right panel toggle (macOS) — just before settings
                     let mac_right_toggle_x = r.max.x - mac_btn_w * 2.0;
@@ -305,13 +323,18 @@ impl App {
                         if right_resp.clicked() {
                             self.show_right_panel = !self.show_right_panel;
                         }
-                        right_resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+                        right_resp.on_hover_text(
+                            self.shortcut_tooltip("Toggle explorer", AppAction::ToggleRightSidebar),
+                        );
                     }
 
                     // Keyboard shortcuts button (macOS) with hint label
                     let mac_kb_btn_x;
                     {
-                        let hint_text = "Ctrl+Shift+/";
+                        let hint_text = self
+                            .shortcut_registry
+                            .label_for(AppAction::ToggleShortcutHelp)
+                            .unwrap_or("");
                         let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
@@ -368,7 +391,12 @@ impl App {
                         if kb_resp.clicked() {
                             self.show_shortcut_help = !self.show_shortcut_help;
                         }
-                        kb_resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
+                        kb_resp.on_hover_text(
+                            self.shortcut_tooltip(
+                                "Keyboard shortcuts",
+                                AppAction::ToggleShortcutHelp,
+                            ),
+                        );
                     }
 
                     // System monitor widget — before keyboard shortcuts
@@ -527,13 +555,18 @@ impl App {
                         if resp.clicked() {
                             self.show_left_panel = !self.show_left_panel;
                         }
-                        resp.on_hover_text("Toggle sidebar (Ctrl+Shift+B)");
+                        resp.on_hover_text(
+                            self.shortcut_tooltip("Toggle sidebar", AppAction::ToggleLeftSidebar),
+                        );
                     }
 
                     // Switcher button (after left toggle)
                     let switcher_end_x;
                     {
-                        let hint_text = "Ctrl+Shift+Space";
+                        let hint_text = self
+                            .shortcut_registry
+                            .label_for(AppAction::OpenQuickSwitcher)
+                            .unwrap_or("");
                         let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
@@ -596,7 +629,9 @@ impl App {
                                 self.quick_switcher_search_active = false;
                             }
                         }
-                        resp.on_hover_text("Switcher (Ctrl+Shift+Space)");
+                        resp.on_hover_text(
+                            self.shortcut_tooltip("Switcher", AppAction::OpenQuickSwitcher),
+                        );
                     }
 
                     // Recently Closed Sessions button (after switcher)
@@ -625,7 +660,10 @@ impl App {
                                 self.closed_sessions_cache = None;
                             }
                         }
-                        rc_resp.on_hover_text("Recently closed sessions (Ctrl+Shift+T)");
+                        rc_resp.on_hover_text(self.shortcut_tooltip(
+                            "Recently closed sessions",
+                            AppAction::ReopenClosedSession,
+                        ));
                     }
 
                     // Gear / Settings button — just before window controls
@@ -649,7 +687,9 @@ impl App {
                         if resp.clicked() {
                             self.show_settings = !self.show_settings;
                         }
-                        resp.on_hover_text("Settings (Ctrl+Shift+,)");
+                        resp.on_hover_text(
+                            self.shortcut_tooltip("Settings", AppAction::OpenSettings),
+                        );
                     }
 
                     // Right panel toggle — just before settings
@@ -673,13 +713,18 @@ impl App {
                         if resp.clicked() {
                             self.show_right_panel = !self.show_right_panel;
                         }
-                        resp.on_hover_text("Toggle explorer (Ctrl+Shift+E)");
+                        resp.on_hover_text(
+                            self.shortcut_tooltip("Toggle explorer", AppAction::ToggleRightSidebar),
+                        );
                     }
 
                     // Keyboard shortcuts button with hint label
                     let kb_btn_x;
                     {
-                        let hint_text = "Ctrl+Shift+/";
+                        let hint_text = self
+                            .shortcut_registry
+                            .label_for(AppAction::ToggleShortcutHelp)
+                            .unwrap_or("");
                         let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
@@ -738,7 +783,12 @@ impl App {
                         if resp.clicked() {
                             self.show_shortcut_help = !self.show_shortcut_help;
                         }
-                        resp.on_hover_text("Keyboard shortcuts (Ctrl+Shift+/)");
+                        resp.on_hover_text(
+                            self.shortcut_tooltip(
+                                "Keyboard shortcuts",
+                                AppAction::ToggleShortcutHelp,
+                            ),
+                        );
                     }
 
                     // System monitor widget — before keyboard shortcuts

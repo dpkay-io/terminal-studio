@@ -302,19 +302,35 @@ impl SessionManager {
         let is_active = Arc::new(AtomicBool::new(false));
         let is_active_for_thread = Arc::clone(&is_active);
 
-        // Spawn the dedicated reader thread
+        // Spawn the dedicated reader thread.
+        // Wrap in catch_unwind so a panic sets `alive = false` instead of
+        // silently leaving the session looking alive but receiving no data.
         let session_clone = Arc::clone(&session);
         let ctx_clone = self.ctx.clone();
+        let alive_for_panic = Arc::clone(&alive);
         thread::Builder::new()
             .name(format!("pty-reader-{}", id))
             .spawn(move || {
-                reader::reader_thread(
-                    reader,
-                    session_clone,
-                    ctx_clone,
-                    alive_for_thread,
-                    is_active_for_thread,
-                )
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    reader::reader_thread(
+                        reader,
+                        session_clone,
+                        ctx_clone,
+                        alive_for_thread,
+                        is_active_for_thread,
+                    )
+                }));
+                if let Err(e) = result {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    log::error!("pty-reader-{id} panicked: {msg}");
+                    alive_for_panic.store(false, std::sync::atomic::Ordering::SeqCst);
+                }
             })?;
 
         Ok((

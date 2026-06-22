@@ -138,7 +138,7 @@ fn reveal_platform(path: &Path) -> std::io::Result<()> {
     std::process::Command::new("explorer")
         .arg("/select,")
         .arg(path)
-        .spawn()
+        .status()
         .map(|_| ())
 }
 
@@ -147,7 +147,7 @@ fn reveal_platform(path: &Path) -> std::io::Result<()> {
     std::process::Command::new("open")
         .arg("-R")
         .arg(path)
-        .spawn()
+        .status()
         .map(|_| ())
 }
 
@@ -164,7 +164,7 @@ fn reveal_platform(path: &Path) -> std::io::Result<()> {
         ])
         .arg(format!("array:string:{uri}"))
         .arg("string:")
-        .spawn();
+        .status();
     match dbus {
         Ok(_) => Ok(()),
         Err(_) => {
@@ -175,7 +175,7 @@ fn reveal_platform(path: &Path) -> std::io::Result<()> {
             };
             std::process::Command::new("xdg-open")
                 .arg(dir)
-                .spawn()
+                .status()
                 .map(|_| ())
         }
     }

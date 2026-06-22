@@ -406,7 +406,11 @@ fn platform_asset_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "terminal-studio-windows.exe"
     } else if cfg!(target_os = "macos") {
-        "terminal-studio-macos-arm"
+        if cfg!(target_arch = "aarch64") {
+            "terminal-studio-macos-arm"
+        } else {
+            "terminal-studio-macos-intel"
+        }
     } else {
         "terminal-studio-linux"
     }

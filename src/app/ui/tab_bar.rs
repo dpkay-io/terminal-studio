@@ -59,6 +59,8 @@ impl App {
                             .map(|&i| self.pane_state.root_of(self.pane_state.panes[i].id))
                             .collect();
 
+                        let painter = ui.painter().clone();
+
                         for (vis_pos, (i, display)) in display_texts.iter().enumerate() {
                             let i = *i;
                             let pane_id = self.pane_state.panes[i].id;
@@ -117,7 +119,6 @@ impl App {
                                 )
                             };
 
-                            let painter = ui.painter().clone();
                             if is_active {
                                 painter.rect_filled(
                                     tab_rect,

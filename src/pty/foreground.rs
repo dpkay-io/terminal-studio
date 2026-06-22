@@ -379,17 +379,18 @@ mod platform {
     use super::ForegroundProcess;
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        // Single `ps` call: list all processes with parent PID, PID, and full command.
-        // `-o ppid=,pid=,command=` gives parent PID, PID, and full command, no header.
         let out = std::process::Command::new("ps")
             .args(["-eo", "ppid=,pid=,command="])
             .output()
             .ok()?;
+        if !out.status.success() {
+            log::warn!("ps exited with status {}", out.status);
+            return None;
+        }
         let text = String::from_utf8_lossy(&out.stdout);
         let shell_pid_str = shell_pid.to_string();
         for line in text.lines() {
             let trimmed = line.trim_start();
-            // Check if this process is a child of our shell
             if let Some(rest) = trimmed.strip_prefix(&shell_pid_str) {
                 if rest.starts_with(' ') {
                     let rest = rest.trim_start();
@@ -403,14 +404,22 @@ mod platform {
                     if cmd.is_empty() {
                         continue;
                     }
-                    let args: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
-                    let Some(first) = args.first() else {
-                        continue;
+                    // ps merges argv with spaces — we can't reconstruct
+                    // original boundaries. Split into executable + rest.
+                    let (exe, remainder) = match cmd.split_once(' ') {
+                        Some((e, r)) => (e, Some(r.trim())),
+                        None => (cmd, None),
                     };
-                    let name = first.rsplit('/').next().unwrap_or(first).to_string();
+                    let name = exe.rsplit('/').next().unwrap_or(exe).to_string();
+                    let mut cmdline = vec![exe.to_string()];
+                    if let Some(r) = remainder {
+                        if !r.is_empty() {
+                            cmdline.push(r.to_string());
+                        }
+                    }
                     return Some(ForegroundProcess {
                         name,
-                        cmdline: args,
+                        cmdline,
                         pid: Some(child_pid),
                     });
                 }
