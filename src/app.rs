@@ -1552,7 +1552,7 @@ impl App {
                             .show(ui, |ui| {
                                 let margin = egui::Margin::symmetric(theme::SP_3, 0.0);
                                 egui::Frame::none().inner_margin(margin).show(ui, |ui| {
-                                    let w = ui.available_width();
+                                    let w = ui.available_width().max(0.0);
                                     ui.set_min_width(w);
                                     ui.set_max_width(w);
                                 match &active_tab {
@@ -2705,11 +2705,12 @@ impl App {
                     }
                 }
 
+                let context_menu_open = self.context_menu_pos.is_some();
                 let mut events = ctx.input(|inp| inp.events.clone());
                 events.append(&mut self.raw_intercepted_keys);
                 for event in &events {
                     match event {
-                        egui::Event::Text(text) => {
+                        egui::Event::Text(text) if !context_menu_open => {
                             if let Some(sid) = active_session_id {
                                 self.term_selection = None;
                                 self.term_selection_sid = None;
@@ -2931,7 +2932,7 @@ impl App {
                             }
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
-                        egui::Event::PointerButton { pos, button, pressed, .. } => {
+                        egui::Event::PointerButton { pos, button, pressed, .. } if !context_menu_open => {
                             let sb_active = self.active_term_geo.as_ref()
                                 .map(|g| g.scrollbar_hovered || g.scrollbar_drag_offset.is_some())
                                 .unwrap_or(false);
@@ -3072,7 +3073,7 @@ impl App {
                             }
                             } // !sb_active
                         }
-                        egui::Event::PointerMoved(pos) if self.term_selecting => {
+                        egui::Event::PointerMoved(pos) if self.term_selecting && !context_menu_open => {
                             if widget_dragging {
                                 self.term_selecting = false;
                                 self.term_selection = None;
@@ -3090,7 +3091,7 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::PointerMoved(pos) if !self.term_selecting && !widget_dragging => {
+                        egui::Event::PointerMoved(pos) if !self.term_selecting && !widget_dragging && !context_menu_open => {
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
@@ -3129,7 +3130,7 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::MouseWheel { unit, delta, .. } if !widget_dragging => {
+                        egui::Event::MouseWheel { unit, delta, .. } if !widget_dragging && !context_menu_open => {
                             let mouse_pos = ctx.input(|inp| inp.pointer.latest_pos());
                             let over_term = mouse_pos
                                 .zip(self.active_term_geo.as_ref())
@@ -3211,8 +3212,9 @@ impl App {
                     let mut close_context_menu = false;
                     if popup_open {
                         if let Some(pos) = self.context_menu_pos {
+                            let anchor_w = 160.0;
                             let dummy_resp = ui.interact(
-                                egui::Rect::from_center_size(pos, egui::vec2(1.0, 1.0)),
+                                egui::Rect::from_min_size(pos, egui::vec2(anchor_w, 1.0)),
                                 popup_id.with("anchor"),
                                 egui::Sense::hover(),
                             );
@@ -3243,14 +3245,10 @@ impl App {
                                         self.term_selection_sid = None;
                                         close_context_menu = true;
                                     }
-                                    if ui.button("Paste").clicked() {
+                                    if ui.add(egui::Button::new("Paste").min_size(egui::vec2(0.0, 22.0))).clicked() {
                                         if let Some(sid) = active_session_id {
                                             if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                                if let Some(clip) = ui.input(|i| i.events.iter().find_map(|e| {
-                                                    if let egui::Event::Paste(t) = e { Some(t.clone()) } else { None }
-                                                })) {
-                                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(clip.into_bytes());
-                                                } else if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                if let Ok(mut cb) = arboard::Clipboard::new() {
                                                     if let Ok(text) = cb.get_text() {
                                                         let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
                                                         let data = if bp {
@@ -3269,11 +3267,11 @@ impl App {
                                         close_context_menu = true;
                                     }
                                     ui.separator();
-                                    if ui.button("Search (Ctrl+F)").clicked() {
+                                    if ui.add(egui::Button::new("Search (Ctrl+F)").min_size(egui::vec2(0.0, 22.0))).clicked() {
                                         self.term_search.active = true;
                                         close_context_menu = true;
                                     }
-                                    if ui.button("Select All").clicked() {
+                                    if ui.add(egui::Button::new("Select All").min_size(egui::vec2(0.0, 22.0))).clicked() {
                                         if let Some(geo) = &self.active_term_geo {
                                             if let Some(sid) = active_session_id {
                                                 if let Some(entry) = self.session_state.find(sid) {

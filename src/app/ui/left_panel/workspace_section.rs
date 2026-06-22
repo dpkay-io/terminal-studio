@@ -170,6 +170,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
+                let outer_w = outer_w.max(0.0);
                 ui.set_min_width(outer_w);
                 ui.set_max_width(outer_w);
                 ui.spacing_mut().item_spacing.y = theme::SP_2;

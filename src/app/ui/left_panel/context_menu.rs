@@ -3,6 +3,7 @@ use super::super::super::title::shell_escape_arg;
 use super::super::super::workspace_ui::{OpenFolderDialog, WorkspaceEditDialog};
 use super::super::super::{App, CloseAllTarget};
 use super::{SessionListActions, WorkspaceSectionActions};
+use crate::app::claude_session::is_claude_process;
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::default_shell;
 use crate::pty::foreground::ForegroundProcess;
@@ -378,8 +379,10 @@ impl App {
                     .map(|p| p.last_size)
                     .unwrap_or((80, 24))
             });
-        // Build the command string to replay in the new session
         let cmd_to_run: Option<String> = active_fg.as_ref().map(|fp| {
+            if is_claude_process(&fp.name, &fp.cmdline) {
+                return "claude".to_string();
+            }
             let parts: Vec<String> = fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();
             let joined = parts.join(" ");
             #[cfg(target_os = "windows")]

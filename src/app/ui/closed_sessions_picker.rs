@@ -56,8 +56,9 @@ impl App {
                     .stroke(egui::Stroke::new(theme::STROKE_THIN, t.surface2))
                     .inner_margin(egui::Margin::same(theme::SP_4))
                     .show(ui, |ui| {
-                        ui.set_min_width(dialog_w - theme::SP_4 * 2.0);
-                        ui.set_max_width(dialog_w - theme::SP_4 * 2.0);
+                        let inner_w = (dialog_w - theme::SP_4 * 2.0).max(0.0);
+                        ui.set_min_width(inner_w);
+                        ui.set_max_width(inner_w);
                         ui.set_max_height(dialog_h);
 
                         // Escape to close
@@ -186,7 +187,7 @@ impl App {
 
                                                 frame.show(ui, |ui| {
                                                     ui.set_min_width(
-                                                        dialog_w - theme::SP_4 * 4.0,
+                                                        (dialog_w - theme::SP_4 * 4.0).max(0.0),
                                                     );
                                                     ui.vertical(|ui| {
                                                         // Title row

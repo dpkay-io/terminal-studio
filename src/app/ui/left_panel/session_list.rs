@@ -418,7 +418,7 @@ impl App {
                 &resp,
                 egui::PopupCloseBehavior::CloseOnClick,
                 |ui: &mut egui::Ui| {
-                    ui.set_min_width(full_w - 2.0 * theme::SP_3);
+                    ui.set_min_width((full_w - 2.0 * theme::SP_3).max(0.0));
                     for (val, name) in &ws_names {
                         let is_selected = self.session_workspace_filter == *val;
                         if ui.selectable_label(is_selected, name).clicked() {
@@ -516,7 +516,7 @@ impl App {
                 &resp,
                 egui::PopupCloseBehavior::CloseOnClick,
                 |ui: &mut egui::Ui| {
-                    ui.set_min_width(full_w - 2.0 * theme::SP_3);
+                    ui.set_min_width((full_w - 2.0 * theme::SP_3).max(0.0));
                     let is_all = self.session_label_filter.is_none();
                     if ui.selectable_label(is_all, "All Labels").clicked() {
                         self.session_label_filter = None;
@@ -684,6 +684,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
+                let outer_w = outer_w.max(0.0);
                 ui.set_min_width(outer_w);
                 ui.set_max_width(outer_w);
                 let matcher = SkimMatcherV2::default();

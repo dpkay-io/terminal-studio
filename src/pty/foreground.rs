@@ -39,9 +39,10 @@ mod platform {
 
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
         let (child_pid, name) = find_child(shell_pid)?;
+        let cmdline = get_process_cmdline(child_pid).unwrap_or_else(|| vec![name.clone()]);
         Some(ForegroundProcess {
-            cmdline: vec![name.clone()],
             name,
+            cmdline,
             pid: Some(child_pid),
         })
     }
@@ -75,6 +76,183 @@ mod platform {
             CloseHandle(snap);
             best
         }
+    }
+
+    fn get_process_cmdline(pid: u32) -> Option<Vec<String>> {
+        use std::mem;
+        use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+        };
+
+        #[repr(C)]
+        struct ProcessBasicInfo {
+            exit_status: i32,
+            peb_base_address: usize,
+            affinity_mask: usize,
+            base_priority: i32,
+            unique_process_id: usize,
+            inherited_from: usize,
+        }
+
+        #[link(name = "ntdll")]
+        extern "system" {
+            fn NtQueryInformationProcess(
+                handle: isize,
+                class: u32,
+                info: *mut std::ffi::c_void,
+                info_len: u32,
+                ret_len: *mut u32,
+            ) -> i32;
+        }
+
+        const PEB_PARAMS_OFFSET: usize = if mem::size_of::<usize>() == 8 {
+            0x20
+        } else {
+            0x10
+        };
+        const CMDLINE_OFFSET: usize = if mem::size_of::<usize>() == 8 {
+            0x70
+        } else {
+            0x40
+        };
+        const US_SIZE: usize = if mem::size_of::<usize>() == 8 { 16 } else { 8 };
+        const PTR_OFFSET_IN_US: usize = if mem::size_of::<usize>() == 8 { 8 } else { 4 };
+
+        unsafe fn read_mem<T>(handle: isize, addr: usize, buf: *mut T, len: usize) -> bool {
+            let mut read: usize = 0;
+            ReadProcessMemory(handle, addr as *const _, buf as *mut _, len, &mut read) != 0
+                && read == len
+        }
+
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
+            if handle == 0 {
+                return None;
+            }
+
+            let result = (|| -> Option<Vec<String>> {
+                let mut pbi: ProcessBasicInfo = mem::zeroed();
+                if NtQueryInformationProcess(
+                    handle,
+                    0,
+                    &mut pbi as *mut _ as *mut _,
+                    mem::size_of::<ProcessBasicInfo>() as u32,
+                    std::ptr::null_mut(),
+                ) != 0
+                {
+                    return None;
+                }
+
+                let mut params_ptr: usize = 0;
+                if !read_mem(
+                    handle,
+                    pbi.peb_base_address + PEB_PARAMS_OFFSET,
+                    &mut params_ptr,
+                    mem::size_of::<usize>(),
+                ) {
+                    return None;
+                }
+
+                let mut us_buf = [0u8; 16];
+                if !read_mem(
+                    handle,
+                    params_ptr + CMDLINE_OFFSET,
+                    us_buf.as_mut_ptr(),
+                    US_SIZE,
+                ) {
+                    return None;
+                }
+
+                let length = u16::from_le_bytes([us_buf[0], us_buf[1]]) as usize;
+                let buf_addr = if mem::size_of::<usize>() == 8 {
+                    usize::from_le_bytes(
+                        us_buf[PTR_OFFSET_IN_US..PTR_OFFSET_IN_US + 8]
+                            .try_into()
+                            .ok()?,
+                    )
+                } else {
+                    u32::from_le_bytes(
+                        us_buf[PTR_OFFSET_IN_US..PTR_OFFSET_IN_US + 4]
+                            .try_into()
+                            .ok()?,
+                    ) as usize
+                };
+
+                if length == 0 || buf_addr == 0 {
+                    return None;
+                }
+
+                let mut wchars = vec![0u16; length / 2];
+                if !read_mem(handle, buf_addr, wchars.as_mut_ptr(), length) {
+                    return None;
+                }
+
+                let raw = String::from_utf16_lossy(&wchars);
+                let raw = raw.trim();
+                if raw.is_empty() {
+                    return None;
+                }
+                Some(parse_cmdline(raw))
+            })();
+
+            CloseHandle(handle);
+            result
+        }
+    }
+
+    /// Parses a Windows command line using the same rules as `CommandLineToArgvW`:
+    /// - 2n backslashes + `"` → n backslashes, quote toggles
+    /// - 2n+1 backslashes + `"` → n backslashes, literal `"`
+    /// - n backslashes not followed by `"` → n literal backslashes
+    pub(super) fn parse_cmdline(raw: &str) -> Vec<String> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let chars: Vec<char> = raw.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+
+        while i < len {
+            let ch = chars[i];
+            if ch == '\\' {
+                let mut num_backslashes = 0;
+                while i < len && chars[i] == '\\' {
+                    num_backslashes += 1;
+                    i += 1;
+                }
+                if i < len && chars[i] == '"' {
+                    for _ in 0..num_backslashes / 2 {
+                        current.push('\\');
+                    }
+                    if num_backslashes % 2 == 1 {
+                        current.push('"');
+                    } else {
+                        in_quotes = !in_quotes;
+                    }
+                    i += 1;
+                } else {
+                    for _ in 0..num_backslashes {
+                        current.push('\\');
+                    }
+                }
+            } else if ch == '"' {
+                in_quotes = !in_quotes;
+                i += 1;
+            } else if ch == ' ' && !in_quotes {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+                i += 1;
+            } else {
+                current.push(ch);
+                i += 1;
+            }
+        }
+        if !current.is_empty() {
+            args.push(current);
+        }
+        args
     }
 
     fn wide_to_string(buf: &[u16; 260]) -> String {
@@ -288,5 +466,77 @@ mod tests {
         assert_eq!(cloned.name, original.name);
         assert_eq!(cloned.cmdline, original.cmdline);
         assert_eq!(cloned.pid, original.pid);
+    }
+
+    #[cfg(target_os = "windows")]
+    mod windows_cmdline {
+        use super::super::platform::parse_cmdline;
+
+        #[test]
+        fn simple_args() {
+            assert_eq!(parse_cmdline("node.exe app.js"), vec!["node.exe", "app.js"]);
+        }
+
+        #[test]
+        fn quoted_args() {
+            assert_eq!(
+                parse_cmdline(r#""C:\Program Files\node.exe" "C:\app dir\cli.js""#),
+                vec![r"C:\Program Files\node.exe", r"C:\app dir\cli.js"]
+            );
+        }
+
+        #[test]
+        fn mixed_quoted_and_plain() {
+            assert_eq!(
+                parse_cmdline(r#"node.exe "C:\Users\me\.npm\claude\cli.js" --resume"#),
+                vec!["node.exe", r"C:\Users\me\.npm\claude\cli.js", "--resume"]
+            );
+        }
+
+        #[test]
+        fn empty_string() {
+            let result: Vec<String> = parse_cmdline("");
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn single_arg() {
+            assert_eq!(parse_cmdline("claude.exe"), vec!["claude.exe"]);
+        }
+
+        #[test]
+        fn escaped_quote_in_arg() {
+            assert_eq!(
+                parse_cmdline(r#"app.exe "say \"hello\"""#),
+                vec!["app.exe", r#"say "hello""#]
+            );
+        }
+
+        #[test]
+        fn backslashes_before_quote() {
+            // 2 backslashes + quote → 1 literal backslash, quote toggles
+            assert_eq!(
+                parse_cmdline(r#"app.exe "path\\" next"#),
+                vec!["app.exe", r"path\", "next"]
+            );
+        }
+
+        #[test]
+        fn backslashes_not_before_quote() {
+            // Backslashes not preceding a quote are literal
+            assert_eq!(
+                parse_cmdline(r"C:\Users\dpk\app.exe"),
+                vec![r"C:\Users\dpk\app.exe"]
+            );
+        }
+
+        #[test]
+        fn triple_backslash_before_quote() {
+            // 3 backslashes + quote → 1 backslash + literal quote
+            assert_eq!(
+                parse_cmdline(r#"app.exe "a\\\"b""#),
+                vec!["app.exe", r#"a\"b"#]
+            );
+        }
     }
 }

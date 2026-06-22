@@ -59,8 +59,9 @@ impl App {
                     })
                     .inner_margin(egui::Margin::same(theme::SP_4))
                     .show(ui, |ui| {
-                        ui.set_min_width(dialog_w - theme::SP_4 * 2.0);
-                        ui.set_max_width(dialog_w - theme::SP_4 * 2.0);
+                        let inner_w = (dialog_w - theme::SP_4 * 2.0).max(0.0);
+                        ui.set_min_width(inner_w);
+                        ui.set_max_width(inner_w);
                         ui.set_max_height(dialog_h);
 
                         // Escape to close

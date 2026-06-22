@@ -41,7 +41,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 .inner_margin(egui::Margin::symmetric(theme::SP_4, theme::SP_3))
                 .rounding(egui::Rounding::same(theme::R_MD))
                 .show(ui, |ui| {
-                    let avail = ui.available_width();
+                    let avail = ui.available_width().max(0.0);
                     ui.set_min_width(avail);
                     ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                     egui::ScrollArea::horizontal()
@@ -254,7 +254,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
         .stroke(egui::Stroke::new(border_width, th.md_table_border))
         .rounding(egui::Rounding::same(theme::R_MD))
         .show(ui, |ui| {
-            let total_width = ui.available_width();
+            let total_width = ui.available_width().max(0.0);
             ui.set_min_width(total_width);
 
             let borders_width = border_width * (col_count as f32 - 1.0);
