@@ -194,6 +194,7 @@ fn main() -> eframe::Result<()> {
     };
 
     let mut last_err: Option<eframe::Result<()>> = None;
+    let mut all_panicked = true;
 
     for &renderer in renderers_to_try {
         write_crash_log(&format!(
@@ -207,19 +208,42 @@ fn main() -> eframe::Result<()> {
             ..Default::default()
         };
 
-        match eframe::run_native(
-            "Terminal Studio",
-            options,
-            Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
-        ) {
-            Ok(()) => return Ok(()),
-            Err(e) => {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            eframe::run_native(
+                "Terminal Studio",
+                options,
+                Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+            )
+        }));
+
+        match result {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) => {
+                all_panicked = false;
                 let msg = format!("{renderer:?} renderer failed: {e}");
                 log::error!("{msg}");
                 write_crash_log(&msg);
                 last_err = Some(Err(e));
             }
+            Err(panic_payload) => {
+                let panic_msg = panic_payload
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "unknown panic".into());
+                let msg = format!("{renderer:?} renderer panicked: {panic_msg}");
+                log::error!("{msg}");
+                write_crash_log(&msg);
+            }
         }
+    }
+
+    if all_panicked {
+        let log_path = crash_log_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "<unavailable>".into());
+        eprintln!("Terminal Studio failed to start. See crash log: {log_path}");
+        std::process::exit(1);
     }
 
     last_err.unwrap_or(Ok(()))

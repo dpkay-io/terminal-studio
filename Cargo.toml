@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.13.1"
+version = "0.13.2"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"
@@ -12,7 +12,8 @@ rust-version = "1.75"
 
 [dependencies]
 # UI framework (wgpu primary, glow fallback for machines with limited GPU drivers)
-eframe = { version = "0.28", features = ["wgpu", "glow", "default_fonts", "persistence"] }
+# default-features=false drops accesskit (crashes on corporate Windows with accessibility tools)
+eframe = { version = "0.28", default-features = false, features = ["wgpu", "glow", "default_fonts", "persistence", "wayland", "x11"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 egui = "0.28"
