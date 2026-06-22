@@ -23,6 +23,7 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
 | `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
+| `src/logging.rs` | `LogLevel` enum, `LogGuard`; non-blocking daily-rotated file logging via tracing-appender; 7-day retention cleanup; `load_configured_level()` partial settings parse |
 | `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
 | `src/util.rs` | `safe_json_load()`, `atomic_write()`, directory expansion, panic handler |
 
@@ -206,7 +207,8 @@ anyhow = "1"
 
 # Logging
 log = "0.4"
-env_logger = "0.11"
+tracing-subscriber = "0.3"   # non-blocking file logging with env-filter + tracing-log bridge
+tracing-appender = "0.2"     # daily rolling file appender
 
 # File system & dialogs
 notify = "6"                 # file system watching
@@ -333,7 +335,8 @@ Color32::from_rgb(30, 30, 46)
 | `src/pty/shell_integration.rs` | 5 | shell prompt integration helpers |
 | `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
 | `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
-| **Total** | **333** | |
+| `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
+| **Total** | **520** | |
 
 ## Release Workflow
 

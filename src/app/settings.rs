@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::diff_parser::DiffViewMode;
+use crate::logging::LogLevel;
 use crate::theme;
 use crate::util;
 
@@ -33,6 +34,7 @@ pub(super) struct AppSettings {
     pub(super) max_closed_sessions: usize,
     pub(super) save_scrollback_on_close: bool,
     pub(super) save_scrollback_on_exit: bool,
+    pub(super) log_level: LogLevel,
 }
 
 impl Default for AppSettings {
@@ -55,6 +57,7 @@ impl Default for AppSettings {
             max_closed_sessions: 50,
             save_scrollback_on_close: true,
             save_scrollback_on_exit: true,
+            log_level: LogLevel::default(),
         }
     }
 }

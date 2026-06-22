@@ -404,6 +404,51 @@ impl App {
                                 });
                             }
 
+                            // ── Logging ──────────────────────────────────────────
+                            ui.add_space(theme::SP_6);
+                            {
+                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            }
+                            ui.add_space(theme::SP_4);
+                            ui.label(
+                                egui::RichText::new("LOGGING")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(theme::active().fg_secondary)
+                                    .strong(),
+                            );
+                            ui.add_space(theme::SP_2);
+
+                            ui.horizontal(|ui| {
+                                ui.label("Log level:");
+                                let current_level = self.settings.log_level;
+                                egui::ComboBox::from_id_source(self.vp_id("settings_log_level"))
+                                    .selected_text(current_level.name())
+                                    .show_ui(ui, |ui| {
+                                        for &level in crate::logging::LogLevel::ALL {
+                                            let resp = ui.selectable_label(
+                                                current_level == level,
+                                                format!("{} — {}", level.name(), level.description()),
+                                            );
+                                            if resp.clicked() && current_level != level {
+                                                self.settings.log_level = level;
+                                                settings_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+                            ui.add_space(theme::SP_2);
+                            ui.label(ui_kit::label_muted(
+                                "Changes take effect on restart. Override with RUST_LOG env var.",
+                            ));
+                            ui.add_space(theme::SP_2);
+                            if ui.small_button("Open log folder").clicked() {
+                                if let Some(dir) = crate::logging::log_dir() {
+                                    let _ = std::fs::create_dir_all(&dir);
+                                    let _ = open::that(&dir);
+                                }
+                            }
+
                             // ── About / Updates ───────────────────────────────────
                             ui.add_space(theme::SP_6);
                             {

@@ -4,6 +4,7 @@ mod app;
 mod file_search_worker;
 mod git;
 mod keybindings;
+pub(crate) mod logging;
 mod md_detector;
 mod pane_tree;
 mod pty;
@@ -138,7 +139,8 @@ fn parse_renderer_arg() -> Option<eframe::Renderer> {
 }
 
 fn main() -> eframe::Result<()> {
-    env_logger::init();
+    let log_level = logging::load_configured_level();
+    let _log_guard = logging::init(log_level);
 
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {

@@ -136,10 +136,14 @@ pub struct App {
     workers: WorkerManager,
     // Used to detect when the window gains focus so we can flush stale GPU frames.
     was_focused: bool,
+    // True on the very first update() frame — used to detect tiny persisted window sizes.
+    first_frame: bool,
     // Shells available on this system, computed once at startup.
     available_shells: Vec<ShellKind>,
     cursor_alpha: f32,
     cursor_blink_start: Instant,
+    // Timer for periodic egui memory GC to evict stale widget state from dead pane/session IDs.
+    last_egui_gc: Instant,
 
     // Terminal text selection state (per-session)
     term_selection: Option<TermSelection>,
@@ -385,6 +389,30 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
 
+        // ── Enforce minimum window size (decorations(false) means the OS won't) ──
+        {
+            let inner_rect = ctx.input(|i| i.viewport().inner_rect);
+            if let Some(rect) = inner_rect {
+                let w = rect.width();
+                let h = rect.height();
+                if w < theme::MIN_WINDOW_W || h < theme::MIN_WINDOW_H {
+                    if self.first_frame {
+                        // First frame with a tiny persisted size — maximize instead
+                        // of snapping to minimum, since the user likely can't see
+                        // the window at all.
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+                    } else {
+                        let new_w = w.max(theme::MIN_WINDOW_W);
+                        let new_h = h.max(theme::MIN_WINDOW_H);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            new_w, new_h,
+                        )));
+                    }
+                }
+            }
+            self.first_frame = false;
+        }
+
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
             if self.session_state.sessions.is_empty() {
                 self.quit_confirmed = true;
@@ -427,6 +455,21 @@ impl eframe::App for App {
                     .collect();
             for sid in orphan_dead {
                 self.remove_session_and_cleanup(sid);
+            }
+        }
+
+        // Periodically trim egui's persisted data to prevent unbounded growth
+        // from dead widget IDs (session/pane counters never reuse). Clearing
+        // resets panel sizes and scroll positions, so use a long interval.
+        {
+            const EGUI_GC_INTERVAL: Duration = Duration::from_secs(1800);
+            if self.last_egui_gc.elapsed() >= EGUI_GC_INTERVAL {
+                self.last_egui_gc = Instant::now();
+                ctx.memory_mut(|mem| mem.data.clear());
+                let version_key = egui::Id::new("__ts_version");
+                ctx.data_mut(|d| {
+                    d.insert_persisted(version_key, env!("CARGO_PKG_VERSION").to_string())
+                });
             }
         }
 
@@ -485,6 +528,23 @@ impl eframe::App for App {
                 self.shown_md_tabs.insert(path.clone());
                 self.show_right_panel = true;
                 self.right_tab = RightTab::Markdown(path);
+            }
+        }
+
+        // Cap markdown content cache to prevent unbounded growth
+        {
+            const MAX_MD_CONTENT: usize = 64;
+            if self.terminal_md_content.len() > MAX_MD_CONTENT {
+                // Keep only entries that have active tabs
+                let active_paths: HashSet<PathBuf> = self.shown_md_tabs.iter().cloned().collect();
+                self.terminal_md_content
+                    .retain(|path, _| active_paths.contains(path));
+                // If still over limit after retaining active, just truncate
+                while self.terminal_md_content.len() > MAX_MD_CONTENT {
+                    if let Some(key) = self.terminal_md_content.keys().next().cloned() {
+                        self.terminal_md_content.remove(&key);
+                    }
+                }
             }
         }
 
@@ -2360,6 +2420,9 @@ impl App {
                                 .is_some_and(|age| age.as_secs() < 10);
                             if !is_recent {
                                 continue;
+                            }
+                            if self.auto_opened_md.len() > 256 {
+                                self.auto_opened_md.clear();
                             }
                             self.auto_opened_md.insert(md.path.clone());
                             let path = md.path.clone();

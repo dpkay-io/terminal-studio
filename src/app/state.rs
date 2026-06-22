@@ -48,6 +48,19 @@ impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let ctx = cc.egui_ctx.clone();
 
+        // Reset egui's persisted widget data if the app version changed.
+        // This prevents corrupted state from old crashed sessions.
+        {
+            let version_key = egui::Id::new("__ts_version");
+            let stored: Option<String> = cc.egui_ctx.data_mut(|d| d.get_persisted(version_key));
+            let current = env!("CARGO_PKG_VERSION").to_string();
+            if stored.as_deref() != Some(&current) {
+                cc.egui_ctx.memory_mut(|mem| mem.data.clear());
+                cc.egui_ctx
+                    .data_mut(|d| d.insert_persisted(version_key, current));
+            }
+        }
+
         {
             use egui::{Rounding, Shadow, Stroke, Visuals};
             let t = theme::active();
@@ -214,9 +227,11 @@ impl App {
                 update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
             },
             was_focused: true,
+            first_frame: true,
             available_shells: available_shells(),
             cursor_alpha: 1.0,
             cursor_blink_start: Instant::now(),
+            last_egui_gc: Instant::now(),
             term_selection: None,
             term_selecting: false,
             term_selection_sid: None,
@@ -779,6 +794,7 @@ impl App {
 
     pub(super) fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
         self.active_group = group;
+        self.auto_opened_md.clear();
 
         if let Some(ws_id) = group {
             let now = std::time::SystemTime::now()

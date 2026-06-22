@@ -9,7 +9,8 @@ The following direct dependencies are bundled or linked into the binary; their l
 | anyhow | 1.x | MIT OR Apache-2.0 |
 | eframe | 0.28.x | MIT |
 | egui | 0.28.x | MIT |
-| env_logger | 0.11.x | MIT OR Apache-2.0 |
+| tracing-subscriber | 0.3.x | MIT |
+| tracing-appender | 0.2.x | MIT |
 | log | 0.4.x | MIT OR Apache-2.0 |
 | notify | 6.x | MIT |
 | parking_lot | 0.12.x | MIT OR Apache-2.0 |
@@ -65,7 +66,7 @@ MIT OR Apache-2.0 (dual-licensed).
 
 ---
 
-## All other crates (anyhow, env_logger, log, notify, parking_lot, serde, serde_json, windows-sys)
+## All other crates (anyhow, log, notify, parking_lot, serde, serde_json, windows-sys)
 
 These crates are licensed under either MIT or Apache-2.0 at the user's option.  
 Full license texts for MIT and Apache-2.0 are available at:
