@@ -397,9 +397,6 @@ impl eframe::App for App {
                 let h = rect.height();
                 if w < theme::MIN_WINDOW_W || h < theme::MIN_WINDOW_H {
                     if self.first_frame {
-                        // First frame with a tiny persisted size — maximize instead
-                        // of snapping to minimum, since the user likely can't see
-                        // the window at all.
                         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     } else {
                         let new_w = w.max(theme::MIN_WINDOW_W);
@@ -664,9 +661,7 @@ impl eframe::App for App {
                         .unwrap_or(false)
                 });
                 // Sessions that just became initialized — mark ready for
-                // restore-scroll (the actual scroll is applied each frame
-                // until the user interacts, since shell output keeps resetting
-                // display_offset to 0).
+                // restore-scroll (a one-shot scroll-to-bottom applied below).
                 let newly_init: Vec<u32> = before
                     .difference(&self.session_state.uninit_sessions)
                     .copied()
@@ -688,18 +683,15 @@ impl eframe::App for App {
                 }
             }
 
-            // Re-apply restore scroll each frame — shell output keeps
-            // resetting display_offset to 0.  Cleared on first user input.
-            for entry in &self.session_state.sessions {
+            for entry in &mut self.session_state.sessions {
                 if entry.restore_scroll_ready {
-                    if let Some(lines) = entry.restore_scroll_lines {
-                        let current = entry.session.read().term.grid().display_offset();
-                        if current == 0 {
-                            entry.session.write().term.scroll_display(
-                                alacritty_terminal::grid::Scroll::Delta(lines as i32),
-                            );
-                        }
-                    }
+                    entry
+                        .session
+                        .write()
+                        .term
+                        .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+                    entry.restore_scroll_ready = false;
+                    entry.restore_scroll_lines = None;
                 }
             }
 

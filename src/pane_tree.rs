@@ -220,6 +220,16 @@ pub fn split_rect(
     ratio: f32,
 ) -> (egui::Rect, egui::Rect, egui::Rect) {
     let half = theme::DIVIDER_W / 2.0;
+    let min_split_dim = theme::DIVIDER_W * 2.0;
+    let too_small = match dir {
+        SplitDir::Horizontal => rect.width() < min_split_dim,
+        SplitDir::Vertical => rect.height() < min_split_dim,
+    };
+    if too_small {
+        let zero = egui::Rect::from_min_max(rect.min, rect.min);
+        return (rect, zero, zero);
+    }
+
     match dir {
         SplitDir::Horizontal => {
             let x = (rect.min.x + rect.width() * ratio)
@@ -413,5 +423,25 @@ mod tests {
         assert!(a.height() > 0.0);
         assert!(b.height() > 0.0);
         assert!(div.height() > 0.0);
+    }
+
+    #[test]
+    fn split_rect_degenerate_horizontal() {
+        let tiny = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(5.0, 50.0));
+        let (a, div, b) = split_rect(tiny, SplitDir::Horizontal, 0.5);
+        assert!(a.width() >= 0.0);
+        assert!(div.width() >= 0.0);
+        assert!(b.width() >= 0.0);
+        assert_eq!(a.min, tiny.min);
+    }
+
+    #[test]
+    fn split_rect_degenerate_vertical() {
+        let tiny = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 5.0));
+        let (a, div, b) = split_rect(tiny, SplitDir::Vertical, 0.5);
+        assert!(a.height() >= 0.0);
+        assert!(div.height() >= 0.0);
+        assert!(b.height() >= 0.0);
+        assert_eq!(a.min, tiny.min);
     }
 }

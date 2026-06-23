@@ -139,6 +139,18 @@ impl TerminalView {
         let visible_rows = (rect.height() / cell_height) as usize;
         let visible_cols = (rect.width() / cell_width) as usize;
 
+        if visible_rows == 0 || visible_cols == 0 {
+            ui.allocate_rect(outer_rect, Sense::hover());
+            return TerminalGeometry {
+                rect,
+                cell_w: cell_width,
+                cell_h: cell_height,
+                scrollbar_drag_offset: None,
+                scrollbar_hovered: false,
+                session_id: None,
+            };
+        }
+
         // ── Snapshot phase: copy out everything we need from the Term under
         //    the read lock, then drop the lock before painting. This keeps
         //    the PTY reader thread (which takes the write lock) from being
