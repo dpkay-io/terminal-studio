@@ -331,7 +331,12 @@ impl App {
                         last_size: (cols, rows),
                     },
                 );
-                self.activate_pane(pane_id);
+                let gid = self.pane_state.focused_group_id;
+                self.pane_state.add_pane_to_group(gid, pane_id, None);
+                if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                    g.activate(pane_id);
+                }
+                self.activate_and_scroll_to_pane(pane_id);
                 self.flash.trigger(
                     crate::app::feedback::FlashTarget::Tab(pane_id),
                     crate::app::feedback::FlashKind::Success,
@@ -428,7 +433,18 @@ impl App {
                         last_size: (cols, rows),
                     },
                 );
-                self.activate_pane(pane_id);
+                let gid = self.pane_state.focused_group_id;
+                let insert_in_group = self.pane_state.groups.get(&gid).and_then(|g| {
+                    g.active_pane_id
+                        .and_then(|apid| g.pane_ids.iter().position(|&id| id == apid))
+                        .map(|pos| pos + 1)
+                });
+                self.pane_state
+                    .add_pane_to_group(gid, pane_id, insert_in_group);
+                if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                    g.activate(pane_id);
+                }
+                self.activate_and_scroll_to_pane(pane_id);
                 self.flash.trigger(
                     crate::app::feedback::FlashTarget::Tab(pane_id),
                     crate::app::feedback::FlashKind::Success,

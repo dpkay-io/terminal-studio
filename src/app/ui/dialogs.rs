@@ -1006,6 +1006,18 @@ impl App {
                 "Close All Sessions".to_string(),
                 self.pane_state.panes.len(),
             ),
+            CloseAllTarget::EditorGroup(gid) => {
+                let cnt = self
+                    .pane_state
+                    .groups
+                    .get(&gid)
+                    .map(|g| g.pane_ids.len())
+                    .unwrap_or(0);
+                (
+                    format!("Close {} Tab{}", cnt, if cnt == 1 { "" } else { "s" }),
+                    cnt,
+                )
+            }
             _ => {
                 let group = match self.close_all_target {
                     CloseAllTarget::Group(g) => g,
@@ -1075,6 +1087,12 @@ impl App {
 
             let pane_ids_to_close: Vec<u32> = match target {
                 CloseAllTarget::All => self.pane_state.panes.iter().map(|p| p.id).collect(),
+                CloseAllTarget::EditorGroup(gid) => self
+                    .pane_state
+                    .groups
+                    .get(&gid)
+                    .map(|g| g.pane_ids.clone())
+                    .unwrap_or_default(),
                 _ => {
                     let group = match target {
                         CloseAllTarget::Group(g) => g,
@@ -1106,6 +1124,8 @@ impl App {
             self.pane_state
                 .panes
                 .retain(|p| !pane_ids_to_close.contains(&p.id));
+            // Sync editor groups with surviving panes (collapse empty groups).
+            self.pane_state.sync_groups_with_panes();
             // Prune closed panes from split trees, preserving surviving siblings.
             let affected_roots: Vec<u32> = self
                 .pane_state

@@ -6,11 +6,12 @@ use super::super::markdown::render_markdown;
 use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::CursorStyle;
 use super::super::App;
-use crate::pane_tree::{split_rect, PaneNode, SplitDir};
+use super::tab_bar::GroupTabBarResult;
+use crate::editor_group::{GroupId, GroupNode};
+use crate::pane_tree::{split_rect, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::syntax;
 use crate::theme;
-use crate::ui_kit;
 
 fn text_fingerprint(s: &str) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -27,6 +28,7 @@ struct SyntaxGalleyCache {
 }
 
 /// Actions emitted by the 3-dot context menu on split panes.
+#[allow(dead_code)]
 pub(in crate::app) enum PaneContextAction {
     MoveToTab(u32),
     Close(u32),
@@ -38,10 +40,11 @@ pub(in crate::app) enum PaneContextAction {
     },
 }
 
-/// Mutable context threaded through the recursive pane-tree renderer.
+/// Mutable context threaded through the recursive pane renderer.
 ///
 /// This struct exists so we can pass references to output accumulators and
-/// read-only state into `render_node()` without capturing `&mut self`.
+/// read-only state without capturing `&mut self`.
+#[allow(dead_code)]
 pub(in crate::app) struct RenderCtx<'a> {
     pub sessions: &'a [SessionEntry],
     pub panes: &'a [PaneEntry],
@@ -71,337 +74,6 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
-}
-
-/// Recursively render a pane tree node into the given rect.
-pub(in crate::app) fn render_node(
-    ui: &mut egui::Ui,
-    node: &PaneNode,
-    rect: egui::Rect,
-    rctx: &mut RenderCtx<'_>,
-) {
-    match node {
-        PaneNode::Leaf { pane_id, .. } => {
-            let pane_id = *pane_id;
-            let is_focused = rctx.focused_pane_id == Some(pane_id);
-            let pane = rctx.panes.iter().find(|p| p.id == pane_id);
-            let Some(pane) = pane else { return };
-
-            // Track width for resize
-            rctx.pane_widths_snap.push((pane_id, rect.width()));
-
-            let content_rect = rect;
-
-            ui.allocate_ui_at_rect(content_rect, |ui| {
-                ui.push_id(pane_id, |ui| match &pane.content {
-                    PaneContent::Terminal(sid) => {
-                        render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
-                    }
-                    PaneContent::DeferredTerminal { .. } => {
-                        ui.painter()
-                            .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
-                    }
-                    PaneContent::FileEditor(ed) => {
-                        render_file_editor_leaf(ui, ed, pane_id, rctx);
-                    }
-                    PaneContent::FileDiff(d) => {
-                        let result = render_file_diff_leaf(ui, d, pane_id, rctx);
-                        if let Some(new_mode) = result.mode_change {
-                            rctx.diff_mode_changes.push((pane_id, new_mode));
-                        }
-                        if let Some(hunk_idx) = result.hunk_navigation {
-                            rctx.diff_hunk_navigations.push((pane_id, hunk_idx));
-                        }
-                    }
-                    PaneContent::NoteEditor(ne) => {
-                        render_note_editor_leaf(ui, ne, pane_id, rctx);
-                    }
-                    PaneContent::ConflictResolver(ref state) => {
-                        let conflict_action =
-                            super::conflict_resolver::render_conflict_resolver(ui, state);
-                        if let Some(ca) = conflict_action {
-                            rctx.pane_context_actions
-                                .push(PaneContextAction::ConflictResolve {
-                                    pane_id,
-                                    action: ca,
-                                });
-                        }
-                    }
-                });
-            });
-
-            // Focus border for split panes — animated fade in/out
-            if rctx.has_splits {
-                let focus_t = crate::app::ui::animation::animated_bool(
-                    ui.ctx(),
-                    egui::Id::new(("pane_focus", pane_id)),
-                    is_focused,
-                    theme::ANIM_NORMAL,
-                );
-                if focus_t > 0.01 {
-                    let border_color = theme::active().border_focus.gamma_multiply(focus_t);
-                    let stroke = egui::Stroke::new(theme::STROKE_MEDIUM, border_color);
-                    let inset_rect = rect.shrink(2.0);
-                    ui.painter().rect_stroke(inset_rect, theme::R_SM, stroke);
-                }
-            }
-
-            // Floating 3-dot context menu overlay for split panes
-            if rctx.has_splits {
-                render_pane_overlay_menu(ui, pane_id, rect, rctx);
-            }
-
-            // Flash feedback overlay
-            rctx.flash.render_on_rect(
-                ui.painter(),
-                rect,
-                crate::app::feedback::FlashTarget::Pane(pane_id),
-            );
-
-            // Drop target highlight for drag-and-drop
-            if rctx.drag_state.is_active() {
-                let accepts = matches!(
-                    &rctx.drag_state.payload,
-                    Some(crate::app::drag::DragPayload::Session(_))
-                        | Some(crate::app::drag::DragPayload::File(_))
-                        | Some(crate::app::drag::DragPayload::Diff(_))
-                        | Some(crate::app::drag::DragPayload::Note(_))
-                );
-                if accepts {
-                    if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                        if rect.contains(pos) {
-                            ui.painter().rect_stroke(
-                                rect.shrink(2.0),
-                                crate::theme::R_SM,
-                                egui::Stroke::new(
-                                    2.0,
-                                    crate::theme::active().blue.gamma_multiply(0.6),
-                                ),
-                            );
-                            rctx.drag_state.drop_target =
-                                Some(crate::app::drag::DropTarget::PaneArea);
-                        }
-                    }
-                }
-            }
-
-            // Click to focus pane (ignore clicks during panel resize drags)
-            let any_drag = ui
-                .ctx()
-                .input(|inp| inp.pointer.any_down() && inp.pointer.is_decidedly_dragging());
-            if !any_drag
-                && ui
-                    .ctx()
-                    .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
-            {
-                if let Some(pos) = ui.ctx().input(|inp| inp.pointer.interact_pos()) {
-                    if rect.contains(pos) {
-                        *rctx.clicked_pane_id = Some(pane_id);
-                        // Only surrender widget focus when clicking a terminal
-                        // pane — editors need their TextEdit to keep focus.
-                        if matches!(pane.content, PaneContent::Terminal(_)) {
-                            if let Some(fid) = ui.ctx().memory(|m| m.focused()) {
-                                ui.ctx().memory_mut(|m| m.surrender_focus(fid));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        PaneNode::Split {
-            split_id,
-            dir,
-            ratio,
-            a,
-            b,
-        } => {
-            let (rect_a, div_rect, rect_b) = split_rect(rect, *dir, *ratio);
-            render_node(ui, a, rect_a, rctx);
-            render_node(ui, b, rect_b, rctx);
-
-            // Draw divider — suppress when a terminal scrollbar owns the drag
-            let div_id = egui::Id::new(("split_div", *split_id));
-            let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
-            let sb_blocks = *rctx.scrollbar_dragging;
-            let is_active = !sb_blocks && (div_resp.dragged() || div_resp.hovered());
-            let anim_t =
-                ui.ctx()
-                    .animate_bool_with_time(div_id.with("anim"), is_active, theme::ANIM_FAST);
-            let t = theme::active();
-            // Line thickens on drag
-            let drag_t = ui.ctx().animate_bool_with_time(
-                div_id.with("drag"),
-                !sb_blocks && div_resp.dragged(),
-                theme::ANIM_FAST,
-            );
-            let line_width =
-                theme::STROKE_THIN + (theme::STROKE_MEDIUM - theme::STROKE_THIN) * drag_t;
-            // Thin center line
-            let line_color = theme::lerp_color(t.border_subtle, t.border_focus, anim_t);
-            match dir {
-                SplitDir::Horizontal => {
-                    let cx = div_rect.center().x;
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(cx, div_rect.min.y),
-                            egui::pos2(cx, div_rect.max.y),
-                        ],
-                        egui::Stroke::new(line_width, line_color),
-                    );
-                }
-                SplitDir::Vertical => {
-                    let cy = div_rect.center().y;
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(div_rect.min.x, cy),
-                            egui::pos2(div_rect.max.x, cy),
-                        ],
-                        egui::Stroke::new(line_width, line_color),
-                    );
-                }
-            }
-            // Grab handle dots — hidden when idle, fade in on hover/drag
-            if anim_t > 0.01 {
-                let dot_color = theme::lerp_color(
-                    egui::Color32::TRANSPARENT,
-                    theme::lerp_color(t.overlay0, t.fg_secondary, anim_t),
-                    anim_t,
-                );
-                let center = div_rect.center();
-                match dir {
-                    SplitDir::Horizontal => {
-                        for i in [-1.0_f32, 0.0, 1.0] {
-                            ui.painter().circle_filled(
-                                egui::pos2(center.x, center.y + i * theme::DOT_GAP),
-                                theme::DOT_R,
-                                dot_color,
-                            );
-                        }
-                    }
-                    SplitDir::Vertical => {
-                        for i in [-1.0_f32, 0.0, 1.0] {
-                            ui.painter().circle_filled(
-                                egui::pos2(center.x + i * theme::DOT_GAP, center.y),
-                                theme::DOT_R,
-                                dot_color,
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Handle drag to resize
-            if div_resp.dragged() && !sb_blocks {
-                let delta = div_resp.drag_delta();
-                let (extent, movement) = match dir {
-                    SplitDir::Horizontal => (rect.width(), delta.x / rect.width()),
-                    SplitDir::Vertical => (rect.height(), delta.y / rect.height()),
-                };
-                let min_pane = theme::MIN_PANE_W;
-                let min_ratio = if extent > 0.0 {
-                    (min_pane / extent).clamp(0.1, 0.4)
-                } else {
-                    0.1
-                };
-                let new_ratio = (*ratio + movement).clamp(min_ratio, 1.0 - min_ratio);
-                rctx.split_ratio_changes.push((*split_id, new_ratio));
-            }
-
-            // Cursor feedback
-            let cursor = match dir {
-                SplitDir::Horizontal => egui::CursorIcon::ResizeHorizontal,
-                SplitDir::Vertical => egui::CursorIcon::ResizeVertical,
-            };
-            if !sb_blocks && (div_resp.hovered() || div_resp.dragged()) {
-                ui.ctx().set_cursor_icon(cursor);
-            }
-        }
-    }
-}
-
-// ── Split-pane floating overlay menu ──────────────────────────────────────
-
-fn render_pane_overlay_menu(
-    ui: &mut egui::Ui,
-    pane_id: u32,
-    pane_rect: egui::Rect,
-    rctx: &mut RenderCtx<'_>,
-) {
-    let popup_id = egui::Id::new(("pane_ctx_menu", pane_id));
-    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
-
-    let btn_size = egui::vec2(theme::BTN_SQ, theme::BTN_SQ);
-    let btn_pos = egui::pos2(
-        pane_rect.max.x - btn_size.x - theme::SP_3,
-        pane_rect.min.y + theme::SP_2,
-    );
-    let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
-
-    let pane_hovered = ui.ctx().input(|i| {
-        i.pointer
-            .latest_pos()
-            .map(|p| pane_rect.contains(p))
-            .unwrap_or(false)
-    });
-
-    let show_btn = pane_hovered || popup_open;
-    let menu_anim_t = crate::app::ui::animation::animated_hover(
-        ui.ctx(),
-        egui::Id::new(("pane_menu_anim", pane_id)),
-        show_btn,
-    );
-    if menu_anim_t <= 0.01 {
-        return;
-    }
-
-    let t = theme::active();
-    let bg_alpha = (theme::ALPHA_SURFACE_OVERLAY as f32 * menu_anim_t) as u8;
-    let bg_pill = egui::Color32::from_rgba_unmultiplied(
-        t.surface0.r(),
-        t.surface0.g(),
-        t.surface0.b(),
-        bg_alpha,
-    );
-    ui.painter()
-        .rect_filled(btn_rect.expand(theme::SP_1), theme::R_MD, bg_pill);
-
-    let btn_id = egui::Id::new(("pane_hdr_menu_btn", pane_id));
-    let btn_resp = ui_kit::dot_menu_button(ui, btn_id, btn_rect, popup_open);
-    if btn_resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(popup_id));
-    }
-
-    egui::containers::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &btn_resp,
-        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_min_width(160.0);
-            if ui.button("Move to tab").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::MoveToTab(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-            ui.separator();
-            if ui.button("Split horizontal").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::SplitHorizontal(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-            if ui.button("Split vertical").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::SplitVertical(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-            ui.separator();
-            if ui.button("Close pane").clicked() {
-                rctx.pane_context_actions
-                    .push(PaneContextAction::Close(pane_id));
-                ui.memory_mut(|m| m.close_popup());
-            }
-        },
-    );
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -956,143 +628,470 @@ fn render_file_diff_leaf(
     }
 }
 
-impl App {
-    /// Render the active tab's pane content (terminal, editor, diff) using the
-    /// split-aware recursive pane tree renderer.
-    ///
-    /// Returns the deferred mutations (clicked pane, editor saves/previews,
-    /// pane width snapshots, split ratio changes) via in/out parameters.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::app) fn render_pane_content(
-        &mut self,
-        ui: &mut egui::Ui,
-        content_rect: egui::Rect,
-        active_pane_id_snap: Option<u32>,
-        editor_texts: &mut Vec<(u32, Option<String>)>,
-        clicked_pane_id: &mut Option<u32>,
-        editor_saves: &mut Vec<u32>,
-        editor_preview_toggles: &mut Vec<u32>,
-        pane_widths_snap: &mut Vec<(u32, f32)>,
-        split_ratio_changes: &mut Vec<(u32, f32)>,
-        pane_context_actions: &mut Vec<PaneContextAction>,
-    ) {
-        // Clear stale terminal geometry so non-terminal panes (e.g. file editor)
-        // don't inherit geometry from a previously rendered terminal tab (H9).
-        self.active_term_geo = None;
+fn render_loading_indicator(ui: &mut egui::Ui, path: &std::path::Path) {
+    let t = theme::active();
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy())
+        .unwrap_or_default();
+    ui.vertical_centered(|ui| {
+        ui.add_space(ui.available_height() * 0.35);
+        let elapsed = ui.input(|i| i.time) as f32;
+        let dots = match ((elapsed * 2.0) as usize) % 4 {
+            0 => "",
+            1 => ".",
+            2 => "..",
+            _ => "...",
+        };
+        ui.label(
+            egui::RichText::new(format!("Loading {filename}{dots}"))
+                .size(theme::FONT_STATUS)
+                .color(t.overlay0),
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(500));
+    });
+}
 
-        let root_pane_id = active_pane_id_snap.and_then(|apid| {
-            if self.pane_state.pane_trees.contains_key(&apid) {
-                return Some(apid);
+// ── Group-based rendering (new editor groups system) ──────────────────────
+
+/// Render the content of a single pane leaf. Extracted so it can be reused
+/// by both the old `render_node` Leaf case and the new group renderer.
+fn render_leaf_content(
+    ui: &mut egui::Ui,
+    pane_id: u32,
+    is_focused: bool,
+    rect: egui::Rect,
+    rctx: &mut RenderCtx<'_>,
+) {
+    let pane = rctx.panes.iter().find(|p| p.id == pane_id);
+    let Some(pane) = pane else { return };
+
+    // Track width for resize
+    rctx.pane_widths_snap.push((pane_id, rect.width()));
+
+    ui.allocate_ui_at_rect(rect, |ui| {
+        ui.push_id(pane_id, |ui| match &pane.content {
+            PaneContent::Terminal(sid) => {
+                render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
             }
-            self.pane_state
-                .pane_trees
-                .iter()
-                .find(|(_, tree)| tree.leaf_ids().contains(&apid))
-                .map(|(&rpid, _)| rpid)
-        });
-        if let Some(root_pane_id) = root_pane_id {
-            let (tree, has_splits) = if let Some(zpid) = self.zoomed_pane_id {
-                let pane_exists = self.pane_state.panes.iter().any(|p| p.id == zpid);
-                if pane_exists {
-                    (
-                        PaneNode::Leaf {
-                            pane_id: zpid,
-                            last_size: (80, 24),
-                        },
-                        false,
-                    )
-                } else {
-                    self.zoomed_pane_id = None;
-                    let t = self
-                        .pane_state
-                        .pane_trees
-                        .get(&root_pane_id)
-                        .cloned()
-                        .unwrap_or(PaneNode::Leaf {
-                            pane_id: root_pane_id,
-                            last_size: (80, 24),
-                        });
-                    let s = matches!(&t, PaneNode::Split { .. });
-                    (t, s)
+            PaneContent::DeferredTerminal { .. } => {
+                ui.painter()
+                    .rect_filled(ui.max_rect(), 0.0, theme::active().bg_term);
+            }
+            PaneContent::FileEditor(ed) => {
+                render_file_editor_leaf(ui, ed, pane_id, rctx);
+            }
+            PaneContent::FileDiff(d) => {
+                let result = render_file_diff_leaf(ui, d, pane_id, rctx);
+                if let Some(new_mode) = result.mode_change {
+                    rctx.diff_mode_changes.push((pane_id, new_mode));
                 }
-            } else {
-                let t = self
-                    .pane_state
-                    .pane_trees
-                    .get(&root_pane_id)
-                    .cloned()
-                    .unwrap_or(PaneNode::Leaf {
-                        pane_id: root_pane_id,
-                        last_size: (80, 24),
+                if let Some(hunk_idx) = result.hunk_navigation {
+                    rctx.diff_hunk_navigations.push((pane_id, hunk_idx));
+                }
+            }
+            PaneContent::NoteEditor(ne) => {
+                render_note_editor_leaf(ui, ne, pane_id, rctx);
+            }
+            PaneContent::ConflictResolver(ref state) => {
+                let conflict_action = super::conflict_resolver::render_conflict_resolver(ui, state);
+                if let Some(ca) = conflict_action {
+                    rctx.pane_context_actions
+                        .push(PaneContextAction::ConflictResolve {
+                            pane_id,
+                            action: ca,
+                        });
+                }
+            }
+        });
+    });
+
+    // Flash feedback overlay
+    rctx.flash.render_on_rect(
+        ui.painter(),
+        rect,
+        crate::app::feedback::FlashTarget::Pane(pane_id),
+    );
+
+    // Drop target highlight for drag-and-drop
+    if rctx.drag_state.is_active() {
+        let accepts = matches!(
+            &rctx.drag_state.payload,
+            Some(crate::app::drag::DragPayload::Tab(_))
+                | Some(crate::app::drag::DragPayload::Session(_))
+                | Some(crate::app::drag::DragPayload::File(_))
+                | Some(crate::app::drag::DragPayload::Diff(_))
+                | Some(crate::app::drag::DragPayload::Note(_))
+        );
+        if accepts {
+            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
+                if rect.contains(pos) {
+                    ui.painter().rect_stroke(
+                        rect.shrink(2.0),
+                        crate::theme::R_SM,
+                        egui::Stroke::new(2.0, crate::theme::active().blue.gamma_multiply(0.6)),
+                    );
+                    rctx.drag_state.drop_target = Some(crate::app::drag::DropTarget::PaneArea);
+                }
+            }
+        }
+    }
+}
+
+/// Recursively render the group layout tree.
+#[allow(clippy::too_many_arguments)]
+fn render_group_node(
+    app: &mut App,
+    ui: &mut egui::Ui,
+    node: &GroupNode,
+    rect: egui::Rect,
+    editor_texts: &mut Vec<(u32, Option<String>)>,
+    clicked_pane_id: &mut Option<u32>,
+    clicked_group_id: &mut Option<GroupId>,
+    editor_saves: &mut Vec<u32>,
+    editor_preview_toggles: &mut Vec<u32>,
+    pane_widths_snap: &mut Vec<(u32, f32)>,
+    split_ratio_changes: &mut Vec<(u32, f32)>,
+    pane_context_actions: &mut Vec<PaneContextAction>,
+    group_tab_results: &mut Vec<GroupTabBarResult>,
+) {
+    match node {
+        GroupNode::Leaf { group_id } => {
+            let group_id = *group_id;
+            let is_focused = app.pane_state.focused_group_id == group_id;
+            let group = app.pane_state.groups.get(&group_id).cloned();
+
+            // Scope all leaf rendering under a group_id-keyed child UI so that
+            // auto-generated widget IDs are unique across sibling groups in a
+            // split.  Without this, two leaves share the parent `ui` and
+            // `allocate_ui_at_rect` children get the same base `id`, leading to
+            // egui "duplicate widget ID" warnings for interactive widgets.
+            let mut leaf_ui = ui.child_ui_with_id_source(rect, *ui.layout(), group_id, None);
+
+            let Some(group) = group else {
+                leaf_ui
+                    .painter()
+                    .rect_filled(rect, 0.0, theme::active().bg_term);
+                leaf_ui.allocate_ui_at_rect(rect, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("Empty group")
+                                .color(theme::active().overlay0)
+                                .size(theme::FONT_TERM),
+                        );
                     });
-                let s = matches!(&t, PaneNode::Split { .. });
-                (t, s)
+                });
+                return;
             };
-            let mut diff_mode_changes = Vec::new();
-            let mut diff_hunk_navigations: Vec<(u32, usize)> = Vec::new();
-            let mut scrollbar_clear_restore = Vec::new();
-            let mut scrollbar_dragging = false;
-            let mut rctx = RenderCtx {
-                sessions: &self.session_state.sessions,
-                panes: &self.pane_state.panes,
+
+            let has_live_panes = !group.is_empty()
+                && group
+                    .pane_ids
+                    .iter()
+                    .any(|pid| app.pane_state.panes.iter().any(|p| p.id == *pid));
+            if !has_live_panes {
+                leaf_ui
+                    .painter()
+                    .rect_filled(rect, 0.0, theme::active().bg_term);
+                return;
+            }
+
+            // Split rect into tab bar (top) and content (rest)
+            let tab_h = theme::HEADER_H;
+            let tab_bar_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), tab_h));
+            let content_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.min.x, rect.min.y + tab_h),
+                egui::vec2(rect.width(), (rect.height() - tab_h).max(0.0)),
+            );
+
+            // Render per-group tab bar
+            let tab_result = app.render_group_tab_bar(
+                &mut leaf_ui,
+                &group,
+                group_id,
+                is_focused,
+                tab_h,
+                tab_bar_rect,
+            );
+            group_tab_results.push(tab_result);
+
+            // Render the active pane's content
+            let active_pid = group.active_pane_id;
+            if let Some(pid) = active_pid {
+                let has_splits = app.pane_state.groups.len() > 1;
+                let mut diff_mode_changes = Vec::new();
+                let mut diff_hunk_navigations: Vec<(u32, usize)> = Vec::new();
+                let mut scrollbar_clear_restore = Vec::new();
+                let mut scrollbar_dragging = false;
+                let focused_pane_id = if is_focused { Some(pid) } else { None };
+
+                {
+                    let mut rctx = RenderCtx {
+                        sessions: &app.session_state.sessions,
+                        panes: &app.pane_state.panes,
+                        editor_texts,
+                        cursor_alpha: app.cursor_alpha,
+                        focused_pane_id,
+                        active_term_geo: &mut app.active_term_geo,
+                        active_term_ui_id: &mut app.active_term_ui_id,
+                        clicked_pane_id,
+                        editor_saves,
+                        editor_preview_toggles,
+                        pane_widths_snap,
+                        split_ratio_changes,
+                        pane_context_actions,
+                        term_selection: &app.term_selection,
+                        term_selection_sid: app.term_selection_sid,
+                        workspace_dialog_open: app.workspace_dialog.is_some(),
+                        workspace_edit_dialog_open: app.workspace_edit_dialog.is_some(),
+                        show_settings: app.show_settings,
+                        font_size: app.settings.font_size,
+                        cursor_style: app.settings.cursor_style,
+                        has_splits,
+                        flash: &app.flash,
+                        text_search: &mut app.text_search,
+                        diff_mode_changes: &mut diff_mode_changes,
+                        diff_hunk_navigations: &mut diff_hunk_navigations,
+                        drag_state: &mut app.drag_state,
+                        scrollbar_clear_restore: &mut scrollbar_clear_restore,
+                        scrollbar_dragging: &mut scrollbar_dragging,
+                    };
+                    render_leaf_content(&mut leaf_ui, pid, is_focused, content_rect, &mut rctx);
+                }
+
+                // Apply diff mode changes
+                for (pane_id, new_mode) in diff_mode_changes {
+                    if let Some(pane) = app.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::FileDiff(ref mut d) = pane.content {
+                            d.diff_mode = new_mode;
+                        }
+                    }
+                    app.settings.diff_view_mode = new_mode;
+                    app.settings.save();
+                }
+                for (pane_id, hunk_idx) in diff_hunk_navigations {
+                    if let Some(pane) = app.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::FileDiff(ref mut d) = pane.content {
+                            d.current_hunk = hunk_idx;
+                        }
+                    }
+                }
+                for sid in scrollbar_clear_restore {
+                    if let Some(entry) = app.session_state.sessions.iter_mut().find(|e| e.id == sid)
+                    {
+                        entry.restore_scroll_ready = false;
+                        entry.restore_scroll_lines = None;
+                    }
+                }
+            }
+
+            // Convert PaneArea to GroupArea for group-aware drop routing
+            if matches!(
+                app.drag_state.drop_target,
+                Some(crate::app::drag::DropTarget::PaneArea)
+            ) {
+                app.drag_state.drop_target =
+                    Some(crate::app::drag::DropTarget::GroupArea(group_id));
+            }
+
+            // Click-to-focus: if clicked in this group's area, set focus
+            let any_drag = leaf_ui
+                .ctx()
+                .input(|inp| inp.pointer.any_down() && inp.pointer.is_decidedly_dragging());
+            if !any_drag
+                && leaf_ui
+                    .ctx()
+                    .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
+            {
+                if let Some(pos) = leaf_ui.ctx().input(|inp| inp.pointer.interact_pos()) {
+                    if rect.contains(pos) {
+                        *clicked_group_id = Some(group_id);
+                    }
+                }
+            }
+        }
+        GroupNode::Split {
+            split_id,
+            dir,
+            ratio,
+            a,
+            b,
+        } => {
+            let (rect_a, div_rect, rect_b) = split_rect(rect, *dir, *ratio);
+            render_group_node(
+                app,
+                ui,
+                a,
+                rect_a,
                 editor_texts,
-                cursor_alpha: self.cursor_alpha,
-                focused_pane_id: active_pane_id_snap,
-                active_term_geo: &mut self.active_term_geo,
-                active_term_ui_id: &mut self.active_term_ui_id,
                 clicked_pane_id,
+                clicked_group_id,
                 editor_saves,
                 editor_preview_toggles,
                 pane_widths_snap,
                 split_ratio_changes,
                 pane_context_actions,
-                term_selection: &self.term_selection,
-                term_selection_sid: self.term_selection_sid,
-                workspace_dialog_open: self.workspace_dialog.is_some(),
-                workspace_edit_dialog_open: self.workspace_edit_dialog.is_some(),
-                show_settings: self.show_settings,
-                font_size: self.settings.font_size,
-                cursor_style: self.settings.cursor_style,
-                has_splits,
-                flash: &self.flash,
-                text_search: &mut self.text_search,
-                diff_mode_changes: &mut diff_mode_changes,
-                diff_hunk_navigations: &mut diff_hunk_navigations,
-                drag_state: &mut self.drag_state,
-                scrollbar_clear_restore: &mut scrollbar_clear_restore,
-                scrollbar_dragging: &mut scrollbar_dragging,
+                group_tab_results,
+            );
+            render_group_node(
+                app,
+                ui,
+                b,
+                rect_b,
+                editor_texts,
+                clicked_pane_id,
+                clicked_group_id,
+                editor_saves,
+                editor_preview_toggles,
+                pane_widths_snap,
+                split_ratio_changes,
+                pane_context_actions,
+                group_tab_results,
+            );
+
+            // Draw divider — reuse existing divider rendering
+            let div_id = egui::Id::new(("group_split_div", *split_id));
+            let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
+            let is_active = div_resp.dragged() || div_resp.hovered();
+            let anim_t =
+                ui.ctx()
+                    .animate_bool_with_time(div_id.with("anim"), is_active, theme::ANIM_FAST);
+            let t = theme::active();
+            let drag_t = ui.ctx().animate_bool_with_time(
+                div_id.with("drag"),
+                div_resp.dragged(),
+                theme::ANIM_FAST,
+            );
+            let line_width =
+                theme::STROKE_THIN + (theme::STROKE_MEDIUM - theme::STROKE_THIN) * drag_t;
+            let line_color = theme::lerp_color(t.border_subtle, t.border_focus, anim_t);
+            match dir {
+                SplitDir::Horizontal => {
+                    let cx = div_rect.center().x;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(cx, div_rect.min.y),
+                            egui::pos2(cx, div_rect.max.y),
+                        ],
+                        egui::Stroke::new(line_width, line_color),
+                    );
+                }
+                SplitDir::Vertical => {
+                    let cy = div_rect.center().y;
+                    ui.painter().line_segment(
+                        [
+                            egui::pos2(div_rect.min.x, cy),
+                            egui::pos2(div_rect.max.x, cy),
+                        ],
+                        egui::Stroke::new(line_width, line_color),
+                    );
+                }
+            }
+            // Grab handle dots
+            if anim_t > 0.01 {
+                let dot_color = theme::lerp_color(
+                    egui::Color32::TRANSPARENT,
+                    theme::lerp_color(t.overlay0, t.fg_secondary, anim_t),
+                    anim_t,
+                );
+                let center = div_rect.center();
+                match dir {
+                    SplitDir::Horizontal => {
+                        for i in [-1.0_f32, 0.0, 1.0] {
+                            ui.painter().circle_filled(
+                                egui::pos2(center.x, center.y + i * theme::DOT_GAP),
+                                theme::DOT_R,
+                                dot_color,
+                            );
+                        }
+                    }
+                    SplitDir::Vertical => {
+                        for i in [-1.0_f32, 0.0, 1.0] {
+                            ui.painter().circle_filled(
+                                egui::pos2(center.x + i * theme::DOT_GAP, center.y),
+                                theme::DOT_R,
+                                dot_color,
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Handle drag to resize
+            if div_resp.dragged() {
+                let delta = div_resp.drag_delta();
+                let (extent, movement, min_pane) = match dir {
+                    SplitDir::Horizontal => {
+                        (rect.width(), delta.x / rect.width(), theme::MIN_PANE_W)
+                    }
+                    SplitDir::Vertical => {
+                        (rect.height(), delta.y / rect.height(), theme::MIN_PANE_H)
+                    }
+                };
+                let min_ratio = if extent > 0.0 {
+                    (min_pane / extent).clamp(0.1, 0.4)
+                } else {
+                    0.1
+                };
+                let new_ratio = (*ratio + movement).clamp(min_ratio, 1.0 - min_ratio);
+                split_ratio_changes.push((*split_id, new_ratio));
+            }
+
+            // Cursor feedback
+            let cursor = match dir {
+                SplitDir::Horizontal => egui::CursorIcon::ResizeHorizontal,
+                SplitDir::Vertical => egui::CursorIcon::ResizeVertical,
             };
-            render_node(ui, &tree, content_rect, &mut rctx);
-
-            // Global flash overlay (rare — PTY spawn errors)
-            self.flash
-                .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
-
-            for sid in scrollbar_clear_restore {
-                if let Some(entry) = self.session_state.sessions.iter_mut().find(|e| e.id == sid) {
-                    entry.restore_scroll_ready = false;
-                    entry.restore_scroll_lines = None;
-                }
-            }
-
-            for (pane_id, new_mode) in diff_mode_changes {
-                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
-                    if let PaneContent::FileDiff(ref mut d) = pane.content {
-                        d.diff_mode = new_mode;
-                    }
-                }
-                self.settings.diff_view_mode = new_mode;
-                self.settings.save();
-            }
-
-            for (pane_id, hunk_idx) in diff_hunk_navigations {
-                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
-                    if let PaneContent::FileDiff(ref mut d) = pane.content {
-                        d.current_hunk = hunk_idx;
-                    }
-                }
+            if div_resp.hovered() || div_resp.dragged() {
+                ui.ctx().set_cursor_icon(cursor);
             }
         }
+    }
+}
+
+impl App {
+    /// New entry point: renders the entire group layout.
+    ///
+    /// Walks the GroupNode tree, rendering per-group tab bars and content.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::app) fn render_group_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        content_rect: egui::Rect,
+        editor_texts: &mut Vec<(u32, Option<String>)>,
+        clicked_pane_id: &mut Option<u32>,
+        clicked_group_id: &mut Option<GroupId>,
+        editor_saves: &mut Vec<u32>,
+        editor_preview_toggles: &mut Vec<u32>,
+        pane_widths_snap: &mut Vec<(u32, f32)>,
+        split_ratio_changes: &mut Vec<(u32, f32)>,
+        pane_context_actions: &mut Vec<PaneContextAction>,
+        group_tab_results: &mut Vec<GroupTabBarResult>,
+    ) {
+        // Clear stale terminal geometry
+        self.active_term_geo = None;
+
+        let layout = self.pane_state.group_layout.clone();
+        render_group_node(
+            self,
+            ui,
+            &layout,
+            content_rect,
+            editor_texts,
+            clicked_pane_id,
+            clicked_group_id,
+            editor_saves,
+            editor_preview_toggles,
+            pane_widths_snap,
+            split_ratio_changes,
+            pane_context_actions,
+            group_tab_results,
+        );
+
+        // Global flash overlay (rare — PTY spawn errors)
+        self.flash
+            .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
 
         // ── File drag hover overlay ────────────────────────────────────────
         let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
@@ -1123,29 +1122,4 @@ impl App {
             );
         }
     }
-}
-
-fn render_loading_indicator(ui: &mut egui::Ui, path: &std::path::Path) {
-    let t = theme::active();
-    let filename = path
-        .file_name()
-        .map(|f| f.to_string_lossy())
-        .unwrap_or_default();
-    ui.vertical_centered(|ui| {
-        ui.add_space(ui.available_height() * 0.35);
-        let elapsed = ui.input(|i| i.time) as f32;
-        let dots = match ((elapsed * 2.0) as usize) % 4 {
-            0 => "",
-            1 => ".",
-            2 => "..",
-            _ => "...",
-        };
-        ui.label(
-            egui::RichText::new(format!("Loading {filename}{dots}"))
-                .size(theme::FONT_STATUS)
-                .color(t.overlay0),
-        );
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_millis(500));
-    });
 }

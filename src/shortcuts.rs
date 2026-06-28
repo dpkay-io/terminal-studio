@@ -69,6 +69,16 @@ pub enum AppAction {
 
     // Session history
     ReopenClosedSession,
+
+    // Editor group navigation
+    FocusNextGroup,
+    FocusPrevGroup,
+    FocusGroupUp,
+    FocusGroupDown,
+    MoveTabToNextGroup,
+    MoveTabToPrevGroup,
+    MoveTabToUpGroup,
+    MoveTabToDownGroup,
 }
 
 impl AppAction {
@@ -109,6 +119,14 @@ impl AppAction {
             Self::ZoomPane => "zoom_pane",
             Self::CommandPalette => "command_palette",
             Self::ReopenClosedSession => "reopen_closed_session",
+            Self::FocusNextGroup => "focus_next_group",
+            Self::FocusPrevGroup => "focus_prev_group",
+            Self::FocusGroupUp => "focus_group_up",
+            Self::FocusGroupDown => "focus_group_down",
+            Self::MoveTabToNextGroup => "move_tab_to_next_group",
+            Self::MoveTabToPrevGroup => "move_tab_to_prev_group",
+            Self::MoveTabToUpGroup => "move_tab_to_up_group",
+            Self::MoveTabToDownGroup => "move_tab_to_down_group",
         }
     }
 
@@ -149,6 +167,14 @@ impl AppAction {
             "zoom_pane" => Some(Self::ZoomPane),
             "command_palette" => Some(Self::CommandPalette),
             "reopen_closed_session" => Some(Self::ReopenClosedSession),
+            "focus_next_group" => Some(Self::FocusNextGroup),
+            "focus_prev_group" => Some(Self::FocusPrevGroup),
+            "focus_group_up" => Some(Self::FocusGroupUp),
+            "focus_group_down" => Some(Self::FocusGroupDown),
+            "move_tab_to_next_group" => Some(Self::MoveTabToNextGroup),
+            "move_tab_to_prev_group" => Some(Self::MoveTabToPrevGroup),
+            "move_tab_to_up_group" => Some(Self::MoveTabToUpGroup),
+            "move_tab_to_down_group" => Some(Self::MoveTabToDownGroup),
             _ => None,
         }
     }
@@ -190,6 +216,14 @@ impl AppAction {
             Self::ZoomPane => "Zoom pane",
             Self::CommandPalette => "Command palette",
             Self::ReopenClosedSession => "Reopen closed session",
+            Self::FocusNextGroup => "Focus next group",
+            Self::FocusPrevGroup => "Focus previous group",
+            Self::FocusGroupUp => "Focus group above",
+            Self::FocusGroupDown => "Focus group below",
+            Self::MoveTabToNextGroup => "Move tab to next group",
+            Self::MoveTabToPrevGroup => "Move tab to previous group",
+            Self::MoveTabToUpGroup => "Move tab to group above",
+            Self::MoveTabToDownGroup => "Move tab to group below",
         }
     }
 
@@ -527,6 +561,80 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::Z), AppAction::ZoomPane),
             // Reopen closed session
             (Shortcut::cs(egui::Key::R), AppAction::ReopenClosedSession),
+            // Group navigation
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowRight,
+                },
+                AppAction::FocusNextGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowLeft,
+                },
+                AppAction::FocusPrevGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowRight,
+                },
+                AppAction::MoveTabToNextGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowLeft,
+                },
+                AppAction::MoveTabToPrevGroup,
+            ),
+            // Vertical group navigation
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowDown,
+                },
+                AppAction::FocusGroupDown,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowUp,
+                },
+                AppAction::FocusGroupUp,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowDown,
+                },
+                AppAction::MoveTabToDownGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowUp,
+                },
+                AppAction::MoveTabToUpGroup,
+            ),
         ]
     }
 
@@ -575,6 +683,14 @@ impl ShortcutRegistry {
                     AppAction::SplitHorizontal,
                     AppAction::SplitVertical,
                     AppAction::ZoomPane,
+                    AppAction::FocusNextGroup,
+                    AppAction::FocusPrevGroup,
+                    AppAction::FocusGroupUp,
+                    AppAction::FocusGroupDown,
+                    AppAction::MoveTabToNextGroup,
+                    AppAction::MoveTabToPrevGroup,
+                    AppAction::MoveTabToUpGroup,
+                    AppAction::MoveTabToDownGroup,
                 ],
             ),
             (

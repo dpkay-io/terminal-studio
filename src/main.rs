@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod editor_group;
 mod file_search_worker;
 mod git;
 mod keybindings;

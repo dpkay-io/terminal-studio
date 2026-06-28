@@ -213,6 +213,7 @@ pub fn reader_thread(
     }
 
     alive.store(false, Ordering::SeqCst);
+    ctx.request_repaint();
     log::info!("Session {} reader thread exiting", session.read().id);
 }
 

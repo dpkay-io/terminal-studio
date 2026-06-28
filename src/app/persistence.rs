@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::editor_group::GroupNode;
 use crate::util;
 
 fn default_panel_ratio() -> f32 {
@@ -55,6 +56,27 @@ pub(super) struct SavedPane {
     pub(super) labels: Vec<u32>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(super) struct SavedEditorGroup {
+    pub(super) id: u32,
+    pub(super) pane_indices: Vec<usize>,
+    pub(super) active_pane_index: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct SavedGroupLayout {
+    pub(super) groups: Vec<SavedEditorGroup>,
+    pub(super) layout: GroupNode,
+    pub(super) focused_group_id: u32,
+    pub(super) next_group_id: u32,
+    #[serde(default = "default_next_split_id")]
+    pub(super) next_split_id: u32,
+}
+
+fn default_next_split_id() -> u32 {
+    1
+}
+
 #[derive(Serialize, Deserialize, Default)]
 pub(super) enum SavedRightTab {
     #[default]
@@ -89,6 +111,8 @@ pub(super) struct AppSession {
     pub(super) right_tab: SavedRightTab,
     #[serde(default)]
     pub(super) shown_md_tabs: Vec<PathBuf>,
+    #[serde(default)]
+    pub(super) group_layout: Option<SavedGroupLayout>,
 }
 
 pub(super) fn session_data_path() -> Option<PathBuf> {
@@ -294,6 +318,7 @@ mod tests {
                 PathBuf::from("/docs/README.md"),
                 PathBuf::from("/docs/CHANGELOG.md"),
             ],
+            group_layout: None,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();
@@ -354,5 +379,227 @@ mod tests {
         let json = r#"{"content":{"Terminal":{"session_index":0}},"manual_width":null}"#;
         let loaded: SavedPane = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.labels, Vec::<u32>::new());
+    }
+
+    // ── Group layout persistence tests ──────────────────────────
+
+    #[test]
+    fn saved_editor_group_roundtrip() {
+        let g = SavedEditorGroup {
+            id: 1,
+            pane_indices: vec![0, 2, 3],
+            active_pane_index: Some(2),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let restored: SavedEditorGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, 1);
+        assert_eq!(restored.pane_indices, vec![0, 2, 3]);
+        assert_eq!(restored.active_pane_index, Some(2));
+    }
+
+    #[test]
+    fn saved_group_layout_roundtrip() {
+        use crate::editor_group::GroupNode;
+        use crate::pane_tree::SplitDir;
+        let layout = SavedGroupLayout {
+            groups: vec![
+                SavedEditorGroup {
+                    id: 1,
+                    pane_indices: vec![0, 1],
+                    active_pane_index: Some(0),
+                },
+                SavedEditorGroup {
+                    id: 2,
+                    pane_indices: vec![2],
+                    active_pane_index: Some(0),
+                },
+            ],
+            layout: GroupNode::Split {
+                split_id: 1,
+                dir: SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(GroupNode::Leaf { group_id: 1 }),
+                b: Box::new(GroupNode::Leaf { group_id: 2 }),
+            },
+            focused_group_id: 1,
+            next_group_id: 3,
+            next_split_id: 2,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let restored: SavedGroupLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.groups.len(), 2);
+        assert_eq!(restored.groups[0].id, 1);
+        assert_eq!(restored.groups[1].id, 2);
+        assert_eq!(restored.focused_group_id, 1);
+        assert_eq!(restored.next_group_id, 3);
+        assert_eq!(restored.next_split_id, 2);
+    }
+
+    #[test]
+    fn app_session_with_group_layout_roundtrip() {
+        use crate::editor_group::GroupNode;
+        let original = AppSession {
+            sessions: vec![SavedSession {
+                cwd: PathBuf::from("/home/user"),
+                command: None,
+                title: None,
+                scrollback_file: None,
+                claude_session_id: None,
+            }],
+            panes: vec![
+                SavedPane {
+                    content: SavedPaneContent::Terminal { session_index: 0 },
+                    manual_width: None,
+                    labels: vec![],
+                },
+                SavedPane {
+                    content: SavedPaneContent::Terminal { session_index: 0 },
+                    manual_width: None,
+                    labels: vec![],
+                },
+            ],
+            active_pane_index: Some(0),
+            active_session_index: Some(0),
+            active_group: None,
+            last_pane_per_group: vec![],
+            workspace_panel_ratio: 0.35,
+            workspace_panel_collapsed: false,
+            notes_panel_ratio: 0.35,
+            notes_panel_collapsed: false,
+            right_tab: SavedRightTab::Directory,
+            shown_md_tabs: vec![],
+            group_layout: Some(SavedGroupLayout {
+                groups: vec![SavedEditorGroup {
+                    id: 1,
+                    pane_indices: vec![0, 1],
+                    active_pane_index: Some(0),
+                }],
+                layout: GroupNode::Leaf { group_id: 1 },
+                focused_group_id: 1,
+                next_group_id: 2,
+                next_split_id: 1,
+            }),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: AppSession = serde_json::from_str(&json).unwrap();
+        assert!(restored.group_layout.is_some());
+        let gl = restored.group_layout.unwrap();
+        assert_eq!(gl.groups.len(), 1);
+        assert_eq!(gl.groups[0].pane_indices, vec![0, 1]);
+        assert_eq!(gl.focused_group_id, 1);
+        assert_eq!(gl.next_group_id, 2);
+        match &gl.layout {
+            GroupNode::Leaf { group_id } => assert_eq!(*group_id, 1),
+            _ => panic!("expected Leaf layout"),
+        }
+    }
+
+    #[test]
+    fn app_session_without_group_layout_defaults_none() {
+        let json = r#"{"sessions":[],"panes":[]}"#;
+        let s: AppSession = serde_json::from_str(json).unwrap();
+        assert!(s.group_layout.is_none());
+    }
+
+    #[test]
+    fn saved_group_layout_missing_next_split_id_defaults() {
+        let json = r#"{"groups":[],"layout":{"Leaf":{"group_id":1}},"focused_group_id":1,"next_group_id":2}"#;
+        let restored: SavedGroupLayout = serde_json::from_str(json).unwrap();
+        assert_eq!(restored.next_split_id, 1);
+    }
+
+    #[test]
+    fn saved_group_layout_single_group() {
+        use crate::editor_group::GroupNode;
+        let layout = SavedGroupLayout {
+            groups: vec![SavedEditorGroup {
+                id: 5,
+                pane_indices: vec![0],
+                active_pane_index: Some(0),
+            }],
+            layout: GroupNode::Leaf { group_id: 5 },
+            focused_group_id: 5,
+            next_group_id: 6,
+            next_split_id: 1,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let restored: SavedGroupLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.groups.len(), 1);
+        assert_eq!(restored.groups[0].id, 5);
+        assert_eq!(restored.focused_group_id, 5);
+        match &restored.layout {
+            GroupNode::Leaf { group_id } => assert_eq!(*group_id, 5),
+            _ => panic!("expected Leaf"),
+        }
+    }
+
+    #[test]
+    fn saved_group_layout_nested_split() {
+        use crate::editor_group::GroupNode;
+        use crate::pane_tree::SplitDir;
+        let layout = SavedGroupLayout {
+            groups: vec![
+                SavedEditorGroup {
+                    id: 1,
+                    pane_indices: vec![0],
+                    active_pane_index: Some(0),
+                },
+                SavedEditorGroup {
+                    id: 2,
+                    pane_indices: vec![1],
+                    active_pane_index: Some(0),
+                },
+                SavedEditorGroup {
+                    id: 3,
+                    pane_indices: vec![2],
+                    active_pane_index: Some(0),
+                },
+            ],
+            layout: GroupNode::Split {
+                split_id: 1,
+                dir: SplitDir::Horizontal,
+                ratio: 0.5,
+                a: Box::new(GroupNode::Leaf { group_id: 1 }),
+                b: Box::new(GroupNode::Split {
+                    split_id: 2,
+                    dir: SplitDir::Vertical,
+                    ratio: 0.5,
+                    a: Box::new(GroupNode::Leaf { group_id: 2 }),
+                    b: Box::new(GroupNode::Leaf { group_id: 3 }),
+                }),
+            },
+            focused_group_id: 2,
+            next_group_id: 4,
+            next_split_id: 3,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let restored: SavedGroupLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.groups.len(), 3);
+        assert_eq!(restored.focused_group_id, 2);
+        assert_eq!(restored.next_group_id, 4);
+        assert_eq!(restored.next_split_id, 3);
+        // Verify the nested structure by checking group IDs in the layout
+        match &restored.layout {
+            GroupNode::Split { a, b, .. } => {
+                match a.as_ref() {
+                    GroupNode::Leaf { group_id } => assert_eq!(*group_id, 1),
+                    _ => panic!("expected Leaf for a"),
+                }
+                match b.as_ref() {
+                    GroupNode::Split { a: ba, b: bb, .. } => {
+                        match ba.as_ref() {
+                            GroupNode::Leaf { group_id } => assert_eq!(*group_id, 2),
+                            _ => panic!("expected Leaf for b.a"),
+                        }
+                        match bb.as_ref() {
+                            GroupNode::Leaf { group_id } => assert_eq!(*group_id, 3),
+                            _ => panic!("expected Leaf for b.b"),
+                        }
+                    }
+                    _ => panic!("expected Split for b"),
+                }
+            }
+            _ => panic!("expected Split root"),
+        }
     }
 }

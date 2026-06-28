@@ -246,12 +246,6 @@ impl SessionManager {
         let mut child = pty_pair.slave.spawn_command(cmd)?;
         let shell_pid = child.process_id().unwrap_or(u32::MAX);
 
-        thread::Builder::new()
-            .name(format!("pty-reaper-{}", id))
-            .spawn(move || {
-                let _ = child.wait();
-            })?;
-
         let reader = pty_pair.master.try_clone_reader()?;
 
         // Create PTY writer channel (256 slots to avoid dropping PtyWrite responses)
@@ -331,6 +325,21 @@ impl SessionManager {
                     log::error!("pty-reader-{id} panicked: {msg}");
                     alive_for_panic.store(false, std::sync::atomic::Ordering::SeqCst);
                 }
+            })?;
+
+        // Spawn reaper thread: waits for the child process to exit, then
+        // signals alive=false and requests a repaint. On Windows ConPTY the
+        // reader may block indefinitely after the shell exits because the
+        // pipe stays open, so this is the primary exit-detection path.
+        let alive_for_reaper = Arc::clone(&alive);
+        let ctx_for_reaper = self.ctx.clone();
+        thread::Builder::new()
+            .name(format!("pty-reaper-{}", id))
+            .spawn(move || {
+                let _ = child.wait();
+                alive_for_reaper.store(false, std::sync::atomic::Ordering::SeqCst);
+                ctx_for_reaper.request_repaint();
+                log::info!("Session {id} shell process exited");
             })?;
 
         Ok((

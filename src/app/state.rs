@@ -8,6 +8,7 @@ const SPAWN_RATE_WINDOW: Duration = Duration::from_secs(5);
 const MAX_SPAWNS_IN_WINDOW: usize = 5;
 const RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK: usize = 3;
 
+use crate::editor_group::EditorGroup;
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
@@ -27,7 +28,8 @@ use super::pane::{
 };
 use super::pane_state::PaneState;
 use super::persistence::{
-    session_data_path, AppSession, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,
+    session_data_path, AppSession, SavedEditorGroup, SavedGroupLayout, SavedPane, SavedPaneContent,
+    SavedRightTab, SavedSession,
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
@@ -462,6 +464,18 @@ impl App {
                             last_size: (cols, rows),
                         },
                     );
+                    if self.pane_state.groups.is_empty() {
+                        let gid = self.pane_state.create_group(pane_id);
+                        self.pane_state.group_layout =
+                            crate::editor_group::GroupNode::Leaf { group_id: gid };
+                        self.pane_state.focused_group_id = gid;
+                    } else {
+                        self.pane_state.add_pane_to_group(
+                            self.pane_state.focused_group_id,
+                            pane_id,
+                            None,
+                        );
+                    }
                     self.pane_state.active_pane_id = Some(pane_id);
                 }
                 Some(id)
@@ -688,6 +702,13 @@ impl App {
             &mut self.session_workspace_filter,
             &mut view.session_workspace_filter,
         );
+        {
+            let temp = view.focused_group_id;
+            view.focused_group_id = Some(self.pane_state.focused_group_id);
+            if let Some(gid) = temp {
+                self.pane_state.focused_group_id = gid;
+            }
+        }
     }
 
     pub(super) fn save_windows(&self) {
@@ -779,6 +800,12 @@ impl App {
 
     pub(super) fn activate_pane(&mut self, pid: u32) {
         self.pane_state.active_pane_id = Some(pid);
+        if let Some(gid) = self.pane_state.group_of(pid) {
+            self.pane_state.focused_group_id = gid;
+            if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                g.activate(pid);
+            }
+        }
         if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
             if let PaneContent::Terminal(sid) = pane.content {
                 self.session_state.active_id = Some(sid);
@@ -865,9 +892,12 @@ impl App {
                         last_size: (cols, rows),
                     },
                 );
-                self.pane_state.active_pane_id = Some(pane_id);
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
+                self.activate_pane(pane_id);
+            } else {
+                self.update_is_active_flags();
             }
-            self.update_is_active_flags();
         }
     }
 
@@ -1322,6 +1352,35 @@ impl App {
             RightTab::Markdown(p) => SavedRightTab::Markdown(p.clone()),
         };
 
+        // Build group layout for persistence
+        let group_layout = if !self.pane_state.groups.is_empty() {
+            let saved_groups: Vec<SavedEditorGroup> = self
+                .pane_state
+                .groups
+                .values()
+                .map(|g| SavedEditorGroup {
+                    id: g.id,
+                    pane_indices: g
+                        .pane_ids
+                        .iter()
+                        .filter_map(|&pid| pane_id_to_index.get(&pid).copied())
+                        .collect(),
+                    active_pane_index: g
+                        .active_pane_id
+                        .and_then(|pid| pane_id_to_index.get(&pid).copied()),
+                })
+                .collect();
+            Some(SavedGroupLayout {
+                groups: saved_groups,
+                layout: self.pane_state.group_layout.clone(),
+                focused_group_id: self.pane_state.focused_group_id,
+                next_group_id: self.pane_state.next_group_id,
+                next_split_id: self.pane_state.next_split_id,
+            })
+        } else {
+            None
+        };
+
         let state = AppSession {
             sessions,
             panes,
@@ -1335,6 +1394,7 @@ impl App {
             notes_panel_collapsed: self.notes_panel_collapsed,
             right_tab,
             shown_md_tabs: self.shown_md_tabs.iter().cloned().collect(),
+            group_layout,
         };
 
         if let Ok(text) = serde_json::to_string_pretty(&state) {
@@ -1566,6 +1626,49 @@ impl App {
             }
         }
 
+        // Restore group layout
+        if let Some(saved_gl) = &state.group_layout {
+            // Clear any auto-created groups from the sync mechanism
+            self.pane_state.groups.clear();
+
+            for sg in &saved_gl.groups {
+                let restored_pane_ids: Vec<u32> = sg
+                    .pane_indices
+                    .iter()
+                    .filter_map(|&idx| pane_ids.get(idx).copied())
+                    .collect();
+                if restored_pane_ids.is_empty() {
+                    continue;
+                }
+                let active_pid = sg
+                    .active_pane_index
+                    .and_then(|idx| pane_ids.get(idx).copied())
+                    .or_else(|| restored_pane_ids.first().copied());
+
+                let mut group = EditorGroup::new(sg.id, restored_pane_ids[0]);
+                for &pid in &restored_pane_ids[1..] {
+                    group.insert_pane(pid, None);
+                }
+                if let Some(apid) = active_pid {
+                    group.activate(apid);
+                }
+                self.pane_state.groups.insert(sg.id, group);
+            }
+
+            // The layout references group IDs directly, and we preserved them
+            self.pane_state.group_layout = saved_gl.layout.clone();
+            self.pane_state.focused_group_id = saved_gl.focused_group_id;
+            self.pane_state.next_group_id = saved_gl.next_group_id;
+            self.pane_state.next_split_id = saved_gl.next_split_id;
+
+            // Fix corrupted data: deduplicate split_ids in the layout tree
+            self.pane_state.dedup_split_ids();
+
+            // Validate: prune layout nodes whose group IDs weren't restored,
+            // and ensure focused_group_id exists.
+            self.pane_state.sync_groups_with_panes();
+        }
+
         self.active_group = state.active_group;
         for (group, pane_index) in &state.last_pane_per_group {
             if let Some(&pid) = pane_ids.get(*pane_index) {
@@ -1597,6 +1700,16 @@ impl App {
                     self.last_pane_per_group.insert(self.active_group, pid);
                 }
             }
+        }
+    }
+
+    /// Update `active_group` to match the workspace of the given pane.
+    /// Records the pane as MRU for that workspace group.
+    pub(super) fn sync_active_group_from_pane(&mut self, pane_id: u32) {
+        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pane_id) {
+            let group = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
+            self.active_group = group;
+            self.last_pane_per_group.insert(group, pane_id);
         }
     }
 
@@ -1944,6 +2057,160 @@ impl App {
                     ctx.send_viewport_cmd_to(ew.viewport_id, egui::ViewportCommand::Focus);
                 } else {
                     self.open_workspace_in_new_window(ctx, workspace_id);
+                }
+            }
+
+            // Group-aware variants — will be wired in a follow-up task
+            DragAction::ReorderTabInGroup {
+                pane_id,
+                group_id,
+                to_index,
+            } => {
+                if let Some(group) = self.pane_state.groups.get_mut(&group_id) {
+                    group.reorder(pane_id, to_index);
+                }
+                self.activate_pane(pane_id);
+            }
+            DragAction::MoveTabToGroup {
+                pane_id,
+                target_group_id,
+                at_index,
+            } => {
+                self.pane_state
+                    .move_pane_to_group(pane_id, target_group_id, at_index);
+                self.pane_state.focused_group_id = target_group_id;
+                self.activate_pane(pane_id);
+            }
+            DragAction::InsertTerminalInGroup {
+                session_id,
+                target_group_id,
+                at_index,
+            } => {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                let entry = PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::Terminal(session_id),
+                    manual_width: None,
+                    last_size: (80, 24),
+                    labels: vec![],
+                };
+                self.pane_state.panes.push(entry);
+                self.pane_state
+                    .add_pane_to_group(target_group_id, pane_id, at_index);
+                self.pane_state.focused_group_id = target_group_id;
+                self.activate_pane(pane_id);
+            }
+            DragAction::InsertFileEditorInGroup {
+                path,
+                target_group_id,
+                at_index,
+            } => {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+                let entry = PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::FileEditor(FileEditorState {
+                        path: path.clone(),
+                        content: String::new(),
+                        dirty: false,
+                        save_error: false,
+                        workspace_id: self.active_group,
+                        show_preview: is_md && self.md_prefer_preview,
+                        stale: false,
+                        loading: true,
+                    }),
+                    manual_width: None,
+                    last_size: (0, 0),
+                    labels: vec![],
+                };
+                self.pane_state.panes.push(entry);
+                self.pane_state
+                    .add_pane_to_group(target_group_id, pane_id, at_index);
+                self.pane_state.focused_group_id = target_group_id;
+                self.activate_pane(pane_id);
+                let results = std::sync::Arc::clone(&self.file_load_results);
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    let content = std::fs::read_to_string(&path).unwrap_or_default();
+                    results.lock().push((pane_id, content));
+                    ctx_clone.request_repaint();
+                });
+            }
+            DragAction::InsertDiffInGroup {
+                rel_path,
+                target_group_id,
+                at_index,
+            } => {
+                if let Some(cwd) = self.active_pane_cwd() {
+                    let full_path = cwd.join(&rel_path);
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    let entry = PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::FileDiff(FileDiffState {
+                            path: full_path.clone(),
+                            old_content: String::new(),
+                            new_content: String::new(),
+                            hunks: Vec::new(),
+                            diff_mode: self.settings.diff_view_mode,
+                            current_hunk: 0,
+                            old_highlights: None,
+                            new_highlights: None,
+                            highlight_theme: crate::theme::active().id,
+                            loading: true,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
+                        labels: vec![],
+                    };
+                    self.pane_state.panes.push(entry);
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pending_diff_panes.insert(full_path, pane_id);
+                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
+                }
+            }
+            DragAction::InsertNoteInGroup {
+                workspace_id,
+                target_group_id,
+                at_index,
+            } => {
+                let ws_id = if workspace_id == 0 {
+                    None
+                } else {
+                    Some(workspace_id)
+                };
+                let existing = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| {
+                        matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id)
+                    })
+                    .map(|p| p.id);
+                if let Some(pid) = existing {
+                    self.activate_pane(pid);
+                } else {
+                    let pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    let entry = PaneEntry {
+                        id: pane_id,
+                        content: PaneContent::NoteEditor(NoteEditorState {
+                            workspace_id: ws_id,
+                        }),
+                        manual_width: None,
+                        last_size: (0, 0),
+                        labels: vec![],
+                    };
+                    self.pane_state.panes.push(entry);
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
                 }
             }
         }

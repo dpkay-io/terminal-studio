@@ -353,6 +353,80 @@ impl KeybindingsConfig {
                 },
                 AppAction::ReopenClosedSession,
             ),
+            // Group navigation
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowRight,
+                },
+                AppAction::FocusNextGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowLeft,
+                },
+                AppAction::FocusPrevGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowRight,
+                },
+                AppAction::MoveTabToNextGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowLeft,
+                },
+                AppAction::MoveTabToPrevGroup,
+            ),
+            // Vertical group navigation
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowDown,
+                },
+                AppAction::FocusGroupDown,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::ArrowUp,
+                },
+                AppAction::FocusGroupUp,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowDown,
+                },
+                AppAction::MoveTabToDownGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: true,
+                    key: egui::Key::ArrowUp,
+                },
+                AppAction::MoveTabToUpGroup,
+            ),
         ];
 
         defaults

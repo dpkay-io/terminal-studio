@@ -371,6 +371,65 @@ impl App {
                     self.deferred_open_workspace = Some(ws_ids[prev]);
                 }
             }
+            AppAction::FocusNextGroup
+            | AppAction::FocusPrevGroup
+            | AppAction::FocusGroupUp
+            | AppAction::FocusGroupDown => {
+                use crate::editor_group::NavigationDir;
+                let nav = match action {
+                    AppAction::FocusNextGroup => NavigationDir::Right,
+                    AppAction::FocusPrevGroup => NavigationDir::Left,
+                    AppAction::FocusGroupUp => NavigationDir::Up,
+                    AppAction::FocusGroupDown => NavigationDir::Down,
+                    _ => unreachable!(),
+                };
+                if let Some(target) = self
+                    .pane_state
+                    .group_layout
+                    .spatial_neighbor(self.pane_state.focused_group_id, nav)
+                {
+                    self.pane_state.focused_group_id = target;
+                    if let Some(g) = self.pane_state.groups.get(&target) {
+                        self.pane_state.active_pane_id = g.active_pane_id;
+                        if let Some(pid) = g.active_pane_id {
+                            if let Some(pane) = self.pane_state.find(pid) {
+                                if let PaneContent::Terminal(sid) = pane.content {
+                                    self.session_state.active_id = Some(sid);
+                                }
+                            }
+                        }
+                    }
+                    self.update_is_active_flags();
+                    ctx.request_repaint();
+                }
+            }
+            AppAction::MoveTabToNextGroup
+            | AppAction::MoveTabToPrevGroup
+            | AppAction::MoveTabToUpGroup
+            | AppAction::MoveTabToDownGroup => {
+                use crate::editor_group::NavigationDir;
+                let nav = match action {
+                    AppAction::MoveTabToNextGroup => NavigationDir::Right,
+                    AppAction::MoveTabToPrevGroup => NavigationDir::Left,
+                    AppAction::MoveTabToUpGroup => NavigationDir::Up,
+                    AppAction::MoveTabToDownGroup => NavigationDir::Down,
+                    _ => unreachable!(),
+                };
+                if let Some(pid) = self.pane_state.active_pane_id {
+                    if let Some(target_gid) = self
+                        .pane_state
+                        .group_layout
+                        .spatial_neighbor(self.pane_state.focused_group_id, nav)
+                    {
+                        self.pane_state.move_pane_to_group(pid, target_gid, None);
+                        self.pane_state.focused_group_id = target_gid;
+                        if let Some(g) = self.pane_state.groups.get(&target_gid) {
+                            self.pane_state.active_pane_id = g.active_pane_id;
+                        }
+                        ctx.request_repaint();
+                    }
+                }
+            }
             AppAction::CommandPalette => {}
             _ => {}
         }
@@ -410,6 +469,14 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         SearchAllSessions,
         ZoomPane,
         ReopenClosedSession,
+        FocusNextGroup,
+        FocusPrevGroup,
+        FocusGroupUp,
+        FocusGroupDown,
+        MoveTabToNextGroup,
+        MoveTabToPrevGroup,
+        MoveTabToUpGroup,
+        MoveTabToDownGroup,
     ];
 
     actions

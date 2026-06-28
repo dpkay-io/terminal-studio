@@ -40,6 +40,7 @@ pub(super) struct WindowView {
     pub(super) active_term_ui_id: Option<egui::Id>,
     pub(super) was_focused: bool,
     pub(super) session_workspace_filter: Option<Option<u64>>,
+    pub(super) focused_group_id: Option<crate::editor_group::GroupId>,
 }
 
 impl WindowView {
@@ -70,6 +71,7 @@ impl WindowView {
             active_term_ui_id: None,
             was_focused: true,
             session_workspace_filter: None,
+            focused_group_id: None,
         }
     }
 }

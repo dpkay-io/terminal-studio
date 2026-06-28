@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use egui::FontId;
 
+use crate::editor_group::NavigationDir;
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
@@ -73,6 +74,7 @@ enum CloseAllTarget {
     #[default]
     ActiveGroup,
     Group(Option<u64>),
+    EditorGroup(crate::editor_group::GroupId),
     All,
 }
 
@@ -432,24 +434,38 @@ impl eframe::App for App {
             }
         }
 
-        // Reap dead sessions whose PTY process has exited. Keeps the session
-        // count from growing unboundedly if something spawns sessions faster
-        // than they are used. Only reap sessions that have NO pane pointing at
-        // them (orphans) — user-visible dead sessions are handled by the
-        // existing close flow.
+        // Auto-close panes whose shell process has exited, then reap any
+        // remaining orphan sessions (no pane references them).
         {
-            let orphan_dead: Vec<u32> =
-                self.session_state
-                    .sessions
-                    .iter()
-                    .filter(|e| !e.alive.load(Ordering::Relaxed))
-                    .filter(|e| {
-                        !self.pane_state.panes.iter().any(
-                            |p| matches!(&p.content, PaneContent::Terminal(sid) if *sid == e.id),
-                        )
-                    })
-                    .map(|e| e.id)
-                    .collect();
+            let dead_sids: Vec<u32> = self
+                .session_state
+                .sessions
+                .iter()
+                .filter(|e| !e.alive.load(Ordering::Relaxed))
+                .map(|e| e.id)
+                .collect();
+
+            let panes_to_close: Vec<u32> = self
+                .pane_state
+                .panes
+                .iter()
+                .filter(
+                    |p| matches!(&p.content, PaneContent::Terminal(sid) if dead_sids.contains(sid)),
+                )
+                .map(|p| p.id)
+                .collect();
+
+            for pid in panes_to_close {
+                self.close_pane_full(pid);
+            }
+
+            let orphan_dead: Vec<u32> = self
+                .session_state
+                .sessions
+                .iter()
+                .filter(|e| !e.alive.load(Ordering::Relaxed))
+                .map(|e| e.id)
+                .collect();
             for sid in orphan_dead {
                 self.remove_session_and_cleanup(sid);
             }
@@ -1135,6 +1151,53 @@ impl App {
         self.completed_badges.remove(&sid);
         self.resize_debounce.remove(&sid);
         self.scroll_accum.remove(&sid);
+    }
+
+    /// Close a pane, cleaning up its session (if terminal) and updating focus.
+    /// Consolidates the repeated close logic used by Ctrl+Shift+W, tab-strip
+    /// close button, and context menu close.
+    fn close_pane_full(&mut self, pid: u32) {
+        if let Some(pane) = self.pane_state.find(pid) {
+            if let PaneContent::Terminal(sid) = pane.content {
+                self.remove_session_and_cleanup(sid);
+                if self.session_state.active_id == Some(sid) {
+                    self.session_state.active_id =
+                        self.session_state.sessions.first().map(|e| e.id);
+                    self.update_is_active_flags();
+                }
+            }
+        }
+
+        let close_result = self.pane_state.close_pane_in_group(pid);
+        self.pane_state.close_leaf(pid);
+
+        if self.zoomed_pane_id == Some(pid) {
+            self.zoomed_pane_id = None;
+        }
+
+        if let Some(result) = close_result {
+            if let Some(new_pid) = result.focus_pane_id {
+                self.activate_pane(new_pid);
+            } else {
+                self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+                if let Some(new_pid) = self.pane_state.active_pane_id {
+                    self.activate_pane(new_pid);
+                }
+            }
+        } else {
+            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+            if let Some(new_pid) = self.pane_state.active_pane_id {
+                self.activate_pane(new_pid);
+            }
+        }
+
+        self.active_group = self
+            .pane_state
+            .active_pane_id
+            .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+            .and_then(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p));
+
+        self.save_session();
     }
 
     fn capture_closed_session(&self, sid: u32) {
@@ -2160,6 +2223,7 @@ impl App {
             .collect();
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
+        #[allow(unused_variables)]
         let ws_colors: Vec<Option<[u8; 3]>> = self
             .pane_state
             .panes
@@ -2197,43 +2261,57 @@ impl App {
             })
             .collect();
 
-        // ── Group membership + visible pane indices for active group ─────────
-        let pane_groups: Vec<Option<u64>> = self
-            .pane_state
-            .panes
-            .iter()
-            .map(|p| Self::pane_group(&self.session_state.sessions, &self.workspace_store, p))
-            .collect();
-        let active_group_snap = self.active_group;
-        let visible_indices: Vec<usize> = self
-            .pane_state
-            .visible_leaf_indices(&pane_groups, active_group_snap);
-        // If the focused pane's computed group no longer matches `active_group`, follow it.
-        // This happens when the user runs `cd` in a terminal and the new CWD belongs to a
-        // different workspace — without this, the user keeps typing into a pane they can't see.
-        //
-        // Only fall back to "first visible pane in current group" when the focused pane was
-        // actually removed (e.g., closed). Callers that deliberately change `active_group`
-        // without changing `active_pane_id` (e.g., `open_workspace_in_new_window`) must clear
-        // `active_pane_id` themselves so this fallback path runs instead of the follow path.
-        if let Some(pid) = self.pane_state.active_pane_id {
-            let pane_visible = visible_indices
+        // ── Sync editor groups with actual panes (remove stale references) ──
+        self.pane_state.sync_groups_with_panes();
+
+        // ── Migration: sync editor groups from panes ──
+        // If groups are empty but we have panes, create one group containing all.
+        if self.pane_state.groups.is_empty() && !self.pane_state.panes.is_empty() {
+            let all_pane_ids: Vec<u32> = self.pane_state.panes.iter().map(|p| p.id).collect();
+            if let Some(&first_pid) = all_pane_ids.first() {
+                let gid = self.pane_state.create_group(first_pid);
+                for &pid in &all_pane_ids[1..] {
+                    self.pane_state.add_pane_to_group(gid, pid, None);
+                }
+                if let Some(active) = self.pane_state.active_pane_id {
+                    if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                        g.activate(active);
+                    }
+                }
+                self.pane_state.group_layout =
+                    crate::editor_group::GroupNode::Leaf { group_id: gid };
+                self.pane_state.focused_group_id = gid;
+            }
+        }
+        // Ensure any pane not in any group gets added to the focused group.
+        // This catches panes created by legacy code paths that don't know about groups.
+        if !self.pane_state.groups.is_empty() {
+            let focused_gid = self.pane_state.focused_group_id;
+            let orphan_pane_ids: Vec<u32> = self
+                .pane_state
+                .panes
                 .iter()
-                .any(|&i| self.pane_state.panes[i].id == pid);
-            if !pane_visible {
-                let pane_idx = self.pane_state.panes.iter().position(|p| p.id == pid);
-                if let Some(idx) = pane_idx {
-                    self.active_group = pane_groups[idx];
-                } else {
-                    // Pane was removed — fall back to first pane in the current group.
-                    self.pane_state.active_pane_id = visible_indices
-                        .first()
-                        .map(|&i| self.pane_state.panes[i].id);
-                    if let Some(new_pid) = self.pane_state.active_pane_id {
-                        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
-                            if let PaneContent::Terminal(sid) = pane.content {
-                                self.session_state.active_id = Some(sid);
-                            }
+                .filter(|p| self.pane_state.groups.values().all(|g| !g.contains(p.id)))
+                .map(|p| p.id)
+                .collect();
+            for pid in orphan_pane_ids {
+                self.pane_state.add_pane_to_group(focused_gid, pid, None);
+            }
+        }
+
+        // ── Visible pane indices (all panes, no workspace filtering) ──────
+        let visible_indices: Vec<usize> = self.pane_state.visible_leaf_indices();
+        // If the active pane was removed, fall back to the first available pane.
+        if let Some(pid) = self.pane_state.active_pane_id {
+            let pane_exists = self.pane_state.panes.iter().any(|p| p.id == pid);
+            if !pane_exists {
+                self.pane_state.active_pane_id = visible_indices
+                    .first()
+                    .map(|&i| self.pane_state.panes[i].id);
+                if let Some(new_pid) = self.pane_state.active_pane_id {
+                    if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == new_pid) {
+                        if let PaneContent::Terminal(sid) = pane.content {
+                            self.session_state.active_id = Some(sid);
                         }
                     }
                 }
@@ -2244,6 +2322,7 @@ impl App {
         let divider_drags: Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
         let mut close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
+        let mut clicked_group_id: Option<crate::editor_group::GroupId> = None;
         let mut editor_saves: Vec<u32> = vec![];
         let mut editor_preview_toggles: Vec<u32> = vec![];
         let mut pane_widths_snap: Vec<(u32, f32)> = vec![];
@@ -2260,7 +2339,9 @@ impl App {
         // Phase D: pane context menu actions (3-dot menu on split panes)
         let mut pane_context_actions: Vec<ui::PaneContextAction> = vec![];
         // Phase D: move existing tab into split alongside active pane
-        let mut move_to_split: Option<(u32, SplitDir)> = None;
+        let move_to_split: Option<(u32, SplitDir)> = None;
+        // Group-based tab bar results
+        let mut group_tab_results: Vec<ui::GroupTabBarResult> = vec![];
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -2293,70 +2374,47 @@ impl App {
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .and_then(|p| match &p.content { PaneContent::Terminal(sid) => Some(*sid), _ => None });
 
-            if nv == 0 {
-                // Empty group — show a placeholder
+            // ── Render group layout ─────────────────────────────────
+            let has_any_panes = self.pane_state.groups.values().any(|g| !g.is_empty());
+            if !has_any_panes {
+                // Empty — show placeholder
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        egui::RichText::new("No sessions in this group.\nUse '+ New' in the Sessions panel to add one.")
+                        egui::RichText::new("No sessions.\nUse '+ New' in the Sessions panel to add one.")
                             .color(theme::active().overlay0).size(theme::FONT_TERM)
                     );
                 });
             } else {
-                // ── Tab bar + single content area ────────────────────────────
-                let tab_h   = theme::HEADER_H;
-                let panel_h = panel_rect.height();
-
-                let tab_actions_w = theme::TAB_ACTIONS_W;
-                let tab_scroll_w = (panel_rect.width() - tab_actions_w).max(0.0);
-                let tab_bar_rect = egui::Rect::from_min_size(
-                    panel_rect.min,
-                    egui::vec2(tab_scroll_w, tab_h),
-                );
-                let tab_actions_rect = egui::Rect::from_min_size(
-                    egui::pos2(panel_rect.min.x + tab_scroll_w, panel_rect.min.y),
-                    egui::vec2(tab_actions_w, tab_h),
-                );
-                let content_rect = egui::Rect::from_min_size(
-                    egui::pos2(panel_rect.min.x, panel_rect.min.y + tab_h),
-                    egui::vec2(panel_rect.width(), (panel_h - tab_h).max(0.0)),
-                );
-
-                // ── Tab bar (horizontally scrollable) + action buttons ──────
-                let tab_result = self.render_tab_bar(
+                self.render_group_content(
                     ui,
-                    &visible_indices,
-                    active_pane_id_snap,
-                    &ws_colors,
-                    tab_h,
-                    tab_bar_rect,
-                    tab_actions_rect,
-                );
-                if tab_result.close_pane_id.is_some() {
-                    close_pane_id = tab_result.close_pane_id;
-                }
-                if tab_result.clicked_pane_id.is_some() {
-                    clicked_pane_id = tab_result.clicked_pane_id;
-                }
-                if tab_result.split_request.is_some() {
-                    split_request = tab_result.split_request;
-                }
-                if tab_result.move_to_split.is_some() {
-                    move_to_split = tab_result.move_to_split;
-                }
-
-                // ── Active tab content (full-size, split-aware) ──────────────
-                self.render_pane_content(
-                    ui,
-                    content_rect,
-                    active_pane_id_snap,
+                    panel_rect,
                     &mut editor_texts,
                     &mut clicked_pane_id,
+                    &mut clicked_group_id,
                     &mut editor_saves,
                     &mut editor_preview_toggles,
                     &mut pane_widths_snap,
                     &mut split_ratio_changes,
                     &mut pane_context_actions,
+                    &mut group_tab_results,
                 );
+
+                // Process group tab bar results
+                for result in &group_tab_results {
+                    if result.close_pane_id.is_some() { close_pane_id = result.close_pane_id; }
+                    if result.clicked_pane_id.is_some() { clicked_pane_id = result.clicked_pane_id; }
+                    if result.clicked_group_id.is_some() { clicked_group_id = result.clicked_group_id; }
+                    if let Some((gid, dir)) = result.split_request {
+                        // Focus the requesting group so the split goes to the right place.
+                        self.pane_state.focused_group_id = gid;
+                        if let Some(g) = self.pane_state.groups.get(&gid) {
+                            if let Some(pid) = g.active_pane_id {
+                                self.pane_state.active_pane_id = Some(pid);
+                            }
+                        }
+                        split_request = Some(dir);
+                    }
+                }
 
             // ── URL detection + search overlay ────────────────────────────
             if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.session_state.active_id) {
@@ -2914,6 +2972,57 @@ impl App {
                                     AppAction::ToggleNotes => {
                                         self.notes_panel_collapsed = !self.notes_panel_collapsed;
                                     }
+                                    AppAction::FocusNextGroup | AppAction::FocusPrevGroup
+                                    | AppAction::FocusGroupUp | AppAction::FocusGroupDown => {
+                                        let nav = match action {
+                                            AppAction::FocusNextGroup => NavigationDir::Right,
+                                            AppAction::FocusPrevGroup => NavigationDir::Left,
+                                            AppAction::FocusGroupUp => NavigationDir::Up,
+                                            AppAction::FocusGroupDown => NavigationDir::Down,
+                                            _ => unreachable!(),
+                                        };
+                                        if let Some(target) = self.pane_state.group_layout.spatial_neighbor(
+                                            self.pane_state.focused_group_id,
+                                            nav,
+                                        ) {
+                                            self.pane_state.focused_group_id = target;
+                                            if let Some(g) = self.pane_state.groups.get(&target) {
+                                                self.pane_state.active_pane_id = g.active_pane_id;
+                                                if let Some(pid) = g.active_pane_id {
+                                                    if let Some(pane) = self.pane_state.find(pid) {
+                                                        if let PaneContent::Terminal(sid) = pane.content {
+                                                            self.session_state.active_id = Some(sid);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            self.update_is_active_flags();
+                                            ctx.request_repaint();
+                                        }
+                                    }
+                                    AppAction::MoveTabToNextGroup | AppAction::MoveTabToPrevGroup
+                                    | AppAction::MoveTabToUpGroup | AppAction::MoveTabToDownGroup => {
+                                        let nav = match action {
+                                            AppAction::MoveTabToNextGroup => NavigationDir::Right,
+                                            AppAction::MoveTabToPrevGroup => NavigationDir::Left,
+                                            AppAction::MoveTabToUpGroup => NavigationDir::Up,
+                                            AppAction::MoveTabToDownGroup => NavigationDir::Down,
+                                            _ => unreachable!(),
+                                        };
+                                        if let Some(pid) = self.pane_state.active_pane_id {
+                                            if let Some(target_gid) = self.pane_state.group_layout.spatial_neighbor(
+                                                self.pane_state.focused_group_id,
+                                                nav,
+                                            ) {
+                                                self.pane_state.move_pane_to_group(pid, target_gid, None);
+                                                self.pane_state.focused_group_id = target_gid;
+                                                if let Some(g) = self.pane_state.groups.get(&target_gid) {
+                                                    self.pane_state.active_pane_id = g.active_pane_id;
+                                                }
+                                                ctx.request_repaint();
+                                            }
+                                        }
+                                    }
                                     _ => {
                                         if let Some(tab_idx) = action.tab_index() {
                                             if tab_idx < nv {
@@ -3453,10 +3562,20 @@ impl App {
 
         // Phase D-0: Apply split divider ratio changes from drag
         for (split_id_changed, new_ratio) in split_ratio_changes {
-            for tree in self.pane_state.pane_trees.values_mut() {
-                if let Some(ratio) = tree.find_split_ratio_mut(split_id_changed) {
-                    *ratio = new_ratio;
-                    break;
+            // Check group_layout first (new system)
+            if let Some(ratio) = self
+                .pane_state
+                .group_layout
+                .find_split_ratio_mut(split_id_changed)
+            {
+                *ratio = new_ratio;
+            } else {
+                // Fall back to pane_trees (legacy)
+                for tree in self.pane_state.pane_trees.values_mut() {
+                    if let Some(ratio) = tree.find_split_ratio_mut(split_id_changed) {
+                        *ratio = new_ratio;
+                        break;
+                    }
                 }
             }
         }
@@ -3464,73 +3583,68 @@ impl App {
         // Phase D-1: Handle split request (Ctrl+Shift+\ or Ctrl+Shift+-)
         if let Some(dir) = split_request {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                // Find the root pane that contains the active pane
-                let root_pid_opt = self
+                // Get current size for the new pane
+                let (cols, rows) = self
                     .pane_state
-                    .pane_trees
+                    .panes
                     .iter()
-                    .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
-                    .map(|(&rpid, _)| rpid);
-                if let Some(root_pid) = root_pid_opt {
-                    // Get current size for the new pane
-                    let (cols, rows) = self
+                    .find(|p| p.id == active_pid)
+                    .map(|p| p.last_size)
+                    .unwrap_or((80, 24));
+                // Get cwd and shell from active session
+                let (cwd, shell) = {
+                    let active_session_entry = self
                         .pane_state
                         .panes
                         .iter()
                         .find(|p| p.id == active_pid)
-                        .map(|p| p.last_size)
-                        .unwrap_or((80, 24));
-                    // Get cwd and shell from active session
-                    let (cwd, shell) = {
-                        let active_session_entry = self
-                            .pane_state
-                            .panes
-                            .iter()
-                            .find(|p| p.id == active_pid)
-                            .and_then(|p| {
-                                if let PaneContent::Terminal(sid) = &p.content {
-                                    Some(*sid)
-                                } else {
-                                    None
-                                }
-                            })
-                            .and_then(|sid| self.session_state.find(sid));
-                        let cwd = active_session_entry
-                            .map(|e| e.session.read().cwd.clone())
-                            .filter(|p| !p.as_os_str().is_empty());
-                        let shell = active_session_entry
-                            .map(|e| e.shell.clone())
-                            .unwrap_or_else(default_shell);
-                        (cwd, shell)
-                    };
-                    // Spawn a new session (no pane entry yet — leaf only in tree)
-                    if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
-                        let new_pane_id = self.pane_state.next_pane_id;
-                        self.pane_state.next_pane_id += 1;
-                        let split_id = self.pane_state.next_split_id;
-                        self.pane_state.next_split_id += 1;
-                        // Add pane entry (NOT a root pane, so no pane_trees entry)
-                        self.pane_state.panes.push(PaneEntry {
-                            id: new_pane_id,
-                            content: PaneContent::Terminal(new_sid),
-                            manual_width: None,
+                        .and_then(|p| {
+                            if let PaneContent::Terminal(sid) = &p.content {
+                                Some(*sid)
+                            } else {
+                                None
+                            }
+                        })
+                        .and_then(|sid| self.session_state.find(sid));
+                    let cwd = active_session_entry
+                        .map(|e| e.session.read().cwd.clone())
+                        .filter(|p| !p.as_os_str().is_empty());
+                    let shell = active_session_entry
+                        .map(|e| e.shell.clone())
+                        .unwrap_or_else(default_shell);
+                    (cwd, shell)
+                };
+                // Spawn a new session
+                if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
+                    let new_pane_id = self.pane_state.next_pane_id;
+                    self.pane_state.next_pane_id += 1;
+                    // Add pane entry
+                    self.pane_state.panes.push(PaneEntry {
+                        id: new_pane_id,
+                        content: PaneContent::Terminal(new_sid),
+                        manual_width: None,
+                        last_size: (cols, rows),
+                        labels: vec![],
+                    });
+                    // Split the focused group (new system)
+                    self.pane_state.split_focused_group(new_pane_id, dir);
+                    // Also maintain pane_trees for backward compat during migration
+                    self.pane_state.pane_trees.insert(
+                        new_pane_id,
+                        PaneNode::Leaf {
+                            pane_id: new_pane_id,
                             last_size: (cols, rows),
-                            labels: vec![],
-                        });
-                        // Modify the tree to split the active leaf
-                        if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                            tree.split_pane(active_pid, new_pane_id, split_id, dir);
-                        }
-                        // Focus the new pane
-                        self.pane_state.active_pane_id = Some(new_pane_id);
-                        self.session_state.active_id = Some(new_sid);
-                        self.update_is_active_flags();
-                        self.flash.trigger(
-                            feedback::FlashTarget::Pane(new_pane_id),
-                            feedback::FlashKind::Success,
-                        );
-                        ctx.request_repaint();
-                    }
+                        },
+                    );
+                    // Focus the new pane
+                    self.pane_state.active_pane_id = Some(new_pane_id);
+                    self.session_state.active_id = Some(new_sid);
+                    self.update_is_active_flags();
+                    self.flash.trigger(
+                        feedback::FlashTarget::Pane(new_pane_id),
+                        feedback::FlashKind::Success,
+                    );
+                    ctx.request_repaint();
                 }
             }
         }
@@ -3644,41 +3758,7 @@ impl App {
         // Phase D-2: Handle Ctrl+Shift+W — close the focused pane
         if close_split_pane {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                // Kill session before tree surgery.
-                if let Some(pane) = self.pane_state.find(active_pid) {
-                    if let PaneContent::Terminal(sid) = pane.content {
-                        self.remove_session_and_cleanup(sid);
-                        if self.session_state.active_id == Some(sid) {
-                            self.session_state.active_id =
-                                self.session_state.sessions.first().map(|e| e.id);
-                            self.update_is_active_flags();
-                        }
-                    }
-                }
-
-                // Find sibling to focus before removing.
-                let sibling_focus = self.pane_state.root_of(active_pid).and_then(|root_id| {
-                    self.pane_state.pane_trees.get(&root_id).and_then(|tree| {
-                        let leaves = tree.leaf_ids();
-                        if leaves.len() > 1 {
-                            leaves.iter().find(|&&lid| lid != active_pid).copied()
-                        } else {
-                            None
-                        }
-                    })
-                });
-
-                self.pane_state.close_leaf(active_pid);
-
-                if self.zoomed_pane_id == Some(active_pid) {
-                    self.zoomed_pane_id = None;
-                }
-                self.pane_state.active_pane_id =
-                    sibling_focus.or_else(|| self.pane_state.panes.last().map(|p| p.id));
-                if let Some(new_pid) = self.pane_state.active_pane_id {
-                    self.activate_pane(new_pid);
-                }
-                self.save_session();
+                self.close_pane_full(active_pid);
             }
         }
 
@@ -3742,76 +3822,7 @@ impl App {
                     }
                 }
                 PaneContextAction::Close(pid) => {
-                    if let Some(root_pid) = self.pane_state.root_of(pid) {
-                        let leaf_count = self
-                            .pane_state
-                            .pane_trees
-                            .get(&root_pid)
-                            .map(|t| t.leaf_ids().len())
-                            .unwrap_or(1);
-                        if leaf_count <= 1 {
-                            if let Some(pos) =
-                                self.pane_state.panes.iter().position(|p| p.id == pid)
-                            {
-                                if let PaneContent::Terminal(sid) =
-                                    self.pane_state.panes[pos].content
-                                {
-                                    self.remove_session_and_cleanup(sid);
-                                    if self.session_state.active_id == Some(sid) {
-                                        self.session_state.active_id =
-                                            self.session_state.sessions.first().map(|e| e.id);
-                                        self.update_is_active_flags();
-                                    }
-                                }
-                                self.pane_state.panes.remove(pos);
-                            }
-                            self.pane_state.pane_trees.remove(&root_pid);
-                            self.pane_state.active_pane_id =
-                                self.pane_state.panes.last().map(|p| p.id);
-                            self.save_session();
-                        } else {
-                            let remove_result =
-                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                    tree.remove_pane(pid)
-                                } else {
-                                    RemoveResult::NotFound
-                                };
-                            if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                    *tree = replacement;
-                                }
-                            }
-                            if let Some(pos) =
-                                self.pane_state.panes.iter().position(|p| p.id == pid)
-                            {
-                                if let PaneContent::Terminal(sid) =
-                                    self.pane_state.panes[pos].content
-                                {
-                                    self.remove_session_and_cleanup(sid);
-                                    if self.session_state.active_id == Some(sid) {
-                                        self.session_state.active_id =
-                                            self.session_state.sessions.first().map(|e| e.id);
-                                        self.update_is_active_flags();
-                                    }
-                                }
-                                self.pane_state.panes.remove(pos);
-                            }
-                            if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
-                                let leaves = tree.leaf_ids();
-                                self.pane_state.active_pane_id = leaves.first().copied();
-                                if let Some(new_pid) = self.pane_state.active_pane_id {
-                                    if let Some(pane) =
-                                        self.pane_state.panes.iter().find(|p| p.id == new_pid)
-                                    {
-                                        if let PaneContent::Terminal(sid) = pane.content {
-                                            self.session_state.active_id = Some(sid);
-                                            self.update_is_active_flags();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    self.close_pane_full(pid);
                 }
                 PaneContextAction::SplitHorizontal(pid) | PaneContextAction::SplitVertical(pid) => {
                     let dir = if matches!(action, PaneContextAction::SplitHorizontal(_)) {
@@ -3819,55 +3830,60 @@ impl App {
                     } else {
                         SplitDir::Vertical
                     };
-                    if let Some(root_pid) = self.pane_state.root_of(pid) {
-                        let (cols, rows) = self
+                    let (cols, rows) = self
+                        .pane_state
+                        .panes
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.last_size)
+                        .unwrap_or((80, 24));
+                    let (cwd, shell) = {
+                        let entry = self
                             .pane_state
                             .panes
                             .iter()
                             .find(|p| p.id == pid)
-                            .map(|p| p.last_size)
-                            .unwrap_or((80, 24));
-                        let (cwd, shell) = {
-                            let entry = self
-                                .pane_state
-                                .panes
-                                .iter()
-                                .find(|p| p.id == pid)
-                                .and_then(|p| {
-                                    if let PaneContent::Terminal(sid) = &p.content {
-                                        Some(*sid)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .and_then(|sid| self.session_state.find(sid));
-                            let cwd = entry
-                                .map(|e| e.session.read().cwd.clone())
-                                .filter(|p| !p.as_os_str().is_empty());
-                            let shell =
-                                entry.map(|e| e.shell.clone()).unwrap_or_else(default_shell);
-                            (cwd, shell)
-                        };
-                        if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
-                            let new_pane_id = self.pane_state.next_pane_id;
-                            self.pane_state.next_pane_id += 1;
-                            let split_id = self.pane_state.next_split_id;
-                            self.pane_state.next_split_id += 1;
-                            self.pane_state.panes.push(PaneEntry {
-                                id: new_pane_id,
-                                content: PaneContent::Terminal(new_sid),
-                                manual_width: None,
-                                last_size: (cols, rows),
-                                labels: vec![],
-                            });
-                            if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                tree.split_pane(pid, new_pane_id, split_id, dir);
-                            }
-                            self.pane_state.active_pane_id = Some(new_pane_id);
-                            self.session_state.active_id = Some(new_sid);
-                            self.update_is_active_flags();
-                            ctx.request_repaint();
+                            .and_then(|p| {
+                                if let PaneContent::Terminal(sid) = &p.content {
+                                    Some(*sid)
+                                } else {
+                                    None
+                                }
+                            })
+                            .and_then(|sid| self.session_state.find(sid));
+                        let cwd = entry
+                            .map(|e| e.session.read().cwd.clone())
+                            .filter(|p| !p.as_os_str().is_empty());
+                        let shell = entry.map(|e| e.shell.clone()).unwrap_or_else(default_shell);
+                        (cwd, shell)
+                    };
+                    if let Some(new_sid) = self.spawn_session_no_pane(&shell, cols, rows, cwd) {
+                        let new_pane_id = self.pane_state.next_pane_id;
+                        self.pane_state.next_pane_id += 1;
+                        self.pane_state.panes.push(PaneEntry {
+                            id: new_pane_id,
+                            content: PaneContent::Terminal(new_sid),
+                            manual_width: None,
+                            last_size: (cols, rows),
+                            labels: vec![],
+                        });
+                        // Focus the group containing `pid`, then split
+                        if let Some(gid) = self.pane_state.group_of(pid) {
+                            self.pane_state.focused_group_id = gid;
                         }
+                        self.pane_state.split_focused_group(new_pane_id, dir);
+                        // Also maintain pane_trees
+                        self.pane_state.pane_trees.insert(
+                            new_pane_id,
+                            PaneNode::Leaf {
+                                pane_id: new_pane_id,
+                                last_size: (cols, rows),
+                            },
+                        );
+                        self.pane_state.active_pane_id = Some(new_pane_id);
+                        self.session_state.active_id = Some(new_sid);
+                        self.update_is_active_flags();
+                        ctx.request_repaint();
                     }
                 }
                 PaneContextAction::ConflictResolve { pane_id, action } => {
@@ -3928,82 +3944,10 @@ impl App {
                 Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
-        // 2. Close pane (tab-strip close — kills the entire split tree for that root)
+        // 2. Close pane (tab-strip close)
         if let Some(pid) = close_pane_id {
-            // Capture the closing pane's workspace group before removal.
-            let closing_group = self.pane_state.find(pid).and_then(|p| {
-                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-            });
-
-            // Kill session for this pane before tree surgery.
-            if let Some(pane) = self.pane_state.find(pid) {
-                if let PaneContent::Terminal(sid) = pane.content {
-                    self.remove_session_and_cleanup(sid);
-                    if self.session_state.active_id == Some(sid) {
-                        self.session_state.active_id =
-                            self.session_state.sessions.first().map(|e| e.id);
-                        self.update_is_active_flags();
-                    }
-                }
-            }
             editor_texts.retain(|(id, _)| *id != pid);
-
-            // Determine a sibling to focus before removing from tree.
-            let sibling_focus = self.pane_state.root_of(pid).and_then(|root_id| {
-                self.pane_state.pane_trees.get(&root_id).and_then(|tree| {
-                    let leaves = tree.leaf_ids();
-                    if leaves.len() > 1 {
-                        leaves.iter().find(|&&lid| lid != pid).copied()
-                    } else {
-                        None
-                    }
-                })
-            });
-
-            // close_leaf handles tree surgery + re-keying + pane removal.
-            if self.pane_state.close_leaf(pid).is_some()
-                && self.pane_state.active_pane_id == Some(pid)
-            {
-                // Focus priority: split sibling → last visited in same workspace
-                // → any pane in same workspace → global fallback.
-                let same_group_fallback = || {
-                    let group = closing_group;
-                    self.last_pane_per_group
-                        .get(&group)
-                        .copied()
-                        .filter(|&lpid| self.pane_state.find(lpid).is_some())
-                        .or_else(|| {
-                            self.pane_state
-                                .panes
-                                .iter()
-                                .find(|p| {
-                                    Self::pane_group(
-                                        &self.session_state.sessions,
-                                        &self.workspace_store,
-                                        p,
-                                    ) == group
-                                })
-                                .map(|p| p.id)
-                        })
-                };
-                self.pane_state.active_pane_id = sibling_focus
-                    .or_else(same_group_fallback)
-                    .or_else(|| self.pane_state.panes.last().map(|p| p.id));
-                if let Some(new_pid) = self.pane_state.active_pane_id {
-                    self.activate_pane(new_pid);
-                }
-                self.active_group = self
-                    .pane_state
-                    .active_pane_id
-                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                    .and_then(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                    });
-            }
-            if self.zoomed_pane_id == Some(pid) {
-                self.zoomed_pane_id = None;
-            }
-            self.save_session();
+            self.close_pane_full(pid);
         }
 
         // 3. Equalize pane widths for visible panes (split icon clicked)
@@ -4043,9 +3987,28 @@ impl App {
             }
         }
 
-        // 5. Pane focus from click
-        if let Some(pid) = clicked_pane_id {
+        // 5. Group + pane focus from click
+        if let Some(gid) = clicked_group_id {
+            self.pane_state.focused_group_id = gid;
+            // If a specific pane was clicked within the group, activate it
+            if let Some(pid) = clicked_pane_id {
+                if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                    g.activate(pid);
+                }
+                self.activate_pane(pid);
+                self.sync_active_group_from_pane(pid);
+            } else {
+                // Clicked in group area but not on a specific tab — sync global active
+                if let Some(g) = self.pane_state.groups.get(&gid) {
+                    if let Some(pid) = g.active_pane_id {
+                        self.activate_pane(pid);
+                        self.sync_active_group_from_pane(pid);
+                    }
+                }
+            }
+        } else if let Some(pid) = clicked_pane_id {
             self.activate_pane(pid);
+            self.sync_active_group_from_pane(pid);
         }
 
         // 5b. Materialize any DeferredTerminal that is now the active pane.

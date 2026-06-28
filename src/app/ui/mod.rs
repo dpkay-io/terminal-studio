@@ -10,4 +10,5 @@ pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
 mod tab_bar;
+pub(super) use tab_bar::GroupTabBarResult;
 mod titlebar;
