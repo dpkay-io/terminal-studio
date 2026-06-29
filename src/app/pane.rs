@@ -100,6 +100,7 @@ pub(super) struct PaneEntry {
     pub(super) manual_width: Option<f32>,
     pub(super) last_size: (u16, u16),
     pub(super) labels: Vec<u32>,
+    pub(super) last_active_at: u64,
 }
 
 pub(super) struct SessionEntry {

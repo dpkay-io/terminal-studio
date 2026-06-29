@@ -191,6 +191,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -323,6 +324,7 @@ impl App {
                     manual_width: None,
                     last_size: (cols, rows),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -424,6 +426,7 @@ impl App {
                         manual_width: None,
                         last_size: (cols, rows),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     },
                 );
                 self.pane_state.pane_trees.insert(

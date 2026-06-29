@@ -405,6 +405,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         }
     }
 
@@ -730,6 +731,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         });
         state.panes.push(PaneEntry {
             id: 2,
@@ -737,6 +739,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         });
         state.panes.push(PaneEntry {
             id: 3,
@@ -744,6 +747,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         });
         assert_eq!(state.panes_referencing_session(5), 2);
         assert_eq!(state.panes_referencing_session(7), 1);
@@ -758,6 +762,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         });
         state.panes.push(PaneEntry {
             id: 2,
@@ -765,6 +770,7 @@ mod tests {
             manual_width: None,
             last_size: (80, 24),
             labels: vec![],
+            last_active_at: 0,
         });
         assert_eq!(state.panes_referencing_session(5), 2);
         state.panes.retain(|p| p.id != 1);
@@ -789,6 +795,7 @@ mod tests {
             manual_width: None,
             last_size: (0, 0),
             labels: vec![],
+            last_active_at: 0,
         }
     }
 

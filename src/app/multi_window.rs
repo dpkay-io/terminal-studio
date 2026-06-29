@@ -17,7 +17,7 @@ pub(super) struct WindowView {
     pub(super) last_focused_sid: Option<u32>,
 
     pub(super) right_tab: RightTab,
-    pub(super) shown_md_tabs: HashSet<PathBuf>,
+    pub(super) shown_md_tabs: HashMap<Option<u64>, HashSet<PathBuf>>,
 
     pub(super) workspace_panel_ratio: f32,
     pub(super) workspace_panel_collapsed: bool,
@@ -52,7 +52,7 @@ impl WindowView {
             last_pane_per_group: HashMap::new(),
             last_focused_sid: None,
             right_tab: RightTab::Directory,
-            shown_md_tabs: HashSet::new(),
+            shown_md_tabs: HashMap::new(),
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.30,

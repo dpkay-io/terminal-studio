@@ -688,7 +688,14 @@ impl App {
                 ui.set_min_width(outer_w);
                 ui.set_max_width(outer_w);
                 let matcher = SkimMatcherV2::default();
-                for pane in self.pane_state.panes.iter() {
+                let mut sorted_indices: Vec<usize> = (0..self.pane_state.panes.len()).collect();
+                sorted_indices.sort_by(|&a, &b| {
+                    self.pane_state.panes[b]
+                        .last_active_at
+                        .cmp(&self.pane_state.panes[a].last_active_at)
+                });
+                for &pane_idx in &sorted_indices {
+                    let pane = &self.pane_state.panes[pane_idx];
                     let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane
                         .content
                     {

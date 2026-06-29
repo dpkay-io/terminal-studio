@@ -38,7 +38,10 @@ impl App {
                     .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
                     .map(|d| d.is_git)
                     .unwrap_or(false),
-                RightTab::Markdown(p) => self.shown_md_tabs.contains(p),
+                RightTab::Markdown(p) => self
+                    .shown_md_tabs
+                    .get(&self.active_group)
+                    .is_some_and(|tabs| tabs.contains(p)),
             };
             if !keep {
                 self.right_tab = RightTab::Directory;

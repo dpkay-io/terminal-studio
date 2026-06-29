@@ -13,6 +13,7 @@ struct WorkspaceCardData {
     has_note: bool,
     other_window_viewport: Option<egui::ViewportId>,
     has_active_session: bool,
+    last_activated: u64,
     git_branch: String,
     git_diff_count: usize,
 }
@@ -142,6 +143,7 @@ impl App {
                     has_note: !self.note_store.get(Some(w.id)).is_empty(),
                     other_window_viewport: other_vp,
                     has_active_session: active_ws_ids.contains(&w.id),
+                    last_activated: w.last_activated,
                     git_branch: git_info
                         .as_ref()
                         .map(|i| i.branch.clone())
@@ -151,12 +153,7 @@ impl App {
             })
             .collect();
 
-        // Sort: opened workspaces first, then alphabetical within each group
-        workspaces.sort_by(|a, b| {
-            b.has_active_session
-                .cmp(&a.has_active_session)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        workspaces.sort_by_key(|w| std::cmp::Reverse(w.last_activated));
 
         // Apply search filter
         if !search_filter.is_empty() {

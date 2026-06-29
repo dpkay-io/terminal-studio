@@ -84,7 +84,7 @@ pub struct App {
 
     pane_state: PaneState,
     right_tab: RightTab,
-    shown_md_tabs: HashSet<PathBuf>,
+    shown_md_tabs: HashMap<Option<u64>, HashSet<PathBuf>>,
     md_prefer_preview: bool,
     watch_state: Option<WatchState>,
 
@@ -205,8 +205,8 @@ pub struct App {
 
     // Detected markdown file paths in the currently visible terminal content
     detected_md_paths: Vec<crate::md_detector::DetectedMdPath>,
-    // Hash of visible lines from last detection pass — skip re-detection when unchanged
-    detection_lines_hash: u64,
+    // Per-session hash of visible lines from last detection pass — skip re-detection when unchanged
+    detection_lines_hash: HashMap<u32, u64>,
     // Tracks which md paths were already auto-opened in the right panel to avoid re-triggering
     auto_opened_md: HashSet<PathBuf>,
     // Content cache for terminal-detected MD files, with associated workspace ID
@@ -538,7 +538,10 @@ impl eframe::App for App {
             for (path, content, ws_id) in results.drain(..) {
                 self.terminal_md_content
                     .insert(path.clone(), (Arc::new(content), ws_id));
-                self.shown_md_tabs.insert(path.clone());
+                self.shown_md_tabs
+                    .entry(ws_id)
+                    .or_default()
+                    .insert(path.clone());
                 self.show_right_panel = true;
                 self.right_tab = RightTab::Markdown(path);
             }
@@ -548,11 +551,14 @@ impl eframe::App for App {
         {
             const MAX_MD_CONTENT: usize = 64;
             if self.terminal_md_content.len() > MAX_MD_CONTENT {
-                // Keep only entries that have active tabs
-                let active_paths: HashSet<PathBuf> = self.shown_md_tabs.iter().cloned().collect();
+                let active_paths: HashSet<PathBuf> = self
+                    .shown_md_tabs
+                    .values()
+                    .flat_map(|s| s.iter())
+                    .cloned()
+                    .collect();
                 self.terminal_md_content
                     .retain(|path, _| active_paths.contains(path));
-                // If still over limit after retaining active, just truncate
                 while self.terminal_md_content.len() > MAX_MD_CONTENT {
                     if let Some(key) = self.terminal_md_content.keys().next().cloned() {
                         self.terminal_md_content.remove(&key);
@@ -748,12 +754,19 @@ impl eframe::App for App {
         if let Some(ws) = &mut self.watch_state {
             let (created_md, removed_md, modified_files) = ws.drain_results();
             for path in created_md {
-                self.shown_md_tabs.insert(path);
+                self.shown_md_tabs
+                    .entry(self.active_group)
+                    .or_default()
+                    .insert(path);
             }
             for path in removed_md {
-                self.shown_md_tabs.remove(&path);
+                for ws_tabs in self.shown_md_tabs.values_mut() {
+                    ws_tabs.remove(&path);
+                }
                 for w in &mut self.extra_windows {
-                    w.view.shown_md_tabs.remove(&path);
+                    for ws_tabs in w.view.shown_md_tabs.values_mut() {
+                        ws_tabs.remove(&path);
+                    }
                 }
             }
             for path in &modified_files {
@@ -1407,9 +1420,10 @@ impl App {
             md_active_content,
         } = snap;
 
+        let ws_tabs = self.shown_md_tabs.get(&self.active_group);
         let mut md_tabs: Vec<PathBuf> = md_paths
             .into_iter()
-            .filter(|p| self.shown_md_tabs.contains(p))
+            .filter(|p| ws_tabs.is_some_and(|tabs| tabs.contains(p)))
             .collect();
         md_tabs.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
 
@@ -1944,7 +1958,10 @@ impl App {
                                             .as_deref()
                                             .map(|s| s.as_str())
                                             .unwrap_or("(file not found)");
+                                        let md_w = ui.available_width().max(0.0);
                                         ui.push_id("right_panel_md", |ui| {
+                                            ui.set_max_width(md_w);
+                                            ui.set_min_width(0.0);
                                             render_markdown(ui, content);
                                         });
                                     }
@@ -2140,7 +2157,9 @@ impl App {
             self.right_tab = tab;
         }
         if let Some(path) = close_tab {
-            self.shown_md_tabs.remove(&path);
+            if let Some(ws_tabs) = self.shown_md_tabs.get_mut(&self.active_group) {
+                ws_tabs.remove(&path);
+            }
             self.terminal_md_content.remove(&path);
             if self.right_tab == RightTab::Markdown(path) {
                 self.right_tab = RightTab::Directory;
@@ -2452,39 +2471,46 @@ impl App {
                         lines.hash(&mut hasher);
                         cwd.hash(&mut hasher);
                         let lines_hash = hasher.finish();
-                        if lines_hash != self.detection_lines_hash {
-                            self.detection_lines_hash = lines_hash;
+                        let prev_hash = self.detection_lines_hash.get(&sid).copied();
+                        let content_changed = prev_hash.is_some_and(|h| h != lines_hash);
+                        self.detection_lines_hash.insert(sid, lines_hash);
+                        if content_changed || prev_hash.is_none() {
                             self.detected_urls = crate::url_detector::detect_urls(&lines);
                             self.detected_md_paths = crate::md_detector::detect_md_paths(&lines, &cwd);
                         }
-                        for md in &self.detected_md_paths {
-                            if self.auto_opened_md.contains(&md.path)
-                                || self.shown_md_tabs.contains(&md.path)
-                            {
-                                continue;
+                        // Only auto-open MD files when the active terminal's content actually changed
+                        // (not when the user switches to a different terminal that already has MD paths)
+                        if content_changed {
+                            let ws_tabs = self.shown_md_tabs.get(&self.active_group);
+                            for md in &self.detected_md_paths {
+                                if self.auto_opened_md.contains(&md.path)
+                                    || ws_tabs.is_some_and(|tabs| tabs.contains(&md.path))
+                                {
+                                    continue;
+                                }
+                                let is_recent = std::fs::metadata(&md.path)
+                                    .and_then(|m| m.modified())
+                                    .ok()
+                                    .and_then(|t| t.elapsed().ok())
+                                    .is_some_and(|age| age.as_secs() < 10);
+                                if !is_recent {
+                                    continue;
+                                }
+                                if self.auto_opened_md.len() > 256 {
+                                    self.auto_opened_md.clear();
+                                }
+                                self.auto_opened_md.insert(md.path.clone());
+                                let path = md.path.clone();
+                                let ws_id = self.active_group;
+                                let results = Arc::clone(&self.md_load_results);
+                                let ctx_clone = ctx.clone();
+                                std::thread::spawn(move || {
+                                    let content = std::fs::read_to_string(&path).unwrap_or_default();
+                                    results.lock().push((path, content, ws_id));
+                                    ctx_clone.request_repaint();
+                                });
+                                break;
                             }
-                            let is_recent = std::fs::metadata(&md.path)
-                                .and_then(|m| m.modified())
-                                .ok()
-                                .and_then(|t| t.elapsed().ok())
-                                .is_some_and(|age| age.as_secs() < 10);
-                            if !is_recent {
-                                continue;
-                            }
-                            if self.auto_opened_md.len() > 256 {
-                                self.auto_opened_md.clear();
-                            }
-                            self.auto_opened_md.insert(md.path.clone());
-                            let path = md.path.clone();
-                            let ws_id = self.active_group;
-                            let results = Arc::clone(&self.md_load_results);
-                            let ctx_clone = ctx.clone();
-                            std::thread::spawn(move || {
-                                let content = std::fs::read_to_string(&path).unwrap_or_default();
-                                results.lock().push((path, content, ws_id));
-                                ctx_clone.request_repaint();
-                            });
-                            break;
                         }
                     }
 
@@ -3625,6 +3651,7 @@ impl App {
                         manual_width: None,
                         last_size: (cols, rows),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     });
                     // Split the focused group (new system)
                     self.pane_state.split_focused_group(new_pane_id, dir);
@@ -3866,6 +3893,7 @@ impl App {
                             manual_width: None,
                             last_size: (cols, rows),
                             labels: vec![],
+                            last_active_at: crate::util::now_millis(),
                         });
                         // Focus the group containing `pid`, then split
                         if let Some(gid) = self.pane_state.group_of(pid) {
@@ -4249,6 +4277,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4298,6 +4327,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4345,6 +4375,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4400,6 +4431,7 @@ impl App {
                             manual_width: None,
                             last_size: (0, 0),
                             labels: vec![],
+                            last_active_at: crate::util::now_millis(),
                         });
                         self.pane_state.pane_trees.insert(
                             pane_id,
@@ -4453,6 +4485,7 @@ impl App {
                                     manual_width: None,
                                     last_size: (0, 0),
                                     labels: vec![],
+                                    last_active_at: crate::util::now_millis(),
                                 });
                                 self.pane_state.pane_trees.insert(
                                     pane_id,
@@ -4512,6 +4545,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -4554,6 +4588,7 @@ impl App {
                 manual_width: None,
                 last_size: (0, 0),
                 labels: vec![],
+                last_active_at: crate::util::now_millis(),
             });
             self.pane_state.pane_trees.insert(
                 pane_id,

@@ -42,7 +42,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 .rounding(egui::Rounding::same(theme::R_MD))
                 .show(ui, |ui| {
                     let avail = ui.available_width().max(0.0);
-                    ui.set_min_width(avail);
+                    ui.set_max_width(avail);
                     ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                     egui::ScrollArea::horizontal()
                         .id_source(("md_code_scroll", code_block_idx))
@@ -255,7 +255,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
         .rounding(egui::Rounding::same(theme::R_MD))
         .show(ui, |ui| {
             let total_width = ui.available_width().max(0.0);
-            ui.set_min_width(total_width);
+            ui.set_max_width(total_width);
 
             let borders_width = border_width * (col_count as f32 - 1.0);
             let padding_width = cell_h_padding * 2.0 * col_count as f32;

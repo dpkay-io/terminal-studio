@@ -1,4 +1,12 @@
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Deserialize JSON from a file. On parse failure, creates a `.bak` backup
 /// of the corrupt file and returns `None` so callers fall back to defaults

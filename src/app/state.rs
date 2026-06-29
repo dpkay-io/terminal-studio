@@ -175,7 +175,7 @@ impl App {
             session_state: SessionState::new(),
             pane_state: PaneState::new(),
             right_tab: RightTab::Directory,
-            shown_md_tabs: HashSet::new(),
+            shown_md_tabs: HashMap::new(),
             watch_state: WatchState::new(ctx.clone()),
             workspace_store: WorkspaceStore::load(),
             active_group: None,
@@ -266,7 +266,7 @@ impl App {
             global_search_selected: 0,
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
-            detection_lines_hash: 0,
+            detection_lines_hash: HashMap::new(),
             auto_opened_md: HashSet::new(),
             terminal_md_content: HashMap::new(),
             drag_state: drag::DragState::new(),
@@ -456,6 +456,7 @@ impl App {
                         manual_width: None,
                         last_size: (cols, rows),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -806,7 +807,9 @@ impl App {
                 g.activate(pid);
             }
         }
-        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
+        let now = crate::util::now_millis();
+        if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pid) {
+            pane.last_active_at = now;
             if let PaneContent::Terminal(sid) = pane.content {
                 self.session_state.active_id = Some(sid);
                 self.update_is_active_flags();
@@ -884,6 +887,7 @@ impl App {
                     manual_width: None,
                     last_size: (cols, rows),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1143,6 +1147,7 @@ impl App {
                     manual_width: None,
                     last_size: (cols, rows),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1328,6 +1333,7 @@ impl App {
                     content,
                     manual_width: p.manual_width,
                     labels: p.labels.clone(),
+                    last_active_at: p.last_active_at,
                 })
             })
             .collect();
@@ -1393,7 +1399,12 @@ impl App {
             notes_panel_ratio: self.notes_panel_ratio,
             notes_panel_collapsed: self.notes_panel_collapsed,
             right_tab,
-            shown_md_tabs: self.shown_md_tabs.iter().cloned().collect(),
+            shown_md_tabs: self
+                .shown_md_tabs
+                .values()
+                .flat_map(|s| s.iter())
+                .cloned()
+                .collect(),
             group_layout,
         };
 
@@ -1579,6 +1590,7 @@ impl App {
                 manual_width: saved.manual_width,
                 last_size: (0, 0),
                 labels: saved.labels.clone(),
+                last_active_at: saved.last_active_at,
             });
             self.pane_state.pane_trees.insert(
                 pane_id,
@@ -1686,7 +1698,12 @@ impl App {
             SavedRightTab::GitDiff => RightTab::GitDiff,
             SavedRightTab::Markdown(p) => RightTab::Markdown(p.clone()),
         };
-        self.shown_md_tabs = state.shown_md_tabs.into_iter().collect();
+        {
+            let tabs: HashSet<PathBuf> = state.shown_md_tabs.into_iter().collect();
+            if !tabs.is_empty() {
+                self.shown_md_tabs.insert(self.active_group, tabs);
+            }
+        }
 
         true
     }
@@ -1947,6 +1964,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.activate_pane(pane_id);
@@ -1970,6 +1988,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.activate_pane(pane_id);
@@ -2003,6 +2022,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.pending_diff_panes.insert(full_path, pane_id);
@@ -2040,6 +2060,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.activate_pane(pane_id);
@@ -2094,6 +2115,7 @@ impl App {
                     manual_width: None,
                     last_size: (80, 24),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 };
                 self.pane_state.panes.push(entry);
                 self.pane_state
@@ -2124,6 +2146,7 @@ impl App {
                     manual_width: None,
                     last_size: (0, 0),
                     labels: vec![],
+                    last_active_at: crate::util::now_millis(),
                 };
                 self.pane_state.panes.push(entry);
                 self.pane_state
@@ -2164,6 +2187,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     };
                     self.pane_state.panes.push(entry);
                     self.pane_state
@@ -2205,6 +2229,7 @@ impl App {
                         manual_width: None,
                         last_size: (0, 0),
                         labels: vec![],
+                        last_active_at: crate::util::now_millis(),
                     };
                     self.pane_state.panes.push(entry);
                     self.pane_state
