@@ -1156,6 +1156,8 @@ impl App {
                         last_size: (cols, rows),
                     },
                 );
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_pane(pane_id);
             }
             self.update_is_active_flags();

@@ -259,7 +259,7 @@ impl PaneState {
                     self.group_layout = replacement;
                 }
                 GroupRemoveResult::IsTarget => {
-                    // Last group — this shouldn't normally happen (app should prevent)
+                    self.focused_group_id = 0;
                 }
                 _ => {}
             }
@@ -1041,6 +1041,23 @@ mod tests {
         assert_eq!(state.focused_group_id, 1);
         // active_pane_id should point to group 1's active pane
         assert_eq!(result.focus_pane_id, Some(1));
+    }
+
+    #[test]
+    fn close_last_pane_in_last_group_resets_state() {
+        let mut state = PaneState::new();
+        state.next_pane_id = 2;
+        state.panes.push(make_pane(1));
+        let gid = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: gid };
+        state.focused_group_id = gid;
+        state.active_pane_id = Some(1);
+
+        let result = state.close_pane_in_group(1).unwrap();
+        assert!(result.group_collapsed);
+        assert!(state.groups.is_empty());
+        assert_eq!(state.focused_group_id, 0);
+        assert_eq!(state.active_pane_id, None);
     }
 
     #[test]

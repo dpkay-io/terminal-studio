@@ -57,6 +57,9 @@ impl EditorGroup {
     }
 
     pub fn insert_pane(&mut self, pane_id: u32, at: Option<usize>) {
+        if self.pane_ids.contains(&pane_id) {
+            return;
+        }
         match at {
             Some(idx) => {
                 let clamped = idx.min(self.pane_ids.len());
@@ -613,6 +616,15 @@ mod tests {
     fn insert_pane_at_clamped_position() {
         let mut g = EditorGroup::new(1, 10);
         g.insert_pane(20, Some(100));
+        assert_eq!(g.pane_ids, vec![10, 20]);
+    }
+
+    #[test]
+    fn insert_pane_duplicate_ignored() {
+        let mut g = EditorGroup::new(1, 10);
+        g.insert_pane(20, None);
+        g.insert_pane(10, None);
+        g.insert_pane(20, Some(0));
         assert_eq!(g.pane_ids, vec![10, 20]);
     }
 

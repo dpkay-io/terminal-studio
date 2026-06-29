@@ -663,25 +663,39 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
 
-                        // Pre-compute display texts
-                        let display_texts: Vec<(u32, usize, String)> = group
+                        // Pre-compute display texts, workspace colors, and tooltips
+                        // outside the tight render loop to avoid per-session read locks.
+                        struct TabInfo {
+                            pane_id: u32,
+                            pane_idx: usize,
+                            display: String,
+                            ws_color: Option<[u8; 3]>,
+                            tooltip: String,
+                        }
+                        let tab_infos: Vec<TabInfo> = group
                             .pane_ids
                             .iter()
                             .filter_map(|&pane_id| {
                                 let pane_idx =
                                     self.pane_state.panes.iter().position(|p| p.id == pane_id)?;
-                                let text = self.tab_display_text(pane_idx);
-                                Some((pane_id, pane_idx, text))
+                                Some(TabInfo {
+                                    pane_id,
+                                    pane_idx,
+                                    display: self.tab_display_text(pane_idx),
+                                    ws_color: self.ws_color_for_pane(pane_idx),
+                                    tooltip: self.tab_tooltip_text(pane_idx),
+                                })
                             })
                             .collect();
 
                         let painter = ui.painter().clone();
 
-                        for (vis_pos, (pane_id, pane_idx, display)) in
-                            display_texts.iter().enumerate()
-                        {
-                            let pane_id = *pane_id;
-                            let pane_idx = *pane_idx;
+                        for (vis_pos, info) in tab_infos.iter().enumerate() {
+                            let pane_id = info.pane_id;
+                            let pane_idx = info.pane_idx;
+                            let display = &info.display;
+                            let ws_color = &info.ws_color;
+                            let tooltip = &info.tooltip;
                             let is_active = group.active_pane_id == Some(pane_id);
 
                             let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
@@ -746,13 +760,34 @@ impl App {
                                 painter.rect_filled(tab_rect, tab_rounding, hover_bg);
                             }
 
-                            // Active indicator dot
+                            // Workspace colour strip on left edge
+                            if let Some(c) = ws_color {
+                                painter.rect_filled(
+                                    egui::Rect::from_min_size(
+                                        tab_rect.min,
+                                        egui::vec2(theme::TAB_COLOR_STRIP_W, tab_h),
+                                    ),
+                                    0.0,
+                                    theme::from_rgb(*c),
+                                );
+                            }
+
+                            // Active indicator dot (tinted by workspace color)
                             if is_active {
+                                let color_strip_offset = if ws_color.is_some() {
+                                    theme::TAB_COLOR_STRIP_W
+                                } else {
+                                    0.0
+                                };
                                 let dot_radius = 3.0;
-                                let dot_x = tab_rect.min.x + theme::TAB_PAD_X + dot_radius;
-                                let dot_color = t.accent;
-                                let dot_center = egui::pos2(dot_x, tab_rect.center().y);
+                                let dot_x = tab_rect.min.x
+                                    + theme::TAB_PAD_X
+                                    + color_strip_offset
+                                    + dot_radius;
+                                let raw_dot = ws_color.map(theme::from_rgb).unwrap_or(t.accent);
                                 let tab_bg = t.bg_tab_active;
+                                let dot_color = theme::ensure_term_contrast(raw_dot, tab_bg);
+                                let dot_center = egui::pos2(dot_x, tab_rect.center().y);
                                 let ring_color =
                                     theme::text_on([tab_bg.r(), tab_bg.g(), tab_bg.b()]);
                                 painter.circle_stroke(
@@ -812,7 +847,13 @@ impl App {
 
                             // Title text (clipped before close button)
                             let dot_offset = if is_active { 10.0 } else { 0.0 };
-                            let text_x = tab_rect.min.x + theme::TAB_PAD_X + dot_offset;
+                            let color_strip_offset = if ws_color.is_some() {
+                                theme::TAB_COLOR_STRIP_W
+                            } else {
+                                0.0
+                            };
+                            let text_x =
+                                tab_rect.min.x + theme::TAB_PAD_X + color_strip_offset + dot_offset;
 
                             let is_renaming = self.tab_rename_pane_id == Some(pane_id);
                             if is_renaming {
@@ -891,6 +932,18 @@ impl App {
                                     );
                                     painter.circle_filled(dot_pos, dot_r, t.green);
                                 }
+                            }
+
+                            // Tooltip on hover (skip when renaming or hovering close button)
+                            if tab_resp.hovered() && !close_resp.hovered() && !is_renaming {
+                                egui::show_tooltip_at_pointer(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    egui::Id::new(("gtab_tooltip", group_id, pane_id)),
+                                    |ui| {
+                                        ui.label(tooltip);
+                                    },
+                                );
                             }
 
                             if close_resp
@@ -1182,6 +1235,102 @@ impl App {
                 .file_name()
                 .map(|n| format!("\u{26a0} {}", n.to_string_lossy()))
                 .unwrap_or_else(|| "Conflicts".to_string()),
+        }
+    }
+
+    /// Compute the tooltip text for a tab: full title + CWD + workspace name.
+    fn tab_tooltip_text(&self, pane_index: usize) -> String {
+        match &self.pane_state.panes[pane_index].content {
+            PaneContent::Terminal(sid) => {
+                let sid = *sid;
+                let Some(e) = self.session_state.sessions.iter().find(|e| e.id == sid) else {
+                    return format!("Terminal {sid}");
+                };
+                let s = e.session.read();
+                let title = s.title();
+                let cwd = s.cwd.clone();
+                drop(s);
+                let ws_name = if cwd.as_os_str().is_empty() {
+                    None
+                } else {
+                    self.workspace_store
+                        .find_for_cwd(&cwd)
+                        .map(|w| w.name.clone())
+                };
+                let fg = self.workers.foreground_worker.get(e.id);
+                let display = effective_title(
+                    &title,
+                    &cwd,
+                    fg.as_ref(),
+                    Some(&e.shell),
+                    ws_name.as_deref(),
+                );
+                let mut tip = display;
+                let cwd_str = cwd.to_string_lossy();
+                if !cwd_str.is_empty() {
+                    tip.push('\n');
+                    tip.push_str(&cwd_str);
+                }
+                if let Some(name) = &ws_name {
+                    tip.push('\n');
+                    tip.push_str(name);
+                }
+                tip
+            }
+            PaneContent::DeferredTerminal {
+                cwd, saved_title, ..
+            } => {
+                let mut tip = saved_title
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Terminal")
+                    .to_string();
+                if let Some(c) = cwd {
+                    let s = c.to_string_lossy();
+                    if !s.is_empty() {
+                        tip.push('\n');
+                        tip.push_str(&s);
+                    }
+                }
+                tip
+            }
+            PaneContent::FileEditor(ed) => ed.path.to_string_lossy().into_owned(),
+            PaneContent::FileDiff(d) => format!("Diff: {}", d.path.to_string_lossy()),
+            PaneContent::NoteEditor(_) => "Notes".to_string(),
+            PaneContent::ConflictResolver(cr) => {
+                format!("Conflicts: {}", cr.path.to_string_lossy())
+            }
+        }
+    }
+
+    /// Workspace color for a pane (by index), if the pane belongs to a workspace.
+    pub(in crate::app) fn ws_color_for_pane(&self, pane_index: usize) -> Option<[u8; 3]> {
+        match &self.pane_state.panes[pane_index].content {
+            PaneContent::Terminal(sid) => self.session_state.find(*sid).and_then(|e| {
+                let cwd = e.session.read().cwd.clone();
+                if cwd.as_os_str().is_empty() {
+                    return None;
+                }
+                self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
+            }),
+            PaneContent::DeferredTerminal { cwd, .. } => cwd
+                .as_ref()
+                .and_then(|c| self.workspace_store.find_for_cwd(c).map(|w| w.color)),
+            PaneContent::FileEditor(ed) => ed.workspace_id.and_then(|id| {
+                self.workspace_store
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map(|w| w.color)
+            }),
+            PaneContent::NoteEditor(ne) => ne.workspace_id.and_then(|id| {
+                self.workspace_store
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map(|w| w.color)
+            }),
+            _ => None,
         }
     }
 }

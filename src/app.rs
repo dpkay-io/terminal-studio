@@ -2243,41 +2243,8 @@ impl App {
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
         #[allow(unused_variables)]
-        let ws_colors: Vec<Option<[u8; 3]>> = self
-            .pane_state
-            .panes
-            .iter()
-            .map(|p| match &p.content {
-                PaneContent::Terminal(sid) => {
-                    let sid = *sid;
-                    self.session_state.find(sid).and_then(|e| {
-                        let cwd = e.session.read().cwd.clone();
-                        if cwd.as_os_str().is_empty() {
-                            return None;
-                        }
-                        self.workspace_store.find_for_cwd(&cwd).map(|w| w.color)
-                    })
-                }
-                PaneContent::DeferredTerminal { cwd, .. } => cwd
-                    .as_ref()
-                    .and_then(|c| self.workspace_store.find_for_cwd(c).map(|w| w.color)),
-                PaneContent::FileEditor(ed) => ed.workspace_id.and_then(|id| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.color)
-                }),
-                PaneContent::FileDiff(_) => None,
-                PaneContent::NoteEditor(ne) => ne.workspace_id.and_then(|id| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.color)
-                }),
-                PaneContent::ConflictResolver(_) => None,
-            })
+        let ws_colors: Vec<Option<[u8; 3]>> = (0..self.pane_state.panes.len())
+            .map(|i| self.ws_color_for_pane(i))
             .collect();
 
         // ── Sync editor groups with actual panes (remove stale references) ──
@@ -2384,7 +2351,6 @@ impl App {
 
             let nv = visible_indices.len();
 
-            let active_pane_id_snap = self.pane_state.active_pane_id;
             let active_is_editor = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
@@ -3058,40 +3024,35 @@ impl App {
                                     }
                                 }
                             }
-                            // Alt+Arrow → move focus between split panes
+                            // Alt+Arrow → move focus between editor groups
                             else if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
-                                let dir_opt = match key {
-                                    egui::Key::ArrowLeft  => Some(SplitDir::Horizontal),
-                                    egui::Key::ArrowRight => Some(SplitDir::Horizontal),
-                                    egui::Key::ArrowUp    => Some(SplitDir::Vertical),
-                                    egui::Key::ArrowDown  => Some(SplitDir::Vertical),
+                                let nav = match key {
+                                    egui::Key::ArrowLeft  => Some(NavigationDir::Left),
+                                    egui::Key::ArrowRight => Some(NavigationDir::Right),
+                                    egui::Key::ArrowUp    => Some(NavigationDir::Up),
+                                    egui::Key::ArrowDown  => Some(NavigationDir::Down),
                                     _ => None,
                                 };
                                 let mut handled = false;
-                                if let Some(_dir) = dir_opt {
-                                    if let Some(active_pid) = active_pane_id_snap {
-                                        let root_pid_opt = self.pane_state.pane_trees.iter()
-                                            .find(|(_, tree)| tree.leaf_ids().contains(&active_pid))
-                                            .map(|(&rpid, _)| rpid);
-                                        if let Some(root_pid) = root_pid_opt {
-                                            if let Some(tree) = self.pane_state.pane_trees.get(&root_pid) {
-                                                let leaves = tree.leaf_ids();
-                                                if leaves.len() > 1 {
-                                                    if let Some(pos) = leaves.iter().position(|&id| id == active_pid) {
-                                                        let next = match key {
-                                                            egui::Key::ArrowRight | egui::Key::ArrowDown => {
-                                                                leaves[(pos + 1) % leaves.len()]
-                                                            }
-                                                            _ => {
-                                                                leaves[(pos + leaves.len() - 1) % leaves.len()]
-                                                            }
-                                                        };
-                                                        clicked_pane_id = Some(next);
-                                                        handled = true;
+                                if let Some(dir) = nav {
+                                    if let Some(target) = self.pane_state.group_layout.spatial_neighbor(
+                                        self.pane_state.focused_group_id,
+                                        dir,
+                                    ) {
+                                        self.pane_state.focused_group_id = target;
+                                        if let Some(g) = self.pane_state.groups.get(&target) {
+                                            self.pane_state.active_pane_id = g.active_pane_id;
+                                            if let Some(pid) = g.active_pane_id {
+                                                if let Some(pane) = self.pane_state.find(pid) {
+                                                    if let PaneContent::Terminal(sid) = pane.content {
+                                                        self.session_state.active_id = Some(sid);
                                                     }
                                                 }
                                             }
                                         }
+                                        self.update_is_active_flags();
+                                        ctx.request_repaint();
+                                        handled = true;
                                     }
                                 }
                                 if !handled {
@@ -3793,61 +3754,7 @@ impl App {
         for action in pane_context_actions {
             use ui::PaneContextAction;
             match action {
-                PaneContextAction::MoveToTab(pid) => {
-                    if let Some(root_pid) = self.pane_state.root_of(pid) {
-                        let leaf_count = self
-                            .pane_state
-                            .pane_trees
-                            .get(&root_pid)
-                            .map(|t| t.leaf_ids().len())
-                            .unwrap_or(1);
-                        if leaf_count > 1 {
-                            let remove_result =
-                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                    tree.remove_pane(pid)
-                                } else {
-                                    RemoveResult::NotFound
-                                };
-                            if let RemoveResult::CollapseToSibling(replacement) = remove_result {
-                                if let Some(tree) = self.pane_state.pane_trees.get_mut(&root_pid) {
-                                    *tree = replacement;
-                                }
-                            }
-                            let last_size = self
-                                .pane_state
-                                .panes
-                                .iter()
-                                .find(|p| p.id == pid)
-                                .map(|p| p.last_size)
-                                .unwrap_or((80, 24));
-                            self.pane_state.pane_trees.insert(
-                                pid,
-                                PaneNode::Leaf {
-                                    pane_id: pid,
-                                    last_size,
-                                },
-                            );
-                            // Focus the first remaining leaf in the original tree
-                            // so the user stays in their current workspace view.
-                            let stay_pid = self
-                                .pane_state
-                                .pane_trees
-                                .get(&root_pid)
-                                .and_then(|t| t.leaf_ids().first().copied())
-                                .unwrap_or(root_pid);
-                            self.pane_state.active_pane_id = Some(stay_pid);
-                            if let Some(pane) =
-                                self.pane_state.panes.iter().find(|p| p.id == stay_pid)
-                            {
-                                if let PaneContent::Terminal(sid) = pane.content {
-                                    self.session_state.active_id = Some(sid);
-                                    self.update_is_active_flags();
-                                }
-                            }
-                            ctx.request_repaint();
-                        }
-                    }
-                }
+                PaneContextAction::MoveToTab(_pid) => {}
                 PaneContextAction::Close(pid) => {
                     self.close_pane_full(pid);
                 }
