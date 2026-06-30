@@ -20,6 +20,8 @@ pub(super) struct GitDiffResult {
     pub(super) gitignore_pattern: Option<String>,
     pub(super) request_refresh: bool,
     pub(super) revert_file: Option<String>,
+    pub(super) merge_abort: bool,
+    pub(super) merge_continue: bool,
 }
 
 fn kind_to_tag(kind: FileChangeKind) -> &'static str {
@@ -54,6 +56,7 @@ pub(super) fn render_git_diff(
     git_refreshing: bool,
     root_dir: Option<&std::path::Path>,
     drag_state: &mut super::drag::DragState,
+    merge_operation: &super::git_worker::MergeOperation,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -65,6 +68,8 @@ pub(super) fn render_git_diff(
     let mut gitignore_pattern: Option<String> = None;
     let mut request_refresh = false;
     let mut revert_file: Option<String> = None;
+    let mut merge_abort = false;
+    let mut merge_continue = false;
 
     let panel_width = ui.available_width();
     ui.set_min_width(0.0);
@@ -99,6 +104,92 @@ pub(super) fn render_git_diff(
     });
 
     let has_status = !status.is_empty();
+
+    // ── Merge/rebase/cherry-pick status banner ─────────────────────────
+    if *merge_operation != super::git_worker::MergeOperation::None {
+        let parsed_for_banner = if has_status {
+            crate::git::parser::parse_git_status(status)
+        } else {
+            Vec::new()
+        };
+        let has_conflicts = parsed_for_banner
+            .iter()
+            .any(|f| f.kind == crate::git::parser::FileChangeKind::Conflicted);
+
+        let t = theme::active();
+        let banner_bg = theme::blend_colors(t.surface0, t.warning, theme::BLEND_SUBTLE);
+        egui::Frame::none()
+            .fill(banner_bg)
+            .rounding(theme::R_MD)
+            .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_2))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    // Left: icon + label
+                    let (icon, label) = match merge_operation {
+                        super::git_worker::MergeOperation::Merge { source_branch } => {
+                            ("\u{1F500}", format!("Merging branch '{source_branch}'"))
+                        }
+                        super::git_worker::MergeOperation::Rebase {
+                            onto,
+                            current_step,
+                            total_steps,
+                        } => (
+                            "\u{1F504}",
+                            format!("Rebasing '{onto}' \u{2014} step {current_step}/{total_steps}"),
+                        ),
+                        super::git_worker::MergeOperation::CherryPick { commit } => {
+                            let short = if commit.len() >= 7 {
+                                &commit[..7]
+                            } else {
+                                commit.as_str()
+                            };
+                            ("\u{1F352}", format!("Cherry-picking {short}"))
+                        }
+                        super::git_worker::MergeOperation::None => unreachable!(),
+                    };
+                    ui.label(
+                        egui::RichText::new(format!("{icon} {label}"))
+                            .size(theme::FONT_UI_MD)
+                            .color(t.warning),
+                    );
+
+                    // Right: Continue + Abort buttons (right-to-left)
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let abort_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Abort")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(t.text),
+                            )
+                            .fill(t.error)
+                            .rounding(theme::R_SM),
+                        );
+                        if abort_btn.clicked() {
+                            merge_abort = true;
+                        }
+
+                        let continue_btn = ui.add_enabled(
+                            !has_conflicts,
+                            egui::Button::new(
+                                egui::RichText::new("Continue")
+                                    .size(theme::FONT_UI_SM)
+                                    .color(if has_conflicts { t.overlay0 } else { t.text }),
+                            )
+                            .fill(if has_conflicts { t.surface1 } else { t.success })
+                            .rounding(theme::R_SM),
+                        );
+                        if has_conflicts {
+                            continue_btn.on_hover_text("Resolve all conflicts first");
+                        } else if continue_btn.clicked() {
+                            merge_continue = true;
+                        }
+                    });
+                });
+            });
+        ui.add_space(theme::SP_2);
+    }
+
     let has_unpushed = !unpushed.is_empty();
 
     if has_status || has_unpushed {
@@ -584,6 +675,8 @@ pub(super) fn render_git_diff(
         gitignore_pattern,
         request_refresh,
         revert_file,
+        merge_abort,
+        merge_continue,
     }
 }
 

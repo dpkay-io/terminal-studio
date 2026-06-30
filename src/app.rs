@@ -976,6 +976,22 @@ impl eframe::App for App {
                 }
             }
 
+            for result in self.workers.git_worker.take_merge_op_results() {
+                match result {
+                    Ok(cwd) => {
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Success);
+                        self.workers.git_worker.enqueue_git(&cwd);
+                        self.workers.git_worker.enqueue_unpushed(&cwd);
+                    }
+                    Err(msg) => {
+                        log::error!("git merge/rebase/cherry-pick operation failed: {msg}");
+                        self.flash
+                            .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
+                    }
+                }
+            }
+
             // Drain last commit message result (for amend pre-fill)
             if let Some(cwd) = self.active_pane_cwd() {
                 if let Some(msg) = self.workers.git_worker.take_last_commit_msg(&cwd) {
@@ -1419,7 +1435,7 @@ impl App {
             git_status,
             git_unpushed,
             git_refreshing,
-            merge_operation: _merge_operation,
+            merge_operation,
             dir_entries,
             md_paths,
             md_active_content,
@@ -1447,6 +1463,8 @@ impl App {
         let mut git_gitignore_pattern: Option<String> = None;
         let mut git_request_refresh = false;
         let mut git_revert_file: Option<String> = None;
+        let mut git_merge_abort = false;
+        let mut git_merge_continue = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
         // Snapshot current note so TextEdit can mutate it inside the closure
@@ -1926,6 +1944,7 @@ impl App {
                                             git_refreshing,
                                             active_cwd.as_deref(),
                                             &mut self.drag_state,
+                                            &merge_operation,
                                         );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
@@ -1954,6 +1973,12 @@ impl App {
                                         }
                                         if result.revert_file.is_some() {
                                             git_revert_file = result.revert_file;
+                                        }
+                                        if result.merge_abort {
+                                            git_merge_abort = true;
+                                        }
+                                        if result.merge_continue {
+                                            git_merge_continue = true;
                                         }
                                     }
                                     RightTab::Markdown(md_path) => {
@@ -2237,6 +2262,39 @@ impl App {
             if let Some(cwd) = active_cwd.as_ref() {
                 self.workers.git_worker.enqueue_git_manual(cwd);
                 self.workers.git_worker.enqueue_unpushed(cwd);
+            }
+        }
+
+        if git_merge_abort || git_merge_continue {
+            if let Some(cwd) = self.active_pane_cwd() {
+                if git_merge_abort {
+                    match &merge_operation {
+                        git_worker::MergeOperation::Merge { .. } => {
+                            self.workers.git_worker.enqueue_merge_abort(&cwd);
+                        }
+                        git_worker::MergeOperation::Rebase { .. } => {
+                            self.workers.git_worker.enqueue_rebase_abort(&cwd);
+                        }
+                        git_worker::MergeOperation::CherryPick { .. } => {
+                            self.workers.git_worker.enqueue_cherry_pick_abort(&cwd);
+                        }
+                        git_worker::MergeOperation::None => {}
+                    }
+                }
+                if git_merge_continue {
+                    match &merge_operation {
+                        git_worker::MergeOperation::Merge { .. } => {
+                            self.workers.git_worker.enqueue_merge_continue(&cwd);
+                        }
+                        git_worker::MergeOperation::Rebase { .. } => {
+                            self.workers.git_worker.enqueue_rebase_continue(&cwd);
+                        }
+                        git_worker::MergeOperation::CherryPick { .. } => {
+                            self.workers.git_worker.enqueue_cherry_pick_continue(&cwd);
+                        }
+                        git_worker::MergeOperation::None => {}
+                    }
+                }
             }
         }
 
