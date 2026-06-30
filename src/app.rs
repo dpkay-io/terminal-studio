@@ -4465,6 +4465,7 @@ impl App {
                                         path: full_path,
                                         content: conflict_file,
                                         resolved_count: 0,
+                                        side_by_side: false,
                                     }),
                                     manual_width: None,
                                     last_size: (0, 0),

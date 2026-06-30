@@ -74,6 +74,8 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
+    /// (pane_id, new side_by_side value) toggled this frame by the conflict resolver toolbar.
+    pub conflict_view_toggles: &'a mut Vec<(u32, bool)>,
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -695,13 +697,16 @@ fn render_leaf_content(
                 render_note_editor_leaf(ui, ne, pane_id, rctx);
             }
             PaneContent::ConflictResolver(ref state) => {
-                let conflict_action = super::conflict_resolver::render_conflict_resolver(ui, state);
-                if let Some(ca) = conflict_action {
+                let result = super::conflict_resolver::render_conflict_resolver(ui, state);
+                if let Some(ca) = result.action {
                     rctx.pane_context_actions
                         .push(PaneContextAction::ConflictResolve {
                             pane_id,
                             action: ca,
                         });
+                }
+                if let Some(sbs) = result.view_toggle {
+                    rctx.conflict_view_toggles.push((pane_id, sbs));
                 }
             }
         });
@@ -824,6 +829,7 @@ fn render_group_node(
                 let mut diff_hunk_navigations: Vec<(u32, usize)> = Vec::new();
                 let mut scrollbar_clear_restore = Vec::new();
                 let mut scrollbar_dragging = false;
+                let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
                 let focused_pane_id = if is_focused { Some(pid) } else { None };
 
                 {
@@ -856,6 +862,7 @@ fn render_group_node(
                         drag_state: &mut app.drag_state,
                         scrollbar_clear_restore: &mut scrollbar_clear_restore,
                         scrollbar_dragging: &mut scrollbar_dragging,
+                        conflict_view_toggles: &mut conflict_view_toggles,
                     };
                     render_leaf_content(&mut leaf_ui, pid, is_focused, content_rect, &mut rctx);
                 }
@@ -882,6 +889,13 @@ fn render_group_node(
                     {
                         entry.restore_scroll_ready = false;
                         entry.restore_scroll_lines = None;
+                    }
+                }
+                for (pane_id, sbs) in conflict_view_toggles {
+                    if let Some(pane) = app.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::ConflictResolver(ref mut s) = pane.content {
+                            s.side_by_side = sbs;
+                        }
                     }
                 }
             }
