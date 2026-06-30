@@ -33,7 +33,21 @@ pub(super) fn detect_merge_operation(dir: &std::path::Path) -> MergeOperation {
         Some(r) => r,
         Option::None => return MergeOperation::None,
     };
-    let dot_git = git_root.join(".git");
+    let dot_git_path = git_root.join(".git");
+    let dot_git = if dot_git_path.is_file() {
+        // Worktree: .git is a file containing "gitdir: /path/to/actual/git/dir"
+        std::fs::read_to_string(&dot_git_path)
+            .ok()
+            .and_then(|content| {
+                content
+                    .trim()
+                    .strip_prefix("gitdir: ")
+                    .map(|p| std::path::PathBuf::from(p.trim()))
+            })
+            .unwrap_or(dot_git_path)
+    } else {
+        dot_git_path
+    };
 
     // rebase-merge (interactive rebase)
     let rebase_merge = dot_git.join("rebase-merge");

@@ -157,16 +157,6 @@ pub(super) fn run_git_info(dir: &Path) -> (String, String) {
     (diff, status)
 }
 
-/// Run all git info queries (diff, status, merge state) for a directory in one call.
-/// The `detect_merge_operation` call is intentionally kept here so callers that
-/// only need diff/status can still use `run_git_info` directly.
-#[allow(dead_code)]
-pub(super) fn run_full_git_info(dir: &Path) -> (String, String, super::git_worker::MergeOperation) {
-    let (diff, status) = run_git_info(dir);
-    let merge_op = super::git_worker::detect_merge_operation(dir);
-    (diff, status, merge_op)
-}
-
 pub(super) fn render_dir_tree(
     ui: &mut egui::Ui,
     entries: &[FileEntry],

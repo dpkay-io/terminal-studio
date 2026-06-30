@@ -40,8 +40,11 @@ fn run_git(args: &[&str], dir: &Path, timeout: Duration) -> Option<Output> {
     let mut cmd = Command::new("git");
     cmd.args(args)
         .current_dir(dir)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .env("GIT_EDITOR", "true")
+        .env("GIT_TERMINAL_PROMPT", "0");
 
     #[cfg(target_os = "windows")]
     {

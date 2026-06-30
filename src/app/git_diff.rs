@@ -104,18 +104,15 @@ pub(super) fn render_git_diff(
     });
 
     let has_status = !status.is_empty();
+    let parsed = if has_status {
+        parse_git_status(status)
+    } else {
+        Vec::new()
+    };
+    let has_conflicts = parsed.iter().any(|f| f.kind == FileChangeKind::Conflicted);
 
     // ── Merge/rebase/cherry-pick status banner ─────────────────────────
     if *merge_operation != super::git_worker::MergeOperation::None {
-        let parsed_for_banner = if has_status {
-            crate::git::parser::parse_git_status(status)
-        } else {
-            Vec::new()
-        };
-        let has_conflicts = parsed_for_banner
-            .iter()
-            .any(|f| f.kind == crate::git::parser::FileChangeKind::Conflicted);
-
         let t = theme::active();
         let banner_bg = theme::blend_colors(t.surface0, t.warning, theme::BLEND_SUBTLE);
         egui::Frame::none()
@@ -200,11 +197,6 @@ pub(super) fn render_git_diff(
             kind: FileChangeKind,
         }
 
-        let parsed = if has_status {
-            parse_git_status(status)
-        } else {
-            Vec::new()
-        };
         let mut staged: Vec<StatusEntry> = Vec::new();
         let mut unstaged: Vec<StatusEntry> = Vec::new();
         let mut conflicted: Vec<StatusEntry> = Vec::new();
