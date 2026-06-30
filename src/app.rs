@@ -857,8 +857,8 @@ impl eframe::App for App {
             let completed = self.workers.git_worker.take_all_git();
             let completed_unpushed = self.workers.git_worker.take_all_unpushed();
             if let Some(ws) = &mut self.watch_state {
-                for (dir, (diff, status)) in completed {
-                    ws.apply_git_result(&dir, diff, status);
+                for (dir, (diff, status, merge_op)) in completed {
+                    ws.apply_git_result(&dir, diff, status, merge_op);
                 }
                 for (dir, commits) in completed_unpushed {
                     ws.apply_unpushed_result(&dir, commits);
@@ -1333,6 +1333,7 @@ impl App {
             git_status: String,
             git_unpushed: Vec<(String, String)>,
             git_refreshing: bool,
+            merge_operation: git_worker::MergeOperation,
             dir_entries: Arc<Vec<FileEntry>>,
             md_paths: Vec<PathBuf>,
             md_active_content: Option<Arc<String>>,
@@ -1359,6 +1360,7 @@ impl App {
                         git_status: d.git_status.clone(),
                         git_unpushed: d.git_unpushed.clone(),
                         git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
+                        merge_operation: d.merge_operation.clone(),
                         dir_entries: Arc::clone(&d.dir_entries),
                         md_paths,
                         md_active_content,
@@ -1381,6 +1383,7 @@ impl App {
                         git_status: String::new(),
                         git_unpushed: Vec::new(),
                         git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
+                        merge_operation: git_worker::MergeOperation::None,
                         dir_entries: Arc::new(Vec::new()),
                         md_paths,
                         md_active_content,
@@ -1404,6 +1407,7 @@ impl App {
                     git_status: String::new(),
                     git_unpushed: Vec::new(),
                     git_refreshing: false,
+                    merge_operation: git_worker::MergeOperation::None,
                     dir_entries: Arc::new(Vec::new()),
                     md_paths,
                     md_active_content,
@@ -1415,6 +1419,7 @@ impl App {
             git_status,
             git_unpushed,
             git_refreshing,
+            merge_operation: _merge_operation,
             dir_entries,
             md_paths,
             md_active_content,

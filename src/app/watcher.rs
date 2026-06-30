@@ -121,6 +121,7 @@ impl WatchState {
                         data.git_diff = existing.git_diff.clone();
                         data.git_status = existing.git_status.clone();
                         data.git_unpushed = existing.git_unpushed.clone();
+                        data.merge_operation = existing.merge_operation.clone();
                     }
                     self.dir_data.insert(path, data);
                 }
@@ -177,10 +178,17 @@ impl WatchState {
         dirs
     }
 
-    pub(super) fn apply_git_result(&mut self, dir: &Path, diff: String, status: String) {
+    pub(super) fn apply_git_result(
+        &mut self,
+        dir: &Path,
+        diff: String,
+        status: String,
+        merge_op: super::git_worker::MergeOperation,
+    ) {
         if let Some(data) = self.dir_data.get_mut(dir) {
             data.git_diff = diff.clone();
             data.git_status = status.clone();
+            data.merge_operation = merge_op;
         }
         let _ = self.cmd_tx.send(WatchCommand::ApplyGitResult {
             dir: dir.to_path_buf(),
@@ -580,6 +588,7 @@ fn process_fs_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::git_worker::MergeOperation;
 
     fn empty_dir_data() -> DirData {
         DirData {
@@ -588,6 +597,7 @@ mod tests {
             git_status: String::new(),
             git_unpushed: Vec::new(),
             git_refresh_at: None,
+            merge_operation: MergeOperation::None,
             md_files: HashMap::new(),
             dir_entries: Arc::new(Vec::new()),
         }
@@ -683,7 +693,12 @@ mod tests {
         let path = PathBuf::from("/test/project");
         ws.dir_data.insert(path.clone(), empty_dir_data());
 
-        ws.apply_git_result(&path, "staged diff".into(), "M file.rs".into());
+        ws.apply_git_result(
+            &path,
+            "staged diff".into(),
+            "M file.rs".into(),
+            MergeOperation::None,
+        );
 
         assert_eq!(ws.dir_data[&path].git_status, "M file.rs");
         assert_eq!(ws.dir_data[&path].git_diff, "staged diff");
@@ -693,7 +708,7 @@ mod tests {
     fn apply_git_result_ignores_missing_dir() {
         let (mut ws, _tx) = WatchState::new_for_test();
         let path = PathBuf::from("/nonexistent");
-        ws.apply_git_result(&path, "diff".into(), "status".into());
+        ws.apply_git_result(&path, "diff".into(), "status".into(), MergeOperation::None);
         assert!(!ws.dir_data.contains_key(&path));
     }
 
@@ -718,7 +733,12 @@ mod tests {
         let path = PathBuf::from("/test/project");
         ws.dir_data.insert(path.clone(), empty_dir_data());
 
-        ws.apply_git_result(&path, "real diff".into(), "M real.rs".into());
+        ws.apply_git_result(
+            &path,
+            "real diff".into(),
+            "M real.rs".into(),
+            MergeOperation::None,
+        );
         assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
 
         let fresh = empty_dir_data();

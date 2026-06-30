@@ -9,6 +9,105 @@ use parking_lot::Mutex;
 
 use super::file_browser::run_git_info;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum MergeOperation {
+    Merge {
+        source_branch: String,
+    },
+    Rebase {
+        onto: String,
+        current_step: usize,
+        total_steps: usize,
+    },
+    CherryPick {
+        commit: String,
+    },
+    None,
+}
+
+/// Detect any in-progress merge/rebase/cherry-pick operation for the git repo
+/// at `dir`. Returns `MergeOperation::None` if the directory is not a git repo
+/// or no operation is in progress.
+pub(super) fn detect_merge_operation(dir: &std::path::Path) -> MergeOperation {
+    let git_root = match crate::util::find_git_root(dir) {
+        Some(r) => r,
+        Option::None => return MergeOperation::None,
+    };
+    let dot_git = git_root.join(".git");
+
+    // rebase-merge (interactive rebase)
+    let rebase_merge = dot_git.join("rebase-merge");
+    if rebase_merge.is_dir() {
+        let onto = std::fs::read_to_string(rebase_merge.join("onto"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let current_step = std::fs::read_to_string(rebase_merge.join("msgnum"))
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
+        let total_steps = std::fs::read_to_string(rebase_merge.join("end"))
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
+        return MergeOperation::Rebase {
+            onto,
+            current_step,
+            total_steps,
+        };
+    }
+
+    // rebase-apply (am-style rebase)
+    let rebase_apply = dot_git.join("rebase-apply");
+    if rebase_apply.is_dir() {
+        let onto = std::fs::read_to_string(rebase_apply.join("onto"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        let current_step = std::fs::read_to_string(rebase_apply.join("next"))
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
+        let total_steps = std::fs::read_to_string(rebase_apply.join("last"))
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(0);
+        return MergeOperation::Rebase {
+            onto,
+            current_step,
+            total_steps,
+        };
+    }
+
+    // MERGE_HEAD — merge in progress
+    let merge_head = dot_git.join("MERGE_HEAD");
+    if merge_head.exists() {
+        let source_branch = std::fs::read_to_string(dot_git.join("MERGE_MSG"))
+            .unwrap_or_default()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        return MergeOperation::Merge { source_branch };
+    }
+
+    // CHERRY_PICK_HEAD — cherry-pick in progress
+    let cherry_pick_head = dot_git.join("CHERRY_PICK_HEAD");
+    if cherry_pick_head.exists() {
+        let commit = std::fs::read_to_string(&cherry_pick_head)
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        return MergeOperation::CherryPick { commit };
+    }
+
+    MergeOperation::None
+}
+
 enum Job {
     GitInfo(PathBuf),
     Stage {
@@ -57,7 +156,7 @@ pub(super) struct DiffResult {
 }
 
 pub(super) struct WorkerResults {
-    pub(super) git: HashMap<PathBuf, (String, String)>,
+    pub(super) git: HashMap<PathBuf, (String, String, MergeOperation)>,
     pub(super) diff_results: Vec<DiffResult>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
     pub(super) commit_results: Vec<Result<PathBuf, String>>,
@@ -117,15 +216,23 @@ impl GitWorker {
                     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         match job {
                             Job::GitInfo(p) => {
-                                let info = run_git_info(&p);
-                                results_bg.lock().git.insert(p.clone(), info);
+                                let (diff, status) = run_git_info(&p);
+                                let merge_op = detect_merge_operation(&p);
+                                results_bg
+                                    .lock()
+                                    .git
+                                    .insert(p.clone(), (diff, status, merge_op));
                                 git_inflight_bg.lock().remove(&p);
                                 manual_git_inflight_bg.lock().remove(&p);
                             }
                             Job::Stage { cwd, path } => {
                                 if super::git_cmd::git_status_ok(&["add", "--", &path], &cwd) {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    let (diff, status) = run_git_info(&cwd);
+                                    let merge_op = detect_merge_operation(&cwd);
+                                    results_bg
+                                        .lock()
+                                        .git
+                                        .insert(cwd.clone(), (diff, status, merge_op));
                                 }
                             }
                             Job::Unstage { cwd, path } => {
@@ -133,20 +240,32 @@ impl GitWorker {
                                     &["reset", "HEAD", "--", &path],
                                     &cwd,
                                 ) {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    let (diff, status) = run_git_info(&cwd);
+                                    let merge_op = detect_merge_operation(&cwd);
+                                    results_bg
+                                        .lock()
+                                        .git
+                                        .insert(cwd.clone(), (diff, status, merge_op));
                                 }
                             }
                             Job::StageAll(cwd) => {
                                 if super::git_cmd::git_status_ok(&["add", "-A"], &cwd) {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    let (diff, status) = run_git_info(&cwd);
+                                    let merge_op = detect_merge_operation(&cwd);
+                                    results_bg
+                                        .lock()
+                                        .git
+                                        .insert(cwd.clone(), (diff, status, merge_op));
                                 }
                             }
                             Job::UnstageAll(cwd) => {
                                 if super::git_cmd::git_status_ok(&["reset", "HEAD"], &cwd) {
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    let (diff, status) = run_git_info(&cwd);
+                                    let merge_op = detect_merge_operation(&cwd);
+                                    results_bg
+                                        .lock()
+                                        .git
+                                        .insert(cwd.clone(), (diff, status, merge_op));
                                 }
                             }
                             Job::Diff { cwd, rel_path } => {
@@ -241,8 +360,12 @@ impl GitWorker {
                                         let result =
                                             match super::git_cmd::git_stderr_on_fail(&args, &cwd) {
                                                 Ok(_) => {
-                                                    let info = run_git_info(&cwd);
-                                                    res.lock().git.insert(cwd.clone(), info);
+                                                    let (diff, status) = run_git_info(&cwd);
+                                                    let merge_op = detect_merge_operation(&cwd);
+                                                    res.lock().git.insert(
+                                                        cwd.clone(),
+                                                        (diff, status, merge_op),
+                                                    );
                                                     Ok(cwd)
                                                 }
                                                 Err(stderr) => Err(stderr),
@@ -298,8 +421,12 @@ impl GitWorker {
                                     content.push('\n');
                                     crate::util::atomic_write(&gitignore_path, &content)
                                         .map_err(|e| e.to_string())?;
-                                    let info = run_git_info(&cwd);
-                                    results_bg.lock().git.insert(cwd.clone(), info);
+                                    let (diff, status) = run_git_info(&cwd);
+                                    let merge_op = detect_merge_operation(&cwd);
+                                    results_bg
+                                        .lock()
+                                        .git
+                                        .insert(cwd.clone(), (diff, status, merge_op));
                                     Ok(cwd.clone())
                                 })();
                                 results_bg.lock().gitignore_results.push(result);
@@ -310,8 +437,12 @@ impl GitWorker {
                                     &cwd,
                                 ) {
                                     Ok(_) => {
-                                        let info = run_git_info(&cwd);
-                                        results_bg.lock().git.insert(cwd.clone(), info);
+                                        let (diff, status) = run_git_info(&cwd);
+                                        let merge_op = detect_merge_operation(&cwd);
+                                        results_bg
+                                            .lock()
+                                            .git
+                                            .insert(cwd.clone(), (diff, status, merge_op));
                                         Ok(cwd)
                                     }
                                     Err(stderr) => Err(stderr),
@@ -363,7 +494,7 @@ impl GitWorker {
         self.manual_git_inflight.lock().contains(path)
     }
 
-    pub(super) fn take_all_git(&self) -> HashMap<PathBuf, (String, String)> {
+    pub(super) fn take_all_git(&self) -> HashMap<PathBuf, (String, String, MergeOperation)> {
         std::mem::take(&mut self.results.lock().git)
     }
 
@@ -520,9 +651,9 @@ mod tests {
             }
         }
         assert!(result.is_some(), "git worker should have produced a result");
-        let (diff, status) = result.unwrap();
+        let (diff, status, merge_op) = result.unwrap();
         // diff and status may both be empty on a clean working tree
-        let _ = (diff, status);
+        let _ = (diff, status, merge_op);
     }
 
     #[test]
@@ -599,6 +730,98 @@ mod tests {
     fn test_take_revert_results_empty() {
         let worker = GitWorker::spawn(egui::Context::default());
         assert!(worker.take_revert_results().is_empty());
+    }
+
+    fn init_temp_git_repo(suffix: &str) -> std::path::PathBuf {
+        let tmp =
+            std::env::temp_dir().join(format!("merge_op_test_{}_{}", suffix, std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&tmp)
+            .output()
+            .ok();
+        tmp
+    }
+
+    #[test]
+    fn detect_merge_state_none() {
+        let tmp = init_temp_git_repo("none");
+        let op = detect_merge_operation(&tmp);
+        assert_eq!(op, MergeOperation::None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_merge_state_merge() {
+        let tmp = init_temp_git_repo("merge");
+        let dot_git = tmp.join(".git");
+        std::fs::write(dot_git.join("MERGE_HEAD"), "abc123\n").unwrap();
+        std::fs::write(dot_git.join("MERGE_MSG"), "Merge branch 'feature'\n").unwrap();
+        let op = detect_merge_operation(&tmp);
+        assert!(
+            matches!(op, MergeOperation::Merge { ref source_branch } if source_branch == "Merge branch 'feature'"),
+            "expected Merge, got {:?}",
+            op
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_rebase_interactive() {
+        let tmp = init_temp_git_repo("rebase_interactive");
+        let rebase_merge = tmp.join(".git").join("rebase-merge");
+        std::fs::create_dir_all(&rebase_merge).unwrap();
+        std::fs::write(rebase_merge.join("onto"), "deadbeef\n").unwrap();
+        std::fs::write(rebase_merge.join("msgnum"), "2\n").unwrap();
+        std::fs::write(rebase_merge.join("end"), "5\n").unwrap();
+        std::fs::write(rebase_merge.join("head-name"), "refs/heads/main\n").unwrap();
+        let op = detect_merge_operation(&tmp);
+        assert!(
+            matches!(
+                op,
+                MergeOperation::Rebase { ref onto, current_step: 2, total_steps: 5 }
+                if onto == "deadbeef"
+            ),
+            "expected Rebase (interactive), got {:?}",
+            op
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_rebase_am_style() {
+        let tmp = init_temp_git_repo("rebase_am");
+        let rebase_apply = tmp.join(".git").join("rebase-apply");
+        std::fs::create_dir_all(&rebase_apply).unwrap();
+        std::fs::write(rebase_apply.join("onto"), "cafebabe\n").unwrap();
+        std::fs::write(rebase_apply.join("next"), "1\n").unwrap();
+        std::fs::write(rebase_apply.join("last"), "3\n").unwrap();
+        let op = detect_merge_operation(&tmp);
+        assert!(
+            matches!(
+                op,
+                MergeOperation::Rebase { ref onto, current_step: 1, total_steps: 3 }
+                if onto == "cafebabe"
+            ),
+            "expected Rebase (am-style), got {:?}",
+            op
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn detect_cherry_pick() {
+        let tmp = init_temp_git_repo("cherry_pick");
+        let dot_git = tmp.join(".git");
+        std::fs::write(dot_git.join("CHERRY_PICK_HEAD"), "feedface\n").unwrap();
+        let op = detect_merge_operation(&tmp);
+        assert!(
+            matches!(op, MergeOperation::CherryPick { ref commit } if commit == "feedface"),
+            "expected CherryPick, got {:?}",
+            op
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

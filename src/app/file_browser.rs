@@ -79,6 +79,7 @@ pub(super) struct DirData {
     pub(super) git_status: String,
     pub(super) git_unpushed: Vec<(String, String)>,
     pub(super) git_refresh_at: Option<Instant>,
+    pub(super) merge_operation: super::git_worker::MergeOperation,
     pub(super) md_files: HashMap<PathBuf, Arc<String>>,
     pub(super) dir_entries: Arc<Vec<FileEntry>>,
 }
@@ -92,6 +93,7 @@ impl DirData {
             git_status: String::new(),
             git_unpushed: Vec::new(),
             git_refresh_at: if is_git { Some(Instant::now()) } else { None },
+            merge_operation: super::git_worker::MergeOperation::None,
             md_files: HashMap::new(),
             dir_entries: Arc::new(list_dir_entries(path)),
         }
@@ -153,6 +155,16 @@ pub(super) fn run_git_info(dir: &Path) -> (String, String) {
         (false, false) => format!("=== Staged ===\n{staged}\n=== Unstaged ===\n{unstaged}"),
     };
     (diff, status)
+}
+
+/// Run all git info queries (diff, status, merge state) for a directory in one call.
+/// The `detect_merge_operation` call is intentionally kept here so callers that
+/// only need diff/status can still use `run_git_info` directly.
+#[allow(dead_code)]
+pub(super) fn run_full_git_info(dir: &Path) -> (String, String, super::git_worker::MergeOperation) {
+    let (diff, status) = run_git_info(dir);
+    let merge_op = super::git_worker::detect_merge_operation(dir);
+    (diff, status, merge_op)
 }
 
 pub(super) fn render_dir_tree(
