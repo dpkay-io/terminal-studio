@@ -1,10 +1,74 @@
-use super::super::pane::RightTab;
+use super::super::pane::{PaneContent, RightTab};
+use super::super::title::effective_title;
 use super::super::App;
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
+
+fn paint_titlebar_title(
+    ui: &egui::Ui,
+    clipped: &egui::Painter,
+    r: egui::Rect,
+    session_title: &Option<String>,
+    ws_name: &Option<String>,
+    bright: egui::Color32,
+) {
+    let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
+    let dim = bright.linear_multiply(0.55);
+
+    match (session_title, ws_name) {
+        (Some(session), Some(ws)) => {
+            let s_g = ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright));
+            let sep_g =
+                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".to_string(), title_font.clone(), dim));
+            let ws_g = ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font, dim));
+            let s_w = s_g.size().x;
+            let sep_w = sep_g.size().x;
+            let total = s_w + sep_w + ws_g.size().x;
+            let x = r.center().x - total / 2.0;
+            let y = r.center().y - s_g.size().y / 2.0;
+            clipped.galley(egui::pos2(x, y), s_g, bright);
+            clipped.galley(egui::pos2(x + s_w, y), sep_g, dim);
+            clipped.galley(egui::pos2(x + s_w + sep_w, y), ws_g, dim);
+        }
+        (Some(session), None) => {
+            clipped.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                session,
+                title_font,
+                bright,
+            );
+        }
+        (None, Some(ws)) => {
+            let app_g = ui.fonts(|f| {
+                f.layout_no_wrap("Terminal Studio".to_string(), title_font.clone(), dim)
+            });
+            let sep_g =
+                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".to_string(), title_font.clone(), dim));
+            let ws_g = ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font, bright));
+            let a_w = app_g.size().x;
+            let sep_w = sep_g.size().x;
+            let total = a_w + sep_w + ws_g.size().x;
+            let x = r.center().x - total / 2.0;
+            let y = r.center().y - app_g.size().y / 2.0;
+            clipped.galley(egui::pos2(x, y), app_g, dim);
+            clipped.galley(egui::pos2(x + a_w, y), sep_g, dim);
+            clipped.galley(egui::pos2(x + a_w + sep_w, y), ws_g, bright);
+        }
+        (None, None) => {
+            clipped.text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                "Terminal Studio",
+                title_font,
+                dim,
+            );
+        }
+    }
+}
 
 impl App {
     fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
@@ -48,11 +112,62 @@ impl App {
             }
         }
 
-        // ── Update window title with active workspace ───────────────────────
-        let ws_title: String = self
-            .active_workspace()
-            .map(|w| format!("Terminal Studio — {}", w.name))
-            .unwrap_or_else(|| "Terminal Studio".to_string());
+        // ── Update window title with active session + workspace ────────────
+        let active_session_title: Option<String> = self
+            .pane_state
+            .active_pane_id
+            .and_then(|pid| self.pane_state.find(pid))
+            .and_then(|pane| match &pane.content {
+                PaneContent::Terminal(sid) => {
+                    let sid = *sid;
+                    self.session_state
+                        .sessions
+                        .iter()
+                        .find(|e| e.id == sid)
+                        .map(|e| {
+                            let s = e.session.read();
+                            let title = s.title();
+                            let cwd = s.cwd.clone();
+                            drop(s);
+                            let fg = self.workers.foreground_worker.get(e.id);
+                            let ws_name = if cwd.as_os_str().is_empty() {
+                                None
+                            } else {
+                                self.workspace_store
+                                    .find_for_cwd(&cwd)
+                                    .map(|w| w.name.clone())
+                            };
+                            effective_title(
+                                &title,
+                                &cwd,
+                                fg.as_ref(),
+                                Some(&e.shell),
+                                ws_name.as_deref(),
+                            )
+                        })
+                }
+                PaneContent::FileEditor(ed) => ed
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned()),
+                PaneContent::FileDiff(d) => d
+                    .path
+                    .file_name()
+                    .map(|n| format!("diff: {}", n.to_string_lossy())),
+                PaneContent::NoteEditor(_) => Some("Notes".to_string()),
+                PaneContent::ConflictResolver(cr) => cr
+                    .path
+                    .file_name()
+                    .map(|n| format!("conflict: {}", n.to_string_lossy())),
+                PaneContent::DeferredTerminal { .. } => None,
+            });
+        let ws_name_for_title = self.active_workspace().map(|w| w.name.clone());
+        let ws_title: String = match (&active_session_title, &ws_name_for_title) {
+            (Some(session), Some(ws)) => format!("{session} — {ws}"),
+            (Some(session), None) => session.clone(),
+            (None, Some(ws)) => format!("Terminal Studio — {ws}"),
+            (None, None) => "Terminal Studio".to_string(),
+        };
         let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
         // Only send the title command when it changes. Sending every frame
         // produces a SetWindowTextW syscall on Windows for no reason.
@@ -478,52 +593,15 @@ impl App {
                         egui::pos2(mac_clip_max_x, r.max.y),
                     );
                     let mac_clipped = painter.with_clip_rect(mac_clip_rect);
-                    let t = theme::active();
-                    let title_color = t.surface2;
-                    if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
-                        let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
-                        let app_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                "Terminal Studio".to_string(),
-                                title_font.clone(),
-                                title_color,
-                            )
-                        });
-                        let sep_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                " \u{00b7} ".to_string(),
-                                title_font.clone(),
-                                title_color,
-                            )
-                        });
-                        let name_galley =
-                            ui.fonts(|f| f.layout_no_wrap(ws_name, title_font, t.fg_secondary));
-                        let app_w = app_galley.size().x;
-                        let sep_w = sep_galley.size().x;
-                        let name_w = name_galley.size().x;
-                        let total_w = app_w + sep_w + name_w;
-                        let start_x = r.center().x - total_w / 2.0;
-                        let text_y = r.center().y - app_galley.size().y / 2.0;
-                        mac_clipped.galley(egui::pos2(start_x, text_y), app_galley, title_color);
-                        mac_clipped.galley(
-                            egui::pos2(start_x + app_w, text_y),
-                            sep_galley,
-                            title_color,
-                        );
-                        mac_clipped.galley(
-                            egui::pos2(start_x + app_w + sep_w, text_y),
-                            name_galley,
-                            t.fg_secondary,
-                        );
-                    } else {
-                        mac_clipped.text(
-                            r.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Terminal Studio",
-                            egui::FontId::proportional(theme::FONT_UI_MD),
-                            title_color,
-                        );
-                    }
+                    let ws_name = self.active_workspace().map(|w| w.name.clone());
+                    paint_titlebar_title(
+                        ui,
+                        &mac_clipped,
+                        r,
+                        &active_session_title,
+                        &ws_name,
+                        tb_fg,
+                    );
                 }
 
                 // ── Windows / Linux: controls on the right ─────────────────
@@ -915,53 +993,8 @@ impl App {
                         egui::pos2(clip_max_x, r.max.y),
                     );
                     let clipped = painter.with_clip_rect(clip_rect);
-                    // "Terminal Studio" dimmed; workspace name emphasized
-                    let t = theme::active();
-                    let title_color = t.surface2;
-                    if let Some(ws_name) = self.active_workspace().map(|w| w.name.clone()) {
-                        let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
-                        let app_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                "Terminal Studio".to_string(),
-                                title_font.clone(),
-                                title_color,
-                            )
-                        });
-                        let sep_galley = ui.fonts(|f| {
-                            f.layout_no_wrap(
-                                " \u{00b7} ".to_string(),
-                                title_font.clone(),
-                                title_color,
-                            )
-                        });
-                        let name_galley =
-                            ui.fonts(|f| f.layout_no_wrap(ws_name, title_font, t.fg_secondary));
-                        let app_w = app_galley.size().x;
-                        let sep_w = sep_galley.size().x;
-                        let name_w = name_galley.size().x;
-                        let total_w = app_w + sep_w + name_w;
-                        let start_x = r.center().x - total_w / 2.0;
-                        let text_y = r.center().y - app_galley.size().y / 2.0;
-                        clipped.galley(egui::pos2(start_x, text_y), app_galley, title_color);
-                        clipped.galley(
-                            egui::pos2(start_x + app_w, text_y),
-                            sep_galley,
-                            title_color,
-                        );
-                        clipped.galley(
-                            egui::pos2(start_x + app_w + sep_w, text_y),
-                            name_galley,
-                            t.fg_secondary,
-                        );
-                    } else {
-                        clipped.text(
-                            r.center(),
-                            egui::Align2::CENTER_CENTER,
-                            "Terminal Studio",
-                            egui::FontId::proportional(theme::FONT_UI_MD),
-                            title_color,
-                        );
-                    }
+                    let ws_name = self.active_workspace().map(|w| w.name.clone());
+                    paint_titlebar_title(ui, &clipped, r, &active_session_title, &ws_name, tb_fg);
                 }
             });
     }

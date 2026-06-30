@@ -202,6 +202,9 @@ pub struct Theme {
     pub md_table_border: Color32,
     pub md_table_header_bg: Color32,
     pub md_table_row_alt_bg: Color32,
+    pub md_heading: Color32,
+    pub md_heading_rule: Color32,
+    pub md_blockquote_bg: Color32,
 
     // Terminal
     pub ansi: [Color32; 16],
@@ -377,6 +380,9 @@ impl ThemeDef {
             md_table_border: c(self.surface1),
             md_table_header_bg: c(blend(self.base, self.surface0, 0.7)),
             md_table_row_alt_bg: c(blend(self.base, self.surface0, 0.3)),
+            md_heading: c(blend(self.text, self.blue, 0.25)),
+            md_heading_rule: c(blend(self.surface0, self.surface1, 0.6)),
+            md_blockquote_bg: c(blend(self.base, self.surface0, 0.35)),
 
             ansi: ansi_c32,
             cursor_color,

@@ -1258,10 +1258,26 @@ impl App {
         }
 
         let mut do_quit = false;
-        let session_count = self.session_state.sessions.len();
+        let mut terminal_count = 0usize;
+        let mut file_count = 0usize;
+        let mut diff_count = 0usize;
+        let mut note_count = 0usize;
+        let mut conflict_count = 0usize;
+        for p in &self.pane_state.panes {
+            match &p.content {
+                PaneContent::Terminal(_) | PaneContent::DeferredTerminal { .. } => {
+                    terminal_count += 1
+                }
+                PaneContent::FileEditor(_) => file_count += 1,
+                PaneContent::FileDiff(_) => diff_count += 1,
+                PaneContent::NoteEditor(_) => note_count += 1,
+                PaneContent::ConflictResolver(_) => conflict_count += 1,
+            }
+        }
+        let total_count = self.pane_state.panes.len();
         let config = ui_kit::DialogConfig {
-            width: ui_kit::DialogWidth::Fixed(340.0),
-            max_height: 120.0,
+            width: ui_kit::DialogWidth::Fixed(380.0),
+            max_height: 200.0,
             ..Default::default()
         };
 
@@ -1269,11 +1285,57 @@ impl App {
         let resp = ui_kit::dialog(ctx, self.vp_id("quit"), config, |ui| {
             ui_kit::dialog_header(ui, "Quit Terminal Studio?");
 
-            ui.label(format!(
-                "You have {} active session{}. Are you sure you want to quit?",
-                session_count,
-                if session_count == 1 { "" } else { "s" }
-            ));
+            let mut parts = Vec::new();
+            if terminal_count > 0 {
+                parts.push(format!(
+                    "{} terminal{}",
+                    terminal_count,
+                    if terminal_count == 1 { "" } else { "s" }
+                ));
+            }
+            if file_count > 0 {
+                parts.push(format!(
+                    "{} file{}",
+                    file_count,
+                    if file_count == 1 { "" } else { "s" }
+                ));
+            }
+            if diff_count > 0 {
+                parts.push(format!(
+                    "{} diff{}",
+                    diff_count,
+                    if diff_count == 1 { "" } else { "s" }
+                ));
+            }
+            if note_count > 0 {
+                parts.push(format!(
+                    "{} note{}",
+                    note_count,
+                    if note_count == 1 { "" } else { "s" }
+                ));
+            }
+            if conflict_count > 0 {
+                parts.push(format!(
+                    "{} conflict{}",
+                    conflict_count,
+                    if conflict_count == 1 { "" } else { "s" }
+                ));
+            }
+            let detail = if parts.len() > 1 {
+                format!("{} open tabs ({}).", total_count, parts.join(", "))
+            } else if let Some(desc) = parts.first() {
+                format!("{desc} open.")
+            } else {
+                String::new()
+            };
+            if !detail.is_empty() {
+                ui.label(format!(
+                    "You have {} Are you sure you want to quit?",
+                    detail
+                ));
+            } else {
+                ui.label("Are you sure you want to quit?");
+            }
 
             ui_kit::dialog_footer(ui, |ui| {
                 if ui_kit::action_button(ui, "Quit", true, ui_kit::ActionButtonStyle::Danger)

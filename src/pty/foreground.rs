@@ -17,18 +17,25 @@ pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
     platform::detect_child(shell_pid)
 }
 
+/// Returns all descendant PIDs of `pid` by walking the process tree.
+/// Used as a fallback when a detected Claude process is a wrapper whose PID
+/// doesn't match the inner Node.js process that wrote the session file.
+pub fn find_descendant_pids(pid: u32) -> Vec<u32> {
+    platform::find_descendant_pids(pid)
+}
+
 // ── Windows ───────────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
 mod platform {
     use super::ForegroundProcess;
+    use std::collections::HashMap;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
 
-    // Process names that are infrastructure, not user commands.
     const SKIP: &[&str] = &[
         "conhost.exe",
         "powershell.exe",
@@ -37,8 +44,76 @@ mod platform {
         "wsl.exe",
     ];
 
+    const MAX_TREE_DEPTH: u32 = 5;
+
+    struct ProcessSnap {
+        pid: u32,
+        parent_pid: u32,
+        name: String,
+    }
+
+    fn snapshot_processes() -> Vec<ProcessSnap> {
+        let mut result = Vec::new();
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return result;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(snap, &mut entry) != 0 {
+                loop {
+                    result.push(ProcessSnap {
+                        pid: entry.th32ProcessID,
+                        parent_pid: entry.th32ParentProcessID,
+                        name: wide_to_string(&entry.szExeFile),
+                    });
+                    if Process32NextW(snap, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snap);
+        }
+        result
+    }
+
+    fn build_children_map(procs: &[ProcessSnap]) -> HashMap<u32, Vec<usize>> {
+        let mut map: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (i, p) in procs.iter().enumerate() {
+            map.entry(p.parent_pid).or_default().push(i);
+        }
+        map
+    }
+
+    fn find_non_skipped_child(
+        procs: &[ProcessSnap],
+        children_map: &HashMap<u32, Vec<usize>>,
+        parent_pid: u32,
+        depth: u32,
+    ) -> Option<(u32, String)> {
+        if depth > MAX_TREE_DEPTH {
+            return None;
+        }
+        let indices = children_map.get(&parent_pid)?;
+        let mut best: Option<(u32, String)> = None;
+        for &idx in indices {
+            let p = &procs[idx];
+            if SKIP.iter().any(|&s| p.name.eq_ignore_ascii_case(s)) {
+                if let Some(desc) = find_non_skipped_child(procs, children_map, p.pid, depth + 1) {
+                    best = Some(desc);
+                }
+            } else {
+                best = Some((p.pid, p.name.clone()));
+            }
+        }
+        best
+    }
+
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
-        let (child_pid, name) = find_child(shell_pid)?;
+        let procs = snapshot_processes();
+        let children_map = build_children_map(&procs);
+        let (child_pid, name) = find_non_skipped_child(&procs, &children_map, shell_pid, 0)?;
         let cmdline = get_process_cmdline(child_pid).unwrap_or_else(|| vec![name.clone()]);
         Some(ForegroundProcess {
             name,
@@ -47,35 +122,21 @@ mod platform {
         })
     }
 
-    fn find_child(parent_pid: u32) -> Option<(u32, String)> {
-        unsafe {
-            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snap == INVALID_HANDLE_VALUE {
-                return None;
-            }
-
-            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-
-            let mut best: Option<(u32, String)> = None;
-
-            if Process32FirstW(snap, &mut entry) != 0 {
-                loop {
-                    if entry.th32ParentProcessID == parent_pid {
-                        let name = wide_to_string(&entry.szExeFile);
-                        if !SKIP.iter().any(|&s| name.eq_ignore_ascii_case(s)) {
-                            best = Some((entry.th32ProcessID, name));
-                        }
-                    }
-                    if Process32NextW(snap, &mut entry) == 0 {
-                        break;
-                    }
+    pub fn find_descendant_pids(pid: u32) -> Vec<u32> {
+        let procs = snapshot_processes();
+        let children_map = build_children_map(&procs);
+        let mut result = Vec::new();
+        let mut stack = vec![pid];
+        while let Some(current) = stack.pop() {
+            if let Some(indices) = children_map.get(&current) {
+                for &idx in indices {
+                    let child_pid = procs[idx].pid;
+                    result.push(child_pid);
+                    stack.push(child_pid);
                 }
             }
-
-            CloseHandle(snap);
-            best
         }
+        result
     }
 
     fn get_process_cmdline(pid: u32) -> Option<Vec<String>> {
@@ -269,6 +330,36 @@ mod platform {
 
     const SHELL_NAMES: &[&str] = &["bash", "sh", "zsh", "fish", "dash", "ksh", "csh", "tcsh"];
 
+    pub fn find_descendant_pids(pid: u32) -> Vec<u32> {
+        let mut result = Vec::new();
+        let mut stack = vec![pid];
+        while let Some(current) = stack.pop() {
+            let entries = match std::fs::read_dir("/proc") {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let current_str = current.to_string();
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                let Ok(child_pid) = name_str.parse::<u32>() else {
+                    continue;
+                };
+                if child_pid == current {
+                    continue;
+                }
+                let Ok(stat) = std::fs::read_to_string(format!("/proc/{child_pid}/stat")) else {
+                    continue;
+                };
+                if ppid_from_stat(&stat) == Some(current_str.as_str()) {
+                    result.push(child_pid);
+                    stack.push(child_pid);
+                }
+            }
+        }
+        result
+    }
+
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
         if let Some(proc) = detect_via_tpgid(shell_pid) {
             return Some(proc);
@@ -378,6 +469,10 @@ mod platform {
 mod platform {
     use super::ForegroundProcess;
 
+    pub fn find_descendant_pids(_pid: u32) -> Vec<u32> {
+        Vec::new()
+    }
+
     pub fn detect_child(shell_pid: u32) -> Option<ForegroundProcess> {
         let out = std::process::Command::new("ps")
             .args(["-eo", "ppid=,pid=,command="])
@@ -436,6 +531,9 @@ mod platform {
     use super::ForegroundProcess;
     pub fn detect_child(_shell_pid: u32) -> Option<ForegroundProcess> {
         None
+    }
+    pub fn find_descendant_pids(_pid: u32) -> Vec<u32> {
+        Vec::new()
     }
 }
 

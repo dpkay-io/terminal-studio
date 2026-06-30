@@ -396,6 +396,7 @@ impl App {
                             if close_resp
                                 .on_hover_text("Close tab (Ctrl+Shift+W)")
                                 .clicked()
+                                || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
                                 close_pane_id = Some(pane_id);
                             } else if tab_resp.double_clicked() && !is_renaming {
@@ -949,6 +950,7 @@ impl App {
                             if close_resp
                                 .on_hover_text("Close tab (Ctrl+Shift+W)")
                                 .clicked()
+                                || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
                                 close_pane_id = Some(pane_id);
                             } else if tab_resp.double_clicked() && !is_renaming {

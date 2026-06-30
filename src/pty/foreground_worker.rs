@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::foreground::{detect_child, ForegroundProcess};
+use super::foreground::{detect_child, find_descendant_pids, ForegroundProcess};
 use crate::app::claude_session::{is_claude_process, lookup_claude_session_id};
 
 /// Background thread that polls foreground-process detection every 500 ms for
@@ -53,7 +53,15 @@ impl ForegroundWorker {
                         if let Some(ref proc) = result {
                             if is_claude_process(&proc.name, &proc.cmdline) {
                                 if let Some(pid) = proc.pid {
-                                    if let Some(session_id) = lookup_claude_session_id(pid) {
+                                    let session_id = lookup_claude_session_id(pid).or_else(|| {
+                                        for desc_pid in find_descendant_pids(pid) {
+                                            if let Some(sid) = lookup_claude_session_id(desc_pid) {
+                                                return Some(sid);
+                                            }
+                                        }
+                                        None
+                                    });
+                                    if let Some(session_id) = session_id {
                                         claude_bg.lock().insert(sid, session_id);
                                     }
                                 }

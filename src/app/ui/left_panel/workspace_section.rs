@@ -153,7 +153,12 @@ impl App {
             })
             .collect();
 
-        workspaces.sort_by_key(|w| std::cmp::Reverse(w.last_activated));
+        workspaces.sort_by(|a, b| match (a.has_active_session, b.has_active_session) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, true) => b.last_activated.cmp(&a.last_activated),
+            (false, false) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
 
         // Apply search filter
         if !search_filter.is_empty() {

@@ -388,6 +388,10 @@ impl App {
             });
         let cmd_to_run: Option<String> = active_fg.as_ref().map(|fp| {
             if is_claude_process(&fp.name, &fp.cmdline) {
+                let name_lower = fp.name.to_lowercase();
+                if name_lower == "claude" || name_lower == "claude.exe" {
+                    return fp.name.clone();
+                }
                 return "claude".to_string();
             }
             let parts: Vec<String> = fp.cmdline.iter().map(|a| shell_escape_arg(a)).collect();

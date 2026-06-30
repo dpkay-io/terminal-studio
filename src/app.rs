@@ -413,7 +413,7 @@ impl eframe::App for App {
         }
 
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
-            if self.session_state.sessions.is_empty() {
+            if self.pane_state.panes.is_empty() {
                 self.quit_confirmed = true;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1571,9 +1571,18 @@ impl App {
                                                         tab_hover_t,
                                                     )
                                                 };
+                                                let git_change_count = git_status
+                                                    .lines()
+                                                    .filter(|l| l.len() >= 3)
+                                                    .count();
+                                                let tab_label = if git_change_count > 0 {
+                                                    format!("Git Diff ({})", git_change_count)
+                                                } else {
+                                                    "Git Diff".to_string()
+                                                };
                                                 let resp = ui.selectable_label(
                                                     is_active_tab,
-                                                    egui::RichText::new("Git Diff")
+                                                    egui::RichText::new(&tab_label)
                                                         .size(theme::FONT_UI_MD)
                                                         .color(tab_color),
                                                 );
@@ -1725,13 +1734,14 @@ impl App {
 
                         ui.separator();
 
-                        egui::ScrollArea::vertical()
+                        let right_content_w = ui.available_width();
+                        egui::ScrollArea::both()
                             .id_source(self.vp_id("right_content"))
                             .show(ui, |ui| {
                                 let margin = egui::Margin::symmetric(theme::SP_3, 0.0);
                                 egui::Frame::none().inner_margin(margin).show(ui, |ui| {
-                                    let w = ui.available_width().max(0.0);
-                                    ui.set_min_width(w);
+                                    let w = (right_content_w - margin.sum().x).max(0.0);
+                                    ui.set_min_width(0.0);
                                     ui.set_max_width(w);
                                 match &active_tab {
                                     RightTab::Directory => {
@@ -1742,20 +1752,24 @@ impl App {
                                                     .workspace_store
                                                     .find_for_path(cwd)
                                                     .is_some();
-                                                let save_btn_reserve = if already_saved { 0.0 } else { 90.0 };
+                                                let save_btn_reserve = if already_saved { 0.0 } else { 24.0 };
                                                 if let Some(ws) =
                                                     self.workspace_store.find_for_cwd(cwd)
                                                 {
                                                     let c = ws.color;
                                                     let panel_bg = theme::active().mantle_rgb;
-                                                    ui.label(
-                                                        egui::RichText::new(&ws.name)
-                                                            .strong()
-                                                            .size(theme::FONT_UI_SM)
-                                                            .color(theme::ensure_readable(
-                                                                c, panel_bg,
-                                                            )),
-                                                    );
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(&ws.name)
+                                                                .strong()
+                                                                .size(theme::FONT_UI_SM)
+                                                                .color(theme::ensure_readable(
+                                                                    c, panel_bg,
+                                                                )),
+                                                        )
+                                                        .truncate(),
+                                                    )
+                                                    .on_hover_text(&ws.name);
                                                     ui.label(
                                                         egui::RichText::new("›")
                                                             .size(theme::FONT_UI_SM)
@@ -1778,13 +1792,13 @@ impl App {
                                                 if !already_saved {
                                                     let save_btn = ui.add(
                                                         egui::Button::new(
-                                                            egui::RichText::new("+ Save Workspace")
+                                                            egui::RichText::new("+")
                                                                 .size(theme::FONT_UI_SM)
                                                                 .color(theme::active().accent_strong),
                                                         )
                                                         .rounding(theme::R_MD),
                                                     );
-                                                    if save_btn.on_hover_text("Save this directory as a workspace").clicked() {
+                                                    if save_btn.on_hover_text("Save as workspace").clicked() {
                                                         open_ws_dialog = Some(cwd.clone());
                                                     }
                                                 }

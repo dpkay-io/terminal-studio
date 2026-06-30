@@ -67,6 +67,7 @@ pub(super) fn render_git_diff(
     let mut revert_file: Option<String> = None;
 
     let panel_width = ui.available_width();
+    ui.set_min_width(0.0);
     ui.set_max_width(panel_width);
 
     let t = theme::active();

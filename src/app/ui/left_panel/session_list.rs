@@ -218,8 +218,9 @@ impl App {
             egui::vec2(ui.available_width(), theme::HEADER_H),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
+                let session_count = self.pane_state.panes.len();
                 ui.label(
-                    egui::RichText::new("Sessions")
+                    egui::RichText::new(format!("Sessions ({})", session_count))
                         .strong()
                         .size(theme::FONT_UI_MD),
                 );

@@ -71,7 +71,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                             }
                         });
                 });
-            ui.add_space(theme::SP_2);
+            ui.add_space(theme::SP_3);
             code_block_idx += 1;
             continue;
         }
@@ -86,22 +86,56 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 i += 1;
             }
             render_table(ui, &table_rows);
-            ui.add_space(theme::SP_2);
+            ui.add_space(theme::SP_3);
             continue;
         }
 
         // Headings
         if let Some(t) = line.strip_prefix("#### ") {
-            ui.label(egui::RichText::new(t).size(theme::FONT_UI_LG).strong());
+            ui.add_space(theme::SP_2);
+            ui.label(
+                egui::RichText::new(t)
+                    .size(theme::FONT_UI_LG)
+                    .strong()
+                    .color(theme::active().md_heading),
+            );
         } else if let Some(t) = line.strip_prefix("### ") {
-            ui.label(egui::RichText::new(t).size(theme::FONT_UI_LG).strong());
+            ui.add_space(theme::SP_3);
+            ui.label(
+                egui::RichText::new(t)
+                    .size(theme::FONT_STATUS)
+                    .strong()
+                    .color(theme::active().md_heading),
+            );
         } else if let Some(t) = line.strip_prefix("## ") {
-            ui.add_space(theme::SP_2);
-            ui.label(egui::RichText::new(t).size(theme::FONT_HEADING_2).strong());
-        } else if let Some(t) = line.strip_prefix("# ") {
-            ui.add_space(theme::SP_2);
-            ui.label(egui::RichText::new(t).size(theme::FONT_HEADING_1).strong());
+            let th = theme::active();
+            ui.add_space(theme::SP_4);
+            ui.label(
+                egui::RichText::new(t)
+                    .size(theme::FONT_HEADING_2)
+                    .strong()
+                    .color(th.md_heading),
+            );
             ui.add_space(theme::SP_1);
+            let rule_rect = ui.allocate_space(egui::vec2(ui.available_width(), theme::STROKE_THIN));
+            ui.painter()
+                .rect_filled(rule_rect.1, 0.0, th.md_heading_rule);
+            ui.add_space(theme::SP_1);
+        } else if let Some(t) = line.strip_prefix("# ") {
+            let th = theme::active();
+            ui.add_space(theme::SP_5);
+            ui.label(
+                egui::RichText::new(t)
+                    .size(theme::FONT_HEADING_1)
+                    .strong()
+                    .color(th.md_heading),
+            );
+            ui.add_space(theme::SP_1);
+            let rule_rect =
+                ui.allocate_space(egui::vec2(ui.available_width(), theme::STROKE_MEDIUM));
+            ui.painter()
+                .rect_filled(rule_rect.1, 0.0, th.md_heading_rule);
+            ui.add_space(theme::SP_2);
         }
         // Unordered list
         else if let Some(rest) = strip_list_prefix(line) {
@@ -121,31 +155,37 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
                 theme::render_inline(ui, rest);
             });
         }
-        // Blockquote
-        else if let Some(t) = line.strip_prefix("> ") {
-            ui.horizontal(|ui| {
-                let bar_h = ui.text_style_height(&egui::TextStyle::Body);
-                let (bar_rect, _) = ui.allocate_exact_size(
-                    egui::vec2(theme::TAB_COLOR_STRIP_W, bar_h),
-                    egui::Sense::hover(),
-                );
-                ui.painter()
-                    .rect_filled(bar_rect, 0.0, theme::active().overlay0);
-                ui.add_space(theme::SP_3);
-                ui.label(
-                    egui::RichText::new(t)
-                        .italics()
-                        .color(theme::active().md_blockquote),
-                );
-            });
+        // Blockquote — collect consecutive `> ` lines into one block
+        else if line.starts_with("> ") || line == ">" {
+            let mut bq_lines: Vec<&str> = Vec::new();
+            loop {
+                let cur = lines[i];
+                if let Some(rest) = cur.strip_prefix("> ") {
+                    bq_lines.push(rest);
+                } else if cur == ">" {
+                    bq_lines.push("");
+                } else {
+                    break;
+                }
+                i += 1;
+                if i >= len {
+                    break;
+                }
+            }
+            render_blockquote(ui, &bq_lines);
+            continue;
         }
         // Horizontal rule
         else if line.starts_with("---") && line.chars().all(|c| c == '-') {
-            ui.separator();
+            ui.add_space(theme::SP_2);
+            let rule_rect = ui.allocate_space(egui::vec2(ui.available_width(), theme::STROKE_THIN));
+            ui.painter()
+                .rect_filled(rule_rect.1, 0.0, theme::active().md_heading_rule);
+            ui.add_space(theme::SP_2);
         }
         // Empty line
         else if line.is_empty() {
-            ui.add_space(theme::SP_2);
+            ui.add_space(theme::SP_3);
         }
         // Normal paragraph
         else {
@@ -233,6 +273,42 @@ fn build_line_job(spans: &[(egui::Color32, String)]) -> egui::text::LayoutJob {
     job
 }
 
+fn render_blockquote(ui: &mut egui::Ui, bq_lines: &[&str]) {
+    use crate::theme;
+
+    let th = theme::active();
+    let bar_w = theme::TAB_COLOR_STRIP_W;
+    let frame_resp = egui::Frame::none()
+        .fill(th.md_blockquote_bg)
+        .rounding(egui::Rounding {
+            nw: 0.0,
+            sw: 0.0,
+            ne: theme::R_SM,
+            se: theme::R_SM,
+        })
+        .inner_margin(egui::Margin {
+            left: theme::SP_4 + bar_w + theme::SP_2,
+            right: theme::SP_4,
+            top: theme::SP_2,
+            bottom: theme::SP_2,
+        })
+        .show(ui, |ui| {
+            for (idx, line) in bq_lines.iter().enumerate() {
+                if line.is_empty() {
+                    ui.add_space(theme::SP_2);
+                } else {
+                    ui.label(egui::RichText::new(*line).italics().color(th.md_blockquote));
+                }
+                if idx < bq_lines.len() - 1 && !line.is_empty() {
+                    ui.add_space(theme::SP_1);
+                }
+            }
+        });
+    let outer = frame_resp.response.rect;
+    let bar_rect = egui::Rect::from_min_size(outer.left_top(), egui::vec2(bar_w, outer.height()));
+    ui.painter().rect_filled(bar_rect, 0.0, th.accent);
+}
+
 fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
     use crate::theme;
 
@@ -247,6 +323,7 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
     }
 
     let cell_h_padding = theme::SP_4;
+    let cell_v_padding = theme::SP_2;
     let border_width = theme::STROKE_THIN;
 
     ui.add_space(theme::SP_2);
@@ -263,11 +340,13 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                 (total_width - borders_width - padding_width).max(col_count as f32 * 20.0);
             let col_content_width = content_width / col_count as f32;
 
-            egui::Grid::new(ui.next_auto_id())
+            let grid_resp = egui::Grid::new(ui.next_auto_id())
                 .num_columns(col_count)
                 .min_col_width(0.0)
+                .max_col_width(col_content_width + cell_h_padding * 2.0)
                 .spacing(egui::vec2(0.0, 0.0))
                 .show(ui, |ui| {
+                    let mut header_bottom_y = 0.0f32;
                     for (row_idx, row) in rows.iter().enumerate() {
                         let is_header = row_idx == 0;
                         for (col_idx, cell) in row.iter().enumerate() {
@@ -284,11 +363,13 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                     .fill(bg)
                                     .inner_margin(egui::Margin::symmetric(
                                         cell_h_padding,
-                                        theme::SP_1 + 1.0,
+                                        cell_v_padding,
                                     ));
 
                             let cell_resp = frame.show(ui, |ui| {
                                 ui.set_min_width(col_content_width);
+                                ui.set_max_width(col_content_width);
+                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                                 if is_header {
                                     ui.label(
                                         egui::RichText::new(*cell).strong().size(theme::FONT_UI_MD),
@@ -297,6 +378,11 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                                     theme::render_inline(ui, cell);
                                 }
                             });
+
+                            if is_header {
+                                header_bottom_y =
+                                    header_bottom_y.max(cell_resp.response.rect.max.y);
+                            }
 
                             if col_idx < col_count.saturating_sub(1) {
                                 let r = cell_resp.response.rect;
@@ -311,7 +397,20 @@ fn render_table(ui: &mut egui::Ui, rows: &[Vec<&str>]) {
                         }
                         ui.end_row();
                     }
+                    header_bottom_y
                 });
+
+            let grid_rect = grid_resp.response.rect;
+            let header_y = grid_resp.inner;
+            if header_y > 0.0 {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(grid_rect.min.x, header_y),
+                        egui::pos2(grid_rect.max.x, header_y),
+                    ],
+                    egui::Stroke::new(border_width, th.md_table_border),
+                );
+            }
         });
 }
 
