@@ -9,7 +9,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use super::foreground::{detect_child, find_descendant_pids, ForegroundProcess};
-use crate::app::claude_session::{is_claude_process, lookup_claude_session_id};
+use crate::app::claude_session::{
+    is_claude_process, lookup_claude_session_id, lookup_claude_session_id_by_cwd,
+};
 
 /// Background thread that polls foreground-process detection every 500 ms for
 /// all registered sessions.  The UI thread reads from the shared cache without
@@ -17,7 +19,8 @@ use crate::app::claude_session::{is_claude_process, lookup_claude_session_id};
 /// CreateToolhelp32Snapshot (Windows) or /proc scans (Linux).
 pub struct ForegroundWorker {
     cache: Arc<Mutex<HashMap<u32, Option<ForegroundProcess>>>>,
-    pids: Arc<Mutex<Vec<(u32, u32)>>>,
+    /// (session_id, shell_pid, cwd)
+    pids: Arc<Mutex<Vec<(u32, u32, String)>>>,
     alive: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
     /// Maps terminal session_id → Claude session UUID.  Entries are only pruned
@@ -29,7 +32,7 @@ impl ForegroundWorker {
     pub fn spawn() -> Self {
         let cache: Arc<Mutex<HashMap<u32, Option<ForegroundProcess>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let pids: Arc<Mutex<Vec<(u32, u32)>>> = Arc::new(Mutex::new(Vec::new()));
+        let pids: Arc<Mutex<Vec<(u32, u32, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let alive = Arc::new(AtomicBool::new(true));
 
         let claude_sessions: Arc<Mutex<HashMap<u32, String>>> =
@@ -44,8 +47,8 @@ impl ForegroundWorker {
             .name("foreground-detector".into())
             .spawn(move || {
                 while alive_bg.load(Ordering::Acquire) {
-                    let snapshot: Vec<(u32, u32)> = pids_bg.lock().clone();
-                    for (sid, shell_pid) in snapshot {
+                    let snapshot: Vec<(u32, u32, String)> = pids_bg.lock().clone();
+                    for (sid, shell_pid, cwd) in snapshot {
                         if shell_pid == u32::MAX {
                             continue;
                         }
@@ -53,17 +56,35 @@ impl ForegroundWorker {
                         if let Some(ref proc) = result {
                             if is_claude_process(&proc.name, &proc.cmdline) {
                                 if let Some(pid) = proc.pid {
-                                    let session_id = lookup_claude_session_id(pid).or_else(|| {
-                                        for desc_pid in find_descendant_pids(pid) {
-                                            if let Some(sid) = lookup_claude_session_id(desc_pid) {
-                                                return Some(sid);
+                                    let session_id = lookup_claude_session_id(pid)
+                                        .or_else(|| {
+                                            for desc_pid in find_descendant_pids(pid) {
+                                                if let Some(sid) =
+                                                    lookup_claude_session_id(desc_pid)
+                                                {
+                                                    return Some(sid);
+                                                }
                                             }
-                                        }
-                                        None
-                                    });
+                                            None
+                                        })
+                                        .or_else(|| {
+                                            if !cwd.is_empty() {
+                                                lookup_claude_session_id_by_cwd(&cwd)
+                                            } else {
+                                                None
+                                            }
+                                        });
                                     if let Some(session_id) = session_id {
-                                        claude_bg.lock().insert(sid, session_id);
+                                        let mut guard = claude_bg.lock();
+                                        guard.retain(|_, v| v != &session_id);
+                                        guard.insert(sid, session_id);
                                     }
+                                }
+                            } else if !cwd.is_empty() && !claude_bg.lock().contains_key(&sid) {
+                                if let Some(session_id) = lookup_claude_session_id_by_cwd(&cwd) {
+                                    let mut guard = claude_bg.lock();
+                                    guard.retain(|_, v| v != &session_id);
+                                    guard.insert(sid, session_id);
                                 }
                             }
                         }
@@ -89,10 +110,11 @@ impl ForegroundWorker {
     }
 
     /// Update the set of sessions to poll.  Call whenever sessions are added or removed.
+    /// Each entry is `(session_id, shell_pid, cwd)`.
     /// Cheap: replaces the inner Vec and prunes stale cache entries.
-    pub fn set_sessions(&self, sessions: Vec<(u32, u32)>) {
+    pub fn set_sessions(&self, sessions: Vec<(u32, u32, String)>) {
         let active_ids: std::collections::HashSet<u32> =
-            sessions.iter().map(|(sid, _)| *sid).collect();
+            sessions.iter().map(|(sid, _, _)| *sid).collect();
         *self.pids.lock() = sessions;
         self.cache.lock().retain(|sid, _| active_ids.contains(sid));
         self.claude_sessions
@@ -151,7 +173,7 @@ mod tests {
             .claude_sessions
             .lock()
             .insert(2, "def-456".to_string());
-        worker.set_sessions(vec![(1, 100)]);
+        worker.set_sessions(vec![(1, 100, String::new())]);
         assert_eq!(worker.get_claude_session_id(1), Some("abc-123".to_string()));
         assert!(worker.get_claude_session_id(2).is_none());
     }

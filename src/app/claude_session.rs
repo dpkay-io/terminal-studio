@@ -85,25 +85,27 @@ fn claude_sessions_dir() -> Option<PathBuf> {
     }
 }
 
+const JS_RUNTIMES: &[&str] = &[
+    "node", "node.exe", "bun", "bun.exe", "deno", "deno.exe", "npx", "npx.exe",
+];
+
 /// Returns true if the given process name/cmdline belongs to a Claude Code session.
 ///
 /// Matches:
 /// - Process named `claude` or `claude.exe` (case-insensitive)
-/// - Process named `node` or `node.exe` (case-insensitive) with `"claude"` anywhere
-///   in any cmdline argument (case-insensitive)
+/// - Any JS runtime (`node`, `bun`, `deno`, `npx` + `.exe` variants) with
+///   `"claude"` anywhere in any cmdline argument (case-insensitive)
 pub(crate) fn is_claude_process(name: &str, cmdline: &[String]) -> bool {
     if name.is_empty() {
         return false;
     }
     let name_lower = name.to_lowercase();
 
-    // Direct match: the binary is claude / claude.exe
     if name_lower == "claude" || name_lower == "claude.exe" {
         return true;
     }
 
-    // Node process running a Claude script
-    if name_lower == "node" || name_lower == "node.exe" {
+    if JS_RUNTIMES.iter().any(|&rt| name_lower == rt) {
         return cmdline
             .iter()
             .any(|arg| arg.to_lowercase().contains("claude"));
@@ -156,6 +158,67 @@ fn lookup_claude_session_id_by_scan(dir: &Path) -> Option<String> {
         }
     }
     best.map(|(sid, _)| sid)
+}
+
+pub(crate) fn normalize_cwd_for_match(cwd: &str) -> String {
+    cwd.replace('\\', "/").trim_end_matches('/').to_lowercase()
+}
+
+/// Scans all session files in `dir` and returns the `sessionId` of the most
+/// recently updated session whose `cwd` matches the given path.
+/// When `active_only` is true, only "busy"/"idle" sessions are considered;
+/// when false, any status is accepted (for close-time capture where Claude
+/// may have already exited and updated its status to "completed").
+fn lookup_claude_session_id_by_cwd_in(dir: &Path, cwd: &str, active_only: bool) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let target = normalize_cwd_for_match(cwd);
+    let mut best: Option<(String, u64)> = None;
+    for entry in entries.flatten() {
+        if entry.path().extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let text = match std::fs::read_to_string(entry.path()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let value: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if active_only {
+            let status = value.get("status").and_then(|v| v.as_str()).unwrap_or("");
+            if status != "busy" && status != "idle" {
+                continue;
+            }
+        }
+        let file_cwd = value.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
+        if normalize_cwd_for_match(file_cwd) != target {
+            continue;
+        }
+        let session_id = value.get("sessionId").and_then(|v| v.as_str());
+        let updated_at = value.get("updatedAt").and_then(|v| v.as_u64()).unwrap_or(0);
+        if let Some(sid) = session_id {
+            if best.as_ref().map_or(true, |b| updated_at > b.1) {
+                best = Some((sid.to_owned(), updated_at));
+            }
+        }
+    }
+    best.map(|(sid, _)| sid)
+}
+
+/// Scans `~/.claude/sessions/` for an active session matching the given CWD.
+/// Only matches sessions with "busy"/"idle" status (currently running).
+pub(crate) fn lookup_claude_session_id_by_cwd(cwd: &str) -> Option<String> {
+    let dir = claude_sessions_dir()?;
+    lookup_claude_session_id_by_cwd_in(&dir, cwd, true)
+}
+
+/// Like `lookup_claude_session_id_by_cwd` but accepts any session status.
+/// Used at session close time when Claude may have already exited and updated
+/// its status to "completed".
+pub(crate) fn lookup_claude_session_id_by_cwd_any(cwd: &str) -> Option<String> {
+    let dir = claude_sessions_dir()?;
+    lookup_claude_session_id_by_cwd_in(&dir, cwd, false)
 }
 
 /// Looks up the Claude Code session ID for the given PID.
@@ -232,11 +295,11 @@ fn find_session_jsonl_in_any_project(projects_dir: &Path, session_id: &str) -> b
 }
 
 /// Returns the `claude --resume "<id>"` command if the session file exists on
-/// disk, otherwise falls back to `claude --continue`.
+/// disk, or `None` if the specific session can't be found.
 ///
 /// On WSL, scans all project directories since the Linux CWD format differs
 /// from the Windows CWD format Claude used when creating the project dir.
-pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> String {
+pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> Option<String> {
     if let Some(claude_home) = claude_home_dir() {
         let project_name = cwd_to_project_dir_name(cwd);
         let jsonl = claude_home
@@ -244,15 +307,15 @@ pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> String {
             .join(&project_name)
             .join(format!("{session_id}.jsonl"));
         if jsonl.exists() {
-            return format!("claude --resume \"{}\"", session_id);
+            return Some(format!("claude --resume \"{}\"", session_id));
         }
         #[cfg(target_os = "linux")]
         if is_wsl() && find_session_jsonl_in_any_project(&claude_home.join("projects"), session_id)
         {
-            return format!("claude --resume \"{}\"", session_id);
+            return Some(format!("claude --resume \"{}\"", session_id));
         }
     }
-    "claude --continue".to_string()
+    None
 }
 
 #[cfg(test)]
@@ -296,6 +359,30 @@ mod tests {
     fn test_is_not_claude_node_without_claude_arg() {
         let args = vec!["server.js".to_string()];
         assert!(!is_claude_process("node", &args));
+    }
+
+    #[test]
+    fn test_is_claude_bun_with_claude_arg() {
+        let args = vec!["claude".to_string()];
+        assert!(is_claude_process("bun", &args));
+    }
+
+    #[test]
+    fn test_is_claude_bun_exe_with_claude_arg() {
+        let args = vec!["C:\\Users\\user\\AppData\\bun\\claude\\cli.js".to_string()];
+        assert!(is_claude_process("bun.exe", &args));
+    }
+
+    #[test]
+    fn test_is_not_claude_bun_without_claude_arg() {
+        let args = vec!["server.ts".to_string()];
+        assert!(!is_claude_process("bun", &args));
+    }
+
+    #[test]
+    fn test_is_claude_npx_with_claude_arg() {
+        let args = vec!["@anthropic-ai/claude-code".to_string()];
+        assert!(is_claude_process("npx", &args));
     }
 
     #[test]
@@ -354,12 +441,12 @@ mod tests {
     // ── claude_resume_command ───────────────────────────────────────────────
 
     #[test]
-    fn test_resume_command_falls_back_when_no_jsonl() {
+    fn test_resume_command_returns_none_when_no_jsonl() {
         let dir = tempdir().unwrap();
         let cwd = dir.path().join("project");
         std::fs::create_dir_all(&cwd).unwrap();
         let cmd = claude_resume_command("nonexistent-uuid", &cwd);
-        assert_eq!(cmd, "claude --continue");
+        assert_eq!(cmd, None);
     }
 
     #[test]
@@ -458,5 +545,99 @@ mod tests {
         std::fs::create_dir_all(&proj_b).unwrap();
         std::fs::write(proj_b.join("target-uuid.jsonl"), "data").unwrap();
         assert!(find_session_jsonl_in_any_project(dir.path(), "target-uuid"));
+    }
+
+    // ── normalize_cwd_for_match ────────────────────────────────────────────
+
+    #[test]
+    fn test_normalize_cwd_backslashes() {
+        assert_eq!(
+            normalize_cwd_for_match(r"C:\Users\dpk\ws\project"),
+            "c:/users/dpk/ws/project"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cwd_trailing_slash() {
+        assert_eq!(
+            normalize_cwd_for_match("/home/user/project/"),
+            "/home/user/project"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cwd_case_insensitive() {
+        assert_eq!(
+            normalize_cwd_for_match("C:/Users/DPK/WS"),
+            normalize_cwd_for_match("c:/users/dpk/ws")
+        );
+    }
+
+    // ── lookup_claude_session_id_by_cwd_in ─────────────────────────────────
+
+    #[test]
+    fn test_cwd_lookup_finds_matching_session() {
+        let dir = tempdir().unwrap();
+        let json = r#"{"pid":100,"sessionId":"cwd-uuid","cwd":"C:\\Users\\dpk\\ws\\project","status":"busy","updatedAt":1000}"#;
+        std::fs::write(dir.path().join("100.json"), json).unwrap();
+        let result =
+            lookup_claude_session_id_by_cwd_in(dir.path(), r"C:\Users\dpk\ws\project", true);
+        assert_eq!(result, Some("cwd-uuid".to_string()));
+    }
+
+    #[test]
+    fn test_cwd_lookup_ignores_different_cwd() {
+        let dir = tempdir().unwrap();
+        let json = r#"{"pid":100,"sessionId":"other-uuid","cwd":"/home/other/project","status":"busy","updatedAt":1000}"#;
+        std::fs::write(dir.path().join("100.json"), json).unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), "/home/user/project", true);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_cwd_lookup_skips_inactive_sessions() {
+        let dir = tempdir().unwrap();
+        let json = r#"{"pid":100,"sessionId":"done-uuid","cwd":"/home/user/project","status":"completed","updatedAt":2000}"#;
+        std::fs::write(dir.path().join("100.json"), json).unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), "/home/user/project", true);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_cwd_lookup_any_status_finds_completed() {
+        let dir = tempdir().unwrap();
+        let json = r#"{"pid":100,"sessionId":"done-uuid","cwd":"/home/user/project","status":"completed","updatedAt":2000}"#;
+        std::fs::write(dir.path().join("100.json"), json).unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), "/home/user/project", false);
+        assert_eq!(result, Some("done-uuid".to_string()));
+    }
+
+    #[test]
+    fn test_cwd_lookup_picks_most_recent() {
+        let dir = tempdir().unwrap();
+        let old =
+            r#"{"pid":100,"sessionId":"old-uuid","cwd":"C:\\ws","status":"busy","updatedAt":1000}"#;
+        let new =
+            r#"{"pid":200,"sessionId":"new-uuid","cwd":"C:\\ws","status":"idle","updatedAt":2000}"#;
+        std::fs::write(dir.path().join("100.json"), old).unwrap();
+        std::fs::write(dir.path().join("200.json"), new).unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), r"C:\ws", true);
+        assert_eq!(result, Some("new-uuid".to_string()));
+    }
+
+    #[test]
+    fn test_cwd_lookup_normalizes_separators() {
+        let dir = tempdir().unwrap();
+        let json = r#"{"pid":100,"sessionId":"norm-uuid","cwd":"C:\\Users\\dpk","status":"busy","updatedAt":1000}"#;
+        std::fs::write(dir.path().join("100.json"), json).unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), "C:/Users/dpk", true);
+        assert_eq!(result, Some("norm-uuid".to_string()));
+    }
+
+    #[test]
+    fn test_cwd_lookup_empty_dir() {
+        let dir = tempdir().unwrap();
+        let result = lookup_claude_session_id_by_cwd_in(dir.path(), "/home/user", true);
+        assert_eq!(result, None);
     }
 }

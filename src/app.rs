@@ -1252,7 +1252,26 @@ impl App {
             .workers
             .foreground_worker
             .get_claude_session_id(sid)
-            .or_else(|| entry.claude_session_id.clone());
+            .or_else(|| entry.claude_session_id.clone())
+            .or_else(|| {
+                let scanned =
+                    claude_session::lookup_claude_session_id_by_cwd_any(&cwd.to_string_lossy())?;
+                let already_taken = self.session_state.sessions.iter().any(|other| {
+                    other.id != sid
+                        && (other.claude_session_id.as_deref() == Some(scanned.as_str())
+                            || self
+                                .workers
+                                .foreground_worker
+                                .get_claude_session_id(other.id)
+                                .as_deref()
+                                == Some(scanned.as_str()))
+                });
+                if already_taken {
+                    None
+                } else {
+                    Some(scanned)
+                }
+            });
 
         drop(session);
 

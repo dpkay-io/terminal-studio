@@ -40,12 +40,15 @@ impl App {
         // Update the worker's session list so it polls the right PIDs, then
         // read instantly from the shared cache — never blocks the UI thread.
         {
-            let pids: Vec<(u32, u32)> = self
+            let pids: Vec<(u32, u32, String)> = self
                 .session_state
                 .sessions
                 .iter()
                 .filter(|e| e.alive.load(Ordering::Relaxed))
-                .map(|e| (e.id, e.shell_pid))
+                .map(|e| {
+                    let cwd = e.session.read().cwd.to_string_lossy().to_string();
+                    (e.id, e.shell_pid, cwd)
+                })
                 .collect();
             self.workers.foreground_worker.set_sessions(pids);
         }
