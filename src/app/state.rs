@@ -170,6 +170,8 @@ impl App {
         let last_update_check = loaded_settings.last_update_check;
         let show_sys_monitor = loaded_settings.show_sys_monitor;
         let (subdir_load_tx, subdir_load_rx) = std::sync::mpsc::channel();
+        let workspace_store = WorkspaceStore::load();
+        let note_store = NoteStore::load(&workspace_store.workspaces);
         let mut app = App {
             session_manager: mgr,
             session_state: SessionState::new(),
@@ -177,7 +179,7 @@ impl App {
             right_tab: RightTab::Directory,
             shown_md_tabs: HashMap::new(),
             watch_state: WatchState::new(ctx.clone()),
-            workspace_store: WorkspaceStore::load(),
+            workspace_store,
             active_group: None,
             last_pane_per_group: HashMap::new(),
             workspace_dialog: None,
@@ -186,7 +188,7 @@ impl App {
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
             workspace_search_query: String::new(),
-            note_store: NoteStore::load(),
+            note_store,
             label_registry: LabelRegistry::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,

@@ -950,6 +950,12 @@ impl App {
         if save_it {
             if let Some(dlg) = self.workspace_edit_dialog.take() {
                 let new_name = dlg.name.trim().to_string();
+                let old_name = self
+                    .workspace_store
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == dlg.workspace_id)
+                    .map(|w| w.name.clone());
                 if let Some(ws) = self
                     .workspace_store
                     .workspaces
@@ -960,6 +966,12 @@ impl App {
                     ws.color = dlg.selected_color;
                 }
                 self.workspace_store.save();
+                if let Some(old) = old_name {
+                    if old != new_name {
+                        self.note_store
+                            .rename_file(dlg.workspace_id, &old, &new_name);
+                    }
+                }
                 if let Some(ew) = self
                     .extra_windows
                     .iter_mut()
@@ -1869,16 +1881,28 @@ impl App {
                 let ws_id = if dlg.save_as_workspace {
                     if let Some(existing_id) = dlg.existing_workspace_id {
                         // Update existing workspace
+                        let new_name = dlg.workspace_name.trim().to_string();
+                        let old_name = self
+                            .workspace_store
+                            .workspaces
+                            .iter()
+                            .find(|w| w.id == existing_id)
+                            .map(|w| w.name.clone());
                         if let Some(ws) = self
                             .workspace_store
                             .workspaces
                             .iter_mut()
                             .find(|w| w.id == existing_id)
                         {
-                            ws.name = dlg.workspace_name.trim().to_string();
+                            ws.name = new_name.clone();
                             ws.color = dlg.workspace_color;
                         }
                         self.workspace_store.save();
+                        if let Some(old) = old_name {
+                            if old != new_name {
+                                self.note_store.rename_file(existing_id, &old, &new_name);
+                            }
+                        }
                         Some(existing_id)
                     } else {
                         // Create new workspace

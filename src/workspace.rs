@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::util;
 
@@ -83,59 +84,294 @@ impl WorkspaceStore {
     }
 }
 
-// ── Per-workspace notes ───────────────────────────────────────────────────────
+// ── Per-workspace notes (file-backed) ────────────────────────────────────────
 
-#[derive(Default, Serialize, Deserialize)]
+const NOTE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const GENERAL_NOTE_FILENAME: &str = "general.md";
+
+struct CachedNote {
+    text: String,
+    disk_mtime: Option<SystemTime>,
+}
+
+#[derive(Default)]
 pub struct NoteStore {
-    // key: workspace id as decimal string, "other" for the None group
-    notes: HashMap<String, String>,
+    notes_dir: Option<PathBuf>,
+    cache: HashMap<Option<u64>, CachedNote>,
+    last_check: Option<Instant>,
 }
 
 impl NoteStore {
-    pub fn load() -> Self {
-        let Some(path) = Self::data_path() else {
-            return Self::default();
+    pub fn load(workspaces: &[Workspace]) -> Self {
+        let notes_dir = util::data_dir().map(|d| d.join("notes"));
+        if let Some(ref dir) = notes_dir {
+            let _ = std::fs::create_dir_all(dir);
+        }
+
+        let mut store = Self {
+            notes_dir,
+            cache: HashMap::new(),
+            last_check: Some(Instant::now()),
         };
-        util::safe_json_load(&path).unwrap_or_default()
+        store.migrate_from_json(workspaces);
+        store.scan_files(workspaces);
+        store
     }
 
-    pub fn save(&self) {
-        let Some(path) = Self::data_path() else {
+    pub fn get(&self, group: Option<u64>) -> &str {
+        self.cache
+            .get(&group)
+            .map(|c| c.text.as_str())
+            .unwrap_or("")
+    }
+
+    pub fn set(&mut self, group: Option<u64>, text: String, workspaces: &[Workspace]) {
+        let Some(path) = self.resolve_path(group, workspaces) else {
             return;
         };
-        if let Ok(text) = serde_json::to_string_pretty(self) {
+        if text.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            self.cache.remove(&group);
+        } else {
             if let Err(e) = util::atomic_write(&path, &text) {
-                log::error!("failed to save data: {e}");
+                log::error!("failed to save note: {e}");
+                return;
+            }
+            let mtime = file_mtime(&path);
+            self.cache.insert(
+                group,
+                CachedNote {
+                    text,
+                    disk_mtime: mtime,
+                },
+            );
+        }
+    }
+
+    /// Check for external edits. Call once per frame; internally throttled.
+    pub fn check_external_changes(&mut self, workspaces: &[Workspace]) {
+        if let Some(last) = self.last_check {
+            if last.elapsed() < NOTE_CHECK_INTERVAL {
+                return;
+            }
+        }
+        self.last_check = Some(Instant::now());
+
+        let Some(ref dir) = self.notes_dir else {
+            return;
+        };
+
+        // Re-check cached entries
+        let groups: Vec<Option<u64>> = self.cache.keys().copied().collect();
+        for group in groups {
+            let path = resolve_path_in(dir, group, workspaces);
+            let current_mtime = file_mtime(&path);
+            let cached_mtime = self.cache.get(&group).and_then(|c| c.disk_mtime);
+            if current_mtime != cached_mtime {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) if !text.is_empty() => {
+                        self.cache.insert(
+                            group,
+                            CachedNote {
+                                text,
+                                disk_mtime: current_mtime,
+                            },
+                        );
+                    }
+                    _ => {
+                        self.cache.remove(&group);
+                    }
+                }
+            }
+        }
+
+        // Detect new files for workspaces not yet in cache
+        for ws in workspaces {
+            let group = Some(ws.id);
+            if self.cache.contains_key(&group) {
+                continue;
+            }
+            let path = dir.join(format!("{}.md", sanitize_name(&ws.name)));
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if !text.is_empty() {
+                    self.cache.insert(
+                        group,
+                        CachedNote {
+                            text,
+                            disk_mtime: file_mtime(&path),
+                        },
+                    );
+                }
+            }
+        }
+
+        // Detect new general.md
+        if let std::collections::hash_map::Entry::Vacant(e) = self.cache.entry(None) {
+            let path = dir.join(GENERAL_NOTE_FILENAME);
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if !text.is_empty() {
+                    e.insert(CachedNote {
+                        text,
+                        disk_mtime: file_mtime(&path),
+                    });
+                }
             }
         }
     }
 
-    pub fn get(&self, group: Option<u64>) -> &str {
-        self.notes
-            .get(&Self::key(group))
-            .map(|s| s.as_str())
-            .unwrap_or("")
-    }
-
-    pub fn set(&mut self, group: Option<u64>, text: String) {
-        let key = Self::key(group);
-        if text.is_empty() {
-            self.notes.remove(&key);
-        } else {
-            self.notes.insert(key, text);
+    pub fn rename_file(&mut self, ws_id: u64, old_name: &str, new_name: &str) {
+        let Some(ref dir) = self.notes_dir else {
+            return;
+        };
+        let old_slug = sanitize_name(old_name);
+        let new_slug = sanitize_name(new_name);
+        if old_slug == new_slug {
+            return;
+        }
+        let old_path = dir.join(format!("{old_slug}.md"));
+        let new_path = dir.join(format!("{new_slug}.md"));
+        if old_path.exists() {
+            if let Err(e) = std::fs::rename(&old_path, &new_path) {
+                log::error!("failed to rename note file: {e}");
+                return;
+            }
+            if let Some(cached) = self.cache.get_mut(&Some(ws_id)) {
+                cached.disk_mtime = file_mtime(&new_path);
+            }
         }
     }
 
-    fn key(group: Option<u64>) -> String {
-        match group {
-            Some(id) => id.to_string(),
-            None => "other".to_string(),
+    fn resolve_path(&self, group: Option<u64>, workspaces: &[Workspace]) -> Option<PathBuf> {
+        self.notes_dir
+            .as_ref()
+            .map(|dir| resolve_path_in(dir, group, workspaces))
+    }
+
+    fn scan_files(&mut self, workspaces: &[Workspace]) {
+        let Some(ref dir) = self.notes_dir else {
+            return;
+        };
+
+        // General notes
+        let path = dir.join(GENERAL_NOTE_FILENAME);
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if !text.is_empty() {
+                self.cache.entry(None).or_insert(CachedNote {
+                    disk_mtime: file_mtime(&path),
+                    text,
+                });
+            }
+        }
+
+        // Workspace notes
+        for ws in workspaces {
+            let path = dir.join(format!("{}.md", sanitize_name(&ws.name)));
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                if !text.is_empty() {
+                    self.cache.entry(Some(ws.id)).or_insert(CachedNote {
+                        disk_mtime: file_mtime(&path),
+                        text,
+                    });
+                }
+            }
         }
     }
 
-    fn data_path() -> Option<PathBuf> {
-        util::data_file("notes.json")
+    fn migrate_from_json(&mut self, workspaces: &[Workspace]) {
+        let Some(json_path) = util::data_file("notes.json") else {
+            return;
+        };
+        if !json_path.exists() {
+            return;
+        }
+        let Ok(data) = std::fs::read_to_string(&json_path) else {
+            return;
+        };
+
+        // Legacy format: { "notes": { "<id_or_other>": "<text>" } }
+        #[derive(Deserialize)]
+        struct Legacy {
+            notes: HashMap<String, String>,
+        }
+        let Ok(legacy) = serde_json::from_str::<Legacy>(&data) else {
+            return;
+        };
+
+        for (key, text) in legacy.notes {
+            if text.is_empty() {
+                continue;
+            }
+            let group = if key == "other" {
+                None
+            } else if let Ok(id) = key.parse::<u64>() {
+                Some(id)
+            } else {
+                continue;
+            };
+
+            if let Some(path) = self.resolve_path(group, workspaces) {
+                if let Err(e) = util::atomic_write(&path, &text) {
+                    log::error!("migration: failed to write {}: {e}", path.display());
+                    continue;
+                }
+                self.cache.insert(
+                    group,
+                    CachedNote {
+                        disk_mtime: file_mtime(&path),
+                        text,
+                    },
+                );
+            }
+        }
+
+        let bak = json_path.with_extension("json.bak");
+        if let Err(e) = std::fs::rename(&json_path, &bak) {
+            log::warn!("could not rename notes.json to .bak: {e}");
+        }
     }
+}
+
+// ── Note helpers ─────────────────────────────────────────────────────────────
+
+fn resolve_path_in(dir: &Path, group: Option<u64>, workspaces: &[Workspace]) -> PathBuf {
+    match group {
+        None => dir.join(GENERAL_NOTE_FILENAME),
+        Some(id) => {
+            let slug = workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| sanitize_name(&w.name))
+                .unwrap_or_else(|| format!("orphan_{id}"));
+            dir.join(format!("{slug}.md"))
+        }
+    }
+}
+
+// ponytail: no collision guard — workspace names are unique (case-insensitive),
+// so sanitized slugs are unique in practice. Add _<id> suffix if collisions arise.
+pub fn sanitize_name(name: &str) -> String {
+    let mut prev_dash = true; // suppresses leading dash
+    let mut slug = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            slug.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash {
+            slug.push('-');
+            prev_dash = true;
+        }
+    }
+    if slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        slug.push_str("unnamed");
+    }
+    slug
+}
+
+fn file_mtime(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
 #[cfg(test)]
@@ -224,6 +460,28 @@ mod tests {
         assert_eq!(store.next_id(), 4);
     }
 
+    fn make_note_store(dir: &std::path::Path) -> NoteStore {
+        NoteStore {
+            notes_dir: Some(dir.to_path_buf()),
+            cache: HashMap::new(),
+            last_check: None,
+        }
+    }
+
+    fn make_workspaces(names: &[(&str, u64)]) -> Vec<Workspace> {
+        names
+            .iter()
+            .map(|(name, id)| Workspace {
+                id: *id,
+                name: name.to_string(),
+                path: PathBuf::from(format!("/{name}")),
+                color: [0, 0, 0],
+                host_window_id: None,
+                last_activated: 0,
+            })
+            .collect()
+    }
+
     #[test]
     fn test_note_store_get_empty() {
         let store = NoteStore::default();
@@ -233,31 +491,133 @@ mod tests {
 
     #[test]
     fn test_note_store_set_and_get() {
-        let mut store = NoteStore::default();
-        store.set(None, "general note".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("proj", 42)]);
+        store.set(None, "general note".to_string(), &ws);
         assert_eq!(store.get(None), "general note");
-        store.set(Some(42), "ws note".to_string());
+        store.set(Some(42), "ws note".to_string(), &ws);
         assert_eq!(store.get(Some(42)), "ws note");
     }
 
     #[test]
     fn test_note_store_set_empty_removes() {
-        let mut store = NoteStore::default();
-        store.set(Some(1), "hello".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("proj", 1)]);
+        store.set(Some(1), "hello".to_string(), &ws);
         assert_eq!(store.get(Some(1)), "hello");
-        store.set(Some(1), String::new());
+        assert!(dir.path().join("proj.md").exists());
+        store.set(Some(1), String::new(), &ws);
         assert_eq!(store.get(Some(1)), "");
+        assert!(!dir.path().join("proj.md").exists());
     }
 
     #[test]
     fn test_note_store_groups_are_independent() {
-        let mut store = NoteStore::default();
-        store.set(None, "other".to_string());
-        store.set(Some(1), "ws1".to_string());
-        store.set(Some(2), "ws2".to_string());
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("ws1", 1), ("ws2", 2)]);
+        store.set(None, "other".to_string(), &ws);
+        store.set(Some(1), "note1".to_string(), &ws);
+        store.set(Some(2), "note2".to_string(), &ws);
         assert_eq!(store.get(None), "other");
-        assert_eq!(store.get(Some(1)), "ws1");
-        assert_eq!(store.get(Some(2)), "ws2");
+        assert_eq!(store.get(Some(1)), "note1");
+        assert_eq!(store.get(Some(2)), "note2");
+    }
+
+    #[test]
+    fn test_note_store_writes_correct_filenames() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("My Project", 1)]);
+        store.set(None, "general".to_string(), &ws);
+        store.set(Some(1), "proj note".to_string(), &ws);
+        assert!(dir.path().join("general.md").exists());
+        assert!(dir.path().join("my-project.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("my-project.md")).unwrap(),
+            "proj note"
+        );
+    }
+
+    #[test]
+    fn test_note_store_external_edit_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("proj", 1)]);
+        store.set(Some(1), "original".to_string(), &ws);
+        assert_eq!(store.get(Some(1)), "original");
+
+        // Simulate external edit
+        std::fs::write(dir.path().join("proj.md"), "edited externally").unwrap();
+        store.last_check = None; // force check
+        store.check_external_changes(&ws);
+        assert_eq!(store.get(Some(1)), "edited externally");
+    }
+
+    #[test]
+    fn test_note_store_external_new_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("proj", 1)]);
+        assert_eq!(store.get(Some(1)), "");
+
+        std::fs::write(dir.path().join("proj.md"), "created externally").unwrap();
+        store.last_check = None;
+        store.check_external_changes(&ws);
+        assert_eq!(store.get(Some(1)), "created externally");
+    }
+
+    #[test]
+    fn test_note_store_rename_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("old-name", 1)]);
+        store.set(Some(1), "my note".to_string(), &ws);
+        assert!(dir.path().join("old-name.md").exists());
+
+        store.rename_file(1, "old-name", "new-name");
+        assert!(!dir.path().join("old-name.md").exists());
+        assert!(dir.path().join("new-name.md").exists());
+        assert_eq!(store.get(Some(1)), "my note");
+    }
+
+    #[test]
+    fn test_note_store_scan_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("general.md"), "general note").unwrap();
+        std::fs::write(dir.path().join("proj.md"), "proj note").unwrap();
+
+        let ws = make_workspaces(&[("proj", 1)]);
+        let mut store = make_note_store(dir.path());
+        store.scan_files(&ws);
+        assert_eq!(store.get(None), "general note");
+        assert_eq!(store.get(Some(1)), "proj note");
+    }
+
+    #[test]
+    fn test_note_store_orphan_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws: Vec<Workspace> = vec![];
+        store.set(Some(99), "orphan".to_string(), &ws);
+        assert!(dir.path().join("orphan_99.md").exists());
+    }
+
+    #[test]
+    fn test_sanitize_name() {
+        assert_eq!(sanitize_name("My Project"), "my-project");
+        assert_eq!(sanitize_name("hello_world"), "hello_world");
+        assert_eq!(sanitize_name("CAPS"), "caps");
+        assert_eq!(sanitize_name("a--b"), "a-b");
+        assert_eq!(sanitize_name("  spaces  "), "spaces");
+        assert_eq!(sanitize_name("foo/bar\\baz"), "foo-bar-baz");
+        assert_eq!(sanitize_name(""), "unnamed");
+        assert_eq!(sanitize_name("---"), "unnamed");
+        // unicode letters are alphanumeric — kept as-is (lowercased)
+        assert_eq!(sanitize_name("café"), "café");
+        assert_eq!(sanitize_name("проект"), "проект");
     }
 
     #[test]

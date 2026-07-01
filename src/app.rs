@@ -1486,6 +1486,10 @@ impl App {
         let mut git_merge_continue = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
+        // Detect external note edits (throttled internally)
+        self.note_store
+            .check_external_changes(&self.workspace_store.workspaces);
+
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
         let mut pending_open_note: Option<Option<u64>> = None;
@@ -2211,8 +2215,8 @@ impl App {
         {
             let group = self.active_group;
             if note_text != self.note_store.get(group) {
-                self.note_store.set(group, note_text);
-                self.note_store.save();
+                self.note_store
+                    .set(group, note_text, &self.workspace_store.workspaces);
             }
         }
 
@@ -4155,8 +4159,11 @@ impl App {
                         PaneContent::NoteEditor(ref ne)
                             if *new_text != self.note_store.get(ne.workspace_id) =>
                         {
-                            self.note_store.set(ne.workspace_id, new_text.clone());
-                            self.note_store.save();
+                            self.note_store.set(
+                                ne.workspace_id,
+                                new_text.clone(),
+                                &self.workspace_store.workspaces,
+                            );
                         }
                         _ => {}
                     }
