@@ -1310,7 +1310,16 @@ impl App {
                     .workers
                     .foreground_worker
                     .get_claude_session_id(e.id)
-                    .or_else(|| e.claude_session_id.clone());
+                    .or_else(|| {
+                        // Only fall back to the entry's cached value when the
+                        // worker hasn't polled this session yet (just restored).
+                        // Once the worker has polled, its data is authoritative.
+                        if !self.workers.foreground_worker.has_polled(e.id) {
+                            e.claude_session_id.clone()
+                        } else {
+                            None
+                        }
+                    });
                 SavedSession {
                     cwd,
                     command,

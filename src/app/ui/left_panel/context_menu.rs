@@ -333,8 +333,27 @@ impl App {
                         last_size: (cols, rows),
                     },
                 );
-                let gid = self.pane_state.focused_group_id;
-                self.pane_state.add_pane_to_group(gid, pane_id, None);
+                let gid = if self
+                    .pane_state
+                    .groups
+                    .contains_key(&self.pane_state.focused_group_id)
+                {
+                    self.pane_state.focused_group_id
+                } else {
+                    let new_gid = self.pane_state.create_group(pane_id);
+                    self.pane_state.group_layout =
+                        crate::editor_group::GroupNode::Leaf { group_id: new_gid };
+                    self.pane_state.focused_group_id = new_gid;
+                    new_gid
+                };
+                if self
+                    .pane_state
+                    .groups
+                    .get(&gid)
+                    .is_some_and(|g| !g.contains(pane_id))
+                {
+                    self.pane_state.add_pane_to_group(gid, pane_id, None);
+                }
                 if let Some(g) = self.pane_state.groups.get_mut(&gid) {
                     g.activate(pane_id);
                 }

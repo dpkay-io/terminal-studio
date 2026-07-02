@@ -23,8 +23,8 @@ pub struct ForegroundWorker {
     pids: Arc<Mutex<Vec<(u32, u32, String)>>>,
     alive: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>,
-    /// Maps terminal session_id → Claude session UUID.  Entries are only pruned
-    /// when the terminal session itself is removed via `set_sessions()`.
+    /// Maps terminal session_id → Claude session UUID. Pruned by `set_sessions()`
+    /// on session removal. UI sync clears stale entries the worker no longer confirms.
     claude_sessions: Arc<Mutex<HashMap<u32, String>>>,
 }
 
@@ -80,13 +80,11 @@ impl ForegroundWorker {
                                         guard.insert(sid, session_id);
                                     }
                                 }
-                            } else if !cwd.is_empty() && !claude_bg.lock().contains_key(&sid) {
-                                if let Some(session_id) = lookup_claude_session_id_by_cwd(&cwd) {
-                                    let mut guard = claude_bg.lock();
-                                    guard.retain(|_, v| v != &session_id);
-                                    guard.insert(sid, session_id);
-                                }
+                            } else {
+                                claude_bg.lock().remove(&sid);
                             }
+                        } else {
+                            claude_bg.lock().remove(&sid);
                         }
                         cache_bg.lock().insert(sid, result);
                     }
@@ -125,6 +123,11 @@ impl ForegroundWorker {
     /// Read the cached result for `session_id`.  Never blocks on OS APIs.
     pub fn get(&self, session_id: u32) -> Option<ForegroundProcess> {
         self.cache.lock().get(&session_id)?.clone()
+    }
+
+    /// True once the worker has polled this session at least once.
+    pub fn has_polled(&self, session_id: u32) -> bool {
+        self.cache.lock().contains_key(&session_id)
     }
 
     /// Return the Claude session UUID for `session_id`, if one has been detected.

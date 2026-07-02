@@ -1348,6 +1348,21 @@ impl App {
 
         Self::handle_frameless_resize(ctx);
 
+        // Consume Ctrl+Shift+N before any panels render, so it works even
+        // when no terminal panes exist and the CentralPanel shows a placeholder.
+        {
+            let cs = egui::Modifiers {
+                alt: false,
+                ctrl: true,
+                shift: true,
+                mac_cmd: false,
+                command: false,
+            };
+            if ctx.input_mut(|i| i.consume_key(cs, egui::Key::N)) {
+                self.deferred_spawn = Some(self.configured_shell());
+            }
+        }
+
         self.render_titlebar(ctx);
 
         self.render_left_panel(ctx);
@@ -4139,6 +4154,18 @@ impl App {
                         entry.claude_session_id = Some(id);
                         new_claude_capture = true;
                     }
+                } else if entry.claude_session_id.is_some()
+                    && self.workers.foreground_worker.has_polled(entry.id)
+                    && !entry
+                        .pending_command
+                        .as_ref()
+                        .is_some_and(|c| c.contains("claude"))
+                {
+                    // Worker has polled but doesn't report Claude, and no pending
+                    // Claude command waiting to fire. Clear the stale tag.
+                    // No save_session() here — the next natural save picks it up,
+                    // giving the worker time to re-detect if Claude is still booting.
+                    entry.claude_session_id = None;
                 }
             }
             if new_claude_capture {
