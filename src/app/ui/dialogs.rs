@@ -1244,6 +1244,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -2019,6 +2020,7 @@ impl App {
                             last_size: (cols, rows),
                             labels: vec![],
                             last_active_at: crate::util::now_millis(),
+                            workspace_id: self.active_group,
                         });
                         self.pane_state.pane_trees.insert(
                             pane_id,

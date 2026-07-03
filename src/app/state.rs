@@ -461,6 +461,7 @@ impl App {
                         last_size: (cols, rows),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -557,7 +558,7 @@ impl App {
         ws_store: &WorkspaceStore,
         pane: &PaneEntry,
     ) -> Option<u64> {
-        match &pane.content {
+        let cwd_match = match &pane.content {
             PaneContent::Terminal(sid) => sessions.iter().find(|e| e.id == *sid).and_then(|e| {
                 let cwd = e.session.read().cwd.clone();
                 if cwd.as_os_str().is_empty() {
@@ -572,7 +573,8 @@ impl App {
             PaneContent::FileDiff(d) => ws_store.find_for_cwd(&d.path).map(|w| w.id),
             PaneContent::NoteEditor(ne) => ne.workspace_id,
             PaneContent::ConflictResolver(cr) => ws_store.find_for_cwd(&cr.path).map(|w| w.id),
-        }
+        };
+        cwd_match.or(pane.workspace_id)
     }
 
     pub(super) fn active_workspace(&self) -> Option<&Workspace> {
@@ -892,6 +894,7 @@ impl App {
                     last_size: (cols, rows),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1174,6 +1177,7 @@ impl App {
                     last_size: (cols, rows),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -1371,6 +1375,7 @@ impl App {
                     manual_width: p.manual_width,
                     labels: p.labels.clone(),
                     last_active_at: p.last_active_at,
+                    workspace_id: p.workspace_id,
                 })
             })
             .collect();
@@ -1659,6 +1664,7 @@ impl App {
                 last_size: (0, 0),
                 labels: saved.labels.clone(),
                 last_active_at: saved.last_active_at,
+                workspace_id: saved.workspace_id,
             });
             self.pane_state.pane_trees.insert(
                 pane_id,
@@ -2033,6 +2039,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.pane_state
@@ -2059,6 +2066,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 };
                 self.insert_pane_entry(entry, at_index);
                 self.pane_state
@@ -2097,6 +2105,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.pane_state.add_pane_to_group(
@@ -2140,6 +2149,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     };
                     self.insert_pane_entry(entry, at_index);
                     self.pane_state.add_pane_to_group(
@@ -2200,6 +2210,7 @@ impl App {
                     last_size: (80, 24),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 };
                 self.pane_state.panes.push(entry);
                 self.pane_state
@@ -2231,6 +2242,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 };
                 self.pane_state.panes.push(entry);
                 self.pane_state
@@ -2274,6 +2286,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     };
                     self.pane_state.panes.push(entry);
                     self.pane_state
@@ -2316,6 +2329,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     };
                     self.pane_state.panes.push(entry);
                     self.pane_state

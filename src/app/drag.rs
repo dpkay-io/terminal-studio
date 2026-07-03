@@ -499,6 +499,7 @@ mod tests {
                     last_size: (80, 24),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: None,
                 })
                 .collect(),
             active_pane_id: first_id,
@@ -846,6 +847,7 @@ mod tests {
                     last_size: (80, 24),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: None,
                 })
                 .collect(),
             active_pane_id: ids.first().copied(),

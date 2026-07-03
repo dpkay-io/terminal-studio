@@ -105,6 +105,9 @@ pub(super) struct PaneEntry {
     pub(super) last_size: (u16, u16),
     pub(super) labels: Vec<u32>,
     pub(super) last_active_at: u64,
+    /// Workspace this pane was created in. Persists across CWD changes so
+    /// close-all and filtering stay reliable when the shell navigates away.
+    pub(super) workspace_id: Option<u64>,
 }
 
 pub(super) struct SessionEntry {

@@ -3280,7 +3280,7 @@ impl App {
                             }
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
-                        egui::Event::PointerButton { pos, button, pressed, .. } if !context_menu_open => {
+                        egui::Event::PointerButton { pos, button, pressed, modifiers, .. } if !context_menu_open => {
                             let sb_active = self.active_term_geo.as_ref()
                                 .map(|g| g.scrollbar_hovered || g.scrollbar_drag_offset.is_some())
                                 .unwrap_or(false);
@@ -3288,7 +3288,10 @@ impl App {
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                    let (has_mouse, sgr) = {
+                                    // Shift bypasses mouse reporting for native text selection
+                                    let (has_mouse, sgr) = if modifiers.shift {
+                                        (false, false)
+                                    } else {
                                         let s = self.session_state.sessions[idx].session.read();
                                         let mode = s.term.mode();
                                         let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
@@ -3440,10 +3443,13 @@ impl App {
                             }
                         }
                         egui::Event::PointerMoved(pos) if !self.term_selecting && !widget_dragging && !context_menu_open => {
+                            let shift_held = ctx.input(|i| i.modifiers.shift);
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                    let (drag, motion, sgr) = {
+                                    let (drag, motion, sgr) = if shift_held {
+                                        (false, false, false)
+                                    } else {
                                         let s = self.session_state.sessions[idx].session.read();
                                         let mode = s.term.mode();
                                         (
@@ -3478,7 +3484,7 @@ impl App {
                                 }
                             }
                         }
-                        egui::Event::MouseWheel { unit, delta, .. } if !widget_dragging && !context_menu_open => {
+                        egui::Event::MouseWheel { unit, delta, modifiers, .. } if !widget_dragging && !context_menu_open => {
                             let mouse_pos = ctx.input(|inp| inp.pointer.latest_pos());
                             let over_term = mouse_pos
                                 .zip(self.active_term_geo.as_ref())
@@ -3488,7 +3494,9 @@ impl App {
                             if over_term {
                                 if let Some(sid) = hovered_sid.or(active_session_id) {
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                        let (has_mouse, sgr) = {
+                                        let (has_mouse, sgr) = if modifiers.shift {
+                                            (false, false)
+                                        } else {
                                             let s = self.session_state.sessions[idx].session.read();
                                             let mode = s.term.mode();
                                             let has = mode.contains(TermMode::MOUSE_REPORT_CLICK)
@@ -3761,6 +3769,7 @@ impl App {
                         last_size: (cols, rows),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     });
                     // Split the focused group (new system)
                     self.pane_state.split_focused_group(new_pane_id, dir);
@@ -3949,6 +3958,7 @@ impl App {
                             last_size: (cols, rows),
                             labels: vec![],
                             last_active_at: crate::util::now_millis(),
+                            workspace_id: self.active_group,
                         });
                         // Focus the group containing `pid`, then split
                         if let Some(gid) = self.pane_state.group_of(pid) {
@@ -4348,6 +4358,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4400,6 +4411,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4450,6 +4462,7 @@ impl App {
                     last_size: (0, 0),
                     labels: vec![],
                     last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -4510,6 +4523,7 @@ impl App {
                             last_size: (0, 0),
                             labels: vec![],
                             last_active_at: crate::util::now_millis(),
+                            workspace_id: self.active_group,
                         });
                         self.pane_state.pane_trees.insert(
                             pane_id,
@@ -4570,6 +4584,7 @@ impl App {
                                     last_size: (0, 0),
                                     labels: vec![],
                                     last_active_at: crate::util::now_millis(),
+                                    workspace_id: self.active_group,
                                 });
                                 self.pane_state.pane_trees.insert(
                                     pane_id,
@@ -4635,6 +4650,7 @@ impl App {
                         last_size: (0, 0),
                         labels: vec![],
                         last_active_at: crate::util::now_millis(),
+                        workspace_id: self.active_group,
                     });
                     self.pane_state.pane_trees.insert(
                         pane_id,
@@ -4683,6 +4699,7 @@ impl App {
                 last_size: (0, 0),
                 labels: vec![],
                 last_active_at: crate::util::now_millis(),
+                workspace_id: self.active_group,
             });
             self.pane_state.pane_trees.insert(
                 pane_id,

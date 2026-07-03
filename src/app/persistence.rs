@@ -56,6 +56,8 @@ pub(super) struct SavedPane {
     pub(super) labels: Vec<u32>,
     #[serde(default)]
     pub(super) last_active_at: u64,
+    #[serde(default)]
+    pub(super) workspace_id: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -291,6 +293,7 @@ mod tests {
                     manual_width: None,
                     labels: vec![],
                     last_active_at: 0,
+                    workspace_id: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::FileEditor {
@@ -302,12 +305,14 @@ mod tests {
                     manual_width: Some(400.0),
                     labels: vec![],
                     last_active_at: 0,
+                    workspace_id: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::NoteEditor { workspace_id: None },
                     manual_width: None,
                     labels: vec![],
                     last_active_at: 0,
+                    workspace_id: None,
                 },
             ],
             active_pane_index: Some(1),
@@ -374,6 +379,7 @@ mod tests {
             manual_width: None,
             labels: vec![1, 9, 100],
             last_active_at: 0,
+            workspace_id: None,
         };
         let json = serde_json::to_string(&pane).unwrap();
         let loaded: SavedPane = serde_json::from_str(&json).unwrap();
@@ -458,12 +464,14 @@ mod tests {
                     manual_width: None,
                     labels: vec![],
                     last_active_at: 0,
+                    workspace_id: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::Terminal { session_index: 0 },
                     manual_width: None,
                     labels: vec![],
                     last_active_at: 0,
+                    workspace_id: None,
                 },
             ],
             active_pane_index: Some(0),
