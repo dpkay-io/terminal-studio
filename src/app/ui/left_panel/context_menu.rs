@@ -200,6 +200,18 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
+                if self.pane_state.groups.is_empty() {
+                    let gid = self.pane_state.create_group(pane_id);
+                    self.pane_state.group_layout =
+                        crate::editor_group::GroupNode::Leaf { group_id: gid };
+                    self.pane_state.focused_group_id = gid;
+                } else {
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
+                }
                 self.pane_state.active_pane_id = Some(pane_id);
             }
         }

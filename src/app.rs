@@ -298,6 +298,14 @@ pub struct App {
     // Git revert confirm dialog state — holds the file path to revert
     revert_confirm_file: Option<String>,
 
+    // Git delete confirm dialog state — holds the untracked file path to delete
+    delete_confirm_file: Option<String>,
+
+    // Optimistic overrides for staging/unstaging: path → should_be_staged.
+    // Applied when rendering git status to give instant feedback before the
+    // git worker finishes. Cleared when fresh git status results arrive.
+    optimistic_git_overrides: std::collections::HashMap<String, bool>,
+
     // Position where the terminal context menu was opened (captured on right-click)
     context_menu_pos: Option<egui::Pos2>,
 
@@ -349,7 +357,8 @@ impl eframe::App for App {
             || self.show_commit_dialog
             || self.show_push_dialog
             || self.show_stage_all_confirm
-            || self.revert_confirm_file.is_some();
+            || self.revert_confirm_file.is_some()
+            || self.delete_confirm_file.is_some();
         let notes_has_focus = _ctx.memory(|m| {
             m.focused()
                 .map(|id| id == self.vp_id("notes_textedit"))
@@ -856,6 +865,16 @@ impl eframe::App for App {
 
             let completed = self.workers.git_worker.take_all_git();
             let completed_unpushed = self.workers.git_worker.take_all_unpushed();
+            if !completed.is_empty() {
+                self.optimistic_git_overrides.clear();
+            }
+            // Drain delete results (flash on error)
+            for result in self.workers.git_worker.take_delete_results() {
+                if result.is_err() {
+                    self.flash
+                        .trigger(feedback::FlashTarget::Global, feedback::FlashKind::Error);
+                }
+            }
             if let Some(ws) = &mut self.watch_state {
                 for (dir, (diff, status, merge_op)) in completed {
                     ws.apply_git_result(&dir, diff, status, merge_op);
@@ -879,6 +898,9 @@ impl eframe::App for App {
                             d.new_highlights = dr.new_highlights;
                             d.highlight_theme = dr.highlight_theme;
                             d.loading = false;
+                            if !d.hunks.is_empty() {
+                                d.scroll_to_first_hunk = true;
+                            }
                         }
                     }
                 }
@@ -1497,6 +1519,7 @@ impl App {
         let mut git_gitignore_pattern: Option<String> = None;
         let mut git_request_refresh = false;
         let mut git_revert_file: Option<String> = None;
+        let mut git_delete_file: Option<String> = None;
         let mut git_merge_abort = false;
         let mut git_merge_continue = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
@@ -1983,6 +2006,7 @@ impl App {
                                             active_cwd.as_deref(),
                                             &mut self.drag_state,
                                             &merge_operation,
+                                            &self.optimistic_git_overrides,
                                         );
                                         git_stage_action = result.stage_action;
                                         if result.open_diff_file.is_some() {
@@ -2011,6 +2035,9 @@ impl App {
                                         }
                                         if result.revert_file.is_some() {
                                             git_revert_file = result.revert_file;
+                                        }
+                                        if result.delete_file.is_some() {
+                                            git_delete_file = result.delete_file;
                                         }
                                         if result.merge_abort {
                                             git_merge_abort = true;
@@ -2259,14 +2286,16 @@ impl App {
         if let Some(action) = git_stage_action {
             if let Some(cwd) = active_cwd.as_ref() {
                 match action {
-                    GitStageAction::Stage(path) => {
-                        self.workers.git_worker.enqueue_stage(cwd, path);
+                    GitStageAction::Stage(ref path) => {
+                        self.optimistic_git_overrides.insert(path.clone(), true);
+                        self.workers.git_worker.enqueue_stage(cwd, path.clone());
                     }
                     GitStageAction::StageAll => {
                         self.workers.git_worker.enqueue_stage_all(cwd);
                     }
-                    GitStageAction::Unstage(path) => {
-                        self.workers.git_worker.enqueue_unstage(cwd, path);
+                    GitStageAction::Unstage(ref path) => {
+                        self.optimistic_git_overrides.insert(path.clone(), false);
+                        self.workers.git_worker.enqueue_unstage(cwd, path.clone());
                     }
                     GitStageAction::UnstageAll => {
                         self.workers.git_worker.enqueue_unstage_all(cwd);
@@ -2295,6 +2324,9 @@ impl App {
         }
         if let Some(path) = git_revert_file {
             self.revert_confirm_file = Some(path);
+        }
+        if let Some(path) = git_delete_file {
+            self.delete_confirm_file = Some(path);
         }
         if git_request_refresh {
             if let Some(cwd) = active_cwd.as_ref() {
@@ -2791,6 +2823,7 @@ impl App {
                 || self.show_push_dialog
                 || self.show_stage_all_confirm
                 || self.revert_confirm_file.is_some()
+                || self.delete_confirm_file.is_some()
                 || self.show_quit_confirm;
 
             // Global shortcuts that work even when a modal/dialog is open
@@ -4323,6 +4356,8 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_and_scroll_to_pane(pane_id);
                 {
                     let results = Arc::clone(&self.file_load_results);
@@ -4373,6 +4408,8 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_and_scroll_to_pane(pane_id);
                 {
                     let results = Arc::clone(&self.file_load_results);
@@ -4421,6 +4458,8 @@ impl App {
                         last_size: (0, 0),
                     },
                 );
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_and_scroll_to_pane(pane_id);
             }
         }
@@ -4464,6 +4503,8 @@ impl App {
                                 new_highlights: None,
                                 highlight_theme: theme::active().id,
                                 loading: true,
+                                workspace_id: self.active_group,
+                                scroll_to_first_hunk: false,
                             }),
                             manual_width: None,
                             last_size: (0, 0),
@@ -4476,6 +4517,11 @@ impl App {
                                 pane_id,
                                 last_size: (0, 0),
                             },
+                        );
+                        self.pane_state.add_pane_to_group(
+                            self.pane_state.focused_group_id,
+                            pane_id,
+                            None,
                         );
                         self.pending_diff_panes.insert(full_path, pane_id);
                         self.workers.git_worker.enqueue_diff(&cwd, rel_path);
@@ -4531,6 +4577,11 @@ impl App {
                                         pane_id,
                                         last_size: (0, 0),
                                     },
+                                );
+                                self.pane_state.add_pane_to_group(
+                                    self.pane_state.focused_group_id,
+                                    pane_id,
+                                    None,
                                 );
                                 self.activate_and_scroll_to_pane(pane_id);
                             }
@@ -4592,6 +4643,11 @@ impl App {
                             last_size: (0, 0),
                         },
                     );
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
                     self.activate_and_scroll_to_pane(pane_id);
                     {
                         let results = Arc::clone(&self.file_load_results);
@@ -4635,6 +4691,8 @@ impl App {
                     last_size: (0, 0),
                 },
             );
+            self.pane_state
+                .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
             self.activate_and_scroll_to_pane(pane_id);
         }
 
@@ -4674,5 +4732,6 @@ impl App {
         self.render_push_dialog(ctx);
         self.render_stage_all_confirm(ctx);
         self.render_revert_confirm(ctx);
+        self.render_delete_confirm(ctx);
     }
 }

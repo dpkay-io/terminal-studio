@@ -1332,7 +1332,14 @@ impl App {
                     .find(|w| w.id == id)
                     .map(|w| w.color)
             }),
-            _ => None,
+            PaneContent::FileDiff(d) => d.workspace_id.and_then(|id| {
+                self.workspace_store
+                    .workspaces
+                    .iter()
+                    .find(|w| w.id == id)
+                    .map(|w| w.color)
+            }),
+            PaneContent::ConflictResolver(_) => None,
         }
     }
 }

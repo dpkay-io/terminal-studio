@@ -65,6 +65,9 @@ pub(super) struct FileDiffState {
     pub(super) highlight_theme: crate::theme::ThemeId,
     /// Diff content is being loaded from the git worker thread.
     pub(super) loading: bool,
+    pub(super) workspace_id: Option<u64>,
+    /// When true, scroll to the first hunk on next render then clear.
+    pub(super) scroll_to_first_hunk: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -227,6 +230,8 @@ mod tests {
             new_highlights: None,
             highlight_theme: crate::theme::active().id,
             loading: false,
+            workspace_id: None,
+            scroll_to_first_hunk: false,
         });
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),

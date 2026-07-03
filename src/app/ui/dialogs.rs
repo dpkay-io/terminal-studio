@@ -1252,6 +1252,18 @@ impl App {
                             last_size: (0, 0),
                         },
                     );
+                    if self.pane_state.groups.is_empty() {
+                        let gid = self.pane_state.create_group(pane_id);
+                        self.pane_state.group_layout =
+                            crate::editor_group::GroupNode::Leaf { group_id: gid };
+                        self.pane_state.focused_group_id = gid;
+                    } else {
+                        self.pane_state.add_pane_to_group(
+                            self.pane_state.focused_group_id,
+                            pane_id,
+                            None,
+                        );
+                    }
                     self.pane_state.active_pane_id = Some(pane_id);
                 }
             }
@@ -1645,6 +1657,58 @@ impl App {
         }
     }
 
+    pub(in crate::app) fn render_delete_confirm(&mut self, ctx: &egui::Context) {
+        let file_path = match &self.delete_confirm_file {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        let mut do_delete = false;
+        let config = ui_kit::DialogConfig {
+            width: ui_kit::DialogWidth::Fixed(380.0),
+            max_height: 140.0,
+            ..Default::default()
+        };
+
+        let mut cancel_clicked = false;
+        let resp = ui_kit::dialog(ctx, self.vp_id("delete_confirm"), config, |ui| {
+            ui_kit::dialog_header(ui, "Delete File");
+
+            ui.label(
+                egui::RichText::new(format!("Delete \"{}\"?", file_path))
+                    .size(crate::theme::FONT_UI_MD),
+            );
+            ui.add_space(crate::theme::SP_1);
+            ui.label(
+                egui::RichText::new("This cannot be undone.")
+                    .size(crate::theme::FONT_UI_SM)
+                    .color(crate::theme::active().error),
+            );
+
+            ui_kit::dialog_footer(ui, |ui| {
+                if ui_kit::action_button(ui, "Delete", true, ui_kit::ActionButtonStyle::Danger)
+                    .clicked()
+                {
+                    do_delete = true;
+                }
+                if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
+                    .clicked()
+                {
+                    cancel_clicked = true;
+                }
+            });
+        });
+
+        if do_delete {
+            if let Some(cwd) = self.active_pane_cwd() {
+                self.workers.git_worker.enqueue_delete(&cwd, file_path);
+            }
+            self.delete_confirm_file = None;
+        } else if resp.dismissed || cancel_clicked {
+            self.delete_confirm_file = None;
+        }
+    }
+
     pub(in crate::app) fn render_open_folder_dialog(&mut self, ctx: &egui::Context) {
         if self.open_folder_dialog.is_none() {
             return;
@@ -1962,6 +2026,11 @@ impl App {
                                 pane_id,
                                 last_size: (cols, rows),
                             },
+                        );
+                        self.pane_state.add_pane_to_group(
+                            self.pane_state.focused_group_id,
+                            pane_id,
+                            None,
                         );
                         self.activate_pane(pane_id);
                         self.flash.trigger(

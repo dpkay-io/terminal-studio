@@ -157,6 +157,10 @@ enum Job {
         cwd: PathBuf,
         path: String,
     },
+    DeleteFile {
+        cwd: PathBuf,
+        path: String,
+    },
     MergeAbort(PathBuf),
     MergeContinue(PathBuf),
     RebaseAbort(PathBuf),
@@ -184,6 +188,7 @@ pub(super) struct WorkerResults {
     pub(super) last_commit_msg: HashMap<PathBuf, String>,
     pub(super) gitignore_results: Vec<Result<PathBuf, String>>,
     pub(super) revert_results: Vec<Result<PathBuf, String>>,
+    pub(super) delete_results: Vec<Result<PathBuf, String>>,
     pub(super) merge_op_results: Vec<Result<PathBuf, String>>,
 }
 
@@ -208,6 +213,7 @@ impl GitWorker {
             last_commit_msg: HashMap::new(),
             gitignore_results: Vec::new(),
             revert_results: Vec::new(),
+            delete_results: Vec::new(),
             merge_op_results: Vec::new(),
         }));
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -471,6 +477,27 @@ impl GitWorker {
                                 };
                                 results_bg.lock().revert_results.push(result);
                             }
+                            Job::DeleteFile { cwd, path } => {
+                                let full = cwd.join(&path);
+                                let result = if full.is_dir() {
+                                    std::fs::remove_dir_all(&full)
+                                } else {
+                                    std::fs::remove_file(&full)
+                                };
+                                let result = match result {
+                                    Ok(()) => {
+                                        let (diff, status) = run_git_info(&cwd);
+                                        let merge_op = detect_merge_operation(&cwd);
+                                        results_bg
+                                            .lock()
+                                            .git
+                                            .insert(cwd.clone(), (diff, status, merge_op));
+                                        Ok(cwd)
+                                    }
+                                    Err(e) => Err(e.to_string()),
+                                };
+                                results_bg.lock().delete_results.push(result);
+                            }
                             Job::MergeAbort(cwd) => {
                                 let result = match super::git_cmd::git_stderr_on_fail(
                                     &["merge", "--abort"],
@@ -721,6 +748,17 @@ impl GitWorker {
 
     pub(super) fn take_revert_results(&self) -> Vec<Result<PathBuf, String>> {
         std::mem::take(&mut self.results.lock().revert_results)
+    }
+
+    pub(super) fn enqueue_delete(&self, cwd: &Path, path: String) {
+        let _ = self.tx.send(Job::DeleteFile {
+            cwd: cwd.to_path_buf(),
+            path,
+        });
+    }
+
+    pub(super) fn take_delete_results(&self) -> Vec<Result<PathBuf, String>> {
+        std::mem::take(&mut self.results.lock().delete_results)
     }
 
     pub(super) fn enqueue_merge_abort(&self, cwd: &Path) {

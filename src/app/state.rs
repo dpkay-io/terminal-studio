@@ -313,6 +313,8 @@ impl App {
             push_error: None,
             show_stage_all_confirm: false,
             revert_confirm_file: None,
+            delete_confirm_file: None,
+            optimistic_git_overrides: std::collections::HashMap::new(),
             context_menu_pos: None,
             last_right_panel_cwd: None,
             spawn_timestamps: VecDeque::new(),
@@ -1637,6 +1639,8 @@ impl App {
                         new_highlights: None,
                         highlight_theme: crate::theme::active().id,
                         loading: true,
+                        workspace_id: None,
+                        scroll_to_first_hunk: false,
                     })
                 }
                 SavedPaneContent::NoteEditor { workspace_id } => {
@@ -2031,6 +2035,8 @@ impl App {
                     last_active_at: crate::util::now_millis(),
                 };
                 self.insert_pane_entry(entry, at_index);
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_pane(pane_id);
             }
             DragAction::InsertFileEditorPane { path, at_index } => {
@@ -2055,6 +2061,8 @@ impl App {
                     last_active_at: crate::util::now_millis(),
                 };
                 self.insert_pane_entry(entry, at_index);
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
                 self.activate_pane(pane_id);
                 let results = std::sync::Arc::clone(&self.file_load_results);
                 let ctx_clone = ctx.clone();
@@ -2082,6 +2090,8 @@ impl App {
                             new_highlights: None,
                             highlight_theme: crate::theme::active().id,
                             loading: true,
+                            workspace_id: self.active_group,
+                            scroll_to_first_hunk: false,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
@@ -2089,6 +2099,11 @@ impl App {
                         last_active_at: crate::util::now_millis(),
                     };
                     self.insert_pane_entry(entry, at_index);
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
                     self.pending_diff_panes.insert(full_path, pane_id);
                     self.workers.git_worker.enqueue_diff(&cwd, rel_path);
                     self.activate_pane(pane_id);
@@ -2127,6 +2142,11 @@ impl App {
                         last_active_at: crate::util::now_millis(),
                     };
                     self.insert_pane_entry(entry, at_index);
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
                     self.activate_pane(pane_id);
                 }
             }
@@ -2247,6 +2267,8 @@ impl App {
                             new_highlights: None,
                             highlight_theme: crate::theme::active().id,
                             loading: true,
+                            workspace_id: self.active_group,
+                            scroll_to_first_hunk: false,
                         }),
                         manual_width: None,
                         last_size: (0, 0),

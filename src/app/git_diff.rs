@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::diff_parser::{DiffLineKind, DiffViewMode};
 use crate::git::parser::{parse_git_status, FileChangeKind};
 use crate::theme;
@@ -20,6 +22,7 @@ pub(super) struct GitDiffResult {
     pub(super) gitignore_pattern: Option<String>,
     pub(super) request_refresh: bool,
     pub(super) revert_file: Option<String>,
+    pub(super) delete_file: Option<String>,
     pub(super) merge_abort: bool,
     pub(super) merge_continue: bool,
 }
@@ -57,6 +60,7 @@ pub(super) fn render_git_diff(
     root_dir: Option<&std::path::Path>,
     drag_state: &mut super::drag::DragState,
     merge_operation: &super::git_worker::MergeOperation,
+    optimistic_overrides: &HashMap<String, bool>,
 ) -> GitDiffResult {
     let mut action: Option<GitStageAction> = None;
     let mut open_diff_file: Option<String> = None;
@@ -68,6 +72,7 @@ pub(super) fn render_git_diff(
     let mut gitignore_pattern: Option<String> = None;
     let mut request_refresh = false;
     let mut revert_file: Option<String> = None;
+    let mut delete_file: Option<String> = None;
     let mut merge_abort = false;
     let mut merge_continue = false;
 
@@ -103,12 +108,17 @@ pub(super) fn render_git_diff(
         });
     });
 
-    let has_status = !status.is_empty();
-    let parsed = if has_status {
+    let has_status = !status.is_empty() || !optimistic_overrides.is_empty();
+    let mut parsed = if !status.is_empty() {
         parse_git_status(status)
     } else {
         Vec::new()
     };
+    for fs in &mut parsed {
+        if let Some(&target_staged) = optimistic_overrides.get(&fs.path) {
+            fs.staged = target_staged;
+        }
+    }
     let has_conflicts = parsed.iter().any(|f| f.kind == FileChangeKind::Conflicted);
 
     // ── Merge/rebase/cherry-pick status banner ─────────────────────────
@@ -477,6 +487,7 @@ pub(super) fn render_git_diff(
                                 open_file: &mut open_file,
                                 gitignore_pattern: &mut gitignore_pattern,
                                 revert_file: &mut revert_file,
+                                delete_file: &mut delete_file,
                             },
                         );
                     });
@@ -553,7 +564,7 @@ pub(super) fn render_git_diff(
                         badge_fg,
                     );
                     let can_revert = entry.kind != FileChangeKind::Untracked;
-                    let btn_reserve = theme::SP_4 + if can_revert { 40.0 } else { 20.0 };
+                    let btn_reserve = theme::SP_4 + 40.0;
                     let label_max = (ui.available_width() - btn_reserve).max(20.0);
                     let label_resp = ui
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
@@ -597,6 +608,7 @@ pub(super) fn render_git_diff(
                                 open_file: &mut open_file,
                                 gitignore_pattern: &mut gitignore_pattern,
                                 revert_file: &mut revert_file,
+                                delete_file: &mut delete_file,
                             },
                         );
                     });
@@ -626,6 +638,19 @@ pub(super) fn render_git_diff(
                             );
                             if revert_btn.on_hover_text("Revert changes").clicked() {
                                 revert_file = Some(entry.path.clone());
+                            }
+                        } else {
+                            let del_btn = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new("\u{2715}")
+                                        .monospace()
+                                        .size(theme::FONT_TERM)
+                                        .color(theme::active().error),
+                                )
+                                .frame(false),
+                            );
+                            if del_btn.on_hover_text("Delete file").clicked() {
+                                delete_file = Some(entry.path.clone());
                             }
                         }
                         None
@@ -667,6 +692,7 @@ pub(super) fn render_git_diff(
         gitignore_pattern,
         request_refresh,
         revert_file,
+        delete_file,
         merge_abort,
         merge_continue,
     }
@@ -678,6 +704,7 @@ struct ContextMenuOutputs<'a> {
     open_file: &'a mut Option<String>,
     gitignore_pattern: &'a mut Option<String>,
     revert_file: &'a mut Option<String>,
+    delete_file: &'a mut Option<String>,
 }
 
 fn file_context_menu(
@@ -731,6 +758,13 @@ fn file_context_menu(
         let revert_label = egui::RichText::new("Revert changes").color(theme::active().error);
         if ui.button(revert_label).clicked() {
             *out.revert_file = Some(path.to_string());
+            ui.close_menu();
+        }
+    } else {
+        ui.separator();
+        let delete_label = egui::RichText::new("Delete file").color(theme::active().error);
+        if ui.button(delete_label).clicked() {
+            *out.delete_file = Some(path.to_string());
             ui.close_menu();
         }
     }
@@ -866,6 +900,7 @@ fn paint_highlighted_line(
     font: &egui::FontId,
 ) {
     let bg_rgb = diff_bg_rgb(kind, t);
+    let painter = ui.painter().with_clip_rect(rect);
 
     if let Some(segs) = segments {
         let mut job = egui::text::LayoutJob::default();
@@ -876,8 +911,7 @@ fn paint_highlighted_line(
         }
         let galley = ui.fonts(|f| f.layout_job(job));
         let y = rect.center().y - galley.size().y / 2.0;
-        ui.painter()
-            .galley(egui::pos2(rect.min.x + 4.0, y), galley, t.text);
+        painter.galley(egui::pos2(rect.min.x + 4.0, y), galley, t.text);
     } else {
         let fg = match kind {
             DiffLineKind::Added => t.git_added,
@@ -885,7 +919,7 @@ fn paint_highlighted_line(
             DiffLineKind::Context => t.text,
         };
         let fg = theme::ensure_readable([fg.r(), fg.g(), fg.b()], bg_rgb);
-        ui.painter().text(
+        painter.text(
             egui::pos2(rect.min.x + 4.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             content,

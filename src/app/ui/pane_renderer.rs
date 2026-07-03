@@ -71,6 +71,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub text_search: &'a mut crate::search::TextSearchState,
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
     pub diff_hunk_navigations: &'a mut Vec<(u32, usize)>,
+    pub diff_clear_scroll_to_first: &'a mut Vec<u32>,
     pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
@@ -547,6 +548,7 @@ fn render_note_editor_leaf(
 struct DiffLeafResult {
     mode_change: Option<super::super::diff_parser::DiffViewMode>,
     hunk_navigation: Option<usize>,
+    clear_scroll_to_first: bool,
 }
 
 fn render_file_diff_leaf(
@@ -578,6 +580,12 @@ fn render_file_diff_leaf(
 
     let is_focused = rctx.focused_pane_id == Some(pane_id);
 
+    let scroll_target = if d.scroll_to_first_hunk && !d.hunks.is_empty() {
+        Some(0_usize)
+    } else {
+        toolbar.scroll_to_hunk
+    };
+
     egui::ScrollArea::both()
         .id_source(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
@@ -591,7 +599,7 @@ fn render_file_diff_leaf(
                         &d.hunks,
                         d.old_highlights.as_deref(),
                         d.new_highlights.as_deref(),
-                        toolbar.scroll_to_hunk,
+                        scroll_target,
                     );
                 }
                 super::super::diff_parser::DiffViewMode::SideBySide => {
@@ -602,7 +610,7 @@ fn render_file_diff_leaf(
                         &d.hunks,
                         d.old_highlights.as_deref(),
                         d.new_highlights.as_deref(),
-                        toolbar.scroll_to_hunk,
+                        scroll_target,
                     );
                 }
             }
@@ -627,6 +635,7 @@ fn render_file_diff_leaf(
     DiffLeafResult {
         mode_change: toolbar.mode_change,
         hunk_navigation: toolbar.scroll_to_hunk,
+        clear_scroll_to_first: d.scroll_to_first_hunk,
     }
 }
 
@@ -691,6 +700,9 @@ fn render_leaf_content(
                 }
                 if let Some(hunk_idx) = result.hunk_navigation {
                     rctx.diff_hunk_navigations.push((pane_id, hunk_idx));
+                }
+                if result.clear_scroll_to_first {
+                    rctx.diff_clear_scroll_to_first.push(pane_id);
                 }
             }
             PaneContent::NoteEditor(ne) => {
@@ -827,6 +839,7 @@ fn render_group_node(
                 let has_splits = app.pane_state.groups.len() > 1;
                 let mut diff_mode_changes = Vec::new();
                 let mut diff_hunk_navigations: Vec<(u32, usize)> = Vec::new();
+                let mut diff_clear_scroll_to_first: Vec<u32> = Vec::new();
                 let mut scrollbar_clear_restore = Vec::new();
                 let mut scrollbar_dragging = false;
                 let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
@@ -859,6 +872,7 @@ fn render_group_node(
                         text_search: &mut app.text_search,
                         diff_mode_changes: &mut diff_mode_changes,
                         diff_hunk_navigations: &mut diff_hunk_navigations,
+                        diff_clear_scroll_to_first: &mut diff_clear_scroll_to_first,
                         drag_state: &mut app.drag_state,
                         scrollbar_clear_restore: &mut scrollbar_clear_restore,
                         scrollbar_dragging: &mut scrollbar_dragging,
@@ -881,6 +895,13 @@ fn render_group_node(
                     if let Some(pane) = app.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                         if let PaneContent::FileDiff(ref mut d) = pane.content {
                             d.current_hunk = hunk_idx;
+                        }
+                    }
+                }
+                for pane_id in diff_clear_scroll_to_first {
+                    if let Some(pane) = app.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                        if let PaneContent::FileDiff(ref mut d) = pane.content {
+                            d.scroll_to_first_hunk = false;
                         }
                     }
                 }
