@@ -4499,6 +4499,8 @@ impl App {
 
         // 9. File opened from right panel → add FileEditor pane (or focus existing)
         if let Some(path) = pending_open_editor {
+            crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+            crate::app::persistence::save_recent_files(&self.recent_files);
             let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
             if let Some(pid) = existing_id {
                 self.activate_and_scroll_to_pane(pid);
@@ -4553,6 +4555,8 @@ impl App {
 
         // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
         if let Some(path) = open_md_in_editor {
+            crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+            crate::app::persistence::save_recent_files(&self.recent_files);
             let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
             if let Some(pid) = existing_id {
                 self.activate_and_scroll_to_pane(pid);
