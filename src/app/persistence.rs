@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -121,6 +121,48 @@ pub(super) struct AppSession {
 
 pub(super) fn session_data_path() -> Option<PathBuf> {
     util::data_file("session.json")
+}
+
+const MAX_RECENT_FILES: usize = 20;
+
+pub(crate) fn load_recent_files() -> Vec<PathBuf> {
+    let Some(path) = util::data_file("recent_files.json") else {
+        return Vec::new();
+    };
+    load_recent_files_from_path(&path)
+}
+
+fn load_recent_files_from_path(path: &Path) -> Vec<PathBuf> {
+    util::safe_json_load::<Vec<String>>(path)
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+}
+
+pub(crate) fn save_recent_files(files: &[PathBuf]) {
+    let Some(path) = util::data_file("recent_files.json") else {
+        return;
+    };
+    save_recent_files_to_path(files, &path);
+}
+
+fn save_recent_files_to_path(files: &[PathBuf], path: &Path) {
+    let strings: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    if let Ok(text) = serde_json::to_string_pretty(&strings) {
+        if let Err(e) = util::atomic_write(path, &text) {
+            log::warn!("failed to save recent_files.json: {e}");
+        }
+    }
+}
+
+pub(crate) fn push_recent_file(recents: &mut Vec<PathBuf>, path: &PathBuf) {
+    recents.retain(|p| p != path);
+    recents.insert(0, path.clone());
+    recents.truncate(MAX_RECENT_FILES);
 }
 
 #[cfg(test)]
@@ -547,6 +589,56 @@ mod tests {
             GroupNode::Leaf { group_id } => assert_eq!(*group_id, 5),
             _ => panic!("expected Leaf"),
         }
+    }
+
+    #[test]
+    fn test_load_recent_files_missing_file() {
+        let result = load_recent_files_from_path(&std::path::PathBuf::from(
+            "/nonexistent/recent_files.json",
+        ));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_recent_files() {
+        let dir = std::env::temp_dir().join(format!("ts_recent_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("recent_files.json");
+
+        let files = vec![
+            std::path::PathBuf::from("/foo/bar.rs"),
+            std::path::PathBuf::from("/baz/qux.toml"),
+        ];
+        save_recent_files_to_path(&files, &path);
+
+        let loaded = load_recent_files_from_path(&path);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0], std::path::PathBuf::from("/foo/bar.rs"));
+        assert_eq!(loaded[1], std::path::PathBuf::from("/baz/qux.toml"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_push_recent_file_deduplicates() {
+        let mut recents = vec![
+            std::path::PathBuf::from("/a.rs"),
+            std::path::PathBuf::from("/b.rs"),
+            std::path::PathBuf::from("/c.rs"),
+        ];
+        push_recent_file(&mut recents, &std::path::PathBuf::from("/b.rs"));
+        assert_eq!(recents[0], std::path::PathBuf::from("/b.rs"));
+        assert_eq!(recents.len(), 3);
+    }
+
+    #[test]
+    fn test_push_recent_file_caps_at_20() {
+        let mut recents: Vec<std::path::PathBuf> = (0..20)
+            .map(|i| std::path::PathBuf::from(format!("/file{}.rs", i)))
+            .collect();
+        push_recent_file(&mut recents, &std::path::PathBuf::from("/new.rs"));
+        assert_eq!(recents.len(), 20);
+        assert_eq!(recents[0], std::path::PathBuf::from("/new.rs"));
     }
 
     #[test]
