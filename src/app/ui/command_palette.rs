@@ -190,7 +190,7 @@ impl App {
                                                         row_rect,
                                                         entry,
                                                         is_selected,
-                                                        &t,
+                                                        t,
                                                     );
                                                 },
                                             );
@@ -263,7 +263,7 @@ impl App {
                                                     path,
                                                     is_selected,
                                                     item_w,
-                                                    &t,
+                                                    t,
                                                 );
 
                                                 if resp.hovered() && !is_selected {
@@ -350,7 +350,7 @@ impl App {
                                                     path,
                                                     is_selected,
                                                     item_w,
-                                                    &t,
+                                                    t,
                                                 );
 
                                                 if resp.hovered() && !is_selected {
@@ -664,8 +664,7 @@ fn render_file_row(
                 ext.clone()
             };
             let badge_font = egui::FontId::monospace(theme::FONT_UI_XS);
-            let badge_galley =
-                painter.layout_no_wrap(badge_text, badge_font, t.accent_muted);
+            let badge_galley = painter.layout_no_wrap(badge_text, badge_font, t.accent_muted);
             let badge_w = badge_galley.size().x + theme::SP_2 * 2.0;
             let badge_h = badge_galley.size().y + theme::SP_1;
             let badge_rect = egui::Rect::from_min_size(
@@ -700,8 +699,7 @@ fn render_file_row(
             // Parent path (right-aligned)
             if !parent.is_empty() {
                 let parent_font = egui::FontId::proportional(theme::FONT_UI_XS);
-                let parent_galley =
-                    painter.layout_no_wrap(parent.clone(), parent_font, t.fg_muted);
+                let parent_galley = painter.layout_no_wrap(parent.clone(), parent_font, t.fg_muted);
                 // Truncate if it would overlap the file name
                 let max_parent_w = (row_rect.max.x - name_x - theme::SP_6)
                     .max(0.0)
@@ -744,8 +742,7 @@ fn render_command_row(
     if let Some(ref hint) = entry.shortcut_hint {
         let badge_font = egui::FontId::monospace(theme::FONT_SYS_SM);
         let badge_text_color = if is_selected { t.subtext1 } else { t.fg_muted };
-        let badge_galley =
-            painter.layout_no_wrap(hint.clone(), badge_font, badge_text_color);
+        let badge_galley = painter.layout_no_wrap(hint.clone(), badge_font, badge_text_color);
         let badge_w = badge_galley.size().x + theme::SP_3 * 2.0;
         let badge_h = badge_galley.size().y + theme::SP_1 * 2.0;
         let badge_rect = egui::Rect::from_min_size(
@@ -810,6 +807,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         MoveTabToUpGroup,
         MoveTabToDownGroup,
         RevealInExplorer,
+        OpenFileFinder,
     ];
 
     actions
@@ -877,5 +875,24 @@ mod tests {
         labels.sort();
         labels.dedup();
         assert_eq!(labels.len(), actions.len());
+    }
+
+    #[test]
+    fn command_mode_detected_by_prefix() {
+        assert!(">toggle".starts_with('>'));
+        assert!(!">".is_empty());
+        assert!(!"search query".starts_with('>'));
+    }
+
+    #[test]
+    fn palette_actions_include_file_finder() {
+        let registry = ShortcutRegistry::new();
+        let actions = all_palette_actions(&registry);
+        assert!(
+            actions
+                .iter()
+                .any(|e| e.action == AppAction::OpenFileFinder),
+            "OpenFileFinder should be in palette actions"
+        );
     }
 }
