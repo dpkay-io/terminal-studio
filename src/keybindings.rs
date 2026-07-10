@@ -302,6 +302,15 @@ impl KeybindingsConfig {
             (
                 Shortcut {
                     ctrl: true,
+                    shift: false,
+                    alt: false,
+                    key: egui::Key::P,
+                },
+                AppAction::OpenFileFinder,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
                     shift: true,
                     alt: false,
                     key: egui::Key::Slash,
@@ -426,6 +435,15 @@ impl KeybindingsConfig {
                     key: egui::Key::ArrowUp,
                 },
                 AppAction::MoveTabToUpGroup,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: true,
+                    alt: false,
+                    key: egui::Key::R,
+                },
+                AppAction::RevealInExplorer,
             ),
         ];
 

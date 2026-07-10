@@ -67,6 +67,9 @@ pub enum AppAction {
     // Command palette
     CommandPalette,
 
+    // File finder
+    OpenFileFinder,
+
     // Session history
     ReopenClosedSession,
 
@@ -79,6 +82,9 @@ pub enum AppAction {
     MoveTabToPrevGroup,
     MoveTabToUpGroup,
     MoveTabToDownGroup,
+
+    // File explorer
+    RevealInExplorer,
 }
 
 impl AppAction {
@@ -118,6 +124,7 @@ impl AppAction {
             Self::SearchAllSessions => "search_all_sessions",
             Self::ZoomPane => "zoom_pane",
             Self::CommandPalette => "command_palette",
+            Self::OpenFileFinder => "open_file_finder",
             Self::ReopenClosedSession => "reopen_closed_session",
             Self::FocusNextGroup => "focus_next_group",
             Self::FocusPrevGroup => "focus_prev_group",
@@ -127,6 +134,7 @@ impl AppAction {
             Self::MoveTabToPrevGroup => "move_tab_to_prev_group",
             Self::MoveTabToUpGroup => "move_tab_to_up_group",
             Self::MoveTabToDownGroup => "move_tab_to_down_group",
+            Self::RevealInExplorer => "reveal_in_explorer",
         }
     }
 
@@ -166,6 +174,7 @@ impl AppAction {
             "search_all_sessions" => Some(Self::SearchAllSessions),
             "zoom_pane" => Some(Self::ZoomPane),
             "command_palette" => Some(Self::CommandPalette),
+            "open_file_finder" => Some(Self::OpenFileFinder),
             "reopen_closed_session" => Some(Self::ReopenClosedSession),
             "focus_next_group" => Some(Self::FocusNextGroup),
             "focus_prev_group" => Some(Self::FocusPrevGroup),
@@ -175,6 +184,7 @@ impl AppAction {
             "move_tab_to_prev_group" => Some(Self::MoveTabToPrevGroup),
             "move_tab_to_up_group" => Some(Self::MoveTabToUpGroup),
             "move_tab_to_down_group" => Some(Self::MoveTabToDownGroup),
+            "reveal_in_explorer" => Some(Self::RevealInExplorer),
             _ => None,
         }
     }
@@ -215,6 +225,7 @@ impl AppAction {
             Self::SearchAllSessions => "Search all sessions",
             Self::ZoomPane => "Zoom pane",
             Self::CommandPalette => "Command palette",
+            Self::OpenFileFinder => "Open file finder",
             Self::ReopenClosedSession => "Reopen closed session",
             Self::FocusNextGroup => "Focus next group",
             Self::FocusPrevGroup => "Focus previous group",
@@ -224,6 +235,7 @@ impl AppAction {
             Self::MoveTabToPrevGroup => "Move tab to previous group",
             Self::MoveTabToUpGroup => "Move tab to group above",
             Self::MoveTabToDownGroup => "Move tab to group below",
+            Self::RevealInExplorer => "Reveal file in explorer",
         }
     }
 
@@ -538,6 +550,15 @@ impl ShortcutRegistry {
             // Search
             (Shortcut::cs(egui::Key::F), AppAction::FocusSessionSearch),
             (Shortcut::cs(egui::Key::P), AppAction::CommandPalette),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: false,
+                    key: egui::Key::P,
+                },
+                AppAction::OpenFileFinder,
+            ),
             // Help
             (
                 Shortcut::cs(egui::Key::Slash),
@@ -704,7 +725,11 @@ impl ShortcutRegistry {
             ),
             (
                 "Right Panel",
-                &[AppAction::RightTabGitDiff, AppAction::ToggleNotes],
+                &[
+                    AppAction::RightTabGitDiff,
+                    AppAction::ToggleNotes,
+                    AppAction::RevealInExplorer,
+                ],
             ),
             (
                 "Session",
@@ -721,6 +746,7 @@ impl ShortcutRegistry {
                     AppAction::RightTabDirectory,
                     AppAction::SearchTerminal,
                     AppAction::SearchAllSessions,
+                    AppAction::OpenFileFinder,
                 ],
             ),
             (
