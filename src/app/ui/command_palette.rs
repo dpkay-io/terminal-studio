@@ -41,7 +41,11 @@ impl App {
             screen_rect.min.y + theme::DIALOG_TOP_OFFSET,
         );
 
+        let command_mode = self.palette_query.starts_with('>');
+
         let mut action_to_run: Option<AppAction> = None;
+        let mut file_to_open: Option<std::path::PathBuf> = None;
+        let mut file_to_open_external: Option<std::path::PathBuf> = None;
 
         egui::Area::new(self.vp_id("cmd_palette_dialog"))
             .fixed_pos(dialog_pos)
@@ -65,30 +69,49 @@ impl App {
                         ui.set_max_height(dialog_h);
 
                         // Escape to close
-                        let esc = ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+                        let esc = ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)
+                        });
                         if esc {
                             self.close_palette();
                             return;
                         }
 
-                        // Up/down to navigate
+                        // Navigation keys
                         let up = ctx.input_mut(|i| {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)
                         });
                         let down = ctx.input_mut(|i| {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
                         });
-                        let enter = ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                        let enter = ctx.input_mut(|i| {
+                            i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                        });
+                        let ctrl_enter = ctx.input_mut(|i| {
+                            i.consume_key(
+                                egui::Modifiers {
+                                    alt: false,
+                                    ctrl: true,
+                                    shift: false,
+                                    mac_cmd: false,
+                                    command: false,
+                                },
+                                egui::Key::Enter,
+                            )
+                        });
 
                         // Search input
+                        let placeholder = if command_mode {
+                            "Type a command\u{2026}"
+                        } else {
+                            "Search files by name\u{2026}"
+                        };
                         let search_id = self.vp_id("cmd_palette_search");
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.palette_query)
                                 .id(search_id)
                                 .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
-                                .hint_text("Type a command\u{2026}")
+                                .hint_text(placeholder)
                                 .font(egui::FontId::monospace(theme::FONT_UI_MD)),
                         );
                         if resp.changed() {
@@ -105,139 +128,289 @@ impl App {
                         }
 
                         ui.add_space(theme::SP_2);
-                        let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                        let sep_rect =
+                            ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
                         ui.painter().rect_filled(sep_rect, 0.0, t.border_subtle);
                         ui.add_space(theme::SP_2);
 
-                        // Build filtered action list
-                        let query = self.palette_query.trim().to_lowercase();
-                        let all_actions = all_palette_actions(&self.shortcut_registry);
-                        let filtered: Vec<&PaletteEntry> = if query.is_empty() {
-                            all_actions.iter().collect()
+                        if command_mode {
+                            // ── Command mode ──
+                            let raw_query = &self.palette_query[1..]; // strip '>'
+                            let query = raw_query.trim().to_lowercase();
+                            let all_actions = all_palette_actions(&self.shortcut_registry);
+                            let filtered: Vec<&PaletteEntry> = if query.is_empty() {
+                                all_actions.iter().collect()
+                            } else {
+                                all_actions
+                                    .iter()
+                                    .filter(|e| fuzzy_match(&e.label_lower, &query))
+                                    .collect()
+                            };
+
+                            let count = filtered.len();
+                            if count == 0 {
+                                ui.add_space(theme::SP_4);
+                                ui.label(
+                                    egui::RichText::new("No matching commands")
+                                        .size(theme::FONT_UI_SM)
+                                        .color(t.overlay0),
+                                );
+                            } else {
+                                if self.palette_selected >= count {
+                                    self.palette_selected = count.saturating_sub(1);
+                                }
+                                if up && self.palette_selected > 0 {
+                                    self.palette_selected -= 1;
+                                }
+                                if down && self.palette_selected + 1 < count {
+                                    self.palette_selected += 1;
+                                }
+                                if enter {
+                                    action_to_run =
+                                        Some(filtered[self.palette_selected].action);
+                                }
+
+                                egui::ScrollArea::vertical()
+                                    .id_source(self.vp_id("cmd_palette_scroll"))
+                                    .auto_shrink([false; 2])
+                                    .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
+                                    .show(ui, |ui| {
+                                        for (idx, entry) in filtered.iter().enumerate() {
+                                            let is_selected = idx == self.palette_selected;
+                                            let item_w = dialog_w - theme::SP_4 * 2.0;
+
+                                            let resp = ui_kit::list_item(
+                                                ui,
+                                                egui::Id::new(("cmd_item", entry.action)),
+                                                item_w,
+                                                is_selected,
+                                                |painter, row_rect| {
+                                                    render_command_row(
+                                                        painter,
+                                                        row_rect,
+                                                        entry,
+                                                        is_selected,
+                                                        &t,
+                                                    );
+                                                },
+                                            );
+
+                                            if resp.hovered() && !is_selected {
+                                                self.palette_selected = idx;
+                                            }
+                                            if resp.clicked() {
+                                                action_to_run = Some(entry.action);
+                                            }
+                                            if is_selected {
+                                                resp.scroll_to_me(Some(egui::Align::Center));
+                                            }
+                                        }
+                                    });
+                            }
                         } else {
-                            all_actions
-                                .iter()
-                                .filter(|e| fuzzy_match(&e.label_lower, &query))
-                                .collect()
-                        };
+                            // ── File mode ──
+                            let query = self.palette_query.trim();
 
-                        let count = filtered.len();
-                        if count == 0 {
-                            ui.add_space(theme::SP_4);
-                            ui.label(
-                                egui::RichText::new("No matching commands")
-                                    .size(theme::FONT_UI_SM)
-                                    .color(t.overlay0),
-                            );
-                        } else {
-                            // Clamp selection
-                            if self.palette_selected >= count {
-                                self.palette_selected = count.saturating_sub(1);
-                            }
-                            if up && self.palette_selected > 0 {
-                                self.palette_selected -= 1;
-                            }
-                            if down && self.palette_selected + 1 < count {
-                                self.palette_selected += 1;
-                            }
-                            if enter {
-                                action_to_run =
-                                    Some(filtered[self.palette_selected].action);
-                            }
+                            if query.is_empty() {
+                                // Show recent files
+                                if self.recent_files.is_empty() {
+                                    ui.add_space(theme::SP_4);
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Type to search files, or > for commands",
+                                        )
+                                        .size(theme::FONT_UI_SM)
+                                        .color(t.overlay0),
+                                    );
+                                } else {
+                                    ui.add_space(theme::SP_1);
+                                    ui.label(
+                                        egui::RichText::new("RECENT FILES")
+                                            .size(theme::FONT_UI_XS)
+                                            .color(t.fg_muted),
+                                    );
+                                    ui.add_space(theme::SP_1);
 
-                            egui::ScrollArea::vertical()
-                                .id_source(self.vp_id("cmd_palette_scroll"))
-                                .auto_shrink([false; 2])
-                                .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
-                                .show(ui, |ui| {
-                                    for (idx, entry) in filtered.iter().enumerate() {
-                                        let is_selected = idx == self.palette_selected;
-                                        let item_w = dialog_w - theme::SP_4 * 2.0;
-
-                                        let resp = ui_kit::list_item(
-                                            ui,
-                                            egui::Id::new(("cmd_item", entry.action)),
-                                            item_w,
-                                            is_selected,
-                                            |painter, row_rect| {
-                                                // Action label
-                                                let label_pos = egui::pos2(
-                                                    row_rect.min.x + theme::SP_3,
-                                                    row_rect.center().y - theme::FONT_UI_SM * 0.55,
-                                                );
-                                                painter.text(
-                                                    label_pos,
-                                                    egui::Align2::LEFT_TOP,
-                                                    &entry.label,
-                                                    egui::FontId::proportional(theme::FONT_UI_SM),
-                                                    if is_selected { t.text } else { t.subtext0 },
-                                                );
-
-                                                // Keybinding hint (right-aligned pill badge)
-                                                if let Some(ref hint) = entry.shortcut_hint {
-                                                    let badge_font =
-                                                        egui::FontId::monospace(theme::FONT_SYS_SM);
-                                                    let badge_text_color = if is_selected {
-                                                        t.subtext1
-                                                    } else {
-                                                        t.fg_muted
-                                                    };
-                                                    let badge_galley = painter.layout_no_wrap(
-                                                        hint.clone(),
-                                                        badge_font,
-                                                        badge_text_color,
-                                                    );
-                                                    let badge_w =
-                                                        badge_galley.size().x + theme::SP_3 * 2.0;
-                                                    let badge_h =
-                                                        badge_galley.size().y + theme::SP_1 * 2.0;
-                                                    let badge_rect = egui::Rect::from_min_size(
-                                                        egui::pos2(
-                                                            row_rect.max.x - theme::SP_3 - badge_w,
-                                                            row_rect.center().y - badge_h / 2.0,
-                                                        ),
-                                                        egui::vec2(badge_w, badge_h),
-                                                    );
-                                                    let badge_bg = if is_selected {
-                                                        t.surface2
-                                                    } else {
-                                                        t.surface0
-                                                    };
-                                                    painter.rect_filled(
-                                                        badge_rect,
-                                                        theme::R_SM,
-                                                        badge_bg,
-                                                    );
-                                                    painter.galley(
-                                                        egui::pos2(
-                                                            badge_rect.min.x + theme::SP_3,
-                                                            badge_rect.center().y
-                                                                - badge_galley.size().y / 2.0,
-                                                        ),
-                                                        badge_galley,
-                                                        badge_text_color,
-                                                    );
-                                                }
-                                            },
-                                        );
-
-                                        if resp.hovered() && !is_selected {
-                                            self.palette_selected = idx;
-                                        }
-
-                                        if resp.clicked() {
-                                            action_to_run = Some(entry.action);
-                                        }
-
-                                        // Scroll selected into view
-                                        if is_selected {
-                                            resp.scroll_to_me(Some(egui::Align::Center));
-                                        }
+                                    let count = self.recent_files.len();
+                                    if self.palette_selected >= count {
+                                        self.palette_selected = count.saturating_sub(1);
                                     }
-                                });
+                                    if up && self.palette_selected > 0 {
+                                        self.palette_selected -= 1;
+                                    }
+                                    if down && self.palette_selected + 1 < count {
+                                        self.palette_selected += 1;
+                                    }
+
+                                    // Clone paths to avoid borrow issues
+                                    let recent_snapshot: Vec<std::path::PathBuf> =
+                                        self.recent_files.clone();
+
+                                    egui::ScrollArea::vertical()
+                                        .id_source(self.vp_id("cmd_palette_scroll"))
+                                        .auto_shrink([false; 2])
+                                        .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
+                                        .show(ui, |ui| {
+                                            for (idx, path) in
+                                                recent_snapshot.iter().enumerate()
+                                            {
+                                                let is_selected =
+                                                    idx == self.palette_selected;
+                                                let item_w = dialog_w - theme::SP_4 * 2.0;
+
+                                                let resp = render_file_row(
+                                                    ui,
+                                                    path,
+                                                    is_selected,
+                                                    item_w,
+                                                    &t,
+                                                );
+
+                                                if resp.hovered() && !is_selected {
+                                                    self.palette_selected = idx;
+                                                }
+                                                if resp.clicked() || (enter && is_selected) {
+                                                    file_to_open = Some(path.clone());
+                                                }
+                                                if ctrl_enter && is_selected {
+                                                    file_to_open_external =
+                                                        Some(path.clone());
+                                                }
+                                                if is_selected {
+                                                    resp.scroll_to_me(Some(
+                                                        egui::Align::Center,
+                                                    ));
+                                                }
+                                            }
+                                        });
+                                }
+                            } else {
+                                // Debounced file search
+                                self.palette_debouncer.update(query);
+                                if self.palette_debouncer.ready() {
+                                    let root = self.palette_search_root();
+                                    self.workers
+                                        .file_search_worker
+                                        .search(query.to_string(), root);
+                                }
+                                if self.palette_debouncer.pending() {
+                                    ctx.request_repaint_after(
+                                        std::time::Duration::from_millis(16),
+                                    );
+                                }
+
+                                let results = self.workers.file_search_worker.results();
+                                let matches_snapshot: Vec<(std::path::PathBuf, bool)> =
+                                    results
+                                        .matches
+                                        .iter()
+                                        .map(|m| (m.path.clone(), m.is_dir))
+                                        .collect();
+                                let completed = results.completed;
+                                drop(results);
+
+                                let count = matches_snapshot.len();
+                                if count == 0 {
+                                    ui.add_space(theme::SP_4);
+                                    let msg = if completed {
+                                        "No matching files"
+                                    } else {
+                                        "Searching\u{2026}"
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(msg)
+                                            .size(theme::FONT_UI_SM)
+                                            .color(t.overlay0),
+                                    );
+                                } else {
+                                    if self.palette_selected >= count {
+                                        self.palette_selected = count.saturating_sub(1);
+                                    }
+                                    if up && self.palette_selected > 0 {
+                                        self.palette_selected -= 1;
+                                    }
+                                    if down && self.palette_selected + 1 < count {
+                                        self.palette_selected += 1;
+                                    }
+
+                                    egui::ScrollArea::vertical()
+                                        .id_source(self.vp_id("cmd_palette_scroll"))
+                                        .auto_shrink([false; 2])
+                                        .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
+                                        .show(ui, |ui| {
+                                            for (idx, (path, _is_dir)) in
+                                                matches_snapshot.iter().enumerate()
+                                            {
+                                                let is_selected =
+                                                    idx == self.palette_selected;
+                                                let item_w = dialog_w - theme::SP_4 * 2.0;
+
+                                                let resp = render_file_row(
+                                                    ui,
+                                                    path,
+                                                    is_selected,
+                                                    item_w,
+                                                    &t,
+                                                );
+
+                                                if resp.hovered() && !is_selected {
+                                                    self.palette_selected = idx;
+                                                }
+                                                if resp.clicked() || (enter && is_selected) {
+                                                    file_to_open = Some(path.clone());
+                                                }
+                                                if ctrl_enter && is_selected {
+                                                    file_to_open_external =
+                                                        Some(path.clone());
+                                                }
+                                                if is_selected {
+                                                    resp.scroll_to_me(Some(
+                                                        egui::Align::Center,
+                                                    ));
+                                                }
+                                            }
+                                        });
+                                }
+                            }
                         }
+
+                        // Footer bar with keyboard hints
+                        ui.add_space(theme::SP_2);
+                        let sep_rect =
+                            ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
+                        ui.painter().rect_filled(sep_rect, 0.0, t.border_subtle);
+                        ui.add_space(theme::SP_2);
+
+                        ui.horizontal(|ui| {
+                            let hint_color = t.fg_muted;
+                            let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+
+                            let hints = if command_mode {
+                                "\u{2191}\u{2193} navigate  \u{23CE} run  Esc close"
+                            } else {
+                                "\u{2191}\u{2193} navigate  \u{23CE} open  Ctrl+\u{23CE} external  Esc close  > commands"
+                            };
+                            ui.label(
+                                egui::RichText::new(hints)
+                                    .font(hint_font)
+                                    .color(hint_color),
+                            );
+                        });
                     });
             });
+
+        // Handle file opens after render (to avoid borrow issues)
+        if let Some(path) = file_to_open {
+            crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+            crate::app::persistence::save_recent_files(&self.recent_files);
+            self.close_palette();
+            self.pending_palette_open_file = Some(path);
+        } else if let Some(path) = file_to_open_external {
+            crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+            crate::app::persistence::save_recent_files(&self.recent_files);
+            self.close_palette();
+            let _ = open::that(&path);
+        }
 
         if let Some(action) = action_to_run {
             self.close_palette();
@@ -249,6 +422,20 @@ impl App {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_selected = 0;
+        self.palette_debouncer.reset();
+        self.workers.file_search_worker.cancel();
+    }
+
+    fn palette_search_root(&self) -> std::path::PathBuf {
+        if let Some(ws) = self.active_workspace() {
+            if ws.path.is_dir() {
+                return ws.path.clone();
+            }
+        }
+        if let Some(cwd) = self.active_pane_cwd() {
+            return cwd;
+        }
+        std::path::PathBuf::from(".")
     }
 
     fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
@@ -440,6 +627,144 @@ impl App {
             AppAction::CommandPalette | AppAction::OpenFileFinder => {}
             _ => {}
         }
+    }
+}
+
+/// Render a single file row in the palette (used for both recent files and search results).
+fn render_file_row(
+    ui: &mut egui::Ui,
+    path: &std::path::Path,
+    is_selected: bool,
+    width: f32,
+    t: &crate::theme::Theme,
+) -> egui::Response {
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let parent = path
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    ui_kit::list_item(
+        ui,
+        egui::Id::new(("file_item", path.to_string_lossy().as_ref())),
+        width,
+        is_selected,
+        |painter, row_rect| {
+            // Extension badge (left)
+            let badge_text = if ext.is_empty() {
+                "\u{2022}".to_string() // bullet for no extension
+            } else {
+                ext.clone()
+            };
+            let badge_font = egui::FontId::monospace(theme::FONT_UI_XS);
+            let badge_galley =
+                painter.layout_no_wrap(badge_text, badge_font, t.accent_muted);
+            let badge_w = badge_galley.size().x + theme::SP_2 * 2.0;
+            let badge_h = badge_galley.size().y + theme::SP_1;
+            let badge_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    row_rect.min.x + theme::SP_3,
+                    row_rect.center().y - badge_h / 2.0,
+                ),
+                egui::vec2(badge_w, badge_h),
+            );
+            let badge_bg = if is_selected { t.surface2 } else { t.surface0 };
+            painter.rect_filled(badge_rect, theme::R_SM, badge_bg);
+            painter.galley(
+                egui::pos2(
+                    badge_rect.min.x + theme::SP_2,
+                    badge_rect.center().y - badge_galley.size().y / 2.0,
+                ),
+                badge_galley,
+                t.accent_muted,
+            );
+
+            // File name (center)
+            let name_x = badge_rect.max.x + theme::SP_3;
+            let name_color = if is_selected { t.text } else { t.subtext0 };
+            painter.text(
+                egui::pos2(name_x, row_rect.center().y - theme::FONT_UI_SM * 0.55),
+                egui::Align2::LEFT_TOP,
+                &file_name,
+                egui::FontId::proportional(theme::FONT_UI_SM),
+                name_color,
+            );
+
+            // Parent path (right-aligned)
+            if !parent.is_empty() {
+                let parent_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                let parent_galley =
+                    painter.layout_no_wrap(parent.clone(), parent_font, t.fg_muted);
+                // Truncate if it would overlap the file name
+                let max_parent_w = (row_rect.max.x - name_x - theme::SP_6)
+                    .max(0.0)
+                    .min(parent_galley.size().x);
+                if max_parent_w > 40.0 {
+                    painter.galley(
+                        egui::pos2(
+                            row_rect.max.x - theme::SP_3 - max_parent_w,
+                            row_rect.center().y - parent_galley.size().y / 2.0,
+                        ),
+                        parent_galley,
+                        t.fg_muted,
+                    );
+                }
+            }
+        },
+    )
+}
+
+/// Render label + shortcut badge for a command row.
+fn render_command_row(
+    painter: &egui::Painter,
+    row_rect: egui::Rect,
+    entry: &PaletteEntry,
+    is_selected: bool,
+    t: &crate::theme::Theme,
+) {
+    let label_pos = egui::pos2(
+        row_rect.min.x + theme::SP_3,
+        row_rect.center().y - theme::FONT_UI_SM * 0.55,
+    );
+    painter.text(
+        label_pos,
+        egui::Align2::LEFT_TOP,
+        &entry.label,
+        egui::FontId::proportional(theme::FONT_UI_SM),
+        if is_selected { t.text } else { t.subtext0 },
+    );
+
+    if let Some(ref hint) = entry.shortcut_hint {
+        let badge_font = egui::FontId::monospace(theme::FONT_SYS_SM);
+        let badge_text_color = if is_selected { t.subtext1 } else { t.fg_muted };
+        let badge_galley =
+            painter.layout_no_wrap(hint.clone(), badge_font, badge_text_color);
+        let badge_w = badge_galley.size().x + theme::SP_3 * 2.0;
+        let badge_h = badge_galley.size().y + theme::SP_1 * 2.0;
+        let badge_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                row_rect.max.x - theme::SP_3 - badge_w,
+                row_rect.center().y - badge_h / 2.0,
+            ),
+            egui::vec2(badge_w, badge_h),
+        );
+        let badge_bg = if is_selected { t.surface2 } else { t.surface0 };
+        painter.rect_filled(badge_rect, theme::R_SM, badge_bg);
+        painter.galley(
+            egui::pos2(
+                badge_rect.min.x + theme::SP_3,
+                badge_rect.center().y - badge_galley.size().y / 2.0,
+            ),
+            badge_galley,
+            badge_text_color,
+        );
     }
 }
 

@@ -4604,6 +4604,60 @@ impl App {
             }
         }
 
+        // 9b. File opened from palette
+        if let Some(path) = self.pending_palette_open_file.take() {
+            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
+            if let Some(pid) = existing_id {
+                self.activate_and_scroll_to_pane(pid);
+            } else {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+                self.pane_state.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::FileEditor(FileEditorState {
+                        path: path.clone(),
+                        content: String::new(),
+                        dirty: false,
+                        save_error: false,
+                        workspace_id: self.active_group,
+                        show_preview: is_md && self.md_prefer_preview,
+                        stale: false,
+                        loading: true,
+                    }),
+                    manual_width: None,
+                    last_size: (0, 0),
+                    labels: vec![],
+                    last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
+                });
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                self.pane_state
+                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
+                self.activate_and_scroll_to_pane(pane_id);
+                {
+                    let results = Arc::clone(&self.file_load_results);
+                    let ctx_clone = ctx.clone();
+                    std::thread::spawn(move || {
+                        let content = match std::fs::read(&path) {
+                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
+                                String::from_utf8_lossy(e.as_bytes()).into_owned()
+                            }),
+                            Err(_) => String::new(),
+                        };
+                        results.lock().push((pane_id, content));
+                        ctx_clone.request_repaint();
+                    });
+                }
+            }
+        }
+
         // 9a2. Open notes in a pane
         if let Some(ws_id) = pending_open_note {
             let existing_id = self
