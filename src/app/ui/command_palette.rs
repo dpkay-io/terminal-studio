@@ -6,8 +6,8 @@ use super::super::pane::PaneContent;
 use super::super::App;
 
 impl App {
-    pub(in crate::app) fn render_command_palette(&mut self, ctx: &egui::Context) {
-        if !self.show_command_palette {
+    pub(in crate::app) fn render_palette(&mut self, ctx: &egui::Context) {
+        if !self.palette_open {
             return;
         }
 
@@ -30,7 +30,7 @@ impl App {
                     egui::Color32::from_black_alpha(theme::ALPHA_OVERLAY_DIM),
                 );
                 if resp.clicked() {
-                    self.close_command_palette();
+                    self.close_palette();
                 }
             });
 
@@ -68,7 +68,7 @@ impl App {
                         let esc = ctx
                             .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                         if esc {
-                            self.close_command_palette();
+                            self.close_palette();
                             return;
                         }
 
@@ -85,14 +85,14 @@ impl App {
                         // Search input
                         let search_id = self.vp_id("cmd_palette_search");
                         let resp = ui.add(
-                            egui::TextEdit::singleline(&mut self.command_palette_query)
+                            egui::TextEdit::singleline(&mut self.palette_query)
                                 .id(search_id)
                                 .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
                                 .hint_text("Type a command\u{2026}")
                                 .font(egui::FontId::monospace(theme::FONT_UI_MD)),
                         );
                         if resp.changed() {
-                            self.command_palette_selected = 0;
+                            self.palette_selected = 0;
                         }
                         if resp.lost_focus()
                             && !esc
@@ -110,7 +110,7 @@ impl App {
                         ui.add_space(theme::SP_2);
 
                         // Build filtered action list
-                        let query = self.command_palette_query.trim().to_lowercase();
+                        let query = self.palette_query.trim().to_lowercase();
                         let all_actions = all_palette_actions(&self.shortcut_registry);
                         let filtered: Vec<&PaletteEntry> = if query.is_empty() {
                             all_actions.iter().collect()
@@ -131,18 +131,18 @@ impl App {
                             );
                         } else {
                             // Clamp selection
-                            if self.command_palette_selected >= count {
-                                self.command_palette_selected = count.saturating_sub(1);
+                            if self.palette_selected >= count {
+                                self.palette_selected = count.saturating_sub(1);
                             }
-                            if up && self.command_palette_selected > 0 {
-                                self.command_palette_selected -= 1;
+                            if up && self.palette_selected > 0 {
+                                self.palette_selected -= 1;
                             }
-                            if down && self.command_palette_selected + 1 < count {
-                                self.command_palette_selected += 1;
+                            if down && self.palette_selected + 1 < count {
+                                self.palette_selected += 1;
                             }
                             if enter {
                                 action_to_run =
-                                    Some(filtered[self.command_palette_selected].action);
+                                    Some(filtered[self.palette_selected].action);
                             }
 
                             egui::ScrollArea::vertical()
@@ -151,7 +151,7 @@ impl App {
                                 .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
                                 .show(ui, |ui| {
                                     for (idx, entry) in filtered.iter().enumerate() {
-                                        let is_selected = idx == self.command_palette_selected;
+                                        let is_selected = idx == self.palette_selected;
                                         let item_w = dialog_w - theme::SP_4 * 2.0;
 
                                         let resp = ui_kit::list_item(
@@ -222,7 +222,7 @@ impl App {
                                         );
 
                                         if resp.hovered() && !is_selected {
-                                            self.command_palette_selected = idx;
+                                            self.palette_selected = idx;
                                         }
 
                                         if resp.clicked() {
@@ -240,15 +240,15 @@ impl App {
             });
 
         if let Some(action) = action_to_run {
-            self.close_command_palette();
+            self.close_palette();
             self.execute_palette_action(action, ctx);
         }
     }
 
-    fn close_command_palette(&mut self) {
-        self.show_command_palette = false;
-        self.command_palette_query.clear();
-        self.command_palette_selected = 0;
+    fn close_palette(&mut self) {
+        self.palette_open = false;
+        self.palette_query.clear();
+        self.palette_selected = 0;
     }
 
     fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
@@ -430,7 +430,14 @@ impl App {
                     }
                 }
             }
-            AppAction::CommandPalette => {}
+            AppAction::RevealInExplorer => {
+                if let Some(path) = self.active_pane_file_path() {
+                    self.reveal_file_path = Some(path);
+                    self.show_right_panel = true;
+                    self.right_tab = super::super::pane::RightTab::Directory;
+                }
+            }
+            AppAction::CommandPalette | AppAction::OpenFileFinder => {}
             _ => {}
         }
     }
@@ -477,6 +484,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         MoveTabToPrevGroup,
         MoveTabToUpGroup,
         MoveTabToDownGroup,
+        RevealInExplorer,
     ];
 
     actions

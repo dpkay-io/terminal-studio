@@ -51,7 +51,7 @@ mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
 
-use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, SubdirCache};
+use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, RevealState, SubdirCache};
 use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use labels::LabelRegistry;
@@ -113,9 +113,12 @@ pub struct App {
     quick_switcher_query: String,
     quick_switcher_selected_ws: Option<usize>,
     quick_switcher_search_active: bool,
-    show_command_palette: bool,
-    command_palette_query: String,
-    command_palette_selected: usize,
+    palette_open: bool,
+    palette_query: String,
+    palette_selected: usize,
+    recent_files: Vec<std::path::PathBuf>,
+    palette_debouncer: crate::app::ui::debounce::Debouncer,
+    pending_palette_open_file: Option<std::path::PathBuf>,
     show_closed_sessions: bool,
     closed_sessions_query: String,
     closed_sessions_selected: usize,
@@ -225,6 +228,12 @@ pub struct App {
     /// Pane ID to scroll into view in the tab bar. Set when opening a
     /// file/diff/conflict pane, consumed by the tab bar renderer.
     pub(super) tab_scroll_to_pane: Option<u32>,
+    /// File path to reveal (expand ancestors + highlight + scroll to) in the
+    /// directory tree. Set by auto-reveal on pane switch or explicit shortcut.
+    /// Consumed by `render_dir_tree` once the target entry is rendered.
+    reveal_file_path: Option<PathBuf>,
+    /// Persisted highlight after reveal: (path, timestamp). Fades over ~1.5s.
+    reveal_highlight: Option<(PathBuf, Instant)>,
     deferred_open_workspace: Option<u64>,
 
     show_close_all_confirm: bool,
@@ -347,7 +356,7 @@ impl eframe::App for App {
             || self.show_settings
             || self.show_shortcut_help
             || self.show_quick_switcher
-            || self.show_command_palette
+            || self.palette_open
             || self.term_search.active
             || self.text_search.active
             || self.show_global_search
@@ -1506,6 +1515,7 @@ impl App {
 
         let mut new_tab: Option<RightTab> = None;
         let mut close_tab: Option<PathBuf> = None;
+        let mut close_all_md = false;
         let mut open_editor: Option<PathBuf> = None;
         let mut open_ws_dialog: Option<PathBuf> = None;
         let mut open_terminal_at: Option<PathBuf> = None;
@@ -1701,84 +1711,128 @@ impl App {
                                                 resp.on_hover_text("Ctrl+Shift+G");
                                             }
 
-                                            for (md_idx, path) in md_tabs.iter().enumerate() {
+                                            if !md_tabs.is_empty() {
                                                 let t = theme::active();
-                                                let name = path
-                                                    .file_name()
-                                                    .map(|n| n.to_string_lossy().into_owned())
-                                                    .unwrap_or_default();
-                                                let is_active =
-                                                    active_tab == RightTab::Markdown(path.clone());
-                                                let tab_index = 2 + md_idx;
-                                                let md_tab_id = self.vp_id("right_tab_hover").with(tab_index);
-                                                let tab_hover_t =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        md_tab_id,
-                                                        false,
-                                                    );
-                                                let tab_color = if is_active {
+                                                let is_any_md_active = matches!(active_tab, RightTab::Markdown(_));
+                                                let active_md_name = if let RightTab::Markdown(ref p) = active_tab {
+                                                    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                                                } else {
+                                                    md_tabs[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                                                };
+                                                let md_count = md_tabs.len();
+                                                let md_tab_id = self.vp_id("right_tab_hover").with(2usize);
+                                                let tab_hover_t = crate::app::ui::animation::animated_hover(
+                                                    ui.ctx(), md_tab_id, false,
+                                                );
+                                                let tab_color = if is_any_md_active {
                                                     t.text
                                                 } else {
-                                                    theme::lerp_color(
-                                                        t.fg_muted,
-                                                        t.fg_secondary,
-                                                        tab_hover_t,
-                                                    )
+                                                    theme::lerp_color(t.fg_muted, t.fg_secondary, tab_hover_t)
                                                 };
-                                                let resp = ui.selectable_label(
-                                                    is_active,
-                                                    egui::RichText::new(&name)
-                                                        .size(theme::FONT_UI_MD)
-                                                        .color(tab_color),
-                                                );
-                                                let _ =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        md_tab_id,
-                                                        resp.hovered(),
+
+                                                if md_count == 1 {
+                                                    // Single MD file: simple tab with ×
+                                                    let path = &md_tabs[0];
+                                                    let resp = ui.selectable_label(
+                                                        is_any_md_active,
+                                                        egui::RichText::new(&active_md_name)
+                                                            .size(theme::FONT_UI_MD)
+                                                            .color(tab_color),
                                                     );
-                                                if resp.clicked() {
-                                                    new_tab =
-                                                        Some(RightTab::Markdown(path.clone()));
-                                                }
-                                                if is_active {
-                                                    let underline_rect =
-                                                        egui::Rect::from_min_size(
-                                                            egui::pos2(
-                                                                resp.rect.min.x + theme::SP_2,
-                                                                resp.rect.max.y - 2.0,
-                                                            ),
-                                                            egui::vec2(
-                                                                resp.rect.width()
-                                                                    - theme::SP_2 * 2.0,
-                                                                2.0,
-                                                            ),
+                                                    let _ = crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(), md_tab_id, resp.hovered(),
+                                                    );
+                                                    if resp.clicked() {
+                                                        new_tab = Some(RightTab::Markdown(path.clone()));
+                                                    }
+                                                    if is_any_md_active {
+                                                        let underline_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(resp.rect.min.x + theme::SP_2, resp.rect.max.y - 2.0),
+                                                            egui::vec2(resp.rect.width() - theme::SP_2 * 2.0, 2.0),
                                                         );
-                                                    ui.painter().rect_filled(
-                                                        underline_rect,
-                                                        egui::Rounding::same(1.0),
-                                                        t.accent,
-                                                    );
-                                                }
-                                                ui.add_space(theme::SP_1);
-                                                if ui
-                                                    .add(
+                                                        ui.painter().rect_filled(underline_rect, egui::Rounding::same(1.0), t.accent);
+                                                    }
+                                                    ui.add_space(theme::SP_1);
+                                                    if ui.add(
                                                         egui::Button::new(
-                                                            egui::RichText::new("×")
-                                                                .size(theme::FONT_UI_MD)
-                                                                .color(theme::active().overlay1),
-                                                        )
-                                                        .frame(false)
-                                                        .min_size(egui::vec2(
-                                                            theme::HEADER_H,
-                                                            theme::HEADER_H,
-                                                        )),
-                                                    )
-                                                    .on_hover_text("Close tab (Ctrl+Shift+W)")
-                                                    .clicked()
-                                                {
-                                                    close_tab = Some(path.clone());
+                                                            egui::RichText::new("×").size(theme::FONT_UI_MD).color(t.overlay1),
+                                                        ).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H)),
+                                                    ).on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
+                                                        close_tab = Some(path.clone());
+                                                    }
+                                                } else {
+                                                    // Multiple MD files: consolidated tab with dropdown
+                                                    let popup_id = self.vp_id("md_tabs_popup");
+                                                    let is_popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                                                    let label = format!("{} ({})", active_md_name, md_count);
+                                                    let resp = ui.selectable_label(
+                                                        is_any_md_active || is_popup_open,
+                                                        egui::RichText::new(&label)
+                                                            .size(theme::FONT_UI_MD)
+                                                            .color(if is_popup_open { t.text } else { tab_color }),
+                                                    );
+                                                    let _ = crate::app::ui::animation::animated_hover(
+                                                        ui.ctx(), md_tab_id, resp.hovered(),
+                                                    );
+                                                    if resp.clicked() {
+                                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
+                                                    }
+                                                    if is_any_md_active {
+                                                        let underline_rect = egui::Rect::from_min_size(
+                                                            egui::pos2(resp.rect.min.x + theme::SP_2, resp.rect.max.y - 2.0),
+                                                            egui::vec2(resp.rect.width() - theme::SP_2 * 2.0, 2.0),
+                                                        );
+                                                        ui.painter().rect_filled(underline_rect, egui::Rounding::same(1.0), t.accent);
+                                                    }
+                                                    // Chevron
+                                                    ui.label(
+                                                        egui::RichText::new(if is_popup_open { "▴" } else { "▾" })
+                                                            .size(theme::FONT_UI_XS)
+                                                            .color(t.overlay1),
+                                                    );
+
+                                                    if is_popup_open {
+                                                        egui::popup::popup_below_widget(
+                                                            ui,
+                                                            popup_id,
+                                                            &resp,
+                                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                                            |ui: &mut egui::Ui| {
+                                                                ui.set_min_width(200.0);
+                                                                for path in &md_tabs {
+                                                                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                                                    let is_active = active_tab == RightTab::Markdown(path.clone());
+                                                                    ui.horizontal(|ui| {
+                                                                        let item_resp = ui.selectable_label(
+                                                                            is_active,
+                                                                            egui::RichText::new(&name).size(theme::FONT_UI_SM),
+                                                                        );
+                                                                        if item_resp.clicked() {
+                                                                            new_tab = Some(RightTab::Markdown(path.clone()));
+                                                                        }
+                                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                                            if ui.add(
+                                                                                egui::Button::new(
+                                                                                    egui::RichText::new("×").size(theme::FONT_UI_SM).color(t.overlay1),
+                                                                                ).frame(false),
+                                                                            ).on_hover_text("Close").clicked() {
+                                                                                close_tab = Some(path.clone());
+                                                                            }
+                                                                        });
+                                                                    });
+                                                                }
+                                                                ui.separator();
+                                                                if ui.selectable_label(
+                                                                    false,
+                                                                    egui::RichText::new(format!("Close All ({})", md_count))
+                                                                        .size(theme::FONT_UI_SM)
+                                                                        .color(t.error),
+                                                                ).clicked() {
+                                                                    close_all_md = true;
+                                                                }
+                                                            },
+                                                        );
+                                                    }
                                                 }
                                             }
                                         });
@@ -1977,6 +2031,10 @@ impl App {
                                                     load_tx: &self.subdir_load_tx,
                                                     ctx: ctx.clone(),
                                                 };
+                                                let mut reveal = RevealState {
+                                                    path: self.reveal_file_path.take(),
+                                                    highlight: self.reveal_highlight.take(),
+                                                };
                                                 render_dir_tree(
                                                     ui,
                                                     &dir_entries,
@@ -1984,7 +2042,10 @@ impl App {
                                                     &mut open_terminal_at,
                                                     &mut cache,
                                                     &mut self.drag_state,
+                                                    &mut reveal,
                                                 );
+                                                self.reveal_file_path = reveal.path;
+                                                self.reveal_highlight = reveal.highlight;
                                             }
                                         } else {
                                             ui.label(
@@ -2271,6 +2332,23 @@ impl App {
             }
             self.terminal_md_content.remove(&path);
             if self.right_tab == RightTab::Markdown(path) {
+                // Switch to next remaining MD tab, or fall back to Directory
+                let next_md = self
+                    .shown_md_tabs
+                    .get(&self.active_group)
+                    .and_then(|tabs| tabs.iter().next().cloned());
+                self.right_tab = next_md
+                    .map(RightTab::Markdown)
+                    .unwrap_or(RightTab::Directory);
+            }
+        }
+        if close_all_md {
+            if let Some(ws_tabs) = self.shown_md_tabs.get_mut(&self.active_group) {
+                for path in ws_tabs.drain() {
+                    self.terminal_md_content.remove(&path);
+                }
+            }
+            if matches!(self.right_tab, RightTab::Markdown(_)) {
                 self.right_tab = RightTab::Directory;
             }
         }
@@ -2748,9 +2826,10 @@ impl App {
                         ui.painter().rect_filled(bar_rect, theme::R_MD, t.surface0);
                         ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
 
+                        let controls_w = 110.0_f32;
                         let input_rect = egui::Rect::from_min_max(
                             egui::pos2(bar_rect.min.x + 6.0, bar_rect.min.y + 4.0),
-                            egui::pos2(bar_rect.max.x - 90.0, bar_rect.max.y - 4.0),
+                            egui::pos2(bar_rect.max.x - controls_w, bar_rect.max.y - 4.0),
                         );
                         let resp = ui.put(
                             input_rect,
@@ -2764,10 +2843,46 @@ impl App {
                         }
                         resp.request_focus();
 
-                        let navigated = if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
+                        let controls_x = bar_rect.max.x - controls_w;
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(controls_x, bar_rect.min.y + theme::SP_2),
+                                egui::pos2(controls_x, bar_rect.max.y - theme::SP_2),
+                            ],
+                            egui::Stroke::new(theme::STROKE_THIN, t.border_subtle),
+                        );
+
+                        let btn_size = 18.0_f32;
+                        let btn_y = bar_rect.center().y - btn_size / 2.0;
+                        let prev_rect = egui::Rect::from_min_size(
+                            egui::pos2(controls_x + 4.0, btn_y),
+                            egui::vec2(btn_size, btn_size),
+                        );
+                        let next_rect = egui::Rect::from_min_size(
+                            egui::pos2(prev_rect.max.x + 2.0, btn_y),
+                            egui::vec2(btn_size, btn_size),
+                        );
+                        let bar_id = ui.id().with("term_search_bar");
+                        let prev_clicked = crate::ui_kit::icon_button(
+                            ui, bar_id.with("prev"), prev_rect, "\u{25B2}",
+                            theme::FONT_UI_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
+                        ).clicked();
+                        let next_clicked = crate::ui_kit::icon_button(
+                            ui, bar_id.with("next"), next_rect, "\u{25BC}",
+                            theme::FONT_UI_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
+                        ).clicked();
+
+                        let kb_prev = ui.input(|i| {
+                            (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::F3)) && i.modifiers.shift
+                        });
+                        let kb_next = ui.input(|i| {
+                            (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::F3)) && !i.modifiers.shift
+                        });
+
+                        let navigated = if prev_clicked || kb_prev {
                             self.term_search.prev_match();
                             true
-                        } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        } else if next_clicked || kb_next {
                             self.term_search.next_match();
                             true
                         } else {
@@ -2794,8 +2909,9 @@ impl App {
                         } else {
                             format!("{}/{}", self.term_search.current_index.unwrap_or(0) + 1, self.term_search.matches.len())
                         };
+                        let count_center_x = next_rect.max.x + (bar_rect.max.x - next_rect.max.x) / 2.0;
                         ui.painter().text(
-                            egui::pos2(bar_rect.max.x - 48.0, bar_rect.center().y),
+                            egui::pos2(count_center_x, bar_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             &count_text,
                             egui::FontId::monospace(theme::FONT_UI_SM),
@@ -2816,7 +2932,7 @@ impl App {
                 || self.show_settings
                 || self.show_shortcut_help
                 || self.show_quick_switcher
-                || self.show_command_palette
+                || self.palette_open
                 || self.open_folder_dialog.is_some()
                 || self.show_close_all_confirm
                 || self.show_commit_dialog
@@ -2850,6 +2966,8 @@ impl App {
                         Some(AppAction::SearchAllSessions)
                     } else if i.consume_key(cs, egui::Key::R) {
                         Some(AppAction::ReopenClosedSession)
+                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::P) {
+                        Some(AppAction::OpenFileFinder)
                     } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
                         Some(AppAction::SearchTerminal)
                     } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
@@ -2879,10 +2997,19 @@ impl App {
                         self.show_settings = !self.show_settings;
                     }
                     Some(AppAction::CommandPalette) => {
-                        self.show_command_palette = !self.show_command_palette;
-                        if !self.show_command_palette {
-                            self.command_palette_query.clear();
-                            self.command_palette_selected = 0;
+                        self.palette_open = !self.palette_open;
+                        if self.palette_open {
+                            self.palette_query = ">".to_string();
+                        } else {
+                            self.palette_query.clear();
+                            self.palette_selected = 0;
+                        }
+                    }
+                    Some(AppAction::OpenFileFinder) => {
+                        self.palette_open = !self.palette_open;
+                        if !self.palette_open {
+                            self.palette_query.clear();
+                            self.palette_selected = 0;
                         }
                     }
                     Some(AppAction::FocusSessionSearch) => {
@@ -3100,6 +3227,13 @@ impl App {
                                             }
                                         }
                                     }
+                                    AppAction::RevealInExplorer => {
+                                        if let Some(path) = self.active_pane_file_path() {
+                                            self.reveal_file_path = Some(path);
+                                            self.show_right_panel = true;
+                                            self.right_tab = RightTab::Directory;
+                                        }
+                                    }
                                     AppAction::RightTabDirectory => {
                                         self.show_right_panel = true;
                                         self.right_tab = RightTab::Directory;
@@ -3288,8 +3422,9 @@ impl App {
                             let hovered_sid = self.active_term_geo.as_ref().and_then(|g| g.session_id);
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                    // Shift bypasses mouse reporting for native text selection
-                                    let (has_mouse, sgr) = if modifiers.shift {
+                                    // Shift bypasses mouse reporting for native text selection;
+                                    // Ctrl bypasses it for URL/path click-to-open
+                                    let (has_mouse, sgr) = if modifiers.shift || modifiers.ctrl {
                                         (false, false)
                                     } else {
                                         let s = self.session_state.sessions[idx].session.read();
@@ -3430,6 +3565,21 @@ impl App {
                                 self.term_selection = None;
                                 self.term_selection_sid = None;
                             } else if let Some(geo) = &self.active_term_geo {
+                                // Auto-scroll when dragging past terminal edges
+                                if let Some(sid) = self.term_selection_sid {
+                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
+                                        let cell_h = geo.cell_h.max(1.0);
+                                        if pos.y < geo.rect.min.y {
+                                            let overshoot = (geo.rect.min.y - pos.y) / cell_h;
+                                            let scroll_lines = (overshoot.ceil() as i32).max(1);
+                                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_lines));
+                                        } else if pos.y > geo.rect.max.y {
+                                            let overshoot = (pos.y - geo.rect.max.y) / cell_h;
+                                            let scroll_lines = (overshoot.ceil() as i32).max(1);
+                                            self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Delta(-scroll_lines));
+                                        }
+                                    }
+                                }
                                 let clamped = egui::pos2(
                                     pos.x.clamp(geo.rect.min.x, geo.rect.max.x - 1.0),
                                     pos.y.clamp(geo.rect.min.y, geo.rect.max.y - 1.0),
@@ -3506,13 +3656,30 @@ impl App {
                                         };
                                         if has_mouse {
                                             // App has mouse mode — forward scroll to PTY
+                                            // Send proportional events (one per line) like native terminals
                                             if let Some(pos) = mouse_pos {
                                                 if let Some(geo) = &self.active_term_geo {
                                                     if let Some((col, row)) = geo.to_cell(pos) {
-                                                        // Button 64 = scroll up, 65 = scroll down
-                                                        let btn = if delta.y > 0.0 { 64u8 } else { 65 };
-                                                        let bytes = mouse_event_bytes(btn, col, row, true, sgr);
-                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
+                                                        let cell_h = geo.cell_h.max(1.0);
+                                                        let visible_rows = (geo.rect.height() / cell_h).max(1.0);
+                                                        let multiplier = self.settings.scroll_lines.max(1) as f32;
+                                                        let delta_lines = match unit {
+                                                            egui::MouseWheelUnit::Point => delta.y / cell_h * multiplier,
+                                                            egui::MouseWheelUnit::Line  => delta.y * multiplier,
+                                                            egui::MouseWheelUnit::Page  => delta.y * visible_rows,
+                                                        };
+                                                        let accum = self.scroll_accum.entry(sid).or_insert(0.0);
+                                                        *accum += delta_lines;
+                                                        let count = (accum.abs() as usize).min(255);
+                                                        if count > 0 {
+                                                            let btn = if *accum > 0.0 { 64u8 } else { 65 };
+                                                            let direction = if *accum > 0.0 { 1.0f32 } else { -1.0 };
+                                                            *accum -= direction * count as f32;
+                                                            for _ in 0..count {
+                                                                let bytes = mouse_event_bytes(btn, col, row, true, sgr);
+                                                                let _ = self.session_state.sessions[idx].pty_tx.try_send(bytes.to_vec());
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3545,9 +3712,6 @@ impl App {
                                                     -(lines as i32)
                                                 };
                                                 self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Delta(scroll_delta));
-                                                self.term_selection = None;
-                                                self.term_selection_sid = None;
-                                                self.term_selecting = false;
                                             }
                                         }
                                     }
@@ -4734,7 +4898,7 @@ impl App {
         self.render_settings_overlay(ctx);
 
         self.render_quick_switcher(ctx);
-        self.render_command_palette(ctx);
+        self.render_palette(ctx);
         self.render_closed_sessions_picker(ctx);
 
         self.render_workspace_save_dialog(ctx);

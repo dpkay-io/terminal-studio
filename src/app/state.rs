@@ -201,9 +201,12 @@ impl App {
             quick_switcher_query: String::new(),
             quick_switcher_selected_ws: None,
             quick_switcher_search_active: false,
-            show_command_palette: false,
-            command_palette_query: String::new(),
-            command_palette_selected: 0,
+            palette_open: false,
+            palette_query: String::new(),
+            palette_selected: 0,
+            recent_files: crate::app::persistence::load_recent_files(),
+            palette_debouncer: crate::app::ui::debounce::Debouncer::new(std::time::Duration::from_millis(150)),
+            pending_palette_open_file: None,
             show_closed_sessions: false,
             closed_sessions_query: String::new(),
             closed_sessions_selected: 0,
@@ -279,6 +282,8 @@ impl App {
             tab_rename_pane_id: None,
             tab_rename_text: String::new(),
             tab_scroll_to_pane: None,
+            reveal_file_path: None,
+            reveal_highlight: None,
             deferred_open_workspace: None,
             show_close_all_confirm: false,
             close_all_frames_open: 0,
@@ -540,6 +545,19 @@ impl App {
             }
             PaneContent::NoteEditor(ne) => self.workspace_path(ne.workspace_id),
             PaneContent::ConflictResolver(cr) => cr.path.parent().map(|p| p.to_path_buf()),
+        }
+    }
+
+    pub(super) fn active_pane_file_path(&self) -> Option<PathBuf> {
+        let pane = self
+            .pane_state
+            .active_pane_id
+            .and_then(|id| self.pane_state.find(id))?;
+        match &pane.content {
+            PaneContent::FileEditor(ed) => Some(ed.path.clone()),
+            PaneContent::FileDiff(d) => Some(d.path.clone()),
+            PaneContent::ConflictResolver(cr) => Some(cr.path.clone()),
+            _ => None,
         }
     }
 
@@ -816,9 +834,22 @@ impl App {
         let now = crate::util::now_millis();
         if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pid) {
             pane.last_active_at = now;
-            if let PaneContent::Terminal(sid) = pane.content {
-                self.session_state.active_id = Some(sid);
-                self.update_is_active_flags();
+            match &pane.content {
+                PaneContent::Terminal(sid) => {
+                    let sid = *sid;
+                    self.session_state.active_id = Some(sid);
+                    self.update_is_active_flags();
+                }
+                PaneContent::FileEditor(ed) => {
+                    self.reveal_file_path = Some(ed.path.clone());
+                }
+                PaneContent::FileDiff(d) => {
+                    self.reveal_file_path = Some(d.path.clone());
+                }
+                PaneContent::ConflictResolver(cr) => {
+                    self.reveal_file_path = Some(cr.path.clone());
+                }
+                _ => {}
             }
         }
     }
