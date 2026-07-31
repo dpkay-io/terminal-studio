@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::Duration;
@@ -197,6 +197,7 @@ pub(super) struct GitWorker {
     results: Arc<Mutex<WorkerResults>>,
     git_inflight: Arc<Mutex<HashSet<PathBuf>>>,
     manual_git_inflight: Arc<Mutex<HashSet<PathBuf>>>,
+    stage_ops_inflight: Arc<AtomicUsize>,
     alive: Arc<AtomicBool>,
     ctx: egui::Context,
 }
@@ -219,11 +220,13 @@ impl GitWorker {
         let git_inflight: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
         let manual_git_inflight: Arc<Mutex<HashSet<PathBuf>>> =
             Arc::new(Mutex::new(HashSet::new()));
+        let stage_ops_inflight = Arc::new(AtomicUsize::new(0));
         let alive = Arc::new(AtomicBool::new(true));
 
         let results_bg = Arc::clone(&results);
         let git_inflight_bg = Arc::clone(&git_inflight);
         let manual_git_inflight_bg = Arc::clone(&manual_git_inflight);
+        let stage_ops_bg = Arc::clone(&stage_ops_inflight);
         let alive_bg = Arc::clone(&alive);
         let ctx_bg = ctx.clone();
 
@@ -262,6 +265,7 @@ impl GitWorker {
                                         .git
                                         .insert(cwd.clone(), (diff, status, merge_op));
                                 }
+                                stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
                             Job::Unstage { cwd, path } => {
                                 if super::git_cmd::git_status_ok(
@@ -275,6 +279,7 @@ impl GitWorker {
                                         .git
                                         .insert(cwd.clone(), (diff, status, merge_op));
                                 }
+                                stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
                             Job::StageAll(cwd) => {
                                 if super::git_cmd::git_status_ok(&["add", "-A"], &cwd) {
@@ -285,6 +290,7 @@ impl GitWorker {
                                         .git
                                         .insert(cwd.clone(), (diff, status, merge_op));
                                 }
+                                stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
                             Job::UnstageAll(cwd) => {
                                 if super::git_cmd::git_status_ok(&["reset", "HEAD"], &cwd) {
@@ -295,6 +301,7 @@ impl GitWorker {
                                         .git
                                         .insert(cwd.clone(), (diff, status, merge_op));
                                 }
+                                stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
                             Job::Diff { cwd, rel_path } => {
                                 let old_content = super::git_cmd::git_output(
@@ -628,6 +635,7 @@ impl GitWorker {
             results,
             git_inflight,
             manual_git_inflight,
+            stage_ops_inflight,
             alive,
             ctx,
         }
@@ -660,6 +668,7 @@ impl GitWorker {
     }
 
     pub(super) fn enqueue_stage(&self, cwd: &Path, path: String) {
+        self.stage_ops_inflight.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(Job::Stage {
             cwd: cwd.to_path_buf(),
             path,
@@ -667,6 +676,7 @@ impl GitWorker {
     }
 
     pub(super) fn enqueue_unstage(&self, cwd: &Path, path: String) {
+        self.stage_ops_inflight.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(Job::Unstage {
             cwd: cwd.to_path_buf(),
             path,
@@ -674,11 +684,17 @@ impl GitWorker {
     }
 
     pub(super) fn enqueue_stage_all(&self, cwd: &Path) {
+        self.stage_ops_inflight.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(Job::StageAll(cwd.to_path_buf()));
     }
 
     pub(super) fn enqueue_unstage_all(&self, cwd: &Path) {
+        self.stage_ops_inflight.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(Job::UnstageAll(cwd.to_path_buf()));
+    }
+
+    pub(super) fn has_stage_ops_inflight(&self) -> bool {
+        self.stage_ops_inflight.load(Ordering::Acquire) > 0
     }
 
     pub(super) fn enqueue_diff(&self, cwd: &Path, rel_path: String) {

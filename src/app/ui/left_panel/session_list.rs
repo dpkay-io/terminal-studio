@@ -429,6 +429,7 @@ impl App {
                 },
             );
         }
+        self.ensure_active_pane_visible();
     }
 
     fn render_label_filter_dropdown(&mut self, ui: &mut egui::Ui, width: f32) {
@@ -543,6 +544,7 @@ impl App {
                 },
             );
         }
+        self.ensure_active_pane_visible();
     }
 
     /// Render the global search results list with keyboard navigation.

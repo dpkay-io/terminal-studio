@@ -165,22 +165,58 @@ fn render_terminal_leaf(
     }
 }
 
-/// Render the floating text-search bar for non-terminal panes.
-/// Returns the 0-based line number of the current match (if any) so callers
-/// can scroll to it.
+fn paint_search_highlights(
+    painter: &egui::Painter,
+    text_origin: egui::Pos2,
+    line_h: f32,
+    char_w: f32,
+    matches: &[(usize, usize, usize)],
+    current_idx: Option<usize>,
+    clip: egui::Rect,
+) {
+    for (i, &(line, col_start, col_end)) in matches.iter().enumerate() {
+        let y = text_origin.y + line as f32 * line_h;
+        if y + line_h < clip.min.y || y > clip.max.y {
+            continue;
+        }
+        let x0 = text_origin.x + col_start as f32 * char_w;
+        let x1 = text_origin.x + col_end as f32 * char_w;
+        let color = if Some(i) == current_idx {
+            egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 255, 0, 50)
+        };
+        painter.rect_filled(
+            egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + line_h)),
+            0.0,
+            color,
+        );
+    }
+}
+
+#[allow(dead_code)]
+struct TextSearchBarResult {
+    navigated: bool,
+    current_line: Option<usize>,
+}
+
 fn render_text_search_bar(
     ui: &mut egui::Ui,
     pane_rect: egui::Rect,
     content: &str,
     search: &mut crate::search::TextSearchState,
-) -> Option<usize> {
+) -> TextSearchBarResult {
+    let none = TextSearchBarResult {
+        navigated: false,
+        current_line: None,
+    };
     if !search.active {
-        return None;
+        return none;
     }
     let t = theme::active();
     let bar_w = 320.0_f32.min(pane_rect.width() - 24.0).max(120.0);
     if pane_rect.width() < 148.0 {
-        return None;
+        return none;
     }
     let bar_h = 30.0_f32;
     let bar_rect = egui::Rect::from_min_size(
@@ -191,9 +227,10 @@ fn render_text_search_bar(
     ui.painter()
         .rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
 
+    let controls_w = 110.0_f32;
     let input_rect = egui::Rect::from_min_max(
         egui::pos2(bar_rect.min.x + 6.0, bar_rect.min.y + 4.0),
-        egui::pos2(bar_rect.max.x - 90.0, bar_rect.max.y - 4.0),
+        egui::pos2(bar_rect.max.x - controls_w, bar_rect.max.y - 4.0),
     );
     let resp = ui.put(
         input_rect,
@@ -207,13 +244,7 @@ fn render_text_search_bar(
     }
     resp.request_focus();
 
-    if ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.shift) {
-        search.prev_match();
-    } else if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        search.next_match();
-    }
-
-    let controls_x = bar_rect.max.x - 90.0;
+    let controls_x = bar_rect.max.x - controls_w;
     ui.painter().line_segment(
         [
             egui::pos2(controls_x, bar_rect.min.y + theme::SP_2),
@@ -221,6 +252,54 @@ fn render_text_search_bar(
         ],
         egui::Stroke::new(theme::STROKE_THIN, t.border_subtle),
     );
+
+    let btn_size = 18.0_f32;
+    let btn_y = bar_rect.center().y - btn_size / 2.0;
+    let prev_rect = egui::Rect::from_min_size(
+        egui::pos2(controls_x + 4.0, btn_y),
+        egui::vec2(btn_size, btn_size),
+    );
+    let next_rect = egui::Rect::from_min_size(
+        egui::pos2(prev_rect.max.x + 2.0, btn_y),
+        egui::vec2(btn_size, btn_size),
+    );
+    let bar_id = ui.id().with("text_search_bar");
+    let prev_clicked = crate::ui_kit::icon_button(
+        ui,
+        bar_id.with("prev"),
+        prev_rect,
+        "\u{25B2}",
+        theme::FONT_UI_XS,
+        t.subtext0,
+        crate::ui_kit::IconButtonStyle::Default,
+    )
+    .clicked();
+    let next_clicked = crate::ui_kit::icon_button(
+        ui,
+        bar_id.with("next"),
+        next_rect,
+        "\u{25BC}",
+        theme::FONT_UI_XS,
+        t.subtext0,
+        crate::ui_kit::IconButtonStyle::Default,
+    )
+    .clicked();
+
+    let kb_prev = ui.input(|i| {
+        (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::F3)) && i.modifiers.shift
+    });
+    let kb_next = ui.input(|i| {
+        (i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::F3)) && !i.modifiers.shift
+    });
+
+    let mut navigated = false;
+    if prev_clicked || kb_prev {
+        search.prev_match();
+        navigated = true;
+    } else if next_clicked || kb_next {
+        search.next_match();
+        navigated = true;
+    }
 
     let count_text = if search.matches.is_empty() {
         if search.query.is_empty() {
@@ -235,15 +314,19 @@ fn render_text_search_bar(
             search.matches.len()
         )
     };
+    let count_center_x = next_rect.max.x + (bar_rect.max.x - next_rect.max.x) / 2.0;
     ui.painter().text(
-        egui::pos2(bar_rect.max.x - 48.0, bar_rect.center().y),
+        egui::pos2(count_center_x, bar_rect.center().y),
         egui::Align2::CENTER_CENTER,
         &count_text,
         egui::FontId::monospace(theme::FONT_UI_SM),
         t.subtext0,
     );
 
-    search.current_match().map(|m| m.line)
+    TextSearchBarResult {
+        navigated: navigated || resp.changed(),
+        current_line: search.current_match().map(|m| m.line),
+    }
 }
 
 fn render_file_editor_leaf(
@@ -323,11 +406,22 @@ fn render_file_editor_leaf(
         }
 
         let is_focused = rctx.focused_pane_id == Some(pane_id);
+        let search_active = is_focused && rctx.text_search.active;
         let scroll_target = if is_focused {
             rctx.text_search.current_match().map(|m| m.line)
         } else {
             None
         };
+        let search_highlights: Vec<(usize, usize, usize)> = if search_active {
+            rctx.text_search
+                .matches
+                .iter()
+                .map(|m| (m.line, m.col_start, m.col_end))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let search_current_idx = rctx.text_search.current_index;
 
         if previewing {
             if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
@@ -405,7 +499,7 @@ fn render_file_editor_leaf(
                                 .rect_filled(sep_rect, 0.0, theme::active().surface1);
                             ui.add_space(theme::SP_2);
 
-                            if let Some(syn) = maybe_syntax {
+                            let te_resp = if let Some(syn) = maybe_syntax {
                                 let cache_id = egui::Id::new(("syn_galley_cache", pane_id));
                                 let mut layouter = |ui: &egui::Ui, s: &str, wrap_width: f32| {
                                     let hash = text_fingerprint(s);
@@ -437,13 +531,32 @@ fn render_file_editor_leaf(
                                         .desired_width(f32::INFINITY)
                                         .frame(false)
                                         .layouter(&mut layouter),
-                                );
+                                )
                             } else {
                                 ui.add(
                                     egui::TextEdit::multiline(text)
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
                                         .frame(false),
+                                )
+                            };
+
+                            if !search_highlights.is_empty() {
+                                let mono_id =
+                                    ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+                                let cw = ui.fonts(|f| {
+                                    f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
+                                        .rect
+                                        .width()
+                                });
+                                paint_search_highlights(
+                                    ui.painter(),
+                                    te_resp.rect.min,
+                                    line_h,
+                                    cw,
+                                    &search_highlights,
+                                    search_current_idx,
+                                    ui.clip_rect(),
                                 );
                             }
 
@@ -501,15 +614,26 @@ fn render_note_editor_leaf(
     ui.separator();
 
     let is_focused = rctx.focused_pane_id == Some(pane_id);
+    let search_active = is_focused && rctx.text_search.active;
     let scroll_target = if is_focused {
         rctx.text_search.current_match().map(|m| m.line)
     } else {
         None
     };
+    let search_highlights: Vec<(usize, usize, usize)> = if search_active {
+        rctx.text_search
+            .matches
+            .iter()
+            .map(|m| (m.line, m.col_start, m.col_end))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let search_current_idx = rctx.text_search.current_index;
 
     if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
         if let Some(ref mut text) = et.1 {
-            let content_snapshot = if is_focused && rctx.text_search.active {
+            let content_snapshot = if search_active {
                 Some(text.clone())
             } else {
                 None
@@ -520,13 +644,30 @@ fn render_note_editor_leaf(
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
-                    ui.add(
+                    let te_resp = ui.add(
                         egui::TextEdit::multiline(text)
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
                             .hint_text("Notes for this workspace\u{2026}")
                             .frame(false),
                     );
+                    if !search_highlights.is_empty() {
+                        let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+                        let cw = ui.fonts(|f| {
+                            f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
+                                .rect
+                                .width()
+                        });
+                        paint_search_highlights(
+                            ui.painter(),
+                            te_resp.rect.min,
+                            line_h,
+                            cw,
+                            &search_highlights,
+                            search_current_idx,
+                            ui.clip_rect(),
+                        );
+                    }
                     if let Some(target_line) = scroll_target {
                         let target_y = target_line as f32 * line_h;
                         let scroll_rect = egui::Rect::from_min_size(
@@ -756,6 +897,30 @@ fn render_leaf_content(
     }
 }
 
+fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
+    if !app.has_active_tab_filter() {
+        return true;
+    }
+    match node {
+        GroupNode::Leaf { group_id } => {
+            let Some(group) = app.pane_state.groups.get(group_id) else {
+                return false;
+            };
+            group.pane_ids.iter().any(|&pid| {
+                app.pane_state
+                    .panes
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .map(|p| app.pane_passes_tab_filter(p))
+                    .unwrap_or(false)
+            })
+        }
+        GroupNode::Split { a, b, .. } => {
+            node_has_visible_panes(app, a) || node_has_visible_panes(app, b)
+        }
+    }
+}
+
 /// Recursively render the group layout tree.
 #[allow(clippy::too_many_arguments)]
 fn render_group_node(
@@ -832,6 +997,33 @@ fn render_group_node(
                 tab_bar_rect,
             );
             group_tab_results.push(tab_result);
+
+            // If active pane is filtered out, show empty state
+            let active_filtered_out = if let Some(pid) = group.active_pane_id {
+                !app.pane_state
+                    .panes
+                    .iter()
+                    .find(|p| p.id == pid)
+                    .map(|p| app.pane_passes_tab_filter(p))
+                    .unwrap_or(true)
+            } else {
+                false
+            };
+
+            if active_filtered_out {
+                let t = theme::active();
+                leaf_ui.painter().rect_filled(content_rect, 0.0, t.bg_term);
+                leaf_ui.allocate_ui_at_rect(content_rect, |ui| {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new("No sessions match the current filter")
+                                .color(t.overlay0)
+                                .size(theme::FONT_UI_MD),
+                        );
+                    });
+                });
+                return;
+            }
 
             // Render the active pane's content
             let active_pid = group.active_pane_id;
@@ -953,6 +1145,54 @@ fn render_group_node(
             a,
             b,
         } => {
+            // Collapse filtered-out sides
+            let a_visible = node_has_visible_panes(app, a);
+            let b_visible = node_has_visible_panes(app, b);
+
+            if !a_visible && !b_visible {
+                ui.painter().rect_filled(rect, 0.0, theme::active().bg_term);
+                return;
+            }
+
+            if !a_visible {
+                render_group_node(
+                    app,
+                    ui,
+                    b,
+                    rect,
+                    editor_texts,
+                    clicked_pane_id,
+                    clicked_group_id,
+                    editor_saves,
+                    editor_preview_toggles,
+                    pane_widths_snap,
+                    split_ratio_changes,
+                    pane_context_actions,
+                    group_tab_results,
+                );
+                return;
+            }
+
+            if !b_visible {
+                render_group_node(
+                    app,
+                    ui,
+                    a,
+                    rect,
+                    editor_texts,
+                    clicked_pane_id,
+                    clicked_group_id,
+                    editor_saves,
+                    editor_preview_toggles,
+                    pane_widths_snap,
+                    split_ratio_changes,
+                    pane_context_actions,
+                    group_tab_results,
+                );
+                return;
+            }
+
+            // Both visible — normal split rendering
             let (rect_a, div_rect, rect_b) = split_rect(rect, *dir, *ratio);
             render_group_node(
                 app,

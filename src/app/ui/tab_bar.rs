@@ -87,7 +87,12 @@ impl App {
                                 });
                             let ws_color = ws_colors[i];
 
-                            let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
+                            let tab_w = if is_active {
+                                theme::TAB_W_ACTIVE
+                            } else {
+                                theme::TAB_W
+                            };
+                            let (_, tab_rect) = ui.allocate_space(egui::vec2(tab_w, tab_h));
 
                             if self.tab_scroll_to_pane == Some(pane_id) {
                                 ui.scroll_to_rect(tab_rect, Some(egui::Align::Center));
@@ -399,18 +404,18 @@ impl App {
                                 || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
                                 close_pane_id = Some(pane_id);
-                            } else if tab_resp.double_clicked() && !is_renaming {
-                                self.tab_rename_pane_id = Some(pane_id);
-                                self.tab_rename_text = display.clone();
-                                clicked_pane_id = Some(pane_id);
                             } else if tab_resp.clicked() {
-                                clicked_pane_id = Some(pane_id);
-                                // Clear badge when tab is clicked
-                                if let PaneContent::Terminal(sid) =
-                                    &self.pane_state.panes[i].content
-                                {
-                                    self.completed_badges.remove(sid);
+                                if is_active && !is_renaming {
+                                    self.tab_rename_pane_id = Some(pane_id);
+                                    self.tab_rename_text = display.clone();
+                                } else {
+                                    if let PaneContent::Terminal(sid) =
+                                        &self.pane_state.panes[i].content
+                                    {
+                                        self.completed_badges.remove(sid);
+                                    }
                                 }
+                                clicked_pane_id = Some(pane_id);
                             }
 
                             // Tab drag-to-reorder
@@ -460,11 +465,26 @@ impl App {
 
                             // Right-click context menu for tab operations.
                             let can_move_to_split = visible_indices.len() >= 2;
+                            let ctx_cwd = self.pane_cwd(i);
                             tab_resp.context_menu(|ui| {
                                 if ui.button("Rename tab").clicked() {
                                     self.tab_rename_pane_id = Some(pane_id);
                                     self.tab_rename_text = display.clone();
                                     ui.close_menu();
+                                }
+                                if let Some(cwd) = &ctx_cwd {
+                                    ui.separator();
+                                    if ui.button("Copy path").clicked() {
+                                        if let Ok(mut clip) = arboard::Clipboard::new() {
+                                            let _ =
+                                                clip.set_text(cwd.to_string_lossy().into_owned());
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Open in file explorer").clicked() {
+                                        let _ = open::that(cwd);
+                                        ui.close_menu();
+                                    }
                                 }
                                 ui.separator();
                                 ui.add_enabled_ui(can_move_to_split, |ui| {
@@ -477,6 +497,11 @@ impl App {
                                         ui.close_menu();
                                     }
                                 });
+                                ui.separator();
+                                if ui.button("Close").clicked() {
+                                    close_pane_id = Some(pane_id);
+                                    ui.close_menu();
+                                }
                             });
                         }
                     });
@@ -679,6 +704,9 @@ impl App {
                             .filter_map(|&pane_id| {
                                 let pane_idx =
                                     self.pane_state.panes.iter().position(|p| p.id == pane_id)?;
+                                if !self.pane_passes_tab_filter(&self.pane_state.panes[pane_idx]) {
+                                    return None;
+                                }
                                 Some(TabInfo {
                                     pane_id,
                                     pane_idx,
@@ -699,7 +727,12 @@ impl App {
                             let tooltip = &info.tooltip;
                             let is_active = group.active_pane_id == Some(pane_id);
 
-                            let (_, tab_rect) = ui.allocate_space(egui::vec2(theme::TAB_W, tab_h));
+                            let tab_w = if is_active {
+                                theme::TAB_W_ACTIVE
+                            } else {
+                                theme::TAB_W
+                            };
+                            let (_, tab_rect) = ui.allocate_space(egui::vec2(tab_w, tab_h));
 
                             if self.tab_scroll_to_pane == Some(pane_id) {
                                 ui.scroll_to_rect(tab_rect, Some(egui::Align::Center));
@@ -953,19 +986,19 @@ impl App {
                                 || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
                                 close_pane_id = Some(pane_id);
-                            } else if tab_resp.double_clicked() && !is_renaming {
-                                self.tab_rename_pane_id = Some(pane_id);
-                                self.tab_rename_text = display.clone();
-                                clicked_pane_id = Some(pane_id);
-                                clicked_group_id = Some(group_id);
                             } else if tab_resp.clicked() {
+                                if is_active && !is_renaming {
+                                    self.tab_rename_pane_id = Some(pane_id);
+                                    self.tab_rename_text = display.clone();
+                                } else {
+                                    if let PaneContent::Terminal(sid) =
+                                        &self.pane_state.panes[pane_idx].content
+                                    {
+                                        self.completed_badges.remove(sid);
+                                    }
+                                }
                                 clicked_pane_id = Some(pane_id);
                                 clicked_group_id = Some(group_id);
-                                if let PaneContent::Terminal(sid) =
-                                    &self.pane_state.panes[pane_idx].content
-                                {
-                                    self.completed_badges.remove(sid);
-                                }
                             }
 
                             // Tab drag-to-reorder
@@ -1004,10 +1037,30 @@ impl App {
                             }
 
                             // Right-click context menu
+                            let ctx_cwd = self.pane_cwd(pane_idx);
                             tab_resp.context_menu(|ui| {
                                 if ui.button("Rename tab").clicked() {
                                     self.tab_rename_pane_id = Some(pane_id);
                                     self.tab_rename_text = display.clone();
+                                    ui.close_menu();
+                                }
+                                if let Some(cwd) = &ctx_cwd {
+                                    ui.separator();
+                                    if ui.button("Copy path").clicked() {
+                                        if let Ok(mut clip) = arboard::Clipboard::new() {
+                                            let _ =
+                                                clip.set_text(cwd.to_string_lossy().into_owned());
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Open in file explorer").clicked() {
+                                        let _ = open::that(cwd);
+                                        ui.close_menu();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button("Close").clicked() {
+                                    close_pane_id = Some(pane_id);
                                     ui.close_menu();
                                 }
                             });
@@ -1302,6 +1355,24 @@ impl App {
             PaneContent::ConflictResolver(cr) => {
                 format!("Conflicts: {}", cr.path.to_string_lossy())
             }
+        }
+    }
+
+    /// Directory path for a pane: CWD for terminals, parent dir for file-based panes.
+    fn pane_cwd(&self, pane_index: usize) -> Option<std::path::PathBuf> {
+        match &self.pane_state.panes[pane_index].content {
+            PaneContent::Terminal(sid) => self
+                .session_state
+                .find(*sid)
+                .map(|e| e.session.read().cwd.clone())
+                .filter(|p| !p.as_os_str().is_empty()),
+            PaneContent::DeferredTerminal { cwd, .. } => {
+                cwd.clone().filter(|p| !p.as_os_str().is_empty())
+            }
+            PaneContent::FileEditor(ed) => ed.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::FileDiff(d) => d.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::ConflictResolver(cr) => cr.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::NoteEditor(_) => None,
         }
     }
 

@@ -9,6 +9,14 @@ fn default_panel_ratio() -> f32 {
     0.35
 }
 
+fn default_left_panel_width() -> f32 {
+    crate::theme::LEFT_SIDEBAR_W
+}
+
+fn default_right_panel_width() -> f32 {
+    crate::theme::RIGHT_SIDEBAR_W
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedSession {
     pub(super) cwd: PathBuf,
@@ -111,6 +119,10 @@ pub(super) struct AppSession {
     pub(super) notes_panel_ratio: f32,
     #[serde(default)]
     pub(super) notes_panel_collapsed: bool,
+    #[serde(default = "default_left_panel_width")]
+    pub(super) left_panel_width: f32,
+    #[serde(default = "default_right_panel_width")]
+    pub(super) right_panel_width: f32,
     #[serde(default)]
     pub(super) right_tab: SavedRightTab,
     #[serde(default)]
@@ -365,6 +377,8 @@ mod tests {
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.3,
             notes_panel_collapsed: true,
+            left_panel_width: 200.0,
+            right_panel_width: 250.0,
             right_tab: SavedRightTab::Markdown(PathBuf::from("/docs/README.md")),
             shown_md_tabs: vec![
                 PathBuf::from("/docs/README.md"),
@@ -524,6 +538,8 @@ mod tests {
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
+            left_panel_width: 180.0,
+            right_panel_width: 180.0,
             right_tab: SavedRightTab::Directory,
             shown_md_tabs: vec![],
             group_layout: Some(SavedGroupLayout {

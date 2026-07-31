@@ -192,6 +192,8 @@ impl App {
             label_registry: LabelRegistry::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
+            left_panel_width: theme::LEFT_SIDEBAR_W,
+            right_panel_width: theme::RIGHT_SIDEBAR_W,
             show_left_panel: true,
             show_right_panel: true,
             show_settings: false,
@@ -205,7 +207,9 @@ impl App {
             palette_query: String::new(),
             palette_selected: 0,
             recent_files: crate::app::persistence::load_recent_files(),
-            palette_debouncer: crate::app::ui::debounce::Debouncer::new(std::time::Duration::from_millis(150)),
+            palette_debouncer: crate::app::ui::debounce::Debouncer::new(
+                std::time::Duration::from_millis(150),
+            ),
             pending_palette_open_file: None,
             show_closed_sessions: false,
             closed_sessions_query: String::new(),
@@ -595,6 +599,110 @@ impl App {
         cwd_match.or(pane.workspace_id)
     }
 
+    pub(super) fn pane_matches_tab_filter(
+        pane: &PaneEntry,
+        sessions: &[SessionEntry],
+        ws_store: &WorkspaceStore,
+        ws_filter: Option<Option<u64>>,
+        label_filter: Option<super::labels::LabelId>,
+    ) -> bool {
+        if let Some(ws_filter) = ws_filter {
+            let pane_ws = Self::pane_group(sessions, ws_store, pane);
+            if pane_ws != ws_filter {
+                return false;
+            }
+        }
+        if let Some(label_filter) = label_filter {
+            if !pane.labels.contains(&label_filter) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub(super) fn pane_passes_tab_filter(&self, pane: &PaneEntry) -> bool {
+        Self::pane_matches_tab_filter(
+            pane,
+            &self.session_state.sessions,
+            &self.workspace_store,
+            self.session_workspace_filter,
+            self.session_label_filter,
+        )
+    }
+
+    pub(super) fn has_active_tab_filter(&self) -> bool {
+        self.session_workspace_filter.is_some() || self.session_label_filter.is_some()
+    }
+
+    pub(super) fn ensure_active_pane_visible(&mut self) {
+        if !self.has_active_tab_filter() {
+            return;
+        }
+        let ws_filter = self.session_workspace_filter;
+        let label_filter = self.session_label_filter;
+
+        let group_ids: Vec<crate::editor_group::GroupId> =
+            self.pane_state.groups.keys().copied().collect();
+        for gid in group_ids {
+            let (active_pid, pane_ids) = match self.pane_state.groups.get(&gid) {
+                Some(g) => match g.active_pane_id {
+                    Some(pid) => (pid, g.pane_ids.clone()),
+                    None => continue,
+                },
+                None => continue,
+            };
+
+            let active_passes = self
+                .pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == active_pid)
+                .map(|p| {
+                    Self::pane_matches_tab_filter(
+                        p,
+                        &self.session_state.sessions,
+                        &self.workspace_store,
+                        ws_filter,
+                        label_filter,
+                    )
+                })
+                .unwrap_or(false);
+
+            if active_passes {
+                continue;
+            }
+
+            let first_visible = pane_ids
+                .iter()
+                .find(|&&pid| {
+                    self.pane_state
+                        .panes
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| {
+                            Self::pane_matches_tab_filter(
+                                p,
+                                &self.session_state.sessions,
+                                &self.workspace_store,
+                                ws_filter,
+                                label_filter,
+                            )
+                        })
+                        .unwrap_or(false)
+                })
+                .copied();
+
+            if let Some(new_pid) = first_visible {
+                if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+                    g.activate(new_pid);
+                }
+                if self.pane_state.focused_group_id == gid {
+                    self.pane_state.active_pane_id = Some(new_pid);
+                }
+            }
+        }
+    }
+
     pub(super) fn active_workspace(&self) -> Option<&Workspace> {
         let ws_id = self.active_group?;
         self.workspace_store
@@ -698,6 +806,8 @@ impl App {
             &mut self.notes_panel_collapsed,
             &mut view.notes_panel_collapsed,
         );
+        swap(&mut self.left_panel_width, &mut view.left_panel_width);
+        swap(&mut self.right_panel_width, &mut view.right_panel_width);
         swap(&mut self.show_left_panel, &mut view.show_left_panel);
         swap(&mut self.show_right_panel, &mut view.show_right_panel);
         swap(&mut self.show_settings, &mut view.show_settings);
@@ -751,6 +861,8 @@ impl App {
                 workspace_panel_collapsed: Some(w.view.workspace_panel_collapsed),
                 notes_panel_ratio: Some(w.view.notes_panel_ratio),
                 notes_panel_collapsed: Some(w.view.notes_panel_collapsed),
+                left_panel_width: Some(w.view.left_panel_width),
+                right_panel_width: Some(w.view.right_panel_width),
             })
             .collect();
         if let Ok(text) = serde_json::to_string_pretty(&saved) {
@@ -807,6 +919,12 @@ impl App {
             }
             if let Some(v) = s.notes_panel_collapsed {
                 view.notes_panel_collapsed = v;
+            }
+            if let Some(v) = s.left_panel_width {
+                view.left_panel_width = v.clamp(80.0, 400.0);
+            }
+            if let Some(v) = s.right_panel_width {
+                view.right_panel_width = v.clamp(80.0, 800.0);
             }
             let viewport_id = egui::ViewportId::from_hash_of(("extra_window", s.id.0));
             self.extra_windows.push(ExtraWindow {
@@ -1471,6 +1589,8 @@ impl App {
             workspace_panel_collapsed: self.workspace_panel_collapsed,
             notes_panel_ratio: self.notes_panel_ratio,
             notes_panel_collapsed: self.notes_panel_collapsed,
+            left_panel_width: self.left_panel_width,
+            right_panel_width: self.right_panel_width,
             right_tab,
             shown_md_tabs: self
                 .shown_md_tabs
@@ -1797,6 +1917,16 @@ impl App {
         self.workspace_panel_collapsed = state.workspace_panel_collapsed;
         self.notes_panel_ratio = safe_ratio(state.notes_panel_ratio, 0.35);
         self.notes_panel_collapsed = state.notes_panel_collapsed;
+        self.left_panel_width = if state.left_panel_width.is_finite() {
+            state.left_panel_width.clamp(80.0, 400.0)
+        } else {
+            theme::LEFT_SIDEBAR_W
+        };
+        self.right_panel_width = if state.right_panel_width.is_finite() {
+            state.right_panel_width.clamp(80.0, 800.0)
+        } else {
+            theme::RIGHT_SIDEBAR_W
+        };
 
         self.right_tab = match &state.right_tab {
             SavedRightTab::Directory => RightTab::Directory,
@@ -2389,5 +2519,153 @@ impl App {
                 last_size: (0, 0),
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
+    use super::App;
+    use crate::workspace::WorkspaceStore;
+
+    fn make_pane(id: u32, workspace_id: Option<u64>, labels: Vec<u32>) -> PaneEntry {
+        PaneEntry {
+            id,
+            content: PaneContent::DeferredTerminal {
+                cwd: None,
+                pending_command: None,
+                saved_title: None,
+                scrollback_file: None,
+            },
+            manual_width: None,
+            last_size: (80, 24),
+            labels,
+            last_active_at: 0,
+            workspace_id,
+        }
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_no_filter() {
+        let pane = make_pane(1, Some(42), vec![10]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        assert!(App::pane_matches_tab_filter(
+            &pane, &sessions, &ws, None, None
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_workspace_match() {
+        let pane = make_pane(1, Some(42), vec![]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        // workspace_id=Some(42), filter=Some(Some(42)) → match
+        assert!(App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            Some(Some(42)),
+            None,
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_workspace_mismatch() {
+        let pane = make_pane(1, Some(42), vec![]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        // workspace_id=Some(42), filter=Some(Some(99)) → no match
+        assert!(!App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            Some(Some(99)),
+            None,
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_label_match() {
+        let pane = make_pane(1, None, vec![5, 10]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        assert!(App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            None,
+            Some(10)
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_label_mismatch() {
+        let pane = make_pane(1, None, vec![5, 10]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        assert!(!App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            None,
+            Some(99)
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_both_filters_must_pass() {
+        let pane = make_pane(1, Some(42), vec![10]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        // Both match → pass
+        assert!(App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            Some(Some(42)),
+            Some(10),
+        ));
+        // Workspace matches, label doesn't → fail
+        assert!(!App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            Some(Some(42)),
+            Some(99),
+        ));
+        // Workspace doesn't match, label does → fail
+        assert!(!App::pane_matches_tab_filter(
+            &pane,
+            &sessions,
+            &ws,
+            Some(Some(99)),
+            Some(10),
+        ));
+    }
+
+    #[test]
+    fn pane_passes_tab_filter_other_workspace() {
+        // "Other" = Some(None) matches panes with no workspace
+        let pane_no_ws = make_pane(1, None, vec![]);
+        let pane_with_ws = make_pane(2, Some(42), vec![]);
+        let sessions: Vec<SessionEntry> = vec![];
+        let ws = WorkspaceStore::default();
+        // pane with no workspace → pane_group returns None → matches Some(None)
+        assert!(App::pane_matches_tab_filter(
+            &pane_no_ws,
+            &sessions,
+            &ws,
+            Some(None),
+            None,
+        ));
+        // pane with workspace → pane_group returns Some(42) → doesn't match Some(None)
+        assert!(!App::pane_matches_tab_filter(
+            &pane_with_ws,
+            &sessions,
+            &ws,
+            Some(None),
+            None,
+        ));
     }
 }

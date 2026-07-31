@@ -288,7 +288,11 @@ impl App {
     ) {
         let spawn_with_cwd = if let Some(ref new_shell) = sess_actions.spawn_new_session {
             let cwd = self.active_pane_cwd().or_else(|| {
-                self.active_group.and_then(|gid| {
+                let ws_id = match self.session_workspace_filter {
+                    Some(Some(id)) => Some(id),
+                    _ => self.active_group,
+                };
+                ws_id.and_then(|gid| {
                     self.workspace_store
                         .workspaces
                         .iter()
@@ -331,14 +335,22 @@ impl App {
             {
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
+                let filter_ws = match self.session_workspace_filter {
+                    Some(Some(id)) => Some(id),
+                    _ => self.active_group,
+                };
+                let filter_labels = self
+                    .session_label_filter
+                    .map(|id| vec![id])
+                    .unwrap_or_default();
                 self.pane_state.panes.push(PaneEntry {
                     id: pane_id,
                     content: PaneContent::Terminal(new_id),
                     manual_width: None,
                     last_size: (cols, rows),
-                    labels: vec![],
+                    labels: filter_labels,
                     last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
+                    workspace_id: filter_ws,
                 });
                 self.pane_state.pane_trees.insert(
                     pane_id,
@@ -455,6 +467,14 @@ impl App {
                     .unwrap_or(self.pane_state.panes.len());
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
+                let filter_ws = match self.session_workspace_filter {
+                    Some(Some(id)) => Some(id),
+                    _ => self.active_group,
+                };
+                let filter_labels = self
+                    .session_label_filter
+                    .map(|id| vec![id])
+                    .unwrap_or_default();
                 self.pane_state.panes.insert(
                     insert_at,
                     PaneEntry {
@@ -462,9 +482,9 @@ impl App {
                         content: PaneContent::Terminal(new_id),
                         manual_width: None,
                         last_size: (cols, rows),
-                        labels: vec![],
+                        labels: filter_labels,
                         last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
+                        workspace_id: filter_ws,
                     },
                 );
                 self.pane_state.pane_trees.insert(

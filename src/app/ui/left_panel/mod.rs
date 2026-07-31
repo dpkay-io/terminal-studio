@@ -82,7 +82,7 @@ impl App {
 
         if self.show_left_panel {
             egui::SidePanel::left(self.vp_id("sessions"))
-                .default_width(theme::LEFT_SIDEBAR_W)
+                .default_width(self.left_panel_width)
                 .width_range(80.0..=400.0)
                 .resizable(true)
                 .frame(
@@ -92,6 +92,7 @@ impl App {
                 .show(ctx, |ui| {
                     let panel_rect = ui.max_rect();
                     let panel_w = panel_rect.width();
+                    self.left_panel_width = panel_w;
                     let total_h = panel_rect.height();
 
                     const COLLAPSED_H: f32 = theme::HEADER_H;

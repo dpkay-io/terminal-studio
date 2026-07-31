@@ -157,6 +157,13 @@ pub(super) fn run_git_info(dir: &Path) -> (String, String) {
     (diff, status)
 }
 
+const REVEAL_HIGHLIGHT_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+
+pub(super) struct RevealState {
+    pub(super) path: Option<PathBuf>,
+    pub(super) highlight: Option<(PathBuf, std::time::Instant)>,
+}
+
 pub(super) fn render_dir_tree(
     ui: &mut egui::Ui,
     entries: &[FileEntry],
@@ -164,6 +171,7 @@ pub(super) fn render_dir_tree(
     open_terminal_at: &mut Option<PathBuf>,
     cache: &mut SubdirCache<'_>,
     drag_state: &mut super::drag::DragState,
+    reveal: &mut RevealState,
 ) {
     use crate::theme;
     if entries.is_empty() {
@@ -176,9 +184,37 @@ pub(super) fn render_dir_tree(
         return;
     }
 
+    // Expire stale highlight
+    if let Some((_, t)) = reveal.highlight.as_ref() {
+        if t.elapsed() >= REVEAL_HIGHLIGHT_DURATION {
+            reveal.highlight = None;
+        }
+    }
+
     ui.spacing_mut().item_spacing.y = theme::SP_1;
 
     for entry in entries {
+        let is_reveal_ancestor = reveal
+            .path
+            .as_ref()
+            .map(|rp| rp.starts_with(&entry.path) && *rp != entry.path)
+            .unwrap_or(false);
+        let is_reveal_target = reveal
+            .path
+            .as_ref()
+            .map(|rp| *rp == entry.path)
+            .unwrap_or(false);
+        let highlight_alpha = reveal
+            .highlight
+            .as_ref()
+            .filter(|(p, _)| *p == entry.path)
+            .map(|(_, t)| {
+                let elapsed = t.elapsed().as_secs_f32();
+                let total = REVEAL_HIGHLIGHT_DURATION.as_secs_f32();
+                (1.0 - (elapsed / total)).clamp(0.0, 1.0)
+            });
+        let is_highlighted = is_reveal_target || highlight_alpha.is_some();
+
         if entry.is_dir {
             let id = ui.make_persistent_id(&entry.path);
             let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -186,6 +222,9 @@ pub(super) fn render_dir_tree(
                 id,
                 false,
             );
+            if is_reveal_ancestor && !state.is_open() {
+                state.set_open(true);
+            }
             let chevron = if state.is_open() { "▼" } else { "▶" };
             let resp = ui
                 .add(
@@ -218,6 +257,7 @@ pub(super) fn render_dir_tree(
                     open_terminal_at,
                     cache,
                     drag_state,
+                    reveal,
                 );
             });
         } else {
@@ -227,22 +267,55 @@ pub(super) fn render_dir_tree(
                 .and_then(|e| e.to_str())
                 .unwrap_or("");
             let is_md = ext == "md";
-            let color = if is_md {
+            let base_color = if is_md {
                 theme::active().fg_md_file
             } else {
                 theme::active().fg_other_file
             };
+
+            let text_color = if is_highlighted {
+                theme::active().accent
+            } else {
+                base_color
+            };
+            let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
+                .color(text_color)
+                .size(theme::FONT_UI_MD);
+            if is_highlighted {
+                label = label.strong();
+            }
+
             let resp = ui
                 .add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
-                            .color(color)
-                            .size(theme::FONT_UI_MD),
-                    )
-                    .truncate()
-                    .sense(egui::Sense::click_and_drag()),
+                    egui::Label::new(label)
+                        .truncate()
+                        .sense(egui::Sense::click_and_drag()),
                 )
                 .on_hover_text(&entry.name);
+
+            if is_highlighted {
+                let alpha = highlight_alpha.unwrap_or(1.0);
+                let bg_rect = resp.rect.expand2(egui::vec2(2.0, 1.0));
+                ui.painter().rect_filled(
+                    bg_rect,
+                    crate::theme::R_SM,
+                    theme::active()
+                        .accent
+                        .linear_multiply(theme::BLEND_SUBTLE * alpha),
+                );
+            }
+
+            if is_reveal_target {
+                resp.scroll_to_me(Some(egui::Align::Center));
+                reveal.highlight = Some((entry.path.clone(), std::time::Instant::now()));
+                reveal.path = None;
+                ui.ctx().request_repaint();
+            }
+
+            if highlight_alpha.is_some() {
+                ui.ctx().request_repaint();
+            }
+
             if resp.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }

@@ -104,6 +104,9 @@ pub struct App {
     notes_panel_ratio: f32,
     notes_panel_collapsed: bool,
 
+    left_panel_width: f32,
+    right_panel_width: f32,
+
     show_left_panel: bool,
     show_right_panel: bool,
     show_settings: bool,
@@ -874,7 +877,7 @@ impl eframe::App for App {
 
             let completed = self.workers.git_worker.take_all_git();
             let completed_unpushed = self.workers.git_worker.take_all_unpushed();
-            if !completed.is_empty() {
+            if !completed.is_empty() && !self.workers.git_worker.has_stage_ops_inflight() {
                 self.optimistic_git_overrides.clear();
             }
             // Drain delete results (flash on error)
@@ -1545,13 +1548,14 @@ impl App {
         // ── Right panel ──────────────────────────────────────────────────────
         if self.show_right_panel {
             egui::SidePanel::right(self.vp_id("right_panel"))
-                .default_width(theme::RIGHT_SIDEBAR_W)
+                .default_width(self.right_panel_width)
                 .width_range(80.0..=800.0)
                 .resizable(true)
                 .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
                 .show(ctx, |ui| {
                     let panel_rect = ui.max_rect();
                     let panel_w = panel_rect.width();
+                    self.right_panel_width = panel_w;
                     let total_h = panel_rect.height();
 
                     const DIV_H: f32 = 8.0;
@@ -2237,16 +2241,30 @@ impl App {
                             egui::vec2(ui.available_width(), theme::HEADER_H),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
-                                ui.label(
-                                    egui::RichText::new("Notes")
-                                        .strong()
-                                        .size(theme::FONT_UI_MD),
+                                let notes_label = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new("Notes")
+                                            .strong()
+                                            .size(theme::FONT_UI_MD),
+                                    )
+                                    .sense(egui::Sense::click()),
                                 );
-                                ui.label(
-                                    egui::RichText::new("· autosaved")
-                                        .size(theme::FONT_UI_XS)
-                                        .color(theme::active().fg_muted),
+                                let auto_label = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new("· autosaved")
+                                            .size(theme::FONT_UI_XS)
+                                            .color(theme::active().fg_muted),
+                                    )
+                                    .sense(egui::Sense::click()),
                                 );
+                                if notes_label.clicked() || auto_label.clicked() {
+                                    self.notes_panel_collapsed =
+                                        !self.notes_panel_collapsed;
+                                }
+                                if notes_label.hovered() || auto_label.hovered() {
+                                    ui.ctx()
+                                        .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {

@@ -13,60 +13,83 @@ fn paint_titlebar_title(
     r: egui::Rect,
     session_title: &Option<String>,
     ws_name: &Option<String>,
+    git_branch: &Option<String>,
     bright: egui::Color32,
 ) {
     let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
+    let branch_font = egui::FontId::proportional(theme::FONT_UI_SM);
     let dim = bright.linear_multiply(0.55);
+    let extra_dim = bright.linear_multiply(0.35);
+
+    let branch_text = git_branch
+        .as_ref()
+        .filter(|b| !b.is_empty())
+        .map(|b| format!("  \u{2387} {b}"));
+
+    let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
 
     match (session_title, ws_name) {
         (Some(session), Some(ws)) => {
-            let s_g = ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright));
-            let sep_g =
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".to_string(), title_font.clone(), dim));
-            let ws_g = ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font, dim));
-            let s_w = s_g.size().x;
-            let sep_w = sep_g.size().x;
-            let total = s_w + sep_w + ws_g.size().x;
-            let x = r.center().x - total / 2.0;
-            let y = r.center().y - s_g.size().y / 2.0;
-            clipped.galley(egui::pos2(x, y), s_g, bright);
-            clipped.galley(egui::pos2(x + s_w, y), sep_g, dim);
-            clipped.galley(egui::pos2(x + s_w + sep_w, y), ws_g, dim);
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
+                bright,
+            ));
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
+                dim,
+            ));
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), dim)),
+                dim,
+            ));
+            if let Some(ref bt) = branch_text {
+                segments.push((
+                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
+                    extra_dim,
+                ));
+            }
         }
         (Some(session), None) => {
-            clipped.text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                session,
-                title_font,
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
                 bright,
-            );
+            ));
         }
         (None, Some(ws)) => {
-            let app_g = ui.fonts(|f| {
-                f.layout_no_wrap("Terminal Studio".to_string(), title_font.clone(), dim)
-            });
-            let sep_g =
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".to_string(), title_font.clone(), dim));
-            let ws_g = ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font, bright));
-            let a_w = app_g.size().x;
-            let sep_w = sep_g.size().x;
-            let total = a_w + sep_w + ws_g.size().x;
-            let x = r.center().x - total / 2.0;
-            let y = r.center().y - app_g.size().y / 2.0;
-            clipped.galley(egui::pos2(x, y), app_g, dim);
-            clipped.galley(egui::pos2(x + a_w, y), sep_g, dim);
-            clipped.galley(egui::pos2(x + a_w + sep_w, y), ws_g, bright);
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
+                dim,
+            ));
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
+                dim,
+            ));
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), bright)),
+                bright,
+            ));
+            if let Some(ref bt) = branch_text {
+                segments.push((
+                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
+                    extra_dim,
+                ));
+            }
         }
         (None, None) => {
-            clipped.text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                "Terminal Studio",
-                title_font,
+            segments.push((
+                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
                 dim,
-            );
+            ));
         }
+    }
+
+    let total_w: f32 = segments.iter().map(|(g, _)| g.size().x).sum();
+    let mut x = r.center().x - total_w / 2.0;
+    for (galley, color) in segments {
+        let y = r.center().y - galley.size().y / 2.0;
+        let w = galley.size().x;
+        clipped.galley(egui::pos2(x, y), galley, color);
+        x += w;
     }
 }
 
@@ -593,13 +616,19 @@ impl App {
                         egui::pos2(mac_clip_max_x, r.max.y),
                     );
                     let mac_clipped = painter.with_clip_rect(mac_clip_rect);
-                    let ws_name = self.active_workspace().map(|w| w.name.clone());
+                    let (ws_name, ws_id) = match self.active_workspace() {
+                        Some(w) => (Some(w.name.clone()), Some(w.id)),
+                        None => (None, None),
+                    };
+                    let git_branch = ws_id
+                        .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
                     paint_titlebar_title(
                         ui,
                         &mac_clipped,
                         r,
                         &active_session_title,
                         &ws_name,
+                        &git_branch,
                         tb_fg,
                     );
                 }
@@ -993,8 +1022,21 @@ impl App {
                         egui::pos2(clip_max_x, r.max.y),
                     );
                     let clipped = painter.with_clip_rect(clip_rect);
-                    let ws_name = self.active_workspace().map(|w| w.name.clone());
-                    paint_titlebar_title(ui, &clipped, r, &active_session_title, &ws_name, tb_fg);
+                    let (ws_name, ws_id) = match self.active_workspace() {
+                        Some(w) => (Some(w.name.clone()), Some(w.id)),
+                        None => (None, None),
+                    };
+                    let git_branch = ws_id
+                        .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
+                    paint_titlebar_title(
+                        ui,
+                        &clipped,
+                        r,
+                        &active_session_title,
+                        &ws_name,
+                        &git_branch,
+                        tb_fg,
+                    );
                 }
             });
     }
