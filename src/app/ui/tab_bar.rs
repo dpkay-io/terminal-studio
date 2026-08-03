@@ -204,7 +204,7 @@ impl App {
                                 painter.circle_stroke(
                                     dot_center,
                                     dot_radius + 1.0,
-                                    egui::Stroke::new(1.0, ring_color.gamma_multiply(0.35)),
+                                    egui::Stroke::new(1.0_f32, ring_color.gamma_multiply(0.35)),
                                 );
                                 painter.circle_filled(dot_center, dot_radius, dot_color);
                             }
@@ -307,14 +307,14 @@ impl App {
                                         egui::pos2(icon_x + 2.0, icon_y - half),
                                         egui::pos2(icon_x + 2.0, icon_y + half),
                                     ],
-                                    egui::Stroke::new(1.0, icon_color),
+                                    egui::Stroke::new(1.0_f32, icon_color),
                                 );
                                 painter.line_segment(
                                     [
                                         egui::pos2(icon_x + 5.0, icon_y - half),
                                         egui::pos2(icon_x + 5.0, icon_y + half),
                                     ],
-                                    egui::Stroke::new(1.0, icon_color),
+                                    egui::Stroke::new(1.0_f32, icon_color),
                                 );
                             }
 
@@ -526,8 +526,8 @@ impl App {
             let t = theme::active();
             let mut x = tab_actions_rect.min.x + theme::SP_1;
 
-            let icon_stroke = egui::Stroke::new(1.2, t.subtext1);
-            let icon_hover_stroke = egui::Stroke::new(1.2, t.text);
+            let icon_stroke = egui::Stroke::new(1.2_f32, t.subtext1);
+            let icon_hover_stroke = egui::Stroke::new(1.2_f32, t.text);
             let icon_inset = theme::ICON_INSET;
 
             // Split horizontal (side-by-side)
@@ -827,7 +827,7 @@ impl App {
                                 painter.circle_stroke(
                                     dot_center,
                                     dot_radius + 1.0,
-                                    egui::Stroke::new(1.0, ring_color.gamma_multiply(0.35)),
+                                    egui::Stroke::new(1.0_f32, ring_color.gamma_multiply(0.35)),
                                 );
                                 painter.circle_filled(dot_center, dot_radius, dot_color);
                             }
@@ -1090,8 +1090,8 @@ impl App {
             let icon_sz = egui::vec2(theme::BTN_W, tab_h);
             let mut x = tab_actions_rect.min.x + theme::SP_1;
 
-            let icon_stroke = egui::Stroke::new(1.2, t.subtext1);
-            let icon_hover_stroke = egui::Stroke::new(1.2, t.text);
+            let icon_stroke = egui::Stroke::new(1.2_f32, t.subtext1);
+            let icon_hover_stroke = egui::Stroke::new(1.2_f32, t.text);
             let icon_inset = theme::ICON_INSET;
 
             // Split horizontal (side-by-side)

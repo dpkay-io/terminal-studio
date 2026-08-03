@@ -370,7 +370,7 @@ impl TerminalView {
                                     egui::pos2(rect.min.x + start as f32 * cell_width, uy),
                                     egui::pos2(rect.min.x + col as f32 * cell_width, uy),
                                 ],
-                                egui::Stroke::new(1.0, color),
+                                egui::Stroke::new(1.0_f32, color),
                             );
                             ul_start = if is_ul { Some((col, fg)) } else { None };
                         }
@@ -398,7 +398,7 @@ impl TerminalView {
                                     egui::pos2(rect.min.x + start as f32 * cell_width, sy),
                                     egui::pos2(rect.min.x + col as f32 * cell_width, sy),
                                 ],
-                                egui::Stroke::new(1.0, color),
+                                egui::Stroke::new(1.0_f32, color),
                             );
                             st_start = if is_st { Some((col, fg)) } else { None };
                         }
@@ -452,7 +452,7 @@ impl TerminalView {
                     painter.rect_stroke(
                         cursor_rect,
                         0.0,
-                        egui::Stroke::new(1.5, t.cursor_dim_color),
+                        egui::Stroke::new(1.5_f32, t.cursor_dim_color),
                     );
                 }
             }

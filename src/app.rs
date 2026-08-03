@@ -773,13 +773,7 @@ impl eframe::App for App {
 
         // ── Drain watcher results ──────────────────────────────────────────
         if let Some(ws) = &mut self.watch_state {
-            let (created_md, removed_md, modified_files) = ws.drain_results();
-            for path in created_md {
-                self.shown_md_tabs
-                    .entry(self.active_group)
-                    .or_default()
-                    .insert(path);
-            }
+            let (_created_md, removed_md, modified_files) = ws.drain_results();
             for path in removed_md {
                 for ws_tabs in self.shown_md_tabs.values_mut() {
                     ws_tabs.remove(&path);
@@ -1796,6 +1790,8 @@ impl App {
                                                     );
 
                                                     if is_popup_open {
+                                                        let screen_h = ui.ctx().screen_rect().height();
+                                                        let popup_max_h = (screen_h * 0.5).max(120.0);
                                                         egui::popup::popup_below_widget(
                                                             ui,
                                                             popup_id,
@@ -1803,28 +1799,32 @@ impl App {
                                                             egui::PopupCloseBehavior::CloseOnClickOutside,
                                                             |ui: &mut egui::Ui| {
                                                                 ui.set_min_width(200.0);
-                                                                for path in &md_tabs {
-                                                                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                                                                    let is_active = active_tab == RightTab::Markdown(path.clone());
-                                                                    ui.horizontal(|ui| {
-                                                                        let item_resp = ui.selectable_label(
-                                                                            is_active,
-                                                                            egui::RichText::new(&name).size(theme::FONT_UI_SM),
-                                                                        );
-                                                                        if item_resp.clicked() {
-                                                                            new_tab = Some(RightTab::Markdown(path.clone()));
-                                                                        }
-                                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                                            if ui.add(
-                                                                                egui::Button::new(
-                                                                                    egui::RichText::new("×").size(theme::FONT_UI_SM).color(t.overlay1),
-                                                                                ).frame(false),
-                                                                            ).on_hover_text("Close").clicked() {
-                                                                                close_tab = Some(path.clone());
+                                                                egui::ScrollArea::vertical()
+                                                                    .max_height(popup_max_h)
+                                                                    .show(ui, |ui| {
+                                                                    for path in &md_tabs {
+                                                                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                                                        let is_active = active_tab == RightTab::Markdown(path.clone());
+                                                                        ui.horizontal(|ui| {
+                                                                            let item_resp = ui.selectable_label(
+                                                                                is_active,
+                                                                                egui::RichText::new(&name).size(theme::FONT_UI_SM),
+                                                                            );
+                                                                            if item_resp.clicked() {
+                                                                                new_tab = Some(RightTab::Markdown(path.clone()));
                                                                             }
+                                                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                                                if ui.add(
+                                                                                    egui::Button::new(
+                                                                                        egui::RichText::new("×").size(theme::FONT_UI_SM).color(t.overlay1),
+                                                                                    ).frame(false),
+                                                                                ).on_hover_text("Close").clicked() {
+                                                                                    close_tab = Some(path.clone());
+                                                                                }
+                                                                            });
                                                                         });
-                                                                    });
-                                                                }
+                                                                    }
+                                                                });
                                                                 ui.separator();
                                                                 if ui.selectable_label(
                                                                     false,
@@ -2741,7 +2741,7 @@ impl App {
                                         let sx1 = geo.rect.min.x + det.end_col as f32 * geo.cell_w;
                                         ui.painter().line_segment(
                                             [egui::pos2(sx0, sy), egui::pos2(sx1, sy)],
-                                            egui::Stroke::new(1.5, t.blue),
+                                            egui::Stroke::new(1.5_f32, t.blue),
                                         );
                                     }
                                 }
@@ -2783,7 +2783,7 @@ impl App {
                                         let sx1 = geo.rect.min.x + det.end_col as f32 * geo.cell_w;
                                         ui.painter().line_segment(
                                             [egui::pos2(sx0, sy), egui::pos2(sx1, sy)],
-                                            egui::Stroke::new(1.5, t.green),
+                                            egui::Stroke::new(1.5_f32, t.green),
                                         );
                                     }
                                 }
@@ -2842,7 +2842,7 @@ impl App {
                             egui::vec2(bar_w, bar_h),
                         );
                         ui.painter().rect_filled(bar_rect, theme::R_MD, t.surface0);
-                        ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
+                        ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0));
 
                         let controls_w = 110.0_f32;
                         let input_rect = egui::Rect::from_min_max(

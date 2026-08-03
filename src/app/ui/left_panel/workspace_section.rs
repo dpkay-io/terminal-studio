@@ -311,7 +311,7 @@ impl App {
                     self.drag_state.set_payload(
                         crate::app::drag::DragPayload::Note(data.id),
                         origin,
-                        format!("\u{1f4dd} {}", &data.name),
+                        format!("\u{1f4dd} {}", data.name),
                     );
                 }
             }

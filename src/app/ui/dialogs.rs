@@ -916,7 +916,7 @@ impl App {
                             if ui
                                 .add(
                                     egui::Button::new(egui::RichText::new("Delete").color(t.error))
-                                        .stroke(egui::Stroke::new(1.0, t.error)),
+                                        .stroke(egui::Stroke::new(1.0_f32, t.error)),
                                 )
                                 .clicked()
                             {

@@ -174,7 +174,7 @@ impl DragState {
         };
         painter.add(shadow.as_shape(rect, egui::Rounding::same(theme::R_MD)));
         painter.rect_filled(rect, theme::R_MD, t.surface1);
-        painter.rect_stroke(rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
+        painter.rect_stroke(rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0));
         painter.galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
     }
 }

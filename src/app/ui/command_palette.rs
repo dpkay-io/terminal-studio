@@ -880,7 +880,8 @@ mod tests {
     #[test]
     fn command_mode_detected_by_prefix() {
         assert!(">toggle".starts_with('>'));
-        assert!(!">".is_empty());
+        let prefix = ">";
+        assert!(!prefix.is_empty());
         assert!(!"search query".starts_with('>'));
     }
 

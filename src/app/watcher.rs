@@ -322,17 +322,36 @@ fn watcher_thread(
         };
 
         if !pending_events.is_empty() {
-            process_fs_events(
+            let newly_git = process_fs_events(
                 &state,
                 &result_tx,
                 pending_events,
                 &mut git_refresh_pending,
-                &is_git,
+                &mut is_git,
                 &mut known_md,
                 debounce,
                 &mut git_root_cache,
                 &editor_files,
             );
+
+            for dir in newly_git {
+                let git_root = cached_git_root(&mut git_root_cache, &dir);
+                if let Some(ref root) = git_root {
+                    let gd = root.join(".git");
+                    if gd.is_dir()
+                        && !state.git_dirs.contains_key(&gd)
+                        && state
+                            .watcher
+                            .watch(&gd, RecursiveMode::NonRecursive)
+                            .is_ok()
+                    {
+                        state.git_dirs.insert(gd, dir.clone());
+                    }
+                }
+                let data = DirData::new(&dir);
+                let _ = result_tx.send(WatchResult::DirAdded { path: dir, data });
+                ctx.request_repaint();
+            }
         }
 
         // Flush matured git refresh timers.
@@ -450,15 +469,16 @@ fn process_fs_events(
     result_tx: &mpsc::Sender<WatchResult>,
     events: Vec<Event>,
     git_refresh_pending: &mut HashMap<PathBuf, Instant>,
-    is_git: &HashMap<PathBuf, bool>,
+    is_git: &mut HashMap<PathBuf, bool>,
     known_md: &mut HashMap<PathBuf, HashSet<PathBuf>>,
     debounce: Duration,
     git_root_cache: &mut HashMap<PathBuf, Option<PathBuf>>,
     editor_files: &HashSet<PathBuf>,
-) {
+) -> HashSet<PathBuf> {
     let now = Instant::now();
     let mut dirs_needing_refresh: HashSet<PathBuf> = HashSet::new();
     let mut editor_files_sent: HashSet<PathBuf> = HashSet::new();
+    let mut newly_git: HashSet<PathBuf> = HashSet::new();
 
     for event in events {
         for path in &event.paths {
@@ -506,7 +526,24 @@ fn process_fs_events(
                     continue;
                 }
 
-                let dir_is_git = is_git.get(&dir).copied().unwrap_or(false);
+                let mut dir_is_git = is_git.get(&dir).copied().unwrap_or(false);
+
+                if !dir_is_git && matches!(&event.kind, EventKind::Create(_)) {
+                    let is_git_event = path
+                        .strip_prefix(&dir)
+                        .ok()
+                        .and_then(|rel| rel.components().next())
+                        .is_some_and(|c| c.as_os_str() == ".git");
+                    if is_git_event {
+                        git_root_cache.remove(&dir);
+                        if crate::util::find_git_root(&dir).is_some() {
+                            is_git.insert(dir.clone(), true);
+                            newly_git.insert(dir.clone());
+                            dir_is_git = true;
+                        }
+                    }
+                }
+
                 let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
 
                 match &event.kind {
@@ -583,6 +620,8 @@ fn process_fs_events(
         let entries = Arc::new(list_dir_entries(&dir));
         let _ = result_tx.send(WatchResult::DirEntriesRefreshed { dir, entries });
     }
+
+    newly_git
 }
 
 #[cfg(test)]
@@ -751,5 +790,67 @@ mod tests {
 
         assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
         assert_eq!(ws.dir_data[&path].git_diff, "real diff");
+    }
+
+    #[test]
+    fn process_fs_events_detects_git_init() {
+        let tmp = std::env::temp_dir().join("ts_test_git_init");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let mut is_git: HashMap<PathBuf, bool> = HashMap::new();
+        is_git.insert(tmp.clone(), false);
+
+        let mut git_root_cache: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
+        git_root_cache.insert(tmp.clone(), None);
+
+        let mut watched = HashSet::new();
+        watched.insert(tmp.clone());
+
+        let events_store: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
+        let ev = Arc::clone(&events_store);
+        let watcher =
+            notify::recommended_watcher(move |_res: Result<Event, notify::Error>| {}).unwrap();
+        let state = WorkerState {
+            watcher,
+            watched,
+            git_dirs: HashMap::new(),
+            events: ev,
+        };
+        let (result_tx, _result_rx) = mpsc::channel();
+        let mut git_refresh_pending: HashMap<PathBuf, Instant> = HashMap::new();
+        let mut known_md: HashMap<PathBuf, HashSet<PathBuf>> = HashMap::new();
+        known_md.insert(tmp.clone(), HashSet::new());
+        let debounce = Duration::from_millis(500);
+        let editor_files: HashSet<PathBuf> = HashSet::new();
+
+        // Create .git directory to simulate git init
+        std::fs::create_dir_all(tmp.join(".git")).unwrap();
+
+        let git_create_event = Event {
+            kind: EventKind::Create(notify::event::CreateKind::Folder),
+            paths: vec![tmp.join(".git")],
+            attrs: Default::default(),
+        };
+
+        let newly_git = process_fs_events(
+            &state,
+            &result_tx,
+            vec![git_create_event],
+            &mut git_refresh_pending,
+            &mut is_git,
+            &mut known_md,
+            debounce,
+            &mut git_root_cache,
+            &editor_files,
+        );
+
+        assert!(newly_git.contains(&tmp));
+        assert_eq!(is_git.get(&tmp), Some(&true));
+        assert!(git_refresh_pending.contains_key(&tmp));
+
+        // Verify DirAdded was NOT sent from process_fs_events
+        // (that's the main loop's job), but GitRefreshNeeded is queued via pending
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

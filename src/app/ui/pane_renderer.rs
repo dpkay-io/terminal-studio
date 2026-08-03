@@ -224,8 +224,11 @@ fn render_text_search_bar(
         egui::vec2(bar_w, bar_h),
     );
     ui.painter().rect_filled(bar_rect, theme::R_MD, t.surface0);
-    ui.painter()
-        .rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0, t.overlay0));
+    ui.painter().rect_stroke(
+        bar_rect,
+        theme::R_MD,
+        egui::Stroke::new(1.0_f32, t.overlay0),
+    );
 
     let controls_w = 110.0_f32;
     let input_rect = egui::Rect::from_min_max(
@@ -888,7 +891,7 @@ fn render_leaf_content(
                     ui.painter().rect_stroke(
                         rect.shrink(2.0),
                         crate::theme::R_SM,
-                        egui::Stroke::new(2.0, crate::theme::active().blue.gamma_multiply(0.6)),
+                        egui::Stroke::new(2.0_f32, crate::theme::active().blue.gamma_multiply(0.6)),
                     );
                     rctx.drag_state.drop_target = Some(crate::app::drag::DropTarget::PaneArea);
                 }
@@ -1386,7 +1389,7 @@ impl App {
             painter.rect_stroke(
                 content_rect.shrink(theme::SP_1),
                 4.0,
-                egui::Stroke::new(2.0, t.blue),
+                egui::Stroke::new(2.0_f32, t.blue),
             );
             painter.text(
                 content_rect.center(),

@@ -229,7 +229,7 @@ pub(super) fn render_dir_tree(
             let resp = ui
                 .add(
                     egui::Label::new(
-                        egui::RichText::new(format!("{} {}", chevron, &entry.name))
+                        egui::RichText::new(format!("{} {}", chevron, entry.name))
                             .color(theme::active().fg_dir_entry)
                             .size(theme::FONT_UI_MD),
                     )
@@ -278,7 +278,7 @@ pub(super) fn render_dir_tree(
             } else {
                 base_color
             };
-            let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), &entry.name))
+            let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), entry.name))
                 .color(text_color)
                 .size(theme::FONT_UI_MD);
             if is_highlighted {
@@ -375,7 +375,7 @@ pub(super) fn render_flat_file_list(
         let resp = ui
             .add(
                 egui::Label::new(
-                    egui::RichText::new(format!("{} {}", file_icon(ext), &display))
+                    egui::RichText::new(format!("{} {}", file_icon(ext), display))
                         .color(color)
                         .size(theme::FONT_UI_MD),
                 )

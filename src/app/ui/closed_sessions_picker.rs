@@ -260,7 +260,7 @@ impl App {
                                                             ui.label(
                                                                 egui::RichText::new(format!(
                                                                     "{}  {} lines",
-                                                                    &record.shell,
+                                                                    record.shell,
                                                                     format_line_count(
                                                                         record.line_count
                                                                     ),

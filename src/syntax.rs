@@ -154,7 +154,7 @@ pub fn highlight_layout_job(
                 format.italics = true;
             }
             if style.font_style.contains(FontStyle::UNDERLINE) {
-                format.underline = egui::Stroke::new(1.0, color);
+                format.underline = egui::Stroke::new(1.0_f32, color);
             }
             job.append(segment, 0.0, format);
         }

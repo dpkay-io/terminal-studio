@@ -80,8 +80,8 @@ impl App {
             vis.widgets.inactive.bg_fill = t.surface0;
             vis.widgets.hovered.bg_fill = t.surface1;
             vis.widgets.active.bg_fill = t.surface2;
-            vis.widgets.inactive.fg_stroke = Stroke::new(1.0, t.subtext0);
-            vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.overlay0);
+            vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
+            vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
             vis.selection.bg_fill = t.selection_bg;
             for state in [
                 &mut vis.widgets.noninteractive,
@@ -1982,8 +1982,8 @@ impl App {
         vis.widgets.inactive.bg_fill = t.surface0;
         vis.widgets.hovered.bg_fill = t.surface1;
         vis.widgets.active.bg_fill = t.surface2;
-        vis.widgets.inactive.fg_stroke = Stroke::new(1.0, t.subtext0);
-        vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.overlay0);
+        vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
+        vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
         vis.selection.bg_fill = t.selection_bg;
         for state in [
             &mut vis.widgets.noninteractive,
