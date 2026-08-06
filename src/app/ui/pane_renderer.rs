@@ -4,8 +4,9 @@ use super::super::feedback;
 use super::super::file_browser;
 use super::super::markdown::render_markdown;
 use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
-use super::super::settings::CursorStyle;
+use super::super::settings::{CursorStyle, InfoBarPosition};
 use super::super::App;
+use super::info_bar::InfoBarAction;
 use super::tab_bar::GroupTabBarResult;
 use crate::editor_group::{GroupId, GroupNode};
 use crate::pane_tree::{split_rect, SplitDir};
@@ -982,13 +983,47 @@ fn render_group_node(
                 return;
             }
 
-            // Split rect into tab bar (top) and content (rest)
+            // Split rect into tab bar (top), optional info bar, and content (rest)
             let tab_h = theme::HEADER_H;
+            let info_bar_pos = app.settings.info_bar_position;
+            let info_h = if info_bar_pos != InfoBarPosition::Hidden {
+                theme::INFO_BAR_H
+            } else {
+                0.0
+            };
             let tab_bar_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), tab_h));
-            let content_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.min.x, rect.min.y + tab_h),
-                egui::vec2(rect.width(), (rect.height() - tab_h).max(0.0)),
-            );
+
+            let (info_bar_rect, content_rect) = match info_bar_pos {
+                InfoBarPosition::Top => {
+                    let ib = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x, rect.min.y + tab_h),
+                        egui::vec2(rect.width(), info_h),
+                    );
+                    let cr = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x, rect.min.y + tab_h + info_h),
+                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                    );
+                    (Some(ib), cr)
+                }
+                InfoBarPosition::Bottom => {
+                    let cr = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x, rect.min.y + tab_h),
+                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                    );
+                    let ib = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x, cr.max.y),
+                        egui::vec2(rect.width(), info_h),
+                    );
+                    (Some(ib), cr)
+                }
+                InfoBarPosition::Hidden => {
+                    let cr = egui::Rect::from_min_size(
+                        egui::pos2(rect.min.x, rect.min.y + tab_h),
+                        egui::vec2(rect.width(), (rect.height() - tab_h).max(0.0)),
+                    );
+                    (None, cr)
+                }
+            };
 
             // Render per-group tab bar
             let tab_result = app.render_group_tab_bar(
@@ -1000,6 +1035,12 @@ fn render_group_node(
                 tab_bar_rect,
             );
             group_tab_results.push(tab_result);
+
+            // Render info bar (or show toggle when hidden)
+            let mut info_bar_action = InfoBarAction::None;
+            if let Some(ib_rect) = info_bar_rect {
+                info_bar_action = app.render_info_bar(&mut leaf_ui, ib_rect, group.active_pane_id);
+            }
 
             // If active pane is filtered out, show empty state
             let active_filtered_out = if let Some(pid) = group.active_pane_id {
@@ -1114,6 +1155,19 @@ fn render_group_node(
                         }
                     }
                 }
+            }
+
+            // Show toggle when info bar is hidden (rendered after content to overlay)
+            if info_bar_pos == InfoBarPosition::Hidden
+                && app.render_info_bar_show_toggle(&mut leaf_ui, content_rect)
+            {
+                info_bar_action = InfoBarAction::SetPosition(InfoBarPosition::Top);
+            }
+
+            // Apply info bar position changes
+            if let InfoBarAction::SetPosition(pos) = info_bar_action {
+                app.settings.info_bar_position = pos;
+                app.settings.save();
             }
 
             // Convert PaneArea to GroupArea for group-aware drop routing

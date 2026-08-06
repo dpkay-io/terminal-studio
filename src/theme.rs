@@ -475,6 +475,7 @@ pub const TITLEBAR_ICON_GAP: f32 = 4.0;
 pub const SYSMON_W: f32 = 100.0;
 pub const UPDATE_BTN_W: f32 = 110.0;
 pub const HEADER_H: f32 = 26.0;
+pub const INFO_BAR_H: f32 = 22.0;
 pub const DIVIDER_W: f32 = 6.0;
 pub const MIN_PANE_W: f32 = 80.0;
 pub const MIN_PANE_H: f32 = 80.0;

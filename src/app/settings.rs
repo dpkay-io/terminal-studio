@@ -14,6 +14,14 @@ pub enum CursorStyle {
     Beam,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InfoBarPosition {
+    #[default]
+    Top,
+    Bottom,
+    Hidden,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub(super) struct AppSettings {
@@ -35,6 +43,7 @@ pub(super) struct AppSettings {
     pub(super) save_scrollback_on_close: bool,
     pub(super) save_scrollback_on_exit: bool,
     pub(super) log_level: LogLevel,
+    pub(super) info_bar_position: InfoBarPosition,
 }
 
 impl Default for AppSettings {
@@ -58,6 +67,7 @@ impl Default for AppSettings {
             save_scrollback_on_close: true,
             save_scrollback_on_exit: true,
             log_level: LogLevel::default(),
+            info_bar_position: InfoBarPosition::default(),
         }
     }
 }
