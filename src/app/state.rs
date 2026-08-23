@@ -2414,8 +2414,30 @@ impl App {
                     self.activate_pane(pane_id);
                 }
             }
-            // Split effect implemented in a follow-up task.
-            DragAction::SplitWithPayload { .. } => {}
+            DragAction::SplitWithPayload {
+                payload,
+                group_id,
+                dir,
+                before,
+            } => {
+                // Focus the target group so split_focused_group acts on it.
+                self.pane_state.focused_group_id = group_id;
+
+                let (cols, rows) = self
+                    .pane_state
+                    .groups
+                    .get(&group_id)
+                    .and_then(|g| g.active_pane_id)
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .map(|p| p.last_size)
+                    .unwrap_or((80, 24));
+
+                if let Some(new_pane_id) = self.create_pane_for_payload(payload, cols, rows, ctx) {
+                    self.pane_state
+                        .split_focused_group(new_pane_id, dir, before);
+                    self.activate_pane(new_pane_id);
+                }
+            }
         }
         self.save_session();
     }
@@ -2569,6 +2591,37 @@ impl App {
             workspace_id: self.active_group,
         });
         Some(pane_id)
+    }
+
+    /// Create a pane for a dragged payload without placing it in any group.
+    ///
+    /// Returns the new pane id, or `None` if the payload cannot become a pane
+    /// (a `Workspace` drag), the underlying resource could not be opened, or
+    /// the payload resolved to an already-open pane that was activated in
+    /// place (a `Note`). For `Tab`, the pane already exists and is only
+    /// detached from its old group here; the caller's `split_focused_group`
+    /// re-homes it.
+    fn create_pane_for_payload(
+        &mut self,
+        payload: super::drag::DragPayload,
+        cols: u16,
+        rows: u16,
+        ctx: &egui::Context,
+    ) -> Option<u32> {
+        use super::drag::DragPayload;
+        match payload {
+            DragPayload::Tab(pane_id) => {
+                self.pane_state.detach_pane_from_group(pane_id);
+                Some(pane_id)
+            }
+            DragPayload::Session(session_id) => {
+                self.create_terminal_pane_for_session(session_id, cols, rows)
+            }
+            DragPayload::File(path) => self.create_file_editor_pane(path, ctx),
+            DragPayload::Diff(rel_path) => self.create_diff_pane(rel_path),
+            DragPayload::Note(workspace_id) => self.create_note_pane(workspace_id),
+            DragPayload::Workspace(_) => None,
+        }
     }
 }
 
