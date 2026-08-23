@@ -929,7 +929,7 @@ fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
 }
 
 /// Apply a deferred action produced by a split's info bar header.
-fn apply_info_bar_action(app: &mut App, action: InfoBarAction) {
+fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Context) {
     match action {
         InfoBarAction::None => {}
         InfoBarAction::SetPosition(pos) => {
@@ -947,9 +947,16 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction) {
                 .get(&gid)
                 .and_then(|g| g.active_pane_id)
             {
-                app.pane_state.active_pane_id = Some(pid);
+                // Go through activate_pane so the session active flags, the
+                // recency stamp and the group's own active pane all agree —
+                // setting active_pane_id alone leaves them stale.
+                app.activate_pane(pid);
             }
             app.deferred_split = Some(dir);
+            // deferred_split is consumed at the top of the *next* update(), so
+            // guarantee that frame happens instead of relying on the cursor
+            // blink or a stray mouse move to schedule it.
+            ctx.request_repaint();
         }
         InfoBarAction::CloseAllInGroup(gid) => {
             app.close_all_target = CloseAllTarget::EditorGroup(gid);
@@ -1072,7 +1079,8 @@ fn render_group_node(
             };
 
             if active_filtered_out {
-                apply_info_bar_action(app, info_bar_action);
+                let ctx = leaf_ui.ctx().clone();
+                apply_info_bar_action(app, info_bar_action, &ctx);
                 let t = theme::active();
                 leaf_ui.painter().rect_filled(content_rect, 0.0, t.bg_term);
                 leaf_ui.allocate_ui_at_rect(content_rect, |ui| {
@@ -1182,7 +1190,8 @@ fn render_group_node(
                 info_bar_action = InfoBarAction::SetPosition(InfoBarPosition::Top);
             }
 
-            apply_info_bar_action(app, info_bar_action);
+            let ctx = leaf_ui.ctx().clone();
+            apply_info_bar_action(app, info_bar_action, &ctx);
 
             // Convert PaneArea to GroupArea for group-aware drop routing
             if matches!(
