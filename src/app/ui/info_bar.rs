@@ -53,9 +53,16 @@ impl App {
 
         if is_focused && has_multiple_groups {
             let line_h = 2.0;
+            // Sit the marker on whichever edge faces the pane content, so it
+            // reads as belonging to that split rather than to its neighbour.
+            let line_y = if self.settings.info_bar_position == InfoBarPosition::Bottom {
+                rect.min.y
+            } else {
+                rect.max.y - line_h
+            };
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(
-                    egui::pos2(rect.min.x, rect.max.y - line_h),
+                    egui::pos2(rect.min.x, line_y),
                     egui::vec2(rect.width(), line_h),
                 ),
                 0.0,
