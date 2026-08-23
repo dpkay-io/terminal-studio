@@ -372,7 +372,42 @@ fn resolve_group(
             }
         }
 
-        // Session / File / Diff / Note onto an edge: always a new split.
+        // One pane per session: a session that is already open moves its pane
+        // into the new split instead of opening a second pane on the same PTY.
+        (
+            DragPayload::Session(session_id),
+            DropTarget::SplitEdge {
+                group_id,
+                dir,
+                before,
+            },
+        ) => {
+            let existing = pane_state
+                .panes
+                .iter()
+                .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id))
+                .map(|p| p.id);
+            match existing {
+                // Delegating to the Tab arm reuses its sole-occupant guard.
+                Some(pane_id) => resolve_group(
+                    DragPayload::Tab(pane_id),
+                    DropTarget::SplitEdge {
+                        group_id,
+                        dir,
+                        before,
+                    },
+                    pane_state,
+                ),
+                None => DragAction::SplitWithPayload {
+                    payload: DragPayload::Session(session_id),
+                    group_id,
+                    dir,
+                    before,
+                },
+            }
+        }
+
+        // File / Diff / Note onto an edge: always a new split.
         (
             payload,
             DropTarget::SplitEdge {
@@ -1332,6 +1367,103 @@ mod tests {
                 group_id: g1,
                 dir: SplitDir::Horizontal,
                 before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Tab(3),
+                group_id,
+                ..
+            } if group_id == g1
+        ));
+    }
+
+    #[test]
+    fn session_already_open_to_split_edge_moves_existing_pane() {
+        // Session 50 is already open as pane 1. Splitting must move that pane,
+        // not open a second pane on the same PTY.
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(50)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Session(50),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Tab(1),
+                group_id,
+                ..
+            } if group_id == g1
+        ));
+    }
+
+    #[test]
+    fn session_not_open_to_split_edge_keeps_session_payload() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(50)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Session(999),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Vertical,
+                before: false,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Session(999),
+                group_id,
+                ..
+            } if group_id == g1
+        ));
+    }
+
+    #[test]
+    fn session_open_as_sole_occupant_of_target_group_is_noop() {
+        // Pane 1 is the only pane of g1. Moving it out of g1 removes g1 from
+        // the layout, leaving the split with nothing to attach to — same
+        // reason the Tab arm rejects this.
+        let ps = make_grouped_pane_state(vec![(1, PaneContent::Terminal(50))]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Session(50),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(action, DragAction::Noop));
+    }
+
+    #[test]
+    fn session_open_in_other_group_to_split_edge_moves_pane() {
+        // Session 30 is open as pane 3, the sole occupant of g2. Dropping it on
+        // g1's edge is fine: g1 survives the detach and hosts the split.
+        let (ps, g1, _g2) = make_two_group_state();
+        let action = resolve_group(
+            DragPayload::Session(30),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: false,
             },
             &ps,
         );
