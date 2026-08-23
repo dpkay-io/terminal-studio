@@ -2410,9 +2410,6 @@ impl App {
                 dir,
                 before,
             } => {
-                // Focus the target group so split_focused_group acts on it.
-                self.pane_state.focused_group_id = group_id;
-
                 let (cols, rows) = self
                     .pane_state
                     .groups
@@ -2423,6 +2420,13 @@ impl App {
                     .unwrap_or((80, 24));
 
                 if let Some(new_pane_id) = self.create_pane_for_payload(payload, cols, rows, ctx) {
+                    // Focus the target group so split_focused_group acts on it.
+                    // Only after the pane exists: on the failure paths (stale
+                    // tab id, diff with no cwd) moving focus here would leave
+                    // focused_group_id pointing at a group that active_pane_id
+                    // is not in, so the focus ring and the keyboard would
+                    // disagree about which split is live.
+                    self.pane_state.focused_group_id = group_id;
                     self.pane_state
                         .split_focused_group(new_pane_id, dir, before);
                     self.activate_pane(new_pane_id);
