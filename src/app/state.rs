@@ -2471,6 +2471,8 @@ impl App {
                     self.activate_pane(pane_id);
                 }
             }
+            // Split effect implemented in a follow-up task.
+            DragAction::SplitWithPayload { .. } => {}
         }
         self.save_session();
     }
