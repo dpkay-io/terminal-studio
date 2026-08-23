@@ -99,6 +99,13 @@ pub(super) enum DragAction {
         target_group_id: GroupId,
         at_index: Option<usize>,
     },
+    /// Split `group_id` and put the dragged payload in the newly created group.
+    SplitWithPayload {
+        payload: DragPayload,
+        group_id: GroupId,
+        dir: SplitDir,
+        before: bool,
+    },
 }
 
 const DRAG_THRESHOLD: f32 = 5.0;
@@ -254,9 +261,9 @@ pub(super) fn resolve_drag(
 
     // Route group targets to new resolver, old targets to old resolver
     match &target {
-        DropTarget::GroupTabBar { .. } | DropTarget::GroupArea(_) => {
-            resolve_group(payload, target, pane_state)
-        }
+        DropTarget::GroupTabBar { .. }
+        | DropTarget::GroupArea(_)
+        | DropTarget::SplitEdge { .. } => resolve_group(payload, target, pane_state),
         _ => resolve(payload, target, pane_state, active_group),
     }
 }
@@ -407,6 +414,55 @@ fn resolve_group(
         (DragPayload::Workspace(_), DropTarget::GroupTabBar { .. } | DropTarget::GroupArea(_)) => {
             DragAction::Noop
         }
+
+        // Workspace drags never create splits.
+        (DragPayload::Workspace(_), DropTarget::SplitEdge { .. }) => DragAction::Noop,
+
+        // A tab that is the sole occupant of the target group would leave that
+        // group empty the instant it moved out of it.
+        (
+            DragPayload::Tab(pane_id),
+            DropTarget::SplitEdge {
+                group_id,
+                dir,
+                before,
+            },
+        ) => {
+            if pane_state.find(pane_id).is_none() {
+                return DragAction::Noop;
+            }
+            let sole_occupant = pane_state.group_of(pane_id) == Some(group_id)
+                && pane_state
+                    .groups
+                    .get(&group_id)
+                    .map(|g| g.pane_ids.len() <= 1)
+                    .unwrap_or(true);
+            if sole_occupant {
+                DragAction::Noop
+            } else {
+                DragAction::SplitWithPayload {
+                    payload: DragPayload::Tab(pane_id),
+                    group_id,
+                    dir,
+                    before,
+                }
+            }
+        }
+
+        // Session / File / Diff / Note onto an edge: always a new split.
+        (
+            payload,
+            DropTarget::SplitEdge {
+                group_id,
+                dir,
+                before,
+            },
+        ) => DragAction::SplitWithPayload {
+            payload,
+            group_id,
+            dir,
+            before,
+        },
 
         // Fallback (should not be reached due to routing in resolve_drag)
         _ => DragAction::Noop,
@@ -1326,6 +1382,177 @@ mod tests {
             DragAction::InsertTerminalPane {
                 session_id: 50,
                 at_index: Some(0),
+            }
+        ));
+    }
+
+    // ── SplitEdge drag resolution tests ─────────────────────────────
+
+    #[test]
+    fn session_to_split_edge_creates_split() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Session(50),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        match action {
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Session(sid),
+                group_id,
+                dir,
+                before,
+            } => {
+                assert_eq!(sid, 50);
+                assert_eq!(group_id, g1);
+                assert_eq!(dir, SplitDir::Horizontal);
+                assert!(before);
+            }
+            _ => panic!("expected SplitWithPayload"),
+        }
+    }
+
+    #[test]
+    fn file_to_split_edge_creates_split() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::File(PathBuf::from("/tmp/new.rs")),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Vertical,
+                before: false,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::File(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn diff_to_split_edge_creates_split() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Diff("src/main.rs".to_string()),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: false,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Diff(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn note_to_split_edge_creates_split() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Note(100),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Vertical,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Note(100),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn workspace_to_split_edge_is_noop() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Workspace(42),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(action, DragAction::Noop));
+    }
+
+    #[test]
+    fn tab_to_split_edge_of_own_lone_group_is_noop() {
+        // Dragging the only pane of a group onto that group's own edge would
+        // split a group and immediately empty it. Reject it.
+        let ps = make_grouped_pane_state(vec![(1, PaneContent::Terminal(10))]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Tab(1),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(action, DragAction::Noop));
+    }
+
+    #[test]
+    fn tab_to_split_edge_of_shared_group_creates_split() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::Tab(1),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Tab(1),
+                ..
             }
         ));
     }
