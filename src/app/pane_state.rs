@@ -227,6 +227,8 @@ impl PaneState {
 
     /// Split the focused group: create a new group with `new_pane_id`, add it
     /// to the layout tree adjacent to `focused_group_id` in direction `dir`.
+    /// When `before` is true the new group is placed before (left/top of) the
+    /// focused group in the layout; otherwise it is placed after (right/bottom).
     /// Returns the new group's ID.
     #[allow(dead_code)]
     pub(super) fn split_focused_group(
@@ -1014,6 +1016,28 @@ mod tests {
         assert_eq!(state.active_pane_id, Some(2));
         // Layout is now a split
         assert_eq!(state.group_layout.group_ids(), vec![g1, g2]);
+    }
+
+    #[test]
+    fn split_focused_group_before_places_new_group_first() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        let g1 = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+
+        state.panes.push(make_pane(2));
+        let g2 = state.split_focused_group(2, SplitDir::Horizontal, true);
+
+        // New group created
+        assert!(state.groups.contains_key(&g2));
+        assert!(state.groups.get(&g2).unwrap().contains(2));
+        // Focus moved to new group
+        assert_eq!(state.focused_group_id, g2);
+        assert_eq!(state.active_pane_id, Some(2));
+        // Layout is now a split with the new group first
+        assert_eq!(state.group_layout.group_ids(), vec![g2, g1]);
     }
 
     #[test]
