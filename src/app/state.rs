@@ -2371,99 +2371,33 @@ impl App {
                 target_group_id,
                 at_index,
             } => {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let entry = PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::Terminal(session_id),
-                    manual_width: None,
-                    last_size: (80, 24),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                };
-                self.pane_state.panes.push(entry);
-                self.pane_state
-                    .add_pane_to_group(target_group_id, pane_id, at_index);
-                self.pane_state.focused_group_id = target_group_id;
-                self.activate_pane(pane_id);
+                if let Some(pane_id) = self.create_terminal_pane_for_session(session_id, 80, 24) {
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
+                }
             }
             DragAction::InsertFileEditorInGroup {
                 path,
                 target_group_id,
                 at_index,
             } => {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-                let entry = PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::FileEditor(FileEditorState {
-                        path: path.clone(),
-                        content: String::new(),
-                        dirty: false,
-                        save_error: false,
-                        workspace_id: self.active_group,
-                        show_preview: is_md && self.md_prefer_preview,
-                        stale: false,
-                        loading: true,
-                        untitled: false,
-                    }),
-                    manual_width: None,
-                    last_size: (0, 0),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                };
-                self.pane_state.panes.push(entry);
-                self.pane_state
-                    .add_pane_to_group(target_group_id, pane_id, at_index);
-                self.pane_state.focused_group_id = target_group_id;
-                self.activate_pane(pane_id);
-                let results = std::sync::Arc::clone(&self.file_load_results);
-                let ctx_clone = ctx.clone();
-                std::thread::spawn(move || {
-                    let content = std::fs::read_to_string(&path).unwrap_or_default();
-                    results.lock().push((pane_id, content));
-                    ctx_clone.request_repaint();
-                });
+                if let Some(pane_id) = self.create_file_editor_pane(path, ctx) {
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
+                }
             }
             DragAction::InsertDiffInGroup {
                 rel_path,
                 target_group_id,
                 at_index,
             } => {
-                if let Some(cwd) = self.active_pane_cwd() {
-                    let full_path = cwd.join(&rel_path);
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    let entry = PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::FileDiff(FileDiffState {
-                            path: full_path.clone(),
-                            old_content: String::new(),
-                            new_content: String::new(),
-                            hunks: Vec::new(),
-                            diff_mode: self.settings.diff_view_mode,
-                            current_hunk: 0,
-                            old_highlights: None,
-                            new_highlights: None,
-                            highlight_theme: crate::theme::active().id,
-                            loading: true,
-                            workspace_id: self.active_group,
-                            scroll_to_first_hunk: false,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    };
-                    self.pane_state.panes.push(entry);
+                if let Some(pane_id) = self.create_diff_pane(rel_path) {
                     self.pane_state
                         .add_pane_to_group(target_group_id, pane_id, at_index);
-                    self.pending_diff_panes.insert(full_path, pane_id);
-                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
                     self.pane_state.focused_group_id = target_group_id;
                     self.activate_pane(pane_id);
                 }
@@ -2473,36 +2407,7 @@ impl App {
                 target_group_id,
                 at_index,
             } => {
-                let ws_id = if workspace_id == 0 {
-                    None
-                } else {
-                    Some(workspace_id)
-                };
-                let existing = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .find(|p| {
-                        matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id)
-                    })
-                    .map(|p| p.id);
-                if let Some(pid) = existing {
-                    self.activate_pane(pid);
-                } else {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    let entry = PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::NoteEditor(NoteEditorState {
-                            workspace_id: ws_id,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    };
-                    self.pane_state.panes.push(entry);
+                if let Some(pane_id) = self.create_note_pane(workspace_id) {
                     self.pane_state
                         .add_pane_to_group(target_group_id, pane_id, at_index);
                     self.pane_state.focused_group_id = target_group_id;
@@ -2531,6 +2436,139 @@ impl App {
                 last_size: (0, 0),
             },
         );
+    }
+
+    // ── Pane creation for drag payloads ─────────────────────────────────
+    //
+    // Each helper appends a `PaneEntry` to `pane_state.panes` and returns its
+    // id. Placement (which group the pane lands in) is the caller's job.
+
+    fn create_terminal_pane_for_session(
+        &mut self,
+        session_id: u32,
+        cols: u16,
+        rows: u16,
+    ) -> Option<u32> {
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::Terminal(session_id),
+            manual_width: None,
+            last_size: (cols, rows),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        Some(pane_id)
+    }
+
+    /// Create a file-editor pane and kick off the background file read.
+    fn create_file_editor_pane(
+        &mut self,
+        path: std::path::PathBuf,
+        ctx: &egui::Context,
+    ) -> Option<u32> {
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileEditor(FileEditorState {
+                path: path.clone(),
+                content: String::new(),
+                dirty: false,
+                save_error: false,
+                workspace_id: self.active_group,
+                show_preview: is_md && self.md_prefer_preview,
+                stale: false,
+                loading: true,
+                untitled: false,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        let results = std::sync::Arc::clone(&self.file_load_results);
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            results.lock().push((pane_id, content));
+            ctx_clone.request_repaint();
+        });
+        Some(pane_id)
+    }
+
+    /// Create a diff pane for `rel_path` under the active pane's cwd and queue
+    /// the diff job. Returns `None` when there is no active cwd to resolve
+    /// `rel_path` against.
+    fn create_diff_pane(&mut self, rel_path: String) -> Option<u32> {
+        let cwd = self.active_pane_cwd()?;
+        let full_path = cwd.join(&rel_path);
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileDiff(FileDiffState {
+                path: full_path.clone(),
+                old_content: String::new(),
+                new_content: String::new(),
+                hunks: Vec::new(),
+                diff_mode: self.settings.diff_view_mode,
+                current_hunk: 0,
+                old_highlights: None,
+                new_highlights: None,
+                highlight_theme: crate::theme::active().id,
+                loading: true,
+                workspace_id: self.active_group,
+                scroll_to_first_hunk: false,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        self.pending_diff_panes.insert(full_path, pane_id);
+        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+        Some(pane_id)
+    }
+
+    /// Create a note pane for `workspace_id` (0 meaning "no workspace"). Notes
+    /// are unique per workspace: if one is already open it is activated in
+    /// place and `None` is returned so the caller does not move it.
+    fn create_note_pane(&mut self, workspace_id: u64) -> Option<u32> {
+        let ws_id = if workspace_id == 0 {
+            None
+        } else {
+            Some(workspace_id)
+        };
+        let existing = self
+            .pane_state
+            .panes
+            .iter()
+            .find(|p| matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id))
+            .map(|p| p.id);
+        if let Some(pid) = existing {
+            self.activate_pane(pid);
+            return None;
+        }
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::NoteEditor(NoteEditorState {
+                workspace_id: ws_id,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        Some(pane_id)
     }
 }
 
