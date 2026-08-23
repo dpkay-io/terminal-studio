@@ -5,7 +5,7 @@ use super::super::file_browser;
 use super::super::markdown::render_markdown;
 use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::{CursorStyle, InfoBarPosition};
-use super::super::App;
+use super::super::{App, CloseAllTarget};
 use super::info_bar::InfoBarAction;
 use crate::editor_group::{GroupId, GroupNode};
 use crate::pane_tree::{split_rect, SplitDir};
@@ -928,6 +928,37 @@ fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
     }
 }
 
+/// Apply a deferred action produced by a split's info bar header.
+fn apply_info_bar_action(app: &mut App, action: InfoBarAction) {
+    match action {
+        InfoBarAction::None => {}
+        InfoBarAction::SetPosition(pos) => {
+            app.settings.info_bar_position = pos;
+            app.settings.save();
+        }
+        InfoBarAction::Split(gid, dir) => {
+            // The split is performed against the focused group, so hand focus
+            // over before requesting it — otherwise clicking the button on a
+            // non-focused split would split the wrong one.
+            app.pane_state.focused_group_id = gid;
+            if let Some(pid) = app
+                .pane_state
+                .groups
+                .get(&gid)
+                .and_then(|g| g.active_pane_id)
+            {
+                app.pane_state.active_pane_id = Some(pid);
+            }
+            app.deferred_split = Some(dir);
+        }
+        InfoBarAction::CloseAllInGroup(gid) => {
+            app.close_all_target = CloseAllTarget::EditorGroup(gid);
+            app.show_close_all_confirm = true;
+            app.close_all_frames_open = 0;
+        }
+    }
+}
+
 /// Recursively render the group layout tree.
 #[allow(clippy::too_many_arguments)]
 fn render_group_node(
@@ -1019,7 +1050,13 @@ fn render_group_node(
             // Render info bar (or show toggle when hidden)
             let mut info_bar_action = InfoBarAction::None;
             if let Some(ib_rect) = info_bar_rect {
-                info_bar_action = app.render_info_bar(&mut leaf_ui, ib_rect, group.active_pane_id);
+                info_bar_action = app.render_info_bar(
+                    &mut leaf_ui,
+                    ib_rect,
+                    group.active_pane_id,
+                    group_id,
+                    is_focused,
+                );
             }
 
             // If active pane is filtered out, show empty state
@@ -1035,6 +1072,7 @@ fn render_group_node(
             };
 
             if active_filtered_out {
+                apply_info_bar_action(app, info_bar_action);
                 let t = theme::active();
                 leaf_ui.painter().rect_filled(content_rect, 0.0, t.bg_term);
                 leaf_ui.allocate_ui_at_rect(content_rect, |ui| {
@@ -1144,11 +1182,7 @@ fn render_group_node(
                 info_bar_action = InfoBarAction::SetPosition(InfoBarPosition::Top);
             }
 
-            // Apply info bar position changes
-            if let InfoBarAction::SetPosition(pos) = info_bar_action {
-                app.settings.info_bar_position = pos;
-                app.settings.save();
-            }
+            apply_info_bar_action(app, info_bar_action);
 
             // Convert PaneArea to GroupArea for group-aware drop routing
             if matches!(

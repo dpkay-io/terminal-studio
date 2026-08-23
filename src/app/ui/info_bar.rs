@@ -1,6 +1,8 @@
 use super::super::pane::PaneContent;
 use super::super::settings::InfoBarPosition;
 use super::super::App;
+use crate::editor_group::GroupId;
+use crate::pane_tree::SplitDir;
 use crate::theme;
 use crate::ui_kit::{icon_button, IconButtonStyle};
 
@@ -10,6 +12,8 @@ const TOGGLE_ICON_SIZE: f32 = 14.0;
 pub(in crate::app) enum InfoBarAction {
     None,
     SetPosition(InfoBarPosition),
+    Split(GroupId, SplitDir),
+    CloseAllInGroup(GroupId),
 }
 
 impl App {
@@ -18,6 +22,8 @@ impl App {
         ui: &mut egui::Ui,
         rect: egui::Rect,
         active_pane_id: Option<u32>,
+        group_id: GroupId,
+        is_focused: bool,
     ) -> InfoBarAction {
         let t = theme::active();
         let mut action = InfoBarAction::None;
@@ -35,15 +41,40 @@ impl App {
         let dim = fg.linear_multiply(0.6);
         let extra_dim = fg.linear_multiply(0.4);
 
+        // The info bar is the only focus indicator now that the tab bar is gone.
+        let has_multiple_groups = self.pane_state.groups.len() > 1;
+        let bg = if is_focused && has_multiple_groups {
+            theme::lerp_color(bg, t.surface1, theme::BLEND_SUBTLE)
+        } else {
+            bg
+        };
+
         ui.painter().rect_filled(rect, 0.0, bg);
+
+        if is_focused && has_multiple_groups {
+            let line_h = 2.0;
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(rect.min.x, rect.max.y - line_h),
+                    egui::vec2(rect.width(), line_h),
+                ),
+                0.0,
+                t.accent.gamma_multiply(0.5),
+            );
+        }
 
         let pad_x = theme::SP_4;
         let text_rect = egui::Rect::from_min_max(
             egui::pos2(rect.min.x + pad_x, rect.min.y),
             egui::pos2(
-                rect.max.x - pad_x - BTN_SIZE * 2.0 - theme::SP_2,
+                rect.max.x - pad_x - BTN_SIZE * 5.0 - theme::SP_2 * 5.0,
                 rect.max.y,
             ),
+        );
+        // A narrow split can invert the rect; egui will not draw that correctly.
+        let text_rect = egui::Rect::from_min_max(
+            text_rect.min,
+            egui::pos2(text_rect.max.x.max(text_rect.min.x), text_rect.max.y),
         );
 
         // Text segments: session · workspace  ⎇ branch
@@ -134,6 +165,65 @@ impl App {
             egui::pos2(hide_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
             egui::vec2(BTN_SIZE, BTN_SIZE),
         );
+
+        let close_all_rect = egui::Rect::from_min_size(
+            egui::pos2(toggle_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
+            egui::vec2(BTN_SIZE, BTN_SIZE),
+        );
+        let split_v_rect = egui::Rect::from_min_size(
+            egui::pos2(close_all_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
+            egui::vec2(BTN_SIZE, BTN_SIZE),
+        );
+        let split_h_rect = egui::Rect::from_min_size(
+            egui::pos2(split_v_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
+            egui::vec2(BTN_SIZE, BTN_SIZE),
+        );
+
+        // Widget ids carry `group_id`: sibling splits render two info bars per frame.
+        if icon_button(
+            ui,
+            ui.id().with(("info_bar_split_h", group_id)),
+            split_h_rect,
+            "⊞",
+            theme::ICON_SM,
+            fg,
+            IconButtonStyle::Default,
+        )
+        .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
+        .clicked()
+        {
+            action = InfoBarAction::Split(group_id, SplitDir::Horizontal);
+        }
+
+        if icon_button(
+            ui,
+            ui.id().with(("info_bar_split_v", group_id)),
+            split_v_rect,
+            "⊟",
+            theme::ICON_SM,
+            fg,
+            IconButtonStyle::Default,
+        )
+        .on_hover_text("Split vertical (Ctrl+Shift+-)")
+        .clicked()
+        {
+            action = InfoBarAction::Split(group_id, SplitDir::Vertical);
+        }
+
+        if icon_button(
+            ui,
+            ui.id().with(("info_bar_close_all", group_id)),
+            close_all_rect,
+            "✖",
+            theme::ICON_SM,
+            fg,
+            IconButtonStyle::Danger,
+        )
+        .on_hover_text("Close all tabs in this split")
+        .clicked()
+        {
+            action = InfoBarAction::CloseAllInGroup(group_id);
+        }
 
         let toggle_resp = icon_button(
             ui,
