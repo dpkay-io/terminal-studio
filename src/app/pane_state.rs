@@ -218,7 +218,6 @@ impl PaneState {
     }
 
     /// Add a pane to an existing group at a specific position.
-    #[allow(dead_code)]
     pub(super) fn add_pane_to_group(&mut self, group_id: GroupId, pane_id: u32, at: Option<usize>) {
         if let Some(group) = self.groups.get_mut(&group_id) {
             group.insert_pane(pane_id, at);
@@ -230,7 +229,6 @@ impl PaneState {
     /// When `before` is true the new group is placed before (left/top of) the
     /// focused group in the layout; otherwise it is placed after (right/bottom).
     /// Returns the new group's ID.
-    #[allow(dead_code)]
     pub(super) fn split_focused_group(
         &mut self,
         new_pane_id: u32,
@@ -240,8 +238,22 @@ impl PaneState {
         let new_group_id = self.create_group(new_pane_id);
         let split_id = self.next_split_id;
         self.next_split_id += 1;
-        self.group_layout
-            .split_group(self.focused_group_id, new_group_id, split_id, dir, before);
+        let placed = self.group_layout.split_group(
+            self.focused_group_id,
+            new_group_id,
+            split_id,
+            dir,
+            before,
+        );
+        if !placed {
+            log::warn!(
+                "split_focused_group: focused group {} is absent from the layout tree; \
+                 new group {} (pane {}) is not reachable in the layout",
+                self.focused_group_id,
+                new_group_id,
+                new_pane_id
+            );
+        }
         self.focused_group_id = new_group_id;
         self.active_pane_id = Some(new_pane_id);
         new_group_id
@@ -358,7 +370,6 @@ impl PaneState {
     }
 
     /// Move a pane from its current group to a target group.
-    #[allow(dead_code)]
     pub(super) fn move_pane_to_group(
         &mut self,
         pane_id: u32,
@@ -400,10 +411,19 @@ impl PaneState {
             .unwrap_or(false);
         if became_empty {
             self.groups.remove(&source_group_id);
-            if let GroupRemoveResult::CollapseToSibling(replacement) =
-                self.group_layout.remove_group(source_group_id)
-            {
-                self.group_layout = replacement;
+            match self.group_layout.remove_group(source_group_id) {
+                GroupRemoveResult::CollapseToSibling(replacement) => {
+                    self.group_layout = replacement;
+                }
+                // The source was the whole layout: there is no sibling to
+                // collapse into, so reset to the same empty sentinel
+                // `PaneState::new` starts from rather than leave the tree
+                // naming a group that no longer exists.
+                GroupRemoveResult::IsTarget => {
+                    self.group_layout = GroupNode::Leaf { group_id: 0 };
+                    self.focused_group_id = 0;
+                }
+                _ => {}
             }
         }
         true
@@ -1038,6 +1058,67 @@ mod tests {
         assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1, 2]);
         assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
         assert_eq!(state.group_layout.group_ids(), layout_before);
+    }
+
+    #[test]
+    fn detach_sole_pane_of_only_group_resets_layout_to_sentinel() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        let g1 = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+
+        assert!(state.detach_pane_from_group(1));
+        // groups and group_layout must agree: no group survives, and the
+        // layout no longer names the erased group.
+        assert!(state.groups.is_empty());
+        assert!(!state.group_layout.group_ids().contains(&g1));
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
+        assert_eq!(state.focused_group_id, 0);
+    }
+
+    #[test]
+    fn move_pane_to_same_group_with_index_keeps_group() {
+        let mut state = make_grouped_state();
+        // Group 2 holds only pane 3; "moving" it into its own group must hit
+        // the early return and leave the group intact.
+        state.move_pane_to_group(3, 2, Some(0));
+        assert!(
+            state.groups.contains_key(&2),
+            "group 2 must survive a same-group move of its sole pane"
+        );
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn move_pane_to_same_group_without_index_keeps_group() {
+        let mut state = make_grouped_state();
+        state.move_pane_to_group(3, 2, None);
+        assert!(state.groups.contains_key(&2));
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn detach_then_split_within_multi_pane_group() {
+        let mut state = make_grouped_state();
+        // Tab payload: pane 2 dragged onto its own group's edge (group 1 has [1, 2]).
+        state.focused_group_id = 1;
+        assert!(state.detach_pane_from_group(2));
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
+        let new_gid = state.split_focused_group(2, SplitDir::Vertical, false);
+        assert_eq!(state.group_layout.group_ids(), vec![1, new_gid, 2]);
+        assert!(state.groups.get(&new_gid).unwrap().contains(2));
+    }
+
+    #[test]
+    fn detach_return_value_tracks_whether_pane_was_found() {
+        let mut state = make_grouped_state();
+        assert!(state.detach_pane_from_group(2)); // group survives
+        assert!(state.detach_pane_from_group(1)); // group dies
+        assert!(!state.detach_pane_from_group(1)); // already gone
     }
 
     /// The `SplitWithPayload` handler focuses the target group, then detaches

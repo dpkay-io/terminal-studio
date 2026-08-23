@@ -2573,6 +2573,8 @@ impl App {
         use super::drag::DragPayload;
         match payload {
             DragPayload::Tab(pane_id) => {
+                // A stale id must not become a group naming a phantom pane.
+                self.pane_state.find(pane_id)?;
                 self.pane_state.detach_pane_from_group(pane_id);
                 Some(pane_id)
             }
