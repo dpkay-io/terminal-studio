@@ -7,7 +7,6 @@ use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, 
 use super::super::settings::{CursorStyle, InfoBarPosition};
 use super::super::App;
 use super::info_bar::InfoBarAction;
-use super::tab_bar::GroupTabBarResult;
 use crate::editor_group::{GroupId, GroupNode};
 use crate::pane_tree::{split_rect, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
@@ -944,7 +943,6 @@ fn render_group_node(
     pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
     split_ratio_changes: &mut Vec<(u32, f32)>,
     pane_context_actions: &mut Vec<PaneContextAction>,
-    group_tab_results: &mut Vec<GroupTabBarResult>,
 ) {
     match node {
         GroupNode::Leaf { group_id } => {
@@ -987,32 +985,27 @@ fn render_group_node(
                 return;
             }
 
-            // Split rect into tab bar (top), optional info bar, and content (rest)
-            let tab_h = theme::HEADER_H;
+            // Split rect into optional info bar and content (rest)
             let info_bar_pos = app.settings.info_bar_position;
             let info_h = if info_bar_pos != InfoBarPosition::Hidden {
                 theme::INFO_BAR_H
             } else {
                 0.0
             };
-            let tab_bar_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), tab_h));
 
             let (info_bar_rect, content_rect) = match info_bar_pos {
                 InfoBarPosition::Top => {
-                    let ib = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), info_h),
-                    );
+                    let ib = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), info_h));
                     let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h + info_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                        egui::pos2(rect.min.x, rect.min.y + info_h),
+                        egui::vec2(rect.width(), (rect.height() - info_h).max(0.0)),
                     );
                     (Some(ib), cr)
                 }
                 InfoBarPosition::Bottom => {
                     let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                        rect.min,
+                        egui::vec2(rect.width(), (rect.height() - info_h).max(0.0)),
                     );
                     let ib = egui::Rect::from_min_size(
                         egui::pos2(rect.min.x, cr.max.y),
@@ -1020,25 +1013,8 @@ fn render_group_node(
                     );
                     (Some(ib), cr)
                 }
-                InfoBarPosition::Hidden => {
-                    let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h).max(0.0)),
-                    );
-                    (None, cr)
-                }
+                InfoBarPosition::Hidden => (None, rect),
             };
-
-            // Render per-group tab bar
-            let tab_result = app.render_group_tab_bar(
-                &mut leaf_ui,
-                &group,
-                group_id,
-                is_focused,
-                tab_h,
-                tab_bar_rect,
-            );
-            group_tab_results.push(tab_result);
 
             // Render info bar (or show toggle when hidden)
             let mut info_bar_action = InfoBarAction::None;
@@ -1229,7 +1205,6 @@ fn render_group_node(
                     pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
-                    group_tab_results,
                 );
                 return;
             }
@@ -1248,7 +1223,6 @@ fn render_group_node(
                     pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
-                    group_tab_results,
                 );
                 return;
             }
@@ -1268,7 +1242,6 @@ fn render_group_node(
                 pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
-                group_tab_results,
             );
             render_group_node(
                 app,
@@ -1283,7 +1256,6 @@ fn render_group_node(
                 pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
-                group_tab_results,
             );
 
             // Draw divider — reuse existing divider rendering
@@ -1403,7 +1375,6 @@ impl App {
         pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
         split_ratio_changes: &mut Vec<(u32, f32)>,
         pane_context_actions: &mut Vec<PaneContextAction>,
-        group_tab_results: &mut Vec<GroupTabBarResult>,
     ) {
         // Clear stale terminal geometry
         self.active_term_geo = None;
@@ -1422,7 +1393,6 @@ impl App {
             pane_rects_snap,
             split_ratio_changes,
             pane_context_actions,
-            group_tab_results,
         );
 
         // Global flash overlay (rare — PTY spawn errors)
