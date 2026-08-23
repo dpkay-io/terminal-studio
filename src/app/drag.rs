@@ -1557,6 +1557,31 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn tab_sole_occupant_to_other_group_edge_creates_split() {
+        // Pane 3 is the sole occupant of g2. Dragging it onto g1's edge
+        // leaves g2 empty — intentional; the executor is responsible for
+        // collapsing the now-empty source group.
+        let (ps, g1, _g2) = make_two_group_state();
+        let action = resolve_group(
+            DragPayload::Tab(3),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Tab(3),
+                group_id,
+                ..
+            } if group_id == g1
+        ));
+    }
+
     // ── edge_zone geometry tests ────────────────────────────────────
 
     fn zone_rect() -> egui::Rect {
