@@ -221,6 +221,7 @@ pub(super) fn edge_zone(rect: egui::Rect, pos: egui::Pos2) -> Option<(SplitDir, 
 
     // ponytail: `nearest` is bit-identical to one of these four bindings via
     // f32::min, not derived from arithmetic on it — exact comparison is safe.
+    // On an exact tie, the if/else-if order below breaks left, then top.
     #[allow(clippy::float_cmp)]
     if nearest == left {
         Some((SplitDir::Horizontal, true))
@@ -1397,5 +1398,48 @@ mod tests {
     fn edge_zone_degenerate_rect_is_none() {
         let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 0.0));
         assert_eq!(edge_zone(r, egui::pos2(0.0, 0.0)), None);
+    }
+
+    #[test]
+    fn edge_zone_off_origin_rect_matches_translated_points() {
+        // Same 400x200 rect as `zone_rect`, translated to a non-zero origin.
+        // The formula only uses `pos - rect.min` and `rect.max - pos`, so
+        // results must be translation-invariant.
+        let offset = egui::vec2(1000.0, 500.0);
+        let rect =
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0) + offset, egui::vec2(400.0, 200.0));
+
+        // left-quarter point
+        assert_eq!(
+            edge_zone(rect, egui::pos2(20.0, 100.0) + offset),
+            Some((SplitDir::Horizontal, true))
+        );
+        // centre point
+        assert_eq!(edge_zone(rect, egui::pos2(200.0, 100.0) + offset), None);
+        // top-quarter point
+        assert_eq!(
+            edge_zone(rect, egui::pos2(200.0, 10.0) + offset),
+            Some((SplitDir::Vertical, true))
+        );
+    }
+
+    #[test]
+    fn edge_zone_exact_tie_breaks_left_before_top() {
+        // 200x200 rect: point (10, 10) is 0.05 from both the left and top
+        // edges — an exact tie. The if/else-if chain checks left first.
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 200.0));
+        assert_eq!(
+            edge_zone(r, egui::pos2(10.0, 10.0)),
+            Some((SplitDir::Horizontal, true))
+        );
+    }
+
+    #[test]
+    fn edge_zone_nan_position_is_none() {
+        // Pointer position comes from egui's live input at runtime; NaN must
+        // not panic or produce a bogus zone. `Rect::contains` uses `<=`
+        // comparisons, which are false for NaN, so it returns false.
+        assert_eq!(edge_zone(zone_rect(), egui::pos2(f32::NAN, 100.0)), None);
+        assert_eq!(edge_zone(zone_rect(), egui::pos2(200.0, f32::NAN)), None);
     }
 }
