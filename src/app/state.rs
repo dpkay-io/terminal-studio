@@ -2346,16 +2346,6 @@ impl App {
             }
 
             // Group-aware variants — will be wired in a follow-up task
-            DragAction::ReorderTabInGroup {
-                pane_id,
-                group_id,
-                to_index,
-            } => {
-                if let Some(group) = self.pane_state.groups.get_mut(&group_id) {
-                    group.reorder(pane_id, to_index);
-                }
-                self.activate_pane(pane_id);
-            }
             DragAction::MoveTabToGroup {
                 pane_id,
                 target_group_id,

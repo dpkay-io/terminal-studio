@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::FontId;
 
 use crate::editor_group::NavigationDir;
-use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
+use crate::pane_tree::{PaneNode, SplitDir};
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::shortcuts::{AppAction, ShortcutRegistry};
@@ -71,6 +71,7 @@ use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
 
 #[derive(Clone, Copy, Default)]
+#[allow(dead_code)]
 enum CloseAllTarget {
     #[default]
     ActiveGroup,
@@ -230,10 +231,12 @@ pub struct App {
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
+    #[allow(dead_code)]
     tab_rename_pane_id: Option<u32>,
+    #[allow(dead_code)]
     tab_rename_text: String,
-    /// Pane ID to scroll into view in the tab bar. Set when opening a
-    /// file/diff/conflict pane, consumed by the tab bar renderer.
+    /// Pane ID to scroll into view in the session navigator. Set when opening
+    /// a file/diff/conflict pane; the consumer moved out of the tab bar.
     pub(super) tab_scroll_to_pane: Option<u32>,
     /// File path to reveal (expand ancestors + highlight + scroll to) in the
     /// directory tree. Set by auto-reveal on pane switch or explicit shortcut.
@@ -2568,7 +2571,7 @@ impl App {
 
         // ── Output variables collected inside the central panel closure ─────
         let divider_drags: Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
-        let mut close_pane_id: Option<u32> = None;
+        let close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
         let mut clicked_group_id: Option<crate::editor_group::GroupId> = None;
         let mut editor_saves: Vec<u32> = vec![];
@@ -2585,10 +2588,6 @@ impl App {
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
         // Phase D: pane context menu actions (3-dot menu on split panes)
         let mut pane_context_actions: Vec<ui::PaneContextAction> = vec![];
-        // Phase D: move existing tab into split alongside active pane
-        let move_to_split: Option<(u32, SplitDir)> = None;
-        // Group-based tab bar results
-        let mut group_tab_results: Vec<ui::GroupTabBarResult> = vec![];
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -2641,25 +2640,7 @@ impl App {
                     &mut pane_rects_snap,
                     &mut split_ratio_changes,
                     &mut pane_context_actions,
-                    &mut group_tab_results,
                 );
-
-                // Process group tab bar results
-                for result in &group_tab_results {
-                    if result.close_pane_id.is_some() { close_pane_id = result.close_pane_id; }
-                    if result.clicked_pane_id.is_some() { clicked_pane_id = result.clicked_pane_id; }
-                    if result.clicked_group_id.is_some() { clicked_group_id = result.clicked_group_id; }
-                    if let Some((gid, dir)) = result.split_request {
-                        // Focus the requesting group so the split goes to the right place.
-                        self.pane_state.focused_group_id = gid;
-                        if let Some(g) = self.pane_state.groups.get(&gid) {
-                            if let Some(pid) = g.active_pane_id {
-                                self.pane_state.active_pane_id = Some(pid);
-                            }
-                        }
-                        split_request = Some(dir);
-                    }
-                }
 
             // ── URL detection + search overlay ────────────────────────────
             if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.session_state.active_id) {
@@ -3994,112 +3975,6 @@ impl App {
                         feedback::FlashKind::Success,
                     );
                     ctx.request_repaint();
-                }
-            }
-        }
-
-        // Phase D-1b: Handle "Move to split" — move an existing tab into split alongside active pane
-        if let Some((clicked_pane, dir)) = move_to_split {
-            if let Some(active_pid) = self.pane_state.active_pane_id {
-                // When the user clicks split on the active tab, pick the next
-                // visible tab as the source to merge alongside it.
-                let active_root = self.pane_state.root_of(active_pid);
-                let source_pane_id = if clicked_pane == active_pid {
-                    // Pick the next visible tab that is NOT in the same split tree.
-                    let active_vis_pos = visible_indices
-                        .iter()
-                        .position(|&i| self.pane_state.panes[i].id == active_pid);
-                    active_vis_pos.and_then(|pos| {
-                        let len = visible_indices.len();
-                        for offset in 1..len {
-                            let idx = (pos + offset) % len;
-                            let pid = self.pane_state.panes[visible_indices[idx]].id;
-                            if self.pane_state.root_of(pid) != active_root {
-                                return Some(pid);
-                            }
-                        }
-                        None
-                    })
-                } else if self.pane_state.root_of(clicked_pane) == active_root {
-                    None
-                } else {
-                    Some(clicked_pane)
-                };
-
-                if let Some(source_pane_id) = source_pane_id {
-                    if source_pane_id != active_pid {
-                        let source_root = self.pane_state.root_of(source_pane_id);
-                        let active_root = self.pane_state.root_of(active_pid);
-                        if let (Some(source_root_pid), Some(active_root_pid)) =
-                            (source_root, active_root)
-                        {
-                            // Remove the source from its tree (same or different root)
-                            let source_node = if source_root_pid == active_root_pid {
-                                if let Some(tree) =
-                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                {
-                                    match tree.remove_pane(source_pane_id) {
-                                        RemoveResult::IsTarget => None,
-                                        RemoveResult::CollapseToSibling(replacement) => {
-                                            let node = PaneNode::Leaf {
-                                                pane_id: source_pane_id,
-                                                last_size: (80, 24),
-                                            };
-                                            if let Some(tree) =
-                                                self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                            {
-                                                *tree = replacement;
-                                            }
-                                            Some(node)
-                                        }
-                                        RemoveResult::Done => Some(PaneNode::Leaf {
-                                            pane_id: source_pane_id,
-                                            last_size: (80, 24),
-                                        }),
-                                        RemoveResult::NotFound => None,
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                self.pane_state.pane_trees.remove(&source_root_pid)
-                            };
-
-                            // Insert source alongside active pane
-                            if let Some(subtree) = source_node {
-                                let split_id = self.pane_state.next_split_id;
-                                self.pane_state.next_split_id += 1;
-                                if let Some(target_tree) =
-                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                {
-                                    if !target_tree.split_pane_with_node(
-                                        active_pid,
-                                        subtree.clone(),
-                                        split_id,
-                                        dir,
-                                    ) {
-                                        self.pane_state.pane_trees.insert(source_pane_id, subtree);
-                                    } else {
-                                        let moved_leaves = subtree.leaf_ids();
-                                        if let Some(&first) = moved_leaves.first() {
-                                            self.pane_state.active_pane_id = Some(first);
-                                            if let Some(pane) =
-                                                self.pane_state.panes.iter().find(|p| p.id == first)
-                                            {
-                                                if let PaneContent::Terminal(sid) = pane.content {
-                                                    self.session_state.active_id = Some(sid);
-                                                    self.update_is_active_flags();
-                                                }
-                                            }
-                                        }
-                                        ctx.request_repaint();
-                                    }
-                                } else {
-                                    self.pane_state.pane_trees.insert(source_pane_id, subtree);
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }

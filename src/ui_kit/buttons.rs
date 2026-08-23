@@ -203,6 +203,7 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, rect: egui::Rect) -> egui::Re
 
 // ── Dot menu button ────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn dot_menu_button(
     ui: &mut egui::Ui,
     id: egui::Id,
