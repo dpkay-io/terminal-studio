@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::editor_group::GroupId;
+use crate::pane_tree::SplitDir;
 
 #[derive(Clone, Debug)]
 pub(super) enum DragPayload {
@@ -18,8 +19,18 @@ pub(super) enum DropTarget {
     TabBar(usize),
     PaneArea,
     NewWindow,
-    GroupTabBar { group_id: GroupId, position: usize },
+    GroupTabBar {
+        group_id: GroupId,
+        position: usize,
+    },
     GroupArea(GroupId),
+    /// Drop near a group's edge: create a new split in `dir`, with the new
+    /// group placed before (left/top) or after (right/bottom) the target.
+    SplitEdge {
+        group_id: GroupId,
+        dir: SplitDir,
+        before: bool,
+    },
 }
 
 #[allow(dead_code)]
@@ -176,6 +187,49 @@ impl DragState {
         painter.rect_filled(rect, theme::R_MD, t.surface1);
         painter.rect_stroke(rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0));
         painter.galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
+    }
+}
+
+/// Fraction of each dimension, measured from the edge inward, that arms a
+/// split rather than a plain "add to this group" drop.
+#[allow(dead_code)] // wired up by the drag resolver in a later task
+const EDGE_ZONE_FRACTION: f32 = 0.25;
+
+/// Resolve a pointer position inside `rect` to a split edge zone.
+///
+/// Returns `None` for the centre region and for points outside `rect`, meaning
+/// the caller should fall back to `DropTarget::GroupArea`.
+///
+/// Distances are compared as a *fraction* of each dimension so that corners of
+/// non-square rects resolve to the edge the pointer is proportionally nearest,
+/// and every point in the rect maps to exactly one zone.
+#[allow(dead_code)] // wired up by the drag resolver in a later task
+pub(super) fn edge_zone(rect: egui::Rect, pos: egui::Pos2) -> Option<(SplitDir, bool)> {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 || !rect.contains(pos) {
+        return None;
+    }
+
+    let left = (pos.x - rect.min.x) / rect.width();
+    let right = (rect.max.x - pos.x) / rect.width();
+    let top = (pos.y - rect.min.y) / rect.height();
+    let bottom = (rect.max.y - pos.y) / rect.height();
+
+    let nearest = left.min(right).min(top).min(bottom);
+    if nearest >= EDGE_ZONE_FRACTION {
+        return None;
+    }
+
+    // ponytail: `nearest` is bit-identical to one of these four bindings via
+    // f32::min, not derived from arithmetic on it — exact comparison is safe.
+    #[allow(clippy::float_cmp)]
+    if nearest == left {
+        Some((SplitDir::Horizontal, true))
+    } else if nearest == right {
+        Some((SplitDir::Horizontal, false))
+    } else if nearest == top {
+        Some((SplitDir::Vertical, true))
+    } else {
+        Some((SplitDir::Vertical, false))
     }
 }
 
@@ -1273,5 +1327,75 @@ mod tests {
                 at_index: Some(0),
             }
         ));
+    }
+
+    // ── edge_zone geometry tests ────────────────────────────────────
+
+    fn zone_rect() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 200.0))
+    }
+
+    #[test]
+    fn edge_zone_centre_is_none() {
+        assert_eq!(edge_zone(zone_rect(), egui::pos2(200.0, 100.0)), None);
+    }
+
+    #[test]
+    fn edge_zone_left_quarter() {
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(20.0, 100.0)),
+            Some((SplitDir::Horizontal, true))
+        );
+    }
+
+    #[test]
+    fn edge_zone_right_quarter() {
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(380.0, 100.0)),
+            Some((SplitDir::Horizontal, false))
+        );
+    }
+
+    #[test]
+    fn edge_zone_top_quarter() {
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(200.0, 10.0)),
+            Some((SplitDir::Vertical, true))
+        );
+    }
+
+    #[test]
+    fn edge_zone_bottom_quarter() {
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(200.0, 190.0)),
+            Some((SplitDir::Vertical, false))
+        );
+    }
+
+    #[test]
+    fn edge_zone_corner_picks_proportionally_nearer_edge() {
+        // Rect is 400x200. Point (10, 20): 2.5% from left, 10% from top.
+        // Left is proportionally nearer, so horizontal wins.
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(10.0, 20.0)),
+            Some((SplitDir::Horizontal, true))
+        );
+        // Point (60, 4): 15% from left, 2% from top. Top wins.
+        assert_eq!(
+            edge_zone(zone_rect(), egui::pos2(60.0, 4.0)),
+            Some((SplitDir::Vertical, true))
+        );
+    }
+
+    #[test]
+    fn edge_zone_outside_rect_is_none() {
+        assert_eq!(edge_zone(zone_rect(), egui::pos2(-5.0, 100.0)), None);
+        assert_eq!(edge_zone(zone_rect(), egui::pos2(500.0, 100.0)), None);
+    }
+
+    #[test]
+    fn edge_zone_degenerate_rect_is_none() {
+        let r = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(0.0, 0.0));
+        assert_eq!(edge_zone(r, egui::pos2(0.0, 0.0)), None);
     }
 }
