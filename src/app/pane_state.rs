@@ -378,12 +378,27 @@ impl PaneState {
             return;
         }
         // Remove from source
-        let source_became_empty = self
+        self.detach_pane_from_group(pane_id);
+        // Insert into target
+        if let Some(target) = self.groups.get_mut(&target_group_id) {
+            target.insert_pane(pane_id, at);
+            target.activate(pane_id);
+        }
+    }
+
+    /// Remove `pane_id` from whichever group holds it, deleting that group and
+    /// collapsing the layout if it became empty. Returns true if a pane was
+    /// actually detached.
+    pub(super) fn detach_pane_from_group(&mut self, pane_id: u32) -> bool {
+        let Some(source_group_id) = self.group_of(pane_id) else {
+            return false;
+        };
+        let became_empty = self
             .groups
             .get_mut(&source_group_id)
             .map(|s| s.remove_pane(pane_id))
             .unwrap_or(false);
-        if source_became_empty {
+        if became_empty {
             self.groups.remove(&source_group_id);
             if let GroupRemoveResult::CollapseToSibling(replacement) =
                 self.group_layout.remove_group(source_group_id)
@@ -391,11 +406,7 @@ impl PaneState {
                 self.group_layout = replacement;
             }
         }
-        // Insert into target
-        if let Some(target) = self.groups.get_mut(&target_group_id) {
-            target.insert_pane(pane_id, at);
-            target.activate(pane_id);
-        }
+        true
     }
 }
 
@@ -994,6 +1005,54 @@ mod tests {
         state.add_pane_to_group(1, 4, Some(1));
         let g = state.groups.get(&1).unwrap();
         assert_eq!(g.pane_ids, vec![1, 4, 2]);
+    }
+
+    #[test]
+    fn detach_pane_keeps_group_with_remaining_panes() {
+        let mut state = make_grouped_state();
+        let layout_before = state.group_layout.group_ids();
+        // Group 1 holds panes [1, 2] — detaching 2 must not remove the group.
+        assert!(state.detach_pane_from_group(2));
+        assert!(state.groups.contains_key(&1));
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
+        assert_eq!(state.group_layout.group_ids(), layout_before);
+    }
+
+    #[test]
+    fn detach_sole_pane_removes_group_and_collapses_layout() {
+        let mut state = make_grouped_state();
+        // Group 2 holds only pane 3 — detaching it empties and collapses group 2.
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+        assert!(state.detach_pane_from_group(3));
+        assert!(!state.groups.contains_key(&2));
+        assert!(state.groups.contains_key(&1));
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+    }
+
+    #[test]
+    fn detach_unknown_pane_is_noop() {
+        let mut state = make_grouped_state();
+        let layout_before = state.group_layout.group_ids();
+        assert!(!state.detach_pane_from_group(99));
+        assert_eq!(state.groups.len(), 2);
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1, 2]);
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), layout_before);
+    }
+
+    /// The `SplitWithPayload` handler focuses the target group, then detaches
+    /// the dragged pane, then splits. Detaching may collapse the *source*
+    /// group out of the layout — the target group must survive that.
+    #[test]
+    fn detach_then_split_keeps_target_group_in_layout() {
+        let mut state = make_grouped_state();
+        // Drag pane 3 (sole occupant of group 2) onto group 1's edge.
+        state.focused_group_id = 1;
+        assert!(state.detach_pane_from_group(3));
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+        let new_gid = state.split_focused_group(3, SplitDir::Vertical, true);
+        assert_eq!(state.group_layout.group_ids(), vec![new_gid, 1]);
+        assert!(state.groups.get(&new_gid).unwrap().contains(3));
     }
 
     #[test]
