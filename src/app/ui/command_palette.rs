@@ -448,6 +448,9 @@ impl App {
             AppAction::NewTerminalTab => {
                 self.deferred_spawn = Some(self.configured_shell());
             }
+            AppAction::NewFile => {
+                self.deferred_new_file = true;
+            }
             AppAction::CloseCurrentPane => {
                 self.deferred_close_pane = true;
             }

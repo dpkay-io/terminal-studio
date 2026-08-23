@@ -12,6 +12,7 @@ pub enum AppAction {
 
     // Tab management
     NewTerminalTab,
+    NewFile,
     CloseCurrentPane,
     SwitchToTab1,
     SwitchToTab2,
@@ -94,6 +95,7 @@ impl AppAction {
             Self::ToggleRightSidebar => "toggle_right_sidebar",
             Self::FocusTerminal => "focus_terminal",
             Self::NewTerminalTab => "new_terminal_tab",
+            Self::NewFile => "new_file",
             Self::CloseCurrentPane => "close_current_pane",
             Self::SwitchToTab1 => "switch_to_tab_1",
             Self::SwitchToTab2 => "switch_to_tab_2",
@@ -144,6 +146,7 @@ impl AppAction {
             "toggle_right_sidebar" => Some(Self::ToggleRightSidebar),
             "focus_terminal" => Some(Self::FocusTerminal),
             "new_terminal_tab" => Some(Self::NewTerminalTab),
+            "new_file" => Some(Self::NewFile),
             "close_current_pane" => Some(Self::CloseCurrentPane),
             "switch_to_tab_1" => Some(Self::SwitchToTab1),
             "switch_to_tab_2" => Some(Self::SwitchToTab2),
@@ -195,6 +198,7 @@ impl AppAction {
             Self::ToggleRightSidebar => "Toggle right sidebar",
             Self::FocusTerminal => "Focus terminal",
             Self::NewTerminalTab => "New terminal tab",
+            Self::NewFile => "New file",
             Self::CloseCurrentPane => "Close current pane",
             Self::SwitchToTab1 => "Switch to tab 1",
             Self::SwitchToTab2 => "Switch to tab 2",
@@ -517,6 +521,15 @@ impl ShortcutRegistry {
             (Shortcut::cs(egui::Key::Backtick), AppAction::FocusTerminal),
             // Tab management
             (Shortcut::cs(egui::Key::N), AppAction::NewTerminalTab),
+            (
+                Shortcut {
+                    ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::N,
+                },
+                AppAction::NewFile,
+            ),
             (Shortcut::cs(egui::Key::W), AppAction::CloseCurrentPane),
             (Shortcut::cs(egui::Key::Num1), AppAction::SwitchToTab1),
             (Shortcut::cs(egui::Key::Num2), AppAction::SwitchToTab2),
@@ -691,6 +704,7 @@ impl ShortcutRegistry {
                 "Tab Management",
                 &[
                     AppAction::NewTerminalTab,
+                    AppAction::NewFile,
                     AppAction::CloseCurrentPane,
                     AppAction::PreviousTab,
                     AppAction::NextTab,

@@ -57,7 +57,7 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub clicked_pane_id: &'a mut Option<u32>,
     pub editor_saves: &'a mut Vec<u32>,
     pub editor_preview_toggles: &'a mut Vec<u32>,
-    pub pane_widths_snap: &'a mut Vec<(u32, f32)>,
+    pub pane_rects_snap: &'a mut Vec<(u32, egui::Rect)>,
     pub split_ratio_changes: &'a mut Vec<(u32, f32)>,
     pub pane_context_actions: &'a mut Vec<PaneContextAction>,
     pub term_selection: &'a Option<TermSelection>,
@@ -823,8 +823,10 @@ fn render_leaf_content(
     let pane = rctx.panes.iter().find(|p| p.id == pane_id);
     let Some(pane) = pane else { return };
 
-    // Track width for resize
-    rctx.pane_widths_snap.push((pane_id, rect.width()));
+    // Track the exact content rect so the PTY grid is sized to match the drawn
+    // area (same paddings), never wider/taller — otherwise content is hidden
+    // past the right edge or under the info bar.
+    rctx.pane_rects_snap.push((pane_id, rect));
 
     ui.allocate_ui_at_rect(rect, |ui| {
         ui.push_id(pane_id, |ui| match &pane.content {
@@ -937,7 +939,7 @@ fn render_group_node(
     clicked_group_id: &mut Option<GroupId>,
     editor_saves: &mut Vec<u32>,
     editor_preview_toggles: &mut Vec<u32>,
-    pane_widths_snap: &mut Vec<(u32, f32)>,
+    pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
     split_ratio_changes: &mut Vec<(u32, f32)>,
     pane_context_actions: &mut Vec<PaneContextAction>,
     group_tab_results: &mut Vec<GroupTabBarResult>,
@@ -1093,7 +1095,7 @@ fn render_group_node(
                         clicked_pane_id,
                         editor_saves,
                         editor_preview_toggles,
-                        pane_widths_snap,
+                        pane_rects_snap,
                         split_ratio_changes,
                         pane_context_actions,
                         term_selection: &app.term_selection,
@@ -1222,7 +1224,7 @@ fn render_group_node(
                     clicked_group_id,
                     editor_saves,
                     editor_preview_toggles,
-                    pane_widths_snap,
+                    pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
                     group_tab_results,
@@ -1241,7 +1243,7 @@ fn render_group_node(
                     clicked_group_id,
                     editor_saves,
                     editor_preview_toggles,
-                    pane_widths_snap,
+                    pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
                     group_tab_results,
@@ -1261,7 +1263,7 @@ fn render_group_node(
                 clicked_group_id,
                 editor_saves,
                 editor_preview_toggles,
-                pane_widths_snap,
+                pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
                 group_tab_results,
@@ -1276,7 +1278,7 @@ fn render_group_node(
                 clicked_group_id,
                 editor_saves,
                 editor_preview_toggles,
-                pane_widths_snap,
+                pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
                 group_tab_results,
@@ -1396,7 +1398,7 @@ impl App {
         clicked_group_id: &mut Option<GroupId>,
         editor_saves: &mut Vec<u32>,
         editor_preview_toggles: &mut Vec<u32>,
-        pane_widths_snap: &mut Vec<(u32, f32)>,
+        pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
         split_ratio_changes: &mut Vec<(u32, f32)>,
         pane_context_actions: &mut Vec<PaneContextAction>,
         group_tab_results: &mut Vec<GroupTabBarResult>,
@@ -1415,7 +1417,7 @@ impl App {
             clicked_group_id,
             editor_saves,
             editor_preview_toggles,
-            pane_widths_snap,
+            pane_rects_snap,
             split_ratio_changes,
             pane_context_actions,
             group_tab_results,

@@ -50,6 +50,8 @@ pub(super) struct FileEditorState {
     pub(super) stale: bool,
     /// Content is being loaded from a background thread.
     pub(super) loading: bool,
+    /// A brand-new buffer with no path yet; first save prompts for a filename.
+    pub(super) untitled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +192,7 @@ mod tests {
             show_preview: false,
             stale: false,
             loading: false,
+            untitled: false,
         };
         let cloned = state.clone();
         assert_eq!(cloned.path, state.path);
@@ -200,6 +203,7 @@ mod tests {
         assert_eq!(cloned.show_preview, state.show_preview);
         assert_eq!(cloned.stale, state.stale);
         assert_eq!(cloned.loading, state.loading);
+        assert_eq!(cloned.untitled, state.untitled);
     }
 
     #[test]
@@ -221,6 +225,7 @@ mod tests {
             show_preview: false,
             stale: false,
             loading: false,
+            untitled: false,
         });
         let diff = PaneContent::FileDiff(FileDiffState {
             path: PathBuf::from("file.rs"),

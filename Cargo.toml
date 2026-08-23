@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "crates/alacritty_terminal"]
+
 [package]
 name = "terminal-studio"
 version = "0.15.4"
@@ -22,10 +25,10 @@ egui = "0.28"
 vte = "0.13"
 
 # Alacritty terminal emulator library — replaces hand-rolled VT emulator
-alacritty_terminal = "0.26"
+alacritty_terminal = { path = "crates/alacritty_terminal" }
 
 # Cross-platform PTY: ConPTY on Windows, openpty on Unix
-portable-pty = "0.8"
+portable-pty = "0.9"
 
 # Error handling
 anyhow = "1"

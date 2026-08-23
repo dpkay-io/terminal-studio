@@ -230,6 +230,22 @@ impl App {
                         .shortcut_registry
                         .find_shortcut(crate::shortcuts::AppAction::NewTerminalTab)
                         .map(|s| s.label());
+                    let new_file_label = {
+                        let key = self
+                            .shortcut_registry
+                            .find_shortcut(crate::shortcuts::AppAction::NewFile)
+                            .map(|s| s.label())
+                            .unwrap_or_else(|| {
+                                crate::shortcuts::Shortcut {
+                                    ctrl: true,
+                                    shift: false,
+                                    alt: true,
+                                    key: egui::Key::N,
+                                }
+                                .label()
+                            });
+                        format!("New File\u{2026}    {}", key)
+                    };
                     ui.menu_button(
                         egui::RichText::new("+ New \u{25be}").size(theme::FONT_UI_MD),
                         |ui| {
@@ -252,6 +268,11 @@ impl App {
                                         ui.close_menu();
                                     }
                                 }
+                            }
+                            ui.separator();
+                            if ui.button(new_file_label).clicked() {
+                                actions.new_file = true;
+                                ui.close_menu();
                             }
                             ui.separator();
                             if ui.button("Open Folder\u{2026}").clicked() {

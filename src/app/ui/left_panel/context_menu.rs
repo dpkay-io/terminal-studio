@@ -32,6 +32,70 @@ impl App {
         self.process_open_folder(folder);
         self.process_spawn_session(&sess_actions, &active_fg);
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
+        if sess_actions.new_file | std::mem::replace(&mut self.deferred_new_file, false) {
+            self.create_new_file_pane();
+        }
+    }
+
+    /// Create a fresh, unsaved ("untitled") editor buffer in the active group.
+    /// The first Ctrl+S prompts for a filename via a native Save dialog.
+    fn create_new_file_pane(&mut self) {
+        use super::super::super::pane::FileEditorState;
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.untitled_seq += 1;
+        let name = format!("Untitled-{}", self.untitled_seq);
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileEditor(FileEditorState {
+                path: std::path::PathBuf::from(name),
+                content: String::new(),
+                dirty: false,
+                save_error: false,
+                workspace_id: self.active_group,
+                show_preview: false,
+                stale: false,
+                loading: false,
+                untitled: true,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        self.pane_state.pane_trees.insert(
+            pane_id,
+            PaneNode::Leaf {
+                pane_id,
+                last_size: (0, 0),
+            },
+        );
+        let gid = if self
+            .pane_state
+            .groups
+            .contains_key(&self.pane_state.focused_group_id)
+        {
+            self.pane_state.focused_group_id
+        } else {
+            let new_gid = self.pane_state.create_group(pane_id);
+            self.pane_state.group_layout =
+                crate::editor_group::GroupNode::Leaf { group_id: new_gid };
+            self.pane_state.focused_group_id = new_gid;
+            new_gid
+        };
+        if self
+            .pane_state
+            .groups
+            .get(&gid)
+            .is_some_and(|g| !g.contains(pane_id))
+        {
+            self.pane_state.add_pane_to_group(gid, pane_id, None);
+        }
+        if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+            g.activate(pane_id);
+        }
+        self.activate_and_scroll_to_pane(pane_id);
     }
 
     fn process_open_folder(&mut self, path: Option<std::path::PathBuf>) {

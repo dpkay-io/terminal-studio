@@ -797,6 +797,7 @@ mod tests {
                 show_preview: false,
                 stale: false,
                 loading: false,
+                untitled: false,
             }),
             manual_width: None,
             last_size: (0, 0),

@@ -86,6 +86,15 @@ impl KeybindingsConfig {
             (
                 Shortcut {
                     ctrl: true,
+                    shift: false,
+                    alt: true,
+                    key: egui::Key::N,
+                },
+                AppAction::NewFile,
+            ),
+            (
+                Shortcut {
+                    ctrl: true,
                     shift: true,
                     alt: false,
                     key: egui::Key::W,
