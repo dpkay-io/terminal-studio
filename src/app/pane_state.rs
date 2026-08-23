@@ -229,12 +229,17 @@ impl PaneState {
     /// to the layout tree adjacent to `focused_group_id` in direction `dir`.
     /// Returns the new group's ID.
     #[allow(dead_code)]
-    pub(super) fn split_focused_group(&mut self, new_pane_id: u32, dir: SplitDir) -> GroupId {
+    pub(super) fn split_focused_group(
+        &mut self,
+        new_pane_id: u32,
+        dir: SplitDir,
+        before: bool,
+    ) -> GroupId {
         let new_group_id = self.create_group(new_pane_id);
         let split_id = self.next_split_id;
         self.next_split_id += 1;
         self.group_layout
-            .split_group(self.focused_group_id, new_group_id, split_id, dir);
+            .split_group(self.focused_group_id, new_group_id, split_id, dir, before);
         self.focused_group_id = new_group_id;
         self.active_pane_id = Some(new_pane_id);
         new_group_id
@@ -936,7 +941,7 @@ mod tests {
         state.next_split_id += 1;
         state
             .group_layout
-            .split_group(g1, g2, split_id, SplitDir::Horizontal);
+            .split_group(g1, g2, split_id, SplitDir::Horizontal, false);
         state.focused_group_id = g1;
         state.active_pane_id = Some(1);
         state
@@ -999,7 +1004,7 @@ mod tests {
         state.active_pane_id = Some(1);
 
         state.panes.push(make_pane(2));
-        let g2 = state.split_focused_group(2, SplitDir::Horizontal);
+        let g2 = state.split_focused_group(2, SplitDir::Horizontal, false);
 
         // New group created
         assert!(state.groups.contains_key(&g2));

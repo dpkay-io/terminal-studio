@@ -904,8 +904,13 @@ mod tests {
         // Update layout to show both groups
         let split_id = ps.next_split_id;
         ps.next_split_id += 1;
-        ps.group_layout
-            .split_group(g1, g2, split_id, crate::pane_tree::SplitDir::Horizontal);
+        ps.group_layout.split_group(
+            g1,
+            g2,
+            split_id,
+            crate::pane_tree::SplitDir::Horizontal,
+            false,
+        );
 
         (ps, g1, g2)
     }
@@ -1107,8 +1112,13 @@ mod tests {
         let g2 = ps.create_group(1); // dummy; we only care about dedup
         let split_id = ps.next_split_id;
         ps.next_split_id += 1;
-        ps.group_layout
-            .split_group(g1, g2, split_id, crate::pane_tree::SplitDir::Horizontal);
+        ps.group_layout.split_group(
+            g1,
+            g2,
+            split_id,
+            crate::pane_tree::SplitDir::Horizontal,
+            false,
+        );
 
         let action = resolve_group(
             DragPayload::File(PathBuf::from("/tmp/test.rs")),

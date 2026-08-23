@@ -3959,7 +3959,7 @@ impl App {
                         workspace_id: self.active_group,
                     });
                     // Split the focused group (new system)
-                    self.pane_state.split_focused_group(new_pane_id, dir);
+                    self.pane_state.split_focused_group(new_pane_id, dir, false);
                     // Also maintain pane_trees for backward compat during migration
                     self.pane_state.pane_trees.insert(
                         new_pane_id,
@@ -4151,7 +4151,7 @@ impl App {
                         if let Some(gid) = self.pane_state.group_of(pid) {
                             self.pane_state.focused_group_id = gid;
                         }
-                        self.pane_state.split_focused_group(new_pane_id, dir);
+                        self.pane_state.split_focused_group(new_pane_id, dir, false);
                         // Also maintain pane_trees
                         self.pane_state.pane_trees.insert(
                             new_pane_id,

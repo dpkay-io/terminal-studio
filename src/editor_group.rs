@@ -142,14 +142,17 @@ impl GroupNode {
         }
     }
 
-    /// Replace the leaf with `target_group_id` with a Split having the target as
-    /// `a` and a new leaf (`new_group_id`) as `b`. Returns true if found.
+    /// Replace the leaf with `target_group_id` with a Split containing the
+    /// target and a new leaf (`new_group_id`). When `before` is true the new
+    /// leaf becomes side `a` (left/top), otherwise side `b` (right/bottom).
+    /// Returns true if the target was found.
     pub fn split_group(
         &mut self,
         target_group_id: GroupId,
         new_group_id: GroupId,
         split_id: u32,
         dir: SplitDir,
+        before: bool,
     ) -> bool {
         match self {
             GroupNode::Leaf { group_id } if *group_id == target_group_id => {
@@ -159,18 +162,23 @@ impl GroupNode {
                 let new_leaf = GroupNode::Leaf {
                     group_id: new_group_id,
                 };
+                let (a, b) = if before {
+                    (new_leaf, old_leaf)
+                } else {
+                    (old_leaf, new_leaf)
+                };
                 *self = GroupNode::Split {
                     split_id,
                     dir,
                     ratio: 0.5,
-                    a: Box::new(old_leaf),
-                    b: Box::new(new_leaf),
+                    a: Box::new(a),
+                    b: Box::new(b),
                 };
                 true
             }
             GroupNode::Split { a, b, .. } => {
-                a.split_group(target_group_id, new_group_id, split_id, dir)
-                    || b.split_group(target_group_id, new_group_id, split_id, dir)
+                a.split_group(target_group_id, new_group_id, split_id, dir, before)
+                    || b.split_group(target_group_id, new_group_id, split_id, dir, before)
             }
             _ => false,
         }
@@ -480,30 +488,56 @@ mod tests {
     #[test]
     fn group_ids_split_order() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.group_ids(), vec![1, 2]);
     }
 
     #[test]
     fn first_group_id_returns_leftmost() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.first_group_id(), 1);
     }
 
     #[test]
     fn contains_group_true_and_false() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert!(root.contains_group(1));
         assert!(root.contains_group(2));
         assert!(!root.contains_group(99));
     }
 
     #[test]
+    fn split_group_before_puts_new_leaf_first() {
+        let mut root = leaf(1);
+        assert!(root.split_group(1, 2, 100, SplitDir::Horizontal, true));
+        match &root {
+            GroupNode::Split { a, b, .. } => {
+                assert_eq!(a.first_group_id(), 2, "new leaf should be side a");
+                assert_eq!(b.first_group_id(), 1, "target should be side b");
+            }
+            _ => panic!("expected a split"),
+        }
+    }
+
+    #[test]
+    fn split_group_after_puts_new_leaf_second() {
+        let mut root = leaf(1);
+        assert!(root.split_group(1, 2, 100, SplitDir::Horizontal, false));
+        match &root {
+            GroupNode::Split { a, b, .. } => {
+                assert_eq!(a.first_group_id(), 1);
+                assert_eq!(b.first_group_id(), 2);
+            }
+            _ => panic!("expected a split"),
+        }
+    }
+
+    #[test]
     fn split_group_creates_split() {
         let mut root = leaf(1);
-        assert!(root.split_group(1, 2, 10, SplitDir::Horizontal));
+        assert!(root.split_group(1, 2, 10, SplitDir::Horizontal, false));
         assert_eq!(root.group_ids(), vec![1, 2]);
         if let GroupNode::Split { dir, ratio, .. } = &root {
             assert_eq!(*dir, SplitDir::Horizontal);
@@ -516,14 +550,14 @@ mod tests {
     #[test]
     fn split_group_unknown_returns_false() {
         let mut root = leaf(1);
-        assert!(!root.split_group(99, 2, 10, SplitDir::Horizontal));
+        assert!(!root.split_group(99, 2, 10, SplitDir::Horizontal, false));
         assert_eq!(root.group_ids(), vec![1]);
     }
 
     #[test]
     fn remove_group_left_collapses() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         let result = root.remove_group(1);
         assert!(matches!(result, GroupRemoveResult::CollapseToSibling(_)));
         if let GroupRemoveResult::CollapseToSibling(node) = result {
@@ -534,7 +568,7 @@ mod tests {
     #[test]
     fn remove_group_right_collapses() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         let result = root.remove_group(2);
         assert!(matches!(result, GroupRemoveResult::CollapseToSibling(_)));
         if let GroupRemoveResult::CollapseToSibling(node) = result {
@@ -557,7 +591,7 @@ mod tests {
     #[test]
     fn find_split_ratio_mut_works() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 42, SplitDir::Horizontal);
+        root.split_group(1, 2, 42, SplitDir::Horizontal, false);
         let ratio = root.find_split_ratio_mut(42).unwrap();
         *ratio = 0.3;
         if let GroupNode::Split { ratio, .. } = &root {
@@ -568,14 +602,14 @@ mod tests {
     #[test]
     fn find_split_ratio_mut_unknown_none() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 42, SplitDir::Horizontal);
+        root.split_group(1, 2, 42, SplitDir::Horizontal, false);
         assert!(root.find_split_ratio_mut(99).is_none());
     }
 
     #[test]
     fn sibling_of_in_split() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.sibling_of(1), Some(2));
         assert_eq!(root.sibling_of(2), Some(1));
     }
@@ -589,8 +623,8 @@ mod tests {
     #[test]
     fn neighbor_navigation() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(2, 3, 11, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 11, SplitDir::Horizontal, false);
         // Order: [1, 2, 3]
         assert_eq!(root.neighbor(1, SplitDir::Horizontal), Some(2));
         assert_eq!(root.neighbor(2, SplitDir::Horizontal), Some(3));
@@ -603,8 +637,8 @@ mod tests {
     #[test]
     fn remove_group_nested_collapses_correctly() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(2, 3, 11, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 11, SplitDir::Vertical, false);
         // Tree: Split(1, Split(2, 3))
         // Remove 2 — inner split collapses to 3, outer becomes Split(1, 3)
         let result = root.remove_group(2);
@@ -655,15 +689,15 @@ mod tests {
     #[test]
     fn neighbor_unknown_group_returns_none() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.neighbor(99, SplitDir::Horizontal), None);
     }
 
     #[test]
     fn sibling_of_nested_finds_immediate_sibling() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(1, 3, 11, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(1, 3, 11, SplitDir::Vertical, false);
         // Tree: Split(Split(1, 3), 2)
         // Sibling of 1 is 3 (immediate split partner)
         assert_eq!(root.sibling_of(1), Some(3));
@@ -681,15 +715,15 @@ mod tests {
     #[test]
     fn last_group_id_split() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.last_group_id(), 2);
     }
 
     #[test]
     fn last_group_id_nested() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(2, 3, 11, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 11, SplitDir::Vertical, false);
         // Tree: Split(1, Split(2, 3)) → last is 3
         assert_eq!(root.last_group_id(), 3);
     }
@@ -708,7 +742,7 @@ mod tests {
     #[test]
     fn spatial_horizontal_split_left_right() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         // Layout: [1 | 2]
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Right), Some(2));
         assert_eq!(root.spatial_neighbor(2, NavigationDir::Left), Some(1));
@@ -719,7 +753,7 @@ mod tests {
     #[test]
     fn spatial_horizontal_split_ignores_up_down() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Up), None);
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Down), None);
         assert_eq!(root.spatial_neighbor(2, NavigationDir::Up), None);
@@ -729,7 +763,7 @@ mod tests {
     #[test]
     fn spatial_vertical_split_up_down() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Vertical, false);
         // Layout: [1 / 2]
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Down), Some(2));
         assert_eq!(root.spatial_neighbor(2, NavigationDir::Up), Some(1));
@@ -740,7 +774,7 @@ mod tests {
     #[test]
     fn spatial_vertical_split_ignores_left_right() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Vertical, false);
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Left), None);
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Right), None);
         assert_eq!(root.spatial_neighbor(2, NavigationDir::Left), None);
@@ -756,8 +790,8 @@ mod tests {
         //      /        \
         //     2          3
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(2, 3, 11, SplitDir::Vertical);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 11, SplitDir::Vertical, false);
 
         // Right from 1 → first in right subtree (2)
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Right), Some(2));
@@ -779,8 +813,8 @@ mod tests {
     fn spatial_three_horizontal() {
         // Layout: [1 | 2 | 3]
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
-        root.split_group(2, 3, 11, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 11, SplitDir::Horizontal, false);
 
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Right), Some(2));
         assert_eq!(root.spatial_neighbor(2, NavigationDir::Right), Some(3));
@@ -793,7 +827,7 @@ mod tests {
     #[test]
     fn spatial_unknown_group_returns_none() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 10, SplitDir::Horizontal);
+        root.split_group(1, 2, 10, SplitDir::Horizontal, false);
         assert_eq!(root.spatial_neighbor(99, NavigationDir::Right), None);
     }
 
@@ -806,9 +840,9 @@ mod tests {
         // /   \      /   \
         // 1    2    3     4
         let mut root = leaf(1);
-        root.split_group(1, 3, 10, SplitDir::Vertical);
-        root.split_group(1, 2, 11, SplitDir::Horizontal);
-        root.split_group(3, 4, 12, SplitDir::Horizontal);
+        root.split_group(1, 3, 10, SplitDir::Vertical, false);
+        root.split_group(1, 2, 11, SplitDir::Horizontal, false);
+        root.split_group(3, 4, 12, SplitDir::Horizontal, false);
 
         // Horizontal navigation within top row
         assert_eq!(root.spatial_neighbor(1, NavigationDir::Right), Some(2));
@@ -827,8 +861,8 @@ mod tests {
     #[test]
     fn dedup_split_ids_no_duplicates() {
         let mut root = leaf(1);
-        root.split_group(1, 2, 1, SplitDir::Horizontal);
-        root.split_group(2, 3, 2, SplitDir::Vertical);
+        root.split_group(1, 2, 1, SplitDir::Horizontal, false);
+        root.split_group(2, 3, 2, SplitDir::Vertical, false);
         let mut next_id = 3u32;
         let mut seen = std::collections::HashSet::new();
         root.dedup_split_ids_inner(&mut seen, &mut next_id);
