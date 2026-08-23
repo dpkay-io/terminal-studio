@@ -71,7 +71,6 @@ use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
 
 #[derive(Clone, Copy, Default)]
-#[allow(dead_code)]
 enum CloseAllTarget {
     #[default]
     ActiveGroup,
