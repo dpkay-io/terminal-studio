@@ -42,6 +42,7 @@ mod pane;
 mod pane_state;
 mod persistence;
 pub(crate) mod scrollback_capture;
+mod scrollback_compactor;
 pub(crate) mod scrollback_inject;
 mod session_state;
 pub(crate) mod settings;
@@ -229,6 +230,9 @@ pub struct App {
 
     // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
     deferred_spawn: Option<ShellKind>,
+    deferred_new_file: bool,
+    /// Monotonic counter for naming untitled buffers (Untitled-1, Untitled-2, …).
+    untitled_seq: u32,
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
@@ -1035,6 +1039,20 @@ impl eframe::App for App {
             }
         }
 
+        // ── Scrollback compactor: harvest + compress old scrollback rows ──
+        {
+            let session_arcs: Vec<(
+                u32,
+                std::sync::Arc<parking_lot::RwLock<crate::terminal::Session>>,
+            )> = self
+                .session_state
+                .sessions
+                .iter()
+                .map(|e| (e.id, e.session.clone()))
+                .collect();
+            self.workers.scrollback_compactor.tick(&session_arcs);
+        }
+
         // ── Global search debounce: fire after 200ms of stable input ─────
         if self.global_search_debouncer.ready() {
             let query = self.global_search_query.clone();
@@ -1209,6 +1227,7 @@ impl App {
             self.capture_closed_session(sid);
         }
         self.session_state.remove(sid);
+        self.workers.scrollback_compactor.remove_session(sid);
         self.command_start_times.remove(&sid);
         self.completed_badges.remove(&sid);
         self.resize_debounce.remove(&sid);
@@ -2574,8 +2593,7 @@ impl App {
         let mut clicked_group_id: Option<crate::editor_group::GroupId> = None;
         let mut editor_saves: Vec<u32> = vec![];
         let mut editor_preview_toggles: Vec<u32> = vec![];
-        let mut pane_widths_snap: Vec<(u32, f32)> = vec![];
-        let mut resize_total_h: f32 = 0.0;
+        let mut pane_rects_snap: Vec<(u32, egui::Rect)> = vec![];
         let mut resize_cell_w: f32 = 0.0;
         let mut resize_cell_h: f32 = 0.0;
         let equalize_widths: bool = false;
@@ -2609,7 +2627,6 @@ impl App {
             };
             resize_cell_w  = cw;
             resize_cell_h  = ch;
-            resize_total_h = panel_rect.height();
             panel_w_snap   = panel_rect.width();
 
             let nv = visible_indices.len();
@@ -2641,7 +2658,7 @@ impl App {
                     &mut clicked_group_id,
                     &mut editor_saves,
                     &mut editor_preview_toggles,
-                    &mut pane_widths_snap,
+                    &mut pane_rects_snap,
                     &mut split_ratio_changes,
                     &mut pane_context_actions,
                     &mut group_tab_results,
@@ -3070,6 +3087,9 @@ impl App {
                     }
                     Some(AppAction::NewTerminalTab) => {
                         self.deferred_spawn = Some(self.configured_shell());
+                    }
+                    Some(AppAction::NewFile) => {
+                        self.deferred_new_file = true;
                     }
                     Some(AppAction::ReopenClosedSession) => {
                         self.show_closed_sessions = !self.show_closed_sessions;
@@ -4410,7 +4430,56 @@ impl App {
 
         // 7. Editor saves (Ctrl+S)
         for save_id in &editor_saves {
-            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
+            let is_untitled = self
+                .pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == *save_id)
+                .map(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.untitled))
+                .unwrap_or(false);
+            if is_untitled {
+                // Untitled buffer: prompt for a filename off-thread; apply next frame.
+                let default_name = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| p.id == *save_id)
+                    .and_then(|p| match &p.content {
+                        PaneContent::FileEditor(ed) => ed
+                            .path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(String::from),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "untitled.txt".to_string());
+                let start_dir = self.active_pane_cwd().or_else(|| {
+                    self.active_group.and_then(|gid| {
+                        self.workspace_store
+                            .workspaces
+                            .iter()
+                            .find(|w| w.id == gid)
+                            .map(|w| w.path.clone())
+                    })
+                });
+                let pane_id = *save_id;
+                let ctx_clone = ctx.clone();
+                std::thread::Builder::new()
+                    .name("save-as-picker".into())
+                    .spawn(move || {
+                        let mut dlg = rfd::FileDialog::new().set_file_name(default_name);
+                        if let Some(dir) = start_dir {
+                            dlg = dlg.set_directory(dir);
+                        }
+                        if let Some(path) = dlg.save_file() {
+                            ctx_clone.data_mut(|d| {
+                                d.insert_temp(egui::Id::new("pending_save_as"), (pane_id, path));
+                            });
+                            ctx_clone.request_repaint();
+                        }
+                    })
+                    .ok();
+            } else if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     match std::fs::write(&ed.path, &ed.content) {
                         Ok(()) => {
@@ -4423,6 +4492,38 @@ impl App {
                         }
                     }
                 }
+            }
+        }
+
+        // 7b. Apply a completed Save-As dialog result (from an untitled buffer).
+        if let Some((pane_id, path)) = ctx.data_mut(|d| {
+            d.remove_temp::<(u32, std::path::PathBuf)>(egui::Id::new("pending_save_as"))
+        }) {
+            let md_pref = self.md_prefer_preview;
+            let mut saved_ok = false;
+            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                if let PaneContent::FileEditor(ref mut ed) = p.content {
+                    match std::fs::write(&path, &ed.content) {
+                        Ok(()) => {
+                            ed.show_preview =
+                                path.extension().and_then(|e| e.to_str()) == Some("md") && md_pref;
+                            ed.path = path.clone();
+                            ed.untitled = false;
+                            ed.dirty = false;
+                            ed.save_error = false;
+                            saved_ok = true;
+                        }
+                        Err(e) => {
+                            log::error!("Failed to save {}: {e}", path.display());
+                            ed.save_error = true;
+                        }
+                    }
+                }
+            }
+            if saved_ok {
+                crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+                crate::app::persistence::save_recent_files(&self.recent_files);
+                self.save_session();
             }
         }
 
@@ -4445,13 +4546,19 @@ impl App {
         // after the size has been stable for 150 ms. This prevents ConPTY from
         // issuing a clear-screen sequence on every drag frame, which would leave
         // the terminal blank for as long as the running app takes to redraw.
-        for (pane_id, width) in pane_widths_snap {
+        for (pane_id, content_rect) in pane_rects_snap {
             if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
                 if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
-                    let cols = (((width - theme::TERM_PAD_LEFT) / resize_cell_w) as u16).max(1);
-                    let rows = (((resize_total_h - theme::HEADER_H - theme::TERM_PAD_TOP)
-                        / resize_cell_h) as u16)
-                        .max(1);
+                    // Size the grid from the exact rect the renderer draws into,
+                    // via the shared helper — keeps cols/rows in lockstep with
+                    // visible_cols/visible_rows so no content is clipped.
+                    let (c, r) = crate::renderer::terminal_pass::grid_size_for_rect(
+                        content_rect,
+                        resize_cell_w,
+                        resize_cell_h,
+                    );
+                    let cols = (c as u16).max(1);
+                    let rows = (r as u16).max(1);
                     let target = (cols, rows);
                     if target != self.pane_state.panes[pane_idx].last_size {
                         // Reset debounce timer only if the target itself changed
@@ -4522,6 +4629,7 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4577,6 +4685,7 @@ impl App {
                         show_preview: true,
                         stale: false,
                         loading: true,
+                        untitled: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4631,6 +4740,7 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4870,6 +4980,7 @@ impl App {
                             show_preview: is_md && self.md_prefer_preview,
                             stale: false,
                             loading: true,
+                            untitled: false,
                         }),
                         manual_width: None,
                         last_size: (0, 0),

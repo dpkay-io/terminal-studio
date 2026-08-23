@@ -228,6 +228,15 @@ impl App {
                         .shortcut_registry
                         .find_shortcut(crate::shortcuts::AppAction::NewTerminalTab)
                         .map(|s| s.label());
+                    // The registry is the single source of the chord; an
+                    // unbound action shows no key, like the shell entries.
+                    let new_file_label = match self
+                        .shortcut_registry
+                        .find_shortcut(crate::shortcuts::AppAction::NewFile)
+                    {
+                        Some(s) => format!("New File\u{2026}    {}", s.label()),
+                        None => "New File\u{2026}".to_string(),
+                    };
                     ui.menu_button(
                         egui::RichText::new("+ New \u{25be}").size(theme::FONT_UI_MD),
                         |ui| {
@@ -250,6 +259,11 @@ impl App {
                                         ui.close_menu();
                                     }
                                 }
+                            }
+                            ui.separator();
+                            if ui.button(new_file_label).clicked() {
+                                actions.new_file = true;
+                                ui.close_menu();
                             }
                             ui.separator();
                             if ui.button("Open Folder\u{2026}").clicked() {

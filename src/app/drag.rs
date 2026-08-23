@@ -728,6 +728,7 @@ mod tests {
                 show_preview: false,
                 stale: false,
                 loading: false,
+                untitled: false,
             }),
         )]);
         let mut state = DragState::new();
@@ -1098,6 +1099,7 @@ mod tests {
                 show_preview: false,
                 stale: false,
                 loading: false,
+                untitled: false,
             }),
         )]);
         let g1 = ps.focused_group_id;

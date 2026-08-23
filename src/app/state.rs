@@ -174,6 +174,9 @@ impl App {
                     None
                 },
                 update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
+                scrollback_compactor: super::scrollback_compactor::ScrollbackCompactor::spawn(
+                    ctx.clone(),
+                ),
             },
             was_focused: true,
             first_frame: true,
@@ -218,6 +221,8 @@ impl App {
             terminal_md_content: HashMap::new(),
             drag_state: drag::DragState::new(),
             deferred_spawn: None,
+            deferred_new_file: false,
+            untitled_seq: 0,
             deferred_duplicate: false,
             deferred_split: None,
             deferred_close_pane: false,
@@ -1467,6 +1472,8 @@ impl App {
                         command: pending_command.clone(),
                         title: saved_title.clone(),
                     },
+                    // Untitled buffers have no real path yet — nothing to reload.
+                    PaneContent::FileEditor(ed) if ed.untitled => return None,
                     PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
                         path: ed.path.clone(),
                         content: ed.content.clone(),
@@ -1740,6 +1747,7 @@ impl App {
                         show_preview: is_md,
                         stale: false,
                         loading: false,
+                        untitled: false,
                     })
                 }
                 SavedPaneContent::FileDiff { path } => {
@@ -2184,6 +2192,7 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -2360,6 +2369,7 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
                     }),
                     manual_width: None,
                     last_size: (0, 0),

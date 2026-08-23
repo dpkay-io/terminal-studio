@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering;
 pub(in crate::app) struct SessionListActions {
     pub spawn_new_session: Option<ShellKind>,
     pub spawn_new_session_cwd: Option<(ShellKind, PathBuf)>,
+    pub new_file: bool,
     pub duplicate_session: bool,
     pub quit_pane_id: Option<u32>,
     pub clicked_sidebar_pane_id: Option<u32>,
@@ -61,6 +62,7 @@ impl App {
         let mut sess_actions = SessionListActions {
             spawn_new_session: self.deferred_spawn.take(),
             spawn_new_session_cwd: None,
+            new_file: false,
             duplicate_session: std::mem::replace(&mut self.deferred_duplicate, false),
             quit_pane_id: None,
             clicked_sidebar_pane_id: None,

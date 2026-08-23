@@ -61,6 +61,29 @@ impl TerminalGeometry {
     }
 }
 
+/// Terminal grid dimensions `(cols, rows)` that fit inside `outer_rect` (the
+/// pane content area) for the given cell size.
+///
+/// Single source of truth shared by the renderer and the PTY resizer: the grid
+/// must never be larger than the drawn area, otherwise alacritty wraps at more
+/// columns/rows than are painted and content is hidden past the right edge /
+/// under the info bar. Subtracts the same paddings the renderer applies.
+pub fn grid_size_for_rect(outer_rect: Rect, cell_w: f32, cell_h: f32) -> (usize, usize) {
+    let w = (outer_rect.width() - theme::TERM_PAD_LEFT - theme::TERM_PAD_RIGHT).max(0.0);
+    let h = (outer_rect.height() - theme::TERM_PAD_TOP - theme::TERM_PAD_BOTTOM).max(0.0);
+    let cols = if cell_w > 0.0 {
+        (w / cell_w) as usize
+    } else {
+        0
+    };
+    let rows = if cell_h > 0.0 {
+        (h / cell_h) as usize
+    } else {
+        0
+    };
+    (cols, rows)
+}
+
 /// Pre-resolved per-cell render data. Filled while holding the session
 /// read-lock briefly, then read without the lock during paint so the PTY
 /// reader thread isn't blocked by the (much slower) text-shaping pass.
@@ -136,8 +159,7 @@ impl TerminalView {
             ),
         );
 
-        let visible_rows = (rect.height() / cell_height) as usize;
-        let visible_cols = (rect.width() / cell_width) as usize;
+        let (visible_cols, visible_rows) = grid_size_for_rect(outer_rect, cell_width, cell_height);
 
         if visible_rows == 0 || visible_cols == 0 {
             ui.allocate_rect(outer_rect, Sense::hover());
@@ -763,6 +785,41 @@ mod tests {
             scrollbar_hovered: false,
             session_id: None,
         }
+    }
+
+    #[test]
+    fn test_grid_size_excludes_all_paddings() {
+        // 800 wide, 480 tall, 10x20 cells. The grid must subtract left+right and
+        // top+bottom pads so it never exceeds the drawn area (the reported bug
+        // was the resizer omitting right/bottom pads → clipped content).
+        let outer = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 480.0));
+        let (cols, rows) = grid_size_for_rect(outer, 10.0, 20.0);
+        // (800 - 4 - 8)/10 = 78.8 → 78 ; (480 - 2 - 2)/20 = 23.8 → 23
+        assert_eq!(cols, 78);
+        assert_eq!(rows, 23);
+    }
+
+    #[test]
+    fn test_grid_size_matches_renderer_rect() {
+        // The helper on the outer rect must equal what the renderer computes
+        // from its padded inner rect — same source of truth, no drift.
+        let outer = Rect::from_min_size(pos2(37.0, 91.0), vec2(1000.0, 600.0));
+        let (cell_w, cell_h) = (8.5_f32, 17.0_f32);
+        let (cols, rows) = grid_size_for_rect(outer, cell_w, cell_h);
+        let inner_w = outer.width() - theme::TERM_PAD_LEFT - theme::TERM_PAD_RIGHT;
+        let inner_h = outer.height() - theme::TERM_PAD_TOP - theme::TERM_PAD_BOTTOM;
+        assert_eq!(cols, (inner_w / cell_w) as usize);
+        assert_eq!(rows, (inner_h / cell_h) as usize);
+    }
+
+    #[test]
+    fn test_grid_size_degenerate_rect() {
+        // Rect smaller than the paddings → zero grid, no underflow/panic.
+        let outer = Rect::from_min_size(pos2(0.0, 0.0), vec2(3.0, 1.0));
+        assert_eq!(grid_size_for_rect(outer, 10.0, 20.0), (0, 0));
+        // Zero cell size must not divide-by-zero.
+        let outer = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 480.0));
+        assert_eq!(grid_size_for_rect(outer, 0.0, 0.0), (0, 0));
     }
 
     #[test]
