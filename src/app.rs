@@ -523,6 +523,15 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
+        // Forget last frame's drop target. Every writer sets it only while the
+        // pointer is over the thing it belongs to, and none of them clear it on
+        // the way out, so without this a target survives the pointer leaving —
+        // release over empty space would then still act on whatever was hovered
+        // last. Runs before any window body renders, so each frame's renderers
+        // re-establish it from scratch and the release handler sees only what is
+        // under the pointer right now.
+        self.drag_state.drop_target = None;
+
         // Drag threshold update + grab cursor
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
             self.drag_state.update_threshold(pos);
