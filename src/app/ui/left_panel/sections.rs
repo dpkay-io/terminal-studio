@@ -32,6 +32,32 @@ pub(super) fn section_labels(layout: &GroupNode) -> Vec<(GroupId, String)> {
         .collect()
 }
 
+/// How prominently a session row should be drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) enum RowState {
+    /// The pane the user is typing into.
+    Focused,
+    /// On screen right now, but in a split that does not have focus.
+    Visible,
+    /// Open but not currently displayed anywhere.
+    Background,
+}
+
+/// `visible_pane_ids` is the `active_pane_id` of every group.
+pub(in crate::app) fn row_state(
+    pane_id: u32,
+    active_pane_id: Option<u32>,
+    visible_pane_ids: &[u32],
+) -> RowState {
+    if active_pane_id == Some(pane_id) {
+        RowState::Focused
+    } else if visible_pane_ids.contains(&pane_id) {
+        RowState::Visible
+    } else {
+        RowState::Background
+    }
+}
+
 /// Caches the recency sort order of the session list so that activating a row
 /// does not reshuffle the list under the user's pointer mid-interaction.
 ///
@@ -132,6 +158,26 @@ mod tests {
             section_labels(&root),
             vec![(9, "Left".to_string()), (4, "Right".to_string())]
         );
+    }
+
+    #[test]
+    fn row_state_focused_beats_visible() {
+        assert_eq!(row_state(7, Some(7), &[7, 9]), RowState::Focused);
+    }
+
+    #[test]
+    fn row_state_visible_when_active_in_another_split() {
+        assert_eq!(row_state(9, Some(7), &[7, 9]), RowState::Visible);
+    }
+
+    #[test]
+    fn row_state_background_otherwise() {
+        assert_eq!(row_state(3, Some(7), &[7, 9]), RowState::Background);
+    }
+
+    #[test]
+    fn row_state_no_active_pane() {
+        assert_eq!(row_state(3, None, &[]), RowState::Background);
     }
 
     #[test]

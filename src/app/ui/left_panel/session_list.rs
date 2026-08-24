@@ -739,6 +739,14 @@ impl App {
                     .map(|p| (p.id, p.last_active_at))
                     .collect();
                 let ordered_ids = self.session_sort_cache.order(&recency, pointer_inside);
+                // Panes currently on screen — one per split. Computed once per
+                // frame, not once per row: this list redraws every frame.
+                let visible_pane_ids: Vec<u32> = self
+                    .pane_state
+                    .groups
+                    .values()
+                    .filter_map(|g| g.active_pane_id)
+                    .collect();
                 // ponytail: linear id lookup per row — O(n²) over the pane
                 // count, which is tens at most. Build an id→index map if a
                 // session list ever gets large enough to show up in a profile.
@@ -760,7 +768,7 @@ impl App {
                 let sections = sections::section_labels(&self.pane_state.group_layout);
                 if sections.is_empty() {
                     for (pane_idx, row) in &visible {
-                        self.render_session_row(ui, *pane_idx, row, actions);
+                        self.render_session_row(ui, *pane_idx, row, &visible_pane_ids, actions);
                     }
                     return;
                 }
@@ -791,13 +799,13 @@ impl App {
                     }
                     self.render_section_header(ui, Some(*gid), label);
                     for (pane_idx, row) in buckets[i].iter().copied() {
-                        self.render_session_row(ui, *pane_idx, row, actions);
+                        self.render_session_row(ui, *pane_idx, row, &visible_pane_ids, actions);
                     }
                 }
                 if !other.is_empty() {
                     self.render_section_header(ui, None, "Other");
                     for (pane_idx, row) in other.iter().copied() {
-                        self.render_session_row(ui, *pane_idx, row, actions);
+                        self.render_session_row(ui, *pane_idx, row, &visible_pane_ids, actions);
                     }
                 }
             });
@@ -970,6 +978,7 @@ impl App {
         ui: &mut egui::Ui,
         pane_idx: usize,
         row: &RowLabel,
+        visible_pane_ids: &[u32],
         actions: &mut SessionListActions,
     ) {
         let pane = &self.pane_state.panes[pane_idx];
@@ -993,7 +1002,8 @@ impl App {
             }
         });
 
-        let is_active = self.pane_state.active_pane_id == Some(pane.id);
+        let state = sections::row_state(pane.id, self.pane_state.active_pane_id, visible_pane_ids);
+        let is_active = state == sections::RowState::Focused;
 
         let (resp, painter) = ui.allocate_painter(
             egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
@@ -1009,12 +1019,26 @@ impl App {
         let hover_id = egui::Id::new(("sess_row_hover", pane.id));
         let hover_t = crate::app::ui::animation::animated_hover(ui.ctx(), hover_id, row_hovered);
         let t = theme::active();
-        let bg = if is_active {
-            t.bg_row_active
-        } else {
-            theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
+        let bg = match state {
+            sections::RowState::Focused => t.bg_row_active,
+            sections::RowState::Visible => {
+                theme::lerp_color(t.bg_row_active, egui::Color32::TRANSPARENT, 0.5)
+            }
+            sections::RowState::Background => {
+                theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
+            }
         };
         painter.rect_filled(row_rect, theme::R_MD, bg);
+
+        // On screen but in an unfocused split — mark it, since with no tab bar
+        // nothing else distinguishes it from a background session.
+        if state == sections::RowState::Visible {
+            painter.rect_filled(
+                egui::Rect::from_min_size(row_rect.min, egui::vec2(2.0, row_rect.height())),
+                0.0,
+                t.accent.gamma_multiply(0.6),
+            );
+        }
 
         // Full-height workspace color bar on the left edge
         if let Some(c) = ws_color {
@@ -1187,10 +1211,12 @@ impl App {
         );
         let text_color = if dimmed {
             theme::active().overlay0
-        } else if is_active {
-            theme::active().text
         } else {
-            theme::active().subtext0
+            match state {
+                sections::RowState::Focused => theme::active().text,
+                sections::RowState::Visible => theme::active().subtext1,
+                sections::RowState::Background => theme::active().subtext0,
+            }
         };
         let text_color = if is_being_dragged {
             text_color.gamma_multiply(0.4)
