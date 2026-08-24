@@ -9,6 +9,17 @@ use crate::ui_kit;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 
+/// Display data for one session-list row, computed once per row per frame.
+///
+/// The label computation takes a read lock on the terminal session, so it must
+/// not be repeated for filtering and again for drawing.
+struct RowLabel {
+    label: String,
+    ws_color: Option<[u8; 3]>,
+    dimmed: bool,
+    pane_ws: Option<u64>,
+}
+
 impl App {
     /// Render the sessions section: header with "+ New" menu, search bars,
     /// workspace filter dropdown, and either global search results or the
@@ -718,21 +729,28 @@ impl App {
                         .last_active_at
                         .cmp(&self.pane_state.panes[a].last_active_at)
                 });
-                for &pane_idx in &sorted_indices {
-                    self.render_session_row(ui, pane_idx, session_filter, &matcher, actions);
+                // Pass 1: compute each row's label and apply the filters, so a
+                // section with no surviving rows never draws its header.
+                let visible: Vec<(usize, RowLabel)> = sorted_indices
+                    .iter()
+                    .filter_map(|&i| self.row_label(i, session_filter, &matcher).map(|r| (i, r)))
+                    .collect();
+
+                // Pass 2: draw.
+                for (pane_idx, row) in &visible {
+                    self.render_session_row(ui, *pane_idx, row, actions);
                 }
             });
     }
 
-    /// Render one row of the session list.
-    fn render_session_row(
-        &mut self,
-        ui: &mut egui::Ui,
+    /// Compute a row's display data and apply the three list filters.
+    /// `None` means the row is filtered out and must not be drawn.
+    fn row_label(
+        &self,
         pane_idx: usize,
         session_filter: &str,
         matcher: &SkimMatcherV2,
-        actions: &mut SessionListActions,
-    ) {
+    ) -> Option<RowLabel> {
         let pane = &self.pane_state.panes[pane_idx];
         let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane.content {
             PaneContent::Terminal(sid) => {
@@ -838,24 +856,44 @@ impl App {
             } else {
                 format!("{} {}", label, label_names)
             };
-            if matcher.fuzzy_match(&searchable, session_filter).is_none() {
-                return;
-            }
+            matcher.fuzzy_match(&searchable, session_filter)?;
         }
 
         let pane_ws = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
 
         if let Some(ws_filter) = self.session_workspace_filter {
             if pane_ws != ws_filter {
-                return;
+                return None;
             }
         }
 
         if let Some(label_filter) = self.session_label_filter {
             if !pane.labels.contains(&label_filter) {
-                return;
+                return None;
             }
         }
+
+        Some(RowLabel {
+            label,
+            ws_color,
+            dimmed,
+            pane_ws,
+        })
+    }
+
+    /// Render one row of the session list.
+    fn render_session_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane_idx: usize,
+        row: &RowLabel,
+        actions: &mut SessionListActions,
+    ) {
+        let pane = &self.pane_state.panes[pane_idx];
+        let label = &row.label;
+        let ws_color = row.ws_color;
+        let dimmed = row.dimmed;
+        let pane_ws = row.pane_ws;
 
         let in_other_window = pane_ws.is_some_and(|ws_id| {
             let owned_by_extra = self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
@@ -1101,7 +1139,7 @@ impl App {
         let resp = if in_other_window {
             resp.on_hover_text(format!("{} (switch window)", label))
         } else {
-            resp.on_hover_text(&label)
+            resp.on_hover_text(label)
         };
 
         if quit_clicked {
@@ -1190,7 +1228,7 @@ impl App {
                 self.drag_state.set_payload(
                     crate::app::drag::DragPayload::Session(*sid),
                     origin,
-                    &label,
+                    label,
                 );
             }
         }
