@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (885 tests)
+cargo test               # all unit tests (922 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -325,7 +325,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
 | `src/app/pane_state.rs` | 72 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group |
-| `src/app/drag.rs` | 55 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session delegation |
+| `src/app/drag.rs` | 65 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
 | `src/app/ui/left_panel/sections.rs` | 13 | split-section labels, frozen sort order, three-state row prominence |
 | `src/app/title.rs` | 20 | title formatting with workspaces, effective title, shell escaping |
@@ -373,7 +373,8 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
 | `src/app/state.rs` (pane workspace) | 3 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
-| **Total** | **885 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| `src/app/ui/pane_labels.rs` | 27 | per-content-kind display text, tooltips, pane directory, workspace colour |
+| **Total** | **922 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
