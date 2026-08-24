@@ -1,13 +1,15 @@
 use super::super::super::pane::PaneContent;
 use super::super::super::title::effective_title;
 use super::super::super::{App, CloseAllTarget};
-use super::SessionListActions;
+use super::{sections, SessionListActions};
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
+use crate::editor_group::GroupId;
 use crate::pty::foreground::ForegroundProcess;
 use crate::theme;
 use crate::ui_kit;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use std::collections::HashMap;
 
 /// Display data for one session-list row, computed once per row per frame.
 ///
@@ -736,11 +738,77 @@ impl App {
                     .filter_map(|&i| self.row_label(i, session_filter, &matcher).map(|r| (i, r)))
                     .collect();
 
-                // Pass 2: draw.
-                for (pane_idx, row) in &visible {
-                    self.render_session_row(ui, *pane_idx, row, actions);
+                // Pass 2: bucket the visible rows per split. Recency order is
+                // preserved inside each bucket. A pane belonging to no group
+                // (see `PaneState::group_of`) would otherwise be unreachable —
+                // the left nav is the only navigator — so it lands in "Other".
+                let sections = sections::section_labels(&self.pane_state.group_layout);
+                if sections.is_empty() {
+                    for (pane_idx, row) in &visible {
+                        self.render_session_row(ui, *pane_idx, row, actions);
+                    }
+                    return;
+                }
+
+                let slot: HashMap<GroupId, usize> = sections
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (gid, _))| (*gid, i))
+                    .collect();
+                let mut buckets: Vec<Vec<&(usize, RowLabel)>> = vec![Vec::new(); sections.len()];
+                let mut other: Vec<&(usize, RowLabel)> = Vec::new();
+                for row in &visible {
+                    let pane_id = self.pane_state.panes[row.0].id;
+                    match self
+                        .pane_state
+                        .group_of(pane_id)
+                        .and_then(|gid| slot.get(&gid))
+                    {
+                        Some(&i) => buckets[i].push(row),
+                        None => other.push(row),
+                    }
+                }
+
+                // Pass 3: draw. Sections with no visible rows draw no header.
+                for (i, (gid, label)) in sections.iter().enumerate() {
+                    if buckets[i].is_empty() {
+                        continue;
+                    }
+                    self.render_section_header(ui, Some(*gid), label);
+                    for (pane_idx, row) in buckets[i].iter().copied() {
+                        self.render_session_row(ui, *pane_idx, row, actions);
+                    }
+                }
+                if !other.is_empty() {
+                    self.render_section_header(ui, None, "Other");
+                    for (pane_idx, row) in other.iter().copied() {
+                        self.render_session_row(ui, *pane_idx, row, actions);
+                    }
                 }
             });
+    }
+
+    /// Section header naming one split. `group_id` is `None` for the trailing
+    /// "Other" section, which has no group to compare against the focus.
+    fn render_section_header(&mut self, ui: &mut egui::Ui, group_id: Option<GroupId>, label: &str) {
+        let t = theme::active();
+        let is_focused = group_id == Some(self.pane_state.focused_group_id);
+        let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), theme::HEADER_H));
+        let painter = ui.painter();
+        if is_focused {
+            painter.rect_filled(
+                egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
+                0.0,
+                t.accent,
+            );
+        }
+        painter.text(
+            egui::pos2(rect.min.x + theme::SP_3, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(theme::FONT_UI_XS),
+            if is_focused { t.text } else { t.subtext0 },
+        );
     }
 
     /// Compute a row's display data and apply the three list filters.
