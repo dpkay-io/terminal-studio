@@ -358,12 +358,23 @@ impl PaneState {
         }
 
         for gid in &empty_group_ids {
-            self.groups.remove(gid);
-            if let GroupRemoveResult::CollapseToSibling(replacement) =
-                self.group_layout.remove_group(*gid)
-            {
-                self.group_layout = replacement;
-            }
+            self.erase_group(*gid);
+        }
+
+        // Drop layout leaves naming a group that is not in the map at all.
+        // The loop above only sees groups that exist, so it cannot catch these:
+        // session restore skips any saved group whose panes all failed to
+        // restore, yet still installs the saved layout that names it. Left in
+        // place, such a leaf renders a split with nothing in it and silently
+        // swallows panes, because `add_pane_to_group` no-ops on an unknown id.
+        let orphan_ids: Vec<GroupId> = self
+            .group_layout
+            .group_ids()
+            .into_iter()
+            .filter(|gid| !self.groups.contains_key(gid))
+            .collect();
+        for gid in orphan_ids {
+            self.erase_group(gid);
         }
 
         if !self.groups.contains_key(&self.focused_group_id) {
@@ -1401,6 +1412,31 @@ mod tests {
         assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
         // Group 2 still has pane 3
         assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+    }
+
+    #[test]
+    fn sync_prunes_layout_groups_absent_from_the_map() {
+        let mut state = make_grouped_state();
+        // Session restore skips a saved group whose panes all failed to
+        // restore, but still installs the layout naming it. The group is not
+        // in `groups` at all, so the empty-group sweep cannot see it.
+        state.groups.remove(&2);
+        state.panes.retain(|p| p.id != 3);
+        state.sync_groups_with_panes();
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+        assert_eq!(state.focused_group_id, 1);
+    }
+
+    #[test]
+    fn sync_resets_layout_when_every_group_is_absent() {
+        let mut state = make_grouped_state();
+        state.groups.clear();
+        state.panes.clear();
+        state.sync_groups_with_panes();
+        // No group survives, so the layout must fall back to the same empty
+        // sentinel `PaneState::new` starts from rather than keep naming one.
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
+        assert_eq!(state.focused_group_id, 0);
     }
 
     #[test]

@@ -821,8 +821,29 @@ impl App {
     fn render_section_header(&mut self, ui: &mut egui::Ui, group_id: Option<GroupId>, label: &str) {
         let t = theme::active();
         let is_focused = group_id == Some(self.pane_state.focused_group_id);
-        let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), theme::HEADER_H));
-        let painter = ui.painter();
+        let (resp, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), theme::HEADER_H),
+            egui::Sense::hover(),
+        );
+        let rect = resp.rect;
+
+        // Dropping on a header moves the payload into that split. Resolves
+        // through the existing GroupArea target, so no new drag action is
+        // needed. "Other" has no group, so it cannot accept a drop.
+        if let Some(gid) = group_id {
+            if self.drag_state.is_active() && resp.hovered() {
+                let accepts = !matches!(
+                    &self.drag_state.payload,
+                    Some(crate::app::drag::DragPayload::Workspace(_))
+                );
+                if accepts {
+                    painter.rect_filled(rect, theme::R_SM, t.accent.gamma_multiply(0.25));
+                    self.drag_state.drop_target =
+                        Some(crate::app::drag::DropTarget::GroupArea(gid));
+                }
+            }
+        }
+
         if is_focused {
             painter.rect_filled(
                 egui::Rect::from_min_size(rect.min, egui::vec2(2.0, rect.height())),
