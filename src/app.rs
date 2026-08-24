@@ -2590,7 +2590,6 @@ impl App {
 
         // ── Output variables collected inside the central panel closure ─────
         let divider_drags: Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
-        let close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
         let mut clicked_group_id: Option<crate::editor_group::GroupId> = None;
         let mut editor_saves: Vec<u32> = vec![];
@@ -4098,12 +4097,6 @@ impl App {
                 Some((left_w + delta_x).max(theme::MIN_PANE_W));
             self.pane_state.panes[right_idx].manual_width =
                 Some((right_w - delta_x).max(theme::MIN_PANE_W));
-        }
-
-        // 2. Close pane (tab-strip close)
-        if let Some(pid) = close_pane_id {
-            editor_texts.retain(|(id, _)| *id != pid);
-            self.close_pane_full(pid);
         }
 
         // 3. Equalize pane widths for visible panes (split icon clicked)
