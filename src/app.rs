@@ -3188,22 +3188,24 @@ impl App {
                                     AppAction::DuplicateSession => self.deferred_duplicate = true,
                                     AppAction::FocusSessionSearch => { /* handled in global shortcuts block above */ }
                                     AppAction::FocusFileSearch => { /* handled in global shortcuts block above */ }
+                                    // Both cycle inside the focused split only. Cycling
+                                    // across every visible pane used to yank focus into
+                                    // another split, which has no way back on the keyboard
+                                    // now that each split owns its own pane order.
                                     AppAction::PreviousTab => {
-                                        if nv > 1 {
-                                            let cur = self.pane_state.active_pane_id
-                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
-                                                .unwrap_or(0);
-                                            let prev = if cur == 0 { nv - 1 } else { cur - 1 };
-                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[prev]].id);
+                                        if let Some(cur) = self.pane_state.active_pane_id {
+                                            let allowed = self.tab_cycle_candidates();
+                                            if let Some(prev) = self.pane_state.prev_pane_in_focused_group(cur, &allowed) {
+                                                clicked_pane_id = Some(prev);
+                                            }
                                         }
                                     }
                                     AppAction::NextTab => {
-                                        if nv > 1 {
-                                            let cur = self.pane_state.active_pane_id
-                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
-                                                .unwrap_or(0);
-                                            let next = (cur + 1) % nv;
-                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[next]].id);
+                                        if let Some(cur) = self.pane_state.active_pane_id {
+                                            let allowed = self.tab_cycle_candidates();
+                                            if let Some(next) = self.pane_state.next_pane_in_focused_group(cur, &allowed) {
+                                                clicked_pane_id = Some(next);
+                                            }
                                         }
                                     }
                                     AppAction::NextWorkspace => {
