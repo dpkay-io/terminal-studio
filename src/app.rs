@@ -238,9 +238,11 @@ pub struct App {
     tab_rename_pane_id: Option<u32>,
     #[allow(dead_code)]
     tab_rename_text: String,
-    /// Pane ID to scroll into view in the session navigator. Set when opening
-    /// a file/diff/conflict pane; the consumer moved out of the tab bar.
-    pub(super) tab_scroll_to_pane: Option<u32>,
+    /// Pane ID to scroll into view in the session navigator. Consumed by the
+    /// left-nav row when it draws, and dropped at the end of the same frame's
+    /// left-panel render either way — a target that is filtered out or in a
+    /// window that is not rendering must not latch here for later activations.
+    pub(super) scroll_to_pane: Option<u32>,
     /// File path to reveal (expand ancestors + highlight + scroll to) in the
     /// directory tree. Set by auto-reveal on pane switch or explicit shortcut.
     /// Consumed by `render_dir_tree` once the target entry is rendered.

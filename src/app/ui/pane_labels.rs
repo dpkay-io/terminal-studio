@@ -84,7 +84,6 @@ impl App {
     }
 
     /// Compute the tooltip text for a tab: full title + CWD + workspace name.
-    #[allow(dead_code)]
     pub(in crate::app) fn tab_tooltip_text(&self, pane_index: usize) -> String {
         match &self.pane_state.panes[pane_index].content {
             PaneContent::Terminal(sid) => {

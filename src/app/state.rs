@@ -291,7 +291,7 @@ impl App {
             deferred_close_pane: false,
             tab_rename_pane_id: None,
             tab_rename_text: String::new(),
-            tab_scroll_to_pane: None,
+            scroll_to_pane: None,
             reveal_file_path: None,
             reveal_highlight: None,
             deferred_open_workspace: None,
@@ -992,7 +992,7 @@ impl App {
 
     pub(super) fn activate_and_scroll_to_pane(&mut self, pid: u32) {
         self.activate_pane(pid);
-        self.tab_scroll_to_pane = Some(pid);
+        self.scroll_to_pane = Some(pid);
     }
 
     pub(super) fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
