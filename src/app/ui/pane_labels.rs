@@ -4,7 +4,6 @@ use super::super::App;
 
 impl App {
     /// Compute the display text for a tab at the given pane index.
-    #[allow(dead_code)]
     pub(in crate::app) fn tab_display_text(&self, pane_index: usize) -> String {
         match &self.pane_state.panes[pane_index].content {
             PaneContent::Terminal(sid) => {
@@ -145,6 +144,24 @@ impl App {
             PaneContent::ConflictResolver(cr) => {
                 format!("Conflicts: {}", cr.path.to_string_lossy())
             }
+        }
+    }
+
+    /// Directory path for a pane: CWD for terminals, parent dir for file-based panes.
+    pub(in crate::app) fn pane_cwd(&self, pane_index: usize) -> Option<std::path::PathBuf> {
+        match &self.pane_state.panes[pane_index].content {
+            PaneContent::Terminal(sid) => self
+                .session_state
+                .find(*sid)
+                .map(|e| e.session.read().cwd.clone())
+                .filter(|p| !p.as_os_str().is_empty()),
+            PaneContent::DeferredTerminal { cwd, .. } => {
+                cwd.clone().filter(|p| !p.as_os_str().is_empty())
+            }
+            PaneContent::FileEditor(ed) => ed.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::FileDiff(d) => d.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::ConflictResolver(cr) => cr.path.parent().map(|p| p.to_path_buf()),
+            PaneContent::NoteEditor(_) => None,
         }
     }
 

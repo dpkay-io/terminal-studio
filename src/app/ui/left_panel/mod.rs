@@ -22,6 +22,10 @@ pub(in crate::app) struct SessionListActions {
     pub open_folder_path: Option<PathBuf>,
     pub toggle_label: Option<(u32, u32)>,
     pub show_new_label_for_pane: Option<u32>,
+    pub start_rename_pane_id: Option<u32>,
+    pub copy_path_pane_id: Option<u32>,
+    pub open_in_explorer_pane_id: Option<u32>,
+    pub commit_rename: Option<(u32, String)>,
 }
 
 /// Deferred actions collected while rendering the workspace section.
@@ -70,6 +74,10 @@ impl App {
             open_folder_path: None,
             toggle_label: None,
             show_new_label_for_pane: None,
+            start_rename_pane_id: None,
+            copy_path_pane_id: None,
+            open_in_explorer_pane_id: None,
+            commit_rename: None,
         };
         if let Some(ws_id) = self.deferred_open_workspace.take() {
             self.navigate_to_workspace(ws_id);

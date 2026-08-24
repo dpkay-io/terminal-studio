@@ -1014,6 +1014,10 @@ impl App {
 
         let state = sections::row_state(pane.id, self.pane_state.active_pane_id, visible_pane_ids);
         let is_active = state == sections::RowState::Focused;
+        // While the inline rename field is up it owns the row: clicking or
+        // dragging inside it must not also activate the pane or start a
+        // session drag, and a tooltip would sit on top of what is being typed.
+        let renaming = self.rename_pane_id == Some(pane.id);
 
         let (resp, painter) = ui.allocate_painter(
             egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
@@ -1277,32 +1281,76 @@ impl App {
         } else {
             text_color
         };
-        let available_w = (clip_max - text_x).max(0.0);
-        let mut job = egui::text::LayoutJob::single_section(
-            label.clone(),
-            egui::TextFormat {
-                font_id: egui::FontId::proportional(theme::FONT_UI_MD),
-                color: text_color,
-                ..Default::default()
-            },
-        );
-        job.wrap = egui::text::TextWrapping {
-            max_width: available_w,
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('\u{2026}'),
-        };
-        let galley = ui.fonts(|f| f.layout_job(job));
-        painter.galley(
-            egui::pos2(text_x, row_rect.center().y - galley.rect.height() / 2.0),
-            galley,
-            text_color,
-        );
+        if renaming {
+            // `clip_max` can fall left of `text_x` in a very narrow panel; an
+            // inverted rect would hand TextEdit a negative desired_width.
+            let edit_rect = egui::Rect::from_min_max(
+                egui::pos2(text_x, row_rect.min.y + theme::SP_1),
+                egui::pos2(clip_max.max(text_x), row_rect.max.y - theme::SP_1),
+            );
+            let edit_id = egui::Id::new(("sess_rename_edit", pane.id));
+            ui.painter().rect_filled(edit_rect, theme::R_SM, t.surface1);
+            // The buffer lives on `self`, which the closure below cannot also
+            // borrow mutably — edit a local and write it straight back.
+            let mut buf = std::mem::take(&mut self.rename_text);
+            let r = ui
+                .allocate_ui_at_rect(edit_rect, |ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut buf)
+                            .id(edit_id)
+                            .desired_width(edit_rect.width())
+                            .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                            .frame(true)
+                            .text_color(text_color),
+                    )
+                })
+                .inner;
+            self.rename_text = buf;
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let lost = r.lost_focus() && !esc;
+            // Read `lost_focus` before requesting: `request_focus` writes the
+            // focus id live, so calling it first would mask the very loss that
+            // commits a click-away — leaving focus trapped in the field.
+            if !(enter || esc || lost || r.has_focus()) {
+                r.request_focus();
+            }
+            if enter || lost {
+                actions.commit_rename = Some((pane.id, self.rename_text.trim().to_string()));
+                self.rename_pane_id = None;
+                self.rename_text.clear();
+            } else if esc {
+                self.rename_pane_id = None;
+                self.rename_text.clear();
+            }
+        } else {
+            let available_w = (clip_max - text_x).max(0.0);
+            let mut job = egui::text::LayoutJob::single_section(
+                label.clone(),
+                egui::TextFormat {
+                    font_id: egui::FontId::proportional(theme::FONT_UI_MD),
+                    color: text_color,
+                    ..Default::default()
+                },
+            );
+            job.wrap = egui::text::TextWrapping {
+                max_width: available_w,
+                max_rows: 1,
+                break_anywhere: true,
+                overflow_character: Some('\u{2026}'),
+            };
+            let galley = ui.fonts(|f| f.layout_job(job));
+            painter.galley(
+                egui::pos2(text_x, row_rect.center().y - galley.rect.height() / 2.0),
+                galley,
+                text_color,
+            );
+        }
 
         // Full title + CWD + workspace. Built only for the hovered row: it
         // takes a session read lock and formats a title, and this list redraws
         // every frame.
-        let resp = if resp.hovered() {
+        let resp = if resp.hovered() && !renaming {
             let tip = self.tab_tooltip_text(pane_idx);
             if in_other_window {
                 resp.on_hover_text(format!("{} (switch window)", tip))
@@ -1313,19 +1361,39 @@ impl App {
             resp
         };
 
-        if quit_clicked || resp.clicked_by(egui::PointerButton::Middle) {
+        if quit_clicked || (!renaming && resp.clicked_by(egui::PointerButton::Middle)) {
             actions.quit_pane_id = Some(pane.id);
-        } else if resp.clicked() {
+        } else if !renaming && resp.clicked() {
             actions.clicked_sidebar_pane_id = Some(pane.id);
         }
 
         // ── Right-click context menu ────────────────────────
         let pane_id = pane.id;
         let pane_labels_snapshot = pane.labels.clone();
+        // Only a terminal carries a settable title, so the entry is hidden
+        // rather than offered as a rename that silently does nothing.
+        let can_rename = matches!(&pane.content, PaneContent::Terminal(_));
         resp.context_menu(|ui| {
+            if can_rename && ui.button("Rename").clicked() {
+                actions.start_rename_pane_id = Some(pane_id);
+                ui.close_menu();
+            }
             if ui.button("Duplicate").clicked() {
                 actions.duplicate_session = true;
                 ui.close_menu();
+            }
+            // Built here rather than hoisted: the menu is open on at most one
+            // row, and this takes a session read lock plus a PathBuf clone.
+            if self.pane_cwd(pane_idx).is_some() {
+                ui.separator();
+                if ui.button("Copy path").clicked() {
+                    actions.copy_path_pane_id = Some(pane_id);
+                    ui.close_menu();
+                }
+                if ui.button("Open in file explorer").clicked() {
+                    actions.open_in_explorer_pane_id = Some(pane_id);
+                    ui.close_menu();
+                }
             }
             ui.separator();
 
@@ -1393,7 +1461,7 @@ impl App {
         });
 
         // Drag source: start dragging this session row
-        if resp.drag_started() {
+        if !renaming && resp.drag_started() {
             if let PaneContent::Terminal(sid) = &pane.content {
                 let origin = resp.interact_pointer_pos().unwrap_or_default();
                 self.drag_state.set_payload(

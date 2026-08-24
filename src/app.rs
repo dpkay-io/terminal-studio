@@ -240,10 +240,9 @@ pub struct App {
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
-    #[allow(dead_code)]
-    tab_rename_pane_id: Option<u32>,
-    #[allow(dead_code)]
-    tab_rename_text: String,
+    /// Session-list row currently being renamed inline, and its edit buffer.
+    rename_pane_id: Option<u32>,
+    rename_text: String,
     /// Pane ID to scroll into view in the session navigator. Consumed by the
     /// left-nav row when it draws, and dropped at the end of the same frame's
     /// left-panel render either way — a target that is filtered out or in a
