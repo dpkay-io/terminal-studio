@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (333 tests)
+cargo test               # all unit tests (726 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -84,14 +84,16 @@ RUST_LOG=debug cargo run # enable debug logging
 | File | Responsibility |
 |------|---------------|
 | `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update button, toolbar, focus tracking |
-| `src/app/ui/tab_bar.rs` | `TabBarResult`, `render_tab_bar()`: horizontally scrollable tab strip, split group indicators |
+| `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()`, `pane_cwd()`: display text, tooltip, colour and path derivation for a pane. No rendering |
+| `src/app/ui/info_bar.rs` | The pane header for each split: identity text, position toggle, hide, split ⊞ ⊟, close-all ✖ |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
 | `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about |
 | `src/app/ui/settings_overlay.rs` | Settings panel: theme picker, cursor style, font size, scrollback, keybinding editor |
 | `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
-| `src/app/ui/left_panel/session_list.rs` | Session list; "+New" menu; fuzzy filter; workspace filter dropdown |
+| `src/app/ui/left_panel/session_list.rs` | The single session navigator: split sections, three-state row highlighting, row chrome and interactions, "+New" menu, fuzzy filter, workspace filter dropdown |
+| `src/app/ui/left_panel/sections.rs` | `section_labels()`, `SortCache`, `RowState`: split-section grouping and naming, frozen recency ordering, row prominence. Pure — no `egui::Ui`, so it is unit-testable |
 | `src/app/ui/left_panel/workspace_section.rs` | Workspace cards; collapse toggle; color swatch; git branch/diff badges |
 | `src/app/ui/left_panel/context_menu.rs` | Right-click context menu: rename, edit color, delete, duplicate, open in new window |
 
@@ -157,7 +159,9 @@ RUST_LOG=debug cargo run # enable debug logging
 - `PaneNode` is a recursive enum: `Leaf { pane_id, last_size }` or `Split { split_id, dir, ratio, a, b }`
 - `render_node()` in `app.rs` recurses the tree, calling `split_rect()` to divide screen space and rendering each leaf
 - 4px interactive dividers support drag-to-resize (ratio clamped to [0.1, 0.9])
-- Keyboard shortcuts: `Ctrl+Shift+\` (horizontal split), `Ctrl+Shift+-` (vertical split), `Ctrl+Shift+W` (close pane), `Alt+Arrow` (focus movement)
+- Keyboard shortcuts: `Ctrl+Shift+\` (horizontal split), `Ctrl+Shift+-` (vertical split), `Ctrl+Shift+W` (close pane), `Alt+Arrow` (focus movement), `Ctrl+Tab` / `Ctrl+Shift+Tab` (cycle panes **within the focused split only**)
+- There is no tab bar. Each split's info bar is its header, and the left nav session list is the only session navigator — it groups rows into split sections, marks which panes are on screen, and owns rename / close / copy-path / reveal
+- Drag-and-drop: dropping on the middle of a split joins that split; dropping within 25% of any edge splits it (`edge_zone()` in `src/app/drag.rs`); dropping on a left-nav section header joins that split
 - **Note:** `pane_trees` is not persisted to disk — splits reset on restart
 
 **Multi-window (multi-viewport):**
@@ -304,7 +308,10 @@ Color32::from_rgb(30, 30, 46)
 |------|-------|---------|
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
-| `src/app/pane_state.rs` | 20 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates |
+| `src/app/pane_state.rs` | 72 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group |
+| `src/app/drag.rs` | 55 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session delegation |
+| `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
+| `src/app/ui/left_panel/sections.rs` | 13 | split-section labels, frozen sort order, three-state row prominence |
 | `src/app/title.rs` | 20 | title formatting with workspaces, effective title, shell escaping |
 | `src/pane_tree.rs` | 19 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, split_rect geometry |
 | `src/app/diff_parser.rs` | 18 | unified diff parsing, hunk extraction, line kind classification |
@@ -336,7 +343,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
 | `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
 | `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
-| **Total** | **520** | |
+| **Total** | **726** | |
 
 ## Release Workflow
 
