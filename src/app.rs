@@ -207,6 +207,10 @@ pub struct App {
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
     global_search_selected: usize,
 
+    // Frozen recency order for the left nav session list — keeps rows from
+    // jumping out from under the pointer when activating one bumps its recency
+    session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
 

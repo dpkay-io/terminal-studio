@@ -1,5 +1,6 @@
 use crate::editor_group::{GroupId, GroupNode};
 use crate::pane_tree::SplitDir;
+use std::collections::HashSet;
 
 /// Ordered `(group_id, label)` pairs, one per split, for the left nav section
 /// headers. Empty when there is only one group — the list renders flat then.
@@ -29,6 +30,39 @@ pub(super) fn section_labels(layout: &GroupNode) -> Vec<(GroupId, String)> {
         .enumerate()
         .map(|(i, gid)| (gid, format!("Split {}", i + 1)))
         .collect()
+}
+
+/// Caches the recency sort order of the session list so that activating a row
+/// does not reshuffle the list under the user's pointer mid-interaction.
+///
+/// The order is recomputed when the pointer is outside the list, or whenever
+/// the set of pane ids changes — a closed session must never linger as a ghost
+/// row just because the pointer happens to be hovering.
+#[derive(Default)]
+pub(in crate::app) struct SortCache {
+    order: Vec<u32>,
+    members: HashSet<u32>,
+}
+
+impl SortCache {
+    /// `panes` is `(pane_id, last_active_at)`, in any order.
+    pub(in crate::app) fn order(&mut self, panes: &[(u32, u64)], pointer_inside: bool) -> Vec<u32> {
+        let members: HashSet<u32> = panes.iter().map(|(id, _)| *id).collect();
+        let membership_changed = members != self.members;
+
+        if pointer_inside && !membership_changed && !self.order.is_empty() {
+            return self.order.clone();
+        }
+
+        let mut sorted: Vec<(u32, u64)> = panes.to_vec();
+        // Tiebreak on id so panes sharing a timestamp keep a deterministic
+        // order — without it the list flickers between frames.
+        sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        self.order = sorted.into_iter().map(|(id, _)| id).collect();
+        self.members = members;
+        self.order.clone()
+    }
 }
 
 #[cfg(test)]
@@ -98,5 +132,36 @@ mod tests {
             section_labels(&root),
             vec![(9, "Left".to_string()), (4, "Right".to_string())]
         );
+    }
+
+    #[test]
+    fn sort_cache_freezes_order_while_pointer_inside() {
+        let mut c = SortCache::default();
+        let first = c.order(&[(1, 100), (2, 200)], true);
+        assert_eq!(first, vec![2, 1]);
+        // Pane 1 becomes most recent, but the pointer is still inside.
+        let second = c.order(&[(1, 300), (2, 200)], true);
+        assert_eq!(second, vec![2, 1], "order must not change while hovered");
+    }
+
+    #[test]
+    fn sort_cache_recomputes_after_pointer_leaves() {
+        let mut c = SortCache::default();
+        assert_eq!(c.order(&[(1, 100), (2, 200)], true), vec![2, 1]);
+        assert_eq!(c.order(&[(1, 300), (2, 200)], false), vec![1, 2]);
+    }
+
+    #[test]
+    fn sort_cache_invalidates_on_membership_change_even_when_hovered() {
+        let mut c = SortCache::default();
+        assert_eq!(c.order(&[(1, 100), (2, 200)], true), vec![2, 1]);
+        // Pane 2 closed while hovering — it must not linger as a ghost row.
+        assert_eq!(c.order(&[(1, 100), (3, 50)], true), vec![1, 3]);
+    }
+
+    #[test]
+    fn sort_cache_empty_input() {
+        let mut c = SortCache::default();
+        assert!(c.order(&[], true).is_empty());
     }
 }
