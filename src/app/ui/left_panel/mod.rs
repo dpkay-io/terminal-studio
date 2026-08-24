@@ -1,4 +1,5 @@
 mod context_menu;
+mod sections;
 mod session_list;
 mod workspace_section;
 
