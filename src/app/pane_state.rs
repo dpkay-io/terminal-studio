@@ -259,10 +259,30 @@ impl PaneState {
         new_group_id
     }
 
+    /// Delete `group_id` from the map and collapse it out of the layout tree.
+    ///
+    /// When the group was the entire layout there is no sibling to collapse
+    /// into, so the tree resets to the same empty sentinel `PaneState::new`
+    /// starts from. Leaving it naming an erased group is what strands the next
+    /// pane: `add_pane_to_group` silently no-ops on a group id that is not in
+    /// the map, so the pane ends up in `panes` but in no group at all.
+    fn erase_group(&mut self, group_id: GroupId) {
+        self.groups.remove(&group_id);
+        match self.group_layout.remove_group(group_id) {
+            GroupRemoveResult::CollapseToSibling(replacement) => {
+                self.group_layout = replacement;
+            }
+            GroupRemoveResult::IsTarget => {
+                self.group_layout = GroupNode::Leaf { group_id: 0 };
+                self.focused_group_id = 0;
+            }
+            _ => {}
+        }
+    }
+
     /// Remove a pane from its group. If the group becomes empty, collapse it
     /// from the layout. Returns info about what happened for the caller to
     /// manage focus.
-    #[allow(dead_code)]
     pub(super) fn close_pane_in_group(&mut self, pane_id: u32) -> Option<CloseGroupResult> {
         let group_id = self.group_of(pane_id)?;
         let group = self.groups.get_mut(&group_id)?;
@@ -271,17 +291,8 @@ impl PaneState {
         self.panes.retain(|p| p.id != pane_id);
 
         if became_empty {
-            self.groups.remove(&group_id);
             let sibling = self.group_layout.sibling_of(group_id);
-            match self.group_layout.remove_group(group_id) {
-                GroupRemoveResult::CollapseToSibling(replacement) => {
-                    self.group_layout = replacement;
-                }
-                GroupRemoveResult::IsTarget => {
-                    self.focused_group_id = 0;
-                }
-                _ => {}
-            }
+            self.erase_group(group_id);
             let focus_gid = sibling.or_else(|| {
                 let first = self.group_layout.first_group_id();
                 if self.groups.contains_key(&first) {
@@ -451,21 +462,7 @@ impl PaneState {
             .map(|s| s.remove_pane(pane_id))
             .unwrap_or(false);
         if became_empty {
-            self.groups.remove(&source_group_id);
-            match self.group_layout.remove_group(source_group_id) {
-                GroupRemoveResult::CollapseToSibling(replacement) => {
-                    self.group_layout = replacement;
-                }
-                // The source was the whole layout: there is no sibling to
-                // collapse into, so reset to the same empty sentinel
-                // `PaneState::new` starts from rather than leave the tree
-                // naming a group that no longer exists.
-                GroupRemoveResult::IsTarget => {
-                    self.group_layout = GroupNode::Leaf { group_id: 0 };
-                    self.focused_group_id = 0;
-                }
-                _ => {}
-            }
+            self.erase_group(source_group_id);
         }
         true
     }
@@ -1354,6 +1351,11 @@ mod tests {
         assert!(state.groups.is_empty());
         assert_eq!(state.focused_group_id, 0);
         assert_eq!(state.active_pane_id, None);
+        // The layout must not keep naming the group that was just erased —
+        // the next add_pane_to_group would no-op against it and strand the
+        // pane outside every group.
+        assert!(!state.group_layout.group_ids().contains(&gid));
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
     }
 
     #[test]
