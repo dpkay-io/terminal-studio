@@ -102,9 +102,24 @@ pub(super) enum DragAction {
 
 const DRAG_THRESHOLD: f32 = 5.0;
 
+/// A drop target one window hit-tested, tagged with the window that found it
+/// (`None` = the main window).
+pub(super) struct PendingDrop {
+    pub(super) window_idx: Option<usize>,
+    pub(super) target: DropTarget,
+}
+
 pub(super) struct DragState {
     pub(super) payload: Option<DragPayload>,
     pub(super) drop_target: Option<DropTarget>,
+    /// What `harvest` collected from the windows rendered so far this frame.
+    pub(super) pending_drop: Option<PendingDrop>,
+    /// Pointer released / Escape pressed in *any* window this frame. Both are
+    /// per-viewport in egui, and the release is delivered to the window the
+    /// drag started in rather than the one under the pointer, so neither can
+    /// be read from a single window's input.
+    pub(super) released: bool,
+    pub(super) cancelled: bool,
     pub(super) origin_pos: egui::Pos2,
     pub(super) threshold_met: bool,
     pub(super) label: String,
@@ -115,9 +130,59 @@ impl DragState {
         Self {
             payload: None,
             drop_target: None,
+            pending_drop: None,
+            released: false,
+            cancelled: false,
             origin_pos: egui::pos2(0.0, 0.0),
             threshold_met: false,
             label: String::new(),
+        }
+    }
+
+    /// Forget everything the previous frame hit-tested.
+    ///
+    /// Every `drop_target` writer sets it only while the pointer is over the
+    /// thing it belongs to, and none of them clear it on the way out, so
+    /// without this a target survives the pointer leaving and a release over
+    /// empty space acts on whatever was hovered last.
+    pub(super) fn begin_frame(&mut self) {
+        self.drop_target = None;
+        self.pending_drop = None;
+        self.released = false;
+        self.cancelled = false;
+    }
+
+    /// Fold one window's hit-test result and input into this frame's state.
+    ///
+    /// Called after each window body renders. Windows only ever *write*
+    /// `drop_target`; collecting it here rather than resolving inside the
+    /// window body keeps the release and the hit-test from being split across
+    /// windows — a body that resolves can only see its own viewport's input,
+    /// and the main window always renders first.
+    ///
+    /// ponytail: last writer wins. Only one window can hold the pointer while
+    /// a button is down, so at most one of them hit-tests a target anyway.
+    pub(super) fn harvest(&mut self, window_idx: Option<usize>, released: bool, cancelled: bool) {
+        self.released |= released;
+        self.cancelled |= cancelled;
+        if let Some(target) = self.drop_target.take() {
+            self.pending_drop = Some(PendingDrop { window_idx, target });
+        }
+    }
+
+    /// Move the harvested target back into `drop_target` for `resolve_drag`,
+    /// returning the window that hit-tested it (`None` = the main window, and
+    /// also the no-target case, which resolves to a no-op).
+    pub(super) fn arm_pending_drop(&mut self) -> Option<usize> {
+        match self.pending_drop.take() {
+            Some(p) => {
+                self.drop_target = Some(p.target);
+                p.window_idx
+            }
+            None => {
+                self.drop_target = None;
+                None
+            }
         }
     }
 
@@ -131,6 +196,7 @@ impl DragState {
         self.origin_pos = origin;
         self.threshold_met = false;
         self.drop_target = None;
+        self.pending_drop = None;
         self.label = label.into();
     }
 
@@ -150,6 +216,7 @@ impl DragState {
     pub(super) fn clear(&mut self) {
         self.payload = None;
         self.drop_target = None;
+        self.pending_drop = None;
         self.threshold_met = false;
         self.label.clear();
     }
@@ -1588,5 +1655,165 @@ mod tests {
         // comparisons, which are false for NaN, so it returns false.
         assert_eq!(edge_zone(zone_rect(), egui::pos2(f32::NAN, 100.0)), None);
         assert_eq!(edge_zone(zone_rect(), egui::pos2(200.0, f32::NAN)), None);
+    }
+
+    // ── Per-frame harvesting across windows ────────────────────────────
+    //
+    // Each window body writes `drop_target` while it renders and `update()`
+    // harvests it afterwards. These cover the ordering rules that a single
+    // window body cannot see.
+
+    fn dragging() -> DragState {
+        let mut state = DragState::new();
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "t");
+        state.threshold_met = true;
+        state
+    }
+
+    fn target_group(state: &DragState) -> Option<GroupId> {
+        match state.drop_target {
+            Some(DropTarget::GroupArea(g)) => Some(g),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn begin_frame_forgets_last_frames_hit_test() {
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(7));
+        state.harvest(None, true, false);
+        assert!(state.released);
+        assert!(state.pending_drop.is_some());
+
+        state.begin_frame();
+        assert!(state.drop_target.is_none());
+        assert!(state.pending_drop.is_none());
+        assert!(!state.released);
+        assert!(!state.cancelled);
+        // The drag itself survives — only the frame's hit-test is discarded.
+        assert!(state.is_active());
+    }
+
+    #[test]
+    fn harvest_tags_the_target_with_its_window() {
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(3));
+        state.harvest(Some(2), false, false);
+
+        let pending = state.pending_drop.as_ref().expect("target harvested");
+        assert_eq!(pending.window_idx, Some(2));
+        assert!(matches!(pending.target, DropTarget::GroupArea(3)));
+        // Taken out of `drop_target` so the next window starts clean.
+        assert!(state.drop_target.is_none());
+    }
+
+    #[test]
+    fn harvest_from_a_window_with_no_target_keeps_the_earlier_one() {
+        // The regression this whole split exists for: the main window renders
+        // first and finds nothing, an extra window renders second and finds
+        // the target. Neither may erase the other's result.
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(5));
+        state.harvest(None, false, false);
+        // Extra window renders, pointer is not over it, sets nothing.
+        state.harvest(Some(0), true, false);
+
+        let pending = state.pending_drop.as_ref().expect("main's target kept");
+        assert_eq!(pending.window_idx, None);
+        assert!(matches!(pending.target, DropTarget::GroupArea(5)));
+    }
+
+    #[test]
+    fn release_in_one_window_is_visible_to_all() {
+        // The release lands in the window the drag started in, which is not
+        // the window that hit-tests the target.
+        let mut state = dragging();
+        state.harvest(None, true, false);
+        state.drop_target = Some(DropTarget::GroupArea(9));
+        state.harvest(Some(0), false, false);
+
+        assert!(state.released, "release from window 0 must survive");
+        assert_eq!(state.pending_drop.as_ref().unwrap().window_idx, Some(0));
+    }
+
+    #[test]
+    fn escape_in_any_window_cancels() {
+        let mut state = dragging();
+        state.harvest(None, false, false);
+        state.harvest(Some(0), false, true);
+        assert!(state.cancelled);
+    }
+
+    #[test]
+    fn arm_pending_drop_returns_the_owning_window() {
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(4));
+        state.harvest(Some(1), true, false);
+
+        assert_eq!(state.arm_pending_drop(), Some(1));
+        assert_eq!(target_group(&state), Some(4));
+        assert!(state.pending_drop.is_none());
+    }
+
+    #[test]
+    fn arm_pending_drop_with_nothing_harvested_is_a_noop_drop() {
+        // Released over empty space: no window found a target, so the drag
+        // must resolve to Noop against the main window rather than reusing a
+        // target left over from an earlier hover.
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(6));
+        state.begin_frame();
+        state.harvest(None, true, false);
+
+        assert_eq!(state.arm_pending_drop(), None);
+        assert!(state.drop_target.is_none());
+
+        let ps = make_pane_state(vec![(1, PaneContent::Terminal(1))]);
+        assert!(matches!(
+            resolve_drag(&mut state, &ps, None),
+            DragAction::Noop
+        ));
+        assert!(state.payload.is_none(), "drag is over either way");
+    }
+
+    #[test]
+    fn armed_target_resolves_normally() {
+        // Round-trip: a target harvested from an extra window survives
+        // `arm_pending_drop` intact and resolves exactly as if it had been set
+        // directly on `drop_target`.
+        let (ps, _g1, g2) = make_two_group_state();
+
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(g2));
+        state.harvest(Some(0), true, false);
+
+        assert_eq!(state.arm_pending_drop(), Some(0));
+        assert!(matches!(
+            resolve_drag(&mut state, &ps, None),
+            DragAction::MoveTabToGroup {
+                pane_id: 1,
+                target_group_id,
+                ..
+            } if target_group_id == g2
+        ));
+    }
+
+    #[test]
+    fn set_payload_clears_a_stale_pending_drop() {
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(1));
+        state.harvest(None, false, false);
+        state.set_payload(DragPayload::Session(9), egui::pos2(0.0, 0.0), "s");
+        assert!(state.pending_drop.is_none());
+        assert!(state.drop_target.is_none());
+    }
+
+    #[test]
+    fn clear_drops_the_pending_drop() {
+        let mut state = dragging();
+        state.drop_target = Some(DropTarget::GroupArea(1));
+        state.harvest(None, false, false);
+        state.clear();
+        assert!(state.pending_drop.is_none());
     }
 }

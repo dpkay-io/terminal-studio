@@ -523,16 +523,15 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // Forget last frame's drop target. Every writer sets it only while the
-        // pointer is over the thing it belongs to, and none of them clear it on
-        // the way out, so without this a target survives the pointer leaving —
-        // release over empty space would then still act on whatever was hovered
-        // last. Runs before any window body renders, so each frame's renderers
-        // re-establish it from scratch and the release handler sees only what is
-        // under the pointer right now.
-        self.drag_state.drop_target = None;
+        // Forget last frame's hit-test. Runs before any window body renders, so
+        // each frame's renderers re-establish the drop target from scratch and
+        // the resolver below sees only what is under the pointer right now.
+        self.drag_state.begin_frame();
 
-        // Drag threshold update + grab cursor
+        // Drag threshold update + grab cursor. This only ever sees the main
+        // window's pointer; `harvest_drag_input` samples each extra window's
+        // as well. Kept here so a main-window drag crosses the threshold in
+        // the same frame it moves rather than at the end of it.
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
             self.drag_state.update_threshold(pos);
         }
@@ -1091,6 +1090,7 @@ impl eframe::App for App {
         // for each extra window we swap its `WindowView` in/out around the
         // render call.
         self.render_window_body(ctx);
+        self.harvest_drag_input(None, ctx);
 
         // ── Render each extra window via an immediate viewport ────────────
         // `show_viewport_immediate` runs synchronously and accepts FnOnce, so
@@ -1130,6 +1130,7 @@ impl eframe::App for App {
                 self.current_window_id = Some(win_id.clone());
 
                 self.render_window_body(vp_ctx);
+                self.harvest_drag_input(Some(idx), vp_ctx);
 
                 // Capture the current inner_size for persistence.
                 let new_size = vp_ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
@@ -1146,6 +1147,24 @@ impl eframe::App for App {
                     vp_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+        }
+
+        // ── Drag-and-drop resolution ──────────────────────────────────────
+        // Resolved once here, after every window has rendered, rather than
+        // once per window body. A body sees only its own viewport's input and
+        // the shared `drag_state`, so whichever window rendered first — always
+        // the main one — consumed the drag on a release in its own viewport,
+        // whether or not the target belonged to it. Harvesting first keeps the
+        // release and the hit-test that goes with it together.
+        if self.drag_state.payload.is_some() {
+            let cancelled = self.drag_state.cancelled
+                || (self.drag_state.released && !self.drag_state.threshold_met);
+            if cancelled {
+                self.drag_state.clear();
+            } else if self.drag_state.released {
+                let window_idx = self.drag_state.arm_pending_drop();
+                self.resolve_drag_in_window(window_idx, ctx);
+            }
         }
 
         // Process pending cross-window focus actions (set by sidebar click routing).
@@ -4949,22 +4968,10 @@ impl App {
             self.activate_and_scroll_to_pane(pane_id);
         }
 
-        // ── Drag-and-drop resolution ──────────────────────────────────
-        if self.drag_state.is_active() && ctx.input(|i| i.pointer.any_released()) {
-            let action =
-                drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
-            self.execute_drag_action(action, ctx);
-        }
-        if self.drag_state.payload.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.drag_state.clear();
-        }
-        if self.drag_state.payload.is_some()
-            && !self.drag_state.threshold_met
-            && ctx.input(|i| i.pointer.any_released())
-        {
-            self.drag_state.clear();
-        }
-
+        // Drag-and-drop is *not* resolved here — this body runs once per
+        // window and only the window under the pointer hit-tests a target, so
+        // `update()` harvests each window's result and resolves once, after
+        // every window has had its turn. See `DragState::harvest`.
         self.drag_state.paint_overlay(ctx);
 
         self.render_settings_overlay(ctx);

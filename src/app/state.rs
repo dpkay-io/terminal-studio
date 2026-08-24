@@ -2155,6 +2155,70 @@ impl App {
 
     // ── Drag-and-drop action execution ──────────────────────────────────
 
+    /// Collect one window's drag hit-test and input after its body rendered.
+    /// `window_idx` is `None` for the main window, `Some(i)` for
+    /// `extra_windows[i]`.
+    pub(super) fn harvest_drag_input(&mut self, window_idx: Option<usize>, ctx: &egui::Context) {
+        if self.drag_state.payload.is_none() {
+            return;
+        }
+        let (pos, released, cancelled) = ctx.input(|i| {
+            (
+                i.pointer.hover_pos(),
+                i.pointer.any_released(),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        // `hover_pos` is per-viewport, and a button press captures the pointer
+        // to the window it happened in, so every move during a drag started in
+        // an extra window is delivered to *that* window. Sampling only the main
+        // window's pointer therefore never advanced the 5px threshold for such
+        // a drag: it stayed inactive, drew no drop targets, and its release
+        // cancelled instead of dropping.
+        if let Some(pos) = pos {
+            self.drag_state.update_threshold(pos);
+        }
+        self.drag_state.harvest(window_idx, released, cancelled);
+    }
+
+    /// Resolve the frame's pending drop with `window_idx`'s view swapped in, so
+    /// the drop lands in the window the pointer was actually over. `None` means
+    /// the main window, whose view is already current.
+    pub(super) fn resolve_drag_in_window(
+        &mut self,
+        window_idx: Option<usize>,
+        ctx: &egui::Context,
+    ) {
+        let Some(idx) = window_idx else {
+            let action =
+                drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
+            self.execute_drag_action(action, ctx);
+            return;
+        };
+        // Unreachable today — harvest and resolve happen in the same frame and
+        // windows only close afterwards — but a stale index must never index
+        // out of bounds, so drop the drag instead.
+        if idx >= self.extra_windows.len() {
+            self.drag_state.clear();
+            return;
+        }
+
+        let mut view = std::mem::replace(
+            &mut self.extra_windows[idx].view,
+            WindowView::new_for_workspace(0),
+        );
+        self.swap_view(&mut view);
+        let prev_window = self.current_window_id.take();
+        self.current_window_id = Some(self.extra_windows[idx].id.clone());
+
+        let action = drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
+        self.execute_drag_action(action, ctx);
+
+        self.current_window_id = prev_window;
+        self.swap_view(&mut view);
+        self.extra_windows[idx].view = view;
+    }
+
     pub(super) fn execute_drag_action(&mut self, action: drag::DragAction, ctx: &egui::Context) {
         use drag::DragAction;
         match action {
