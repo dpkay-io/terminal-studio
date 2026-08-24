@@ -1030,16 +1030,6 @@ impl App {
         };
         painter.rect_filled(row_rect, theme::R_MD, bg);
 
-        // On screen but in an unfocused split — mark it, since with no tab bar
-        // nothing else distinguishes it from a background session.
-        if state == sections::RowState::Visible {
-            painter.rect_filled(
-                egui::Rect::from_min_size(row_rect.min, egui::vec2(2.0, row_rect.height())),
-                0.0,
-                t.accent.gamma_multiply(0.6),
-            );
-        }
-
         // Full-height workspace color bar on the left edge
         if let Some(c) = ws_color {
             let bar_rect = egui::Rect::from_min_size(
@@ -1053,6 +1043,22 @@ impl App {
                 se: 0.0,
             };
             painter.rect_filled(bar_rect, left_rounding, theme::from_rgb(c));
+        }
+
+        // On screen but in an unfocused split — mark it, since with no tab bar
+        // nothing else distinguishes it from a background session. Drawn after
+        // the workspace colour bar and offset past it, so neither hides the
+        // other; the label starts at SP_4 + WS_BORDER_W, clear of both.
+        if state == sections::RowState::Visible {
+            let x = row_rect.min.x + ws_color.map_or(0.0, |_| theme::WS_BORDER_W - 1.0);
+            painter.rect_filled(
+                egui::Rect::from_min_size(
+                    egui::pos2(x, row_rect.min.y),
+                    egui::vec2(2.0, row_rect.height()),
+                ),
+                0.0,
+                t.accent.gamma_multiply(0.6),
+            );
         }
 
         // Close button — hidden when row is idle, fades in on hover/active
