@@ -719,481 +719,480 @@ impl App {
                         .cmp(&self.pane_state.panes[a].last_active_at)
                 });
                 for &pane_idx in &sorted_indices {
-                    let pane = &self.pane_state.panes[pane_idx];
-                    let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane
-                        .content
-                    {
-                        PaneContent::Terminal(sid) => {
-                            if let Some(e) = self.session_state.find(*sid) {
-                                let (title, cwd) = {
-                                    let s = e.session.read();
-                                    (s.title(), s.cwd.clone())
-                                };
-                                let ws = if cwd.as_os_str().is_empty() {
-                                    None
-                                } else {
-                                    self.workspace_store.find_for_cwd(&cwd)
-                                };
-                                let color = ws.map(|w| w.color);
-                                let ws_name = ws.map(|w| w.name.as_str());
-                                let fg = self.workers.foreground_worker.get(e.id);
-                                (
-                                    effective_title(
-                                        &title,
-                                        &cwd,
-                                        fg.as_ref(),
-                                        Some(&e.shell),
-                                        ws_name,
-                                    ),
-                                    color,
-                                    false,
-                                )
-                            } else {
-                                ("(missing)".to_string(), None, true)
-                            }
-                        }
-                        PaneContent::DeferredTerminal {
-                            cwd, saved_title, ..
-                        } => {
-                            let cwd_path = cwd.clone().unwrap_or_default();
-                            let ws = if cwd_path.as_os_str().is_empty() {
-                                None
-                            } else {
-                                self.workspace_store.find_for_cwd(&cwd_path)
-                            };
-                            let color = ws.map(|w| w.color);
-                            let ws_name = ws.map(|w| w.name.as_str());
-                            let mut text =
-                                if let Some(t) = saved_title.as_deref().filter(|s| !s.is_empty()) {
-                                    t.to_string()
-                                } else {
-                                    effective_title("", &cwd_path, None, None, ws_name)
-                                };
-                            if text.is_empty() {
-                                text = "(restored)".to_string();
-                            }
-                            (text, color, true)
-                        }
-                        PaneContent::FileEditor(ed) => {
-                            let text = ed
-                                .path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| ed.path.display().to_string());
-                            let color = ed.workspace_id.and_then(|id| {
-                                self.workspace_store
-                                    .workspaces
-                                    .iter()
-                                    .find(|w| w.id == id)
-                                    .map(|w| w.color)
-                            });
-                            (text, color, false)
-                        }
-                        PaneContent::FileDiff(d) => {
-                            let name = d
-                                .path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(|s| format!("\u{21c4} {}", s))
-                                .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
-                            (name, None, false)
-                        }
-                        PaneContent::NoteEditor(ne) => {
-                            let color = ne.workspace_id.and_then(|id| {
-                                self.workspace_store
-                                    .workspaces
-                                    .iter()
-                                    .find(|w| w.id == id)
-                                    .map(|w| w.color)
-                            });
-                            ("Notes".to_string(), color, false)
-                        }
-                        PaneContent::ConflictResolver(cr) => {
-                            let name = cr
-                                .path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(|s| format!("\u{26a0} {}", s))
-                                .unwrap_or_else(|| "Conflicts".to_string());
-                            (name, None, false)
-                        }
-                    };
-
-                    if !session_filter.is_empty() {
-                        let label_names: String = pane
-                            .labels
-                            .iter()
-                            .filter_map(|&lid| self.label_registry.get(lid))
-                            .map(|l| l.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let searchable = if label_names.is_empty() {
-                            label.clone()
-                        } else {
-                            format!("{} {}", label, label_names)
-                        };
-                        if matcher.fuzzy_match(&searchable, session_filter).is_none() {
-                            continue;
-                        }
-                    }
-
-                    let pane_ws =
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
-
-                    if let Some(ws_filter) = self.session_workspace_filter {
-                        if pane_ws != ws_filter {
-                            continue;
-                        }
-                    }
-
-                    if let Some(label_filter) = self.session_label_filter {
-                        if !pane.labels.contains(&label_filter) {
-                            continue;
-                        }
-                    }
-
-                    let in_other_window = pane_ws.is_some_and(|ws_id| {
-                        let owned_by_extra =
-                            self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
-                        if owned_by_extra {
-                            // Workspace has a dedicated extra window — "other" if
-                            // that window isn't the one we're currently rendering.
-                            self.extra_windows.iter().any(|ew| {
-                                ew.workspace_id == ws_id
-                                    && self.current_window_id.as_ref() != Some(&ew.id)
-                            })
-                        } else {
-                            // Workspace lives in the main window — "other" only
-                            // when we're rendering from an extra window.
-                            self.current_window_id.is_some()
-                        }
-                    });
-
-                    let is_active = self.pane_state.active_pane_id == Some(pane.id);
-
-                    let (resp, painter) = ui.allocate_painter(
-                        egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
-                        egui::Sense::click_and_drag(),
-                    );
-                    let row_rect = resp.rect;
-                    if resp.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-
-                    // Paint background — animated hover transition
-                    let row_hovered = resp.hovered();
-                    let hover_id = egui::Id::new(("sess_row_hover", pane.id));
-                    let hover_t =
-                        crate::app::ui::animation::animated_hover(ui.ctx(), hover_id, row_hovered);
-                    let t = theme::active();
-                    let bg = if is_active {
-                        t.bg_row_active
-                    } else {
-                        theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
-                    };
-                    painter.rect_filled(row_rect, theme::R_MD, bg);
-
-                    // Full-height workspace color bar on the left edge
-                    if let Some(c) = ws_color {
-                        let bar_rect = egui::Rect::from_min_size(
-                            egui::pos2(row_rect.min.x, row_rect.min.y),
-                            egui::vec2(theme::WS_BORDER_W - 1.0, row_rect.height()),
-                        );
-                        let left_rounding = egui::Rounding {
-                            nw: theme::R_MD,
-                            sw: theme::R_MD,
-                            ne: 0.0,
-                            se: 0.0,
-                        };
-                        painter.rect_filled(bar_rect, left_rounding, theme::from_rgb(c));
-                    }
-
-                    // Close button — hidden when row is idle, fades in on hover/active
-                    let show_close = is_active || row_hovered;
-                    let close_anim_t = crate::app::ui::animation::animated_hover(
-                        ui.ctx(),
-                        egui::Id::new(("sess_close_anim", pane.id)),
-                        show_close,
-                    );
-                    let quit_resp = if close_anim_t > 0.01 {
-                        let quit_rect = egui::Rect::from_min_size(
-                            egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
-                            egui::vec2(theme::BTN_W, row_rect.height()),
-                        );
-                        let close_color = t.danger_fg.gamma_multiply(close_anim_t);
-                        let result = ui_kit::icon_button(
-                            ui,
-                            egui::Id::new(("pane_quit", pane.id)),
-                            quit_rect,
-                            "\u{00d7}",
-                            theme::FONT_TERM,
-                            close_color,
-                            ui_kit::IconButtonStyle::Danger,
-                        );
-                        Some((result, quit_rect))
-                    } else {
-                        None
-                    };
-                    let (quit_rect_opt, quit_clicked) = match &quit_resp {
-                        Some((r, rect)) => (Some(*rect), r.clicked()),
-                        None => (None, false),
-                    };
-
-                    let win_icon_w: f32 = if in_other_window {
-                        theme::FONT_TERM
-                    } else {
-                        0.0
-                    };
-
-                    if in_other_window {
-                        let icon_x = row_rect.max.x
-                            - quit_rect_opt.map_or(0.0, |_| theme::BTN_W)
-                            - win_icon_w / 2.0
-                            - 1.0;
-                        painter.text(
-                            egui::pos2(icon_x, row_rect.center().y),
-                            egui::Align2::CENTER_CENTER,
-                            "\u{2197}",
-                            egui::FontId::proportional(theme::FONT_UI_SM),
-                            theme::active().blue,
-                        );
-                    }
-
-                    // ── Label icons ──────────────────────────────────────
-                    let effective_btn_w = if close_anim_t > 0.01 {
-                        theme::BTN_W
-                    } else {
-                        0.0
-                    };
-                    let max_visible_labels: usize = 4;
-                    let label_icon_size = theme::ICON_SM;
-                    let label_gap = theme::SP_1;
-                    let pane_labels = &pane.labels;
-                    let has_overflow = pane_labels.len() > max_visible_labels;
-                    let icons_to_show = if has_overflow {
-                        max_visible_labels - 1
-                    } else {
-                        pane_labels.len()
-                    };
-                    let rendered_slots = icons_to_show + if has_overflow { 1 } else { 0 };
-                    let labels_total_w = if rendered_slots > 0 {
-                        rendered_slots as f32 * (label_icon_size + label_gap) + label_gap
-                    } else {
-                        0.0
-                    };
-                    let labels_right = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
-
-                    if !pane_labels.is_empty() {
-                        let row_bg_rgb = if is_active {
-                            t.surface0_rgb
-                        } else {
-                            t.base_rgb
-                        };
-                        for (i, &lid) in pane_labels.iter().take(icons_to_show).enumerate() {
-                            if let Some(ldef) = self.label_registry.get(lid) {
-                                let x = labels_right - labels_total_w
-                                    + (i as f32) * (label_icon_size + label_gap)
-                                    + label_gap;
-                                let icon_pos = egui::pos2(x, row_rect.center().y);
-                                let color = theme::ensure_readable(
-                                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
-                                    row_bg_rgb,
-                                );
-                                painter.text(
-                                    icon_pos,
-                                    egui::Align2::LEFT_CENTER,
-                                    &ldef.icon,
-                                    egui::FontId::proportional(label_icon_size),
-                                    color,
-                                );
-                                let icon_rect = egui::Rect::from_min_size(
-                                    egui::pos2(x, row_rect.min.y),
-                                    egui::vec2(label_icon_size + label_gap, row_rect.height()),
-                                );
-                                if ui.rect_contains_pointer(icon_rect) {
-                                    egui::show_tooltip_at_pointer(
-                                        ui.ctx(),
-                                        ui.layer_id(),
-                                        egui::Id::new(("label_tip", pane.id, lid)),
-                                        |ui| {
-                                            ui.label(&ldef.name);
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        if has_overflow {
-                            let x = labels_right - label_icon_size - label_gap;
-                            painter.text(
-                                egui::pos2(x, row_rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                "\u{2026}",
-                                egui::FontId::proportional(label_icon_size),
-                                theme::active().subtext0,
-                            );
-                            let overflow_rect = egui::Rect::from_min_size(
-                                egui::pos2(x, row_rect.min.y),
-                                egui::vec2(label_icon_size + label_gap, row_rect.height()),
-                            );
-                            if ui.rect_contains_pointer(overflow_rect) {
-                                let remaining: Vec<String> = pane_labels
-                                    .iter()
-                                    .skip(icons_to_show)
-                                    .filter_map(|&lid| self.label_registry.get(lid))
-                                    .map(|l| format!("{} {}", l.icon, l.name))
-                                    .collect();
-                                egui::show_tooltip_at_pointer(
-                                    ui.ctx(),
-                                    ui.layer_id(),
-                                    egui::Id::new(("label_overflow_tip", pane.id)),
-                                    |ui| {
-                                        ui.label(remaining.join("\n"));
-                                    },
-                                );
-                            }
-                        }
-                    }
-
-                    // Title text: consistent left padding regardless of workspace bar
-                    let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
-                    let clip_max = labels_right - labels_total_w;
-                    let is_being_dragged = matches!(
-                        &self.drag_state.payload,
-                        Some(crate::app::drag::DragPayload::Session(sid))
-                            if matches!(&pane.content, PaneContent::Terminal(psid) if *psid == *sid)
-                    );
-                    let text_color = if dimmed {
-                        theme::active().overlay0
-                    } else if is_active {
-                        theme::active().text
-                    } else {
-                        theme::active().subtext0
-                    };
-                    let text_color = if is_being_dragged {
-                        text_color.gamma_multiply(0.4)
-                    } else {
-                        text_color
-                    };
-                    let available_w = (clip_max - text_x).max(0.0);
-                    let mut job = egui::text::LayoutJob::single_section(
-                        label.clone(),
-                        egui::TextFormat {
-                            font_id: egui::FontId::proportional(theme::FONT_UI_MD),
-                            color: text_color,
-                            ..Default::default()
-                        },
-                    );
-                    job.wrap = egui::text::TextWrapping {
-                        max_width: available_w,
-                        max_rows: 1,
-                        break_anywhere: true,
-                        overflow_character: Some('\u{2026}'),
-                    };
-                    let galley = ui.fonts(|f| f.layout_job(job));
-                    painter.galley(
-                        egui::pos2(text_x, row_rect.center().y - galley.rect.height() / 2.0),
-                        galley,
-                        text_color,
-                    );
-
-                    let resp = if in_other_window {
-                        resp.on_hover_text(format!("{} (switch window)", label))
-                    } else {
-                        resp.on_hover_text(&label)
-                    };
-
-                    if quit_clicked {
-                        actions.quit_pane_id = Some(pane.id);
-                    } else if resp.clicked() {
-                        actions.clicked_sidebar_pane_id = Some(pane.id);
-                    }
-
-                    // ── Right-click context menu ────────────────────────
-                    let pane_id = pane.id;
-                    let pane_labels_snapshot = pane.labels.clone();
-                    resp.context_menu(|ui| {
-                        if ui.button("Duplicate").clicked() {
-                            actions.duplicate_session = true;
-                            ui.close_menu();
-                        }
-                        ui.separator();
-
-                        ui.menu_button("Labels", |ui| {
-                            ui.set_min_width(160.0);
-                            let mut current_cat: Option<crate::app::labels::LabelCategory> = None;
-                            for ldef in self.label_registry.all() {
-                                if current_cat.as_ref() != Some(&ldef.category) {
-                                    if current_cat.is_some() {
-                                        ui.separator();
-                                    }
-                                    let header = match &ldef.category {
-                                        crate::app::labels::LabelCategory::Status => "Status",
-                                        crate::app::labels::LabelCategory::Intent => "Intent",
-                                        crate::app::labels::LabelCategory::Priority => "Priority",
-                                        crate::app::labels::LabelCategory::Custom => "Custom",
-                                    };
-                                    ui.label(
-                                        egui::RichText::new(header)
-                                            .size(theme::FONT_UI_XS)
-                                            .strong()
-                                            .color(theme::active().subtext0),
-                                    );
-                                    current_cat = Some(ldef.category.clone());
-                                }
-                                let is_set = pane_labels_snapshot.contains(&ldef.id);
-                                let check = if is_set { "\u{2713} " } else { "    " };
-                                let menu_bg = theme::active().base_rgb;
-                                let color = theme::ensure_readable(
-                                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
-                                    menu_bg,
-                                );
-                                let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
-                                let btn = ui.button(
-                                    egui::RichText::new(label_text)
-                                        .size(theme::FONT_UI_MD)
-                                        .color(color),
-                                );
-                                if btn.clicked() {
-                                    actions.toggle_label = Some((pane_id, ldef.id));
-                                }
-                            }
-                            ui.separator();
-                            if ui
-                                .button(
-                                    egui::RichText::new("+ New label\u{2026}")
-                                        .size(theme::FONT_UI_MD)
-                                        .color(theme::active().accent),
-                                )
-                                .clicked()
-                            {
-                                actions.show_new_label_for_pane = Some(pane_id);
-                                ui.close_menu();
-                            }
-                        });
-
-                        ui.separator();
-                        if ui
-                            .button(egui::RichText::new("Close").color(theme::active().danger_fg))
-                            .clicked()
-                        {
-                            actions.quit_pane_id = Some(pane_id);
-                            ui.close_menu();
-                        }
-                    });
-
-                    // Drag source: start dragging this session row
-                    if resp.drag_started() {
-                        if let PaneContent::Terminal(sid) = &pane.content {
-                            let origin = resp.interact_pointer_pos().unwrap_or_default();
-                            self.drag_state.set_payload(
-                                crate::app::drag::DragPayload::Session(*sid),
-                                origin,
-                                &label,
-                            );
-                        }
-                    }
+                    self.render_session_row(ui, pane_idx, session_filter, &matcher, actions);
                 }
             });
+    }
+
+    /// Render one row of the session list.
+    fn render_session_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane_idx: usize,
+        session_filter: &str,
+        matcher: &SkimMatcherV2,
+        actions: &mut SessionListActions,
+    ) {
+        let pane = &self.pane_state.panes[pane_idx];
+        let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane.content {
+            PaneContent::Terminal(sid) => {
+                if let Some(e) = self.session_state.find(*sid) {
+                    let (title, cwd) = {
+                        let s = e.session.read();
+                        (s.title(), s.cwd.clone())
+                    };
+                    let ws = if cwd.as_os_str().is_empty() {
+                        None
+                    } else {
+                        self.workspace_store.find_for_cwd(&cwd)
+                    };
+                    let color = ws.map(|w| w.color);
+                    let ws_name = ws.map(|w| w.name.as_str());
+                    let fg = self.workers.foreground_worker.get(e.id);
+                    (
+                        effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell), ws_name),
+                        color,
+                        false,
+                    )
+                } else {
+                    ("(missing)".to_string(), None, true)
+                }
+            }
+            PaneContent::DeferredTerminal {
+                cwd, saved_title, ..
+            } => {
+                let cwd_path = cwd.clone().unwrap_or_default();
+                let ws = if cwd_path.as_os_str().is_empty() {
+                    None
+                } else {
+                    self.workspace_store.find_for_cwd(&cwd_path)
+                };
+                let color = ws.map(|w| w.color);
+                let ws_name = ws.map(|w| w.name.as_str());
+                let mut text = if let Some(t) = saved_title.as_deref().filter(|s| !s.is_empty()) {
+                    t.to_string()
+                } else {
+                    effective_title("", &cwd_path, None, None, ws_name)
+                };
+                if text.is_empty() {
+                    text = "(restored)".to_string();
+                }
+                (text, color, true)
+            }
+            PaneContent::FileEditor(ed) => {
+                let text = ed
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| ed.path.display().to_string());
+                let color = ed.workspace_id.and_then(|id| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == id)
+                        .map(|w| w.color)
+                });
+                (text, color, false)
+            }
+            PaneContent::FileDiff(d) => {
+                let name = d
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| format!("\u{21c4} {}", s))
+                    .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
+                (name, None, false)
+            }
+            PaneContent::NoteEditor(ne) => {
+                let color = ne.workspace_id.and_then(|id| {
+                    self.workspace_store
+                        .workspaces
+                        .iter()
+                        .find(|w| w.id == id)
+                        .map(|w| w.color)
+                });
+                ("Notes".to_string(), color, false)
+            }
+            PaneContent::ConflictResolver(cr) => {
+                let name = cr
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| format!("\u{26a0} {}", s))
+                    .unwrap_or_else(|| "Conflicts".to_string());
+                (name, None, false)
+            }
+        };
+
+        if !session_filter.is_empty() {
+            let label_names: String = pane
+                .labels
+                .iter()
+                .filter_map(|&lid| self.label_registry.get(lid))
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let searchable = if label_names.is_empty() {
+                label.clone()
+            } else {
+                format!("{} {}", label, label_names)
+            };
+            if matcher.fuzzy_match(&searchable, session_filter).is_none() {
+                return;
+            }
+        }
+
+        let pane_ws = Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane);
+
+        if let Some(ws_filter) = self.session_workspace_filter {
+            if pane_ws != ws_filter {
+                return;
+            }
+        }
+
+        if let Some(label_filter) = self.session_label_filter {
+            if !pane.labels.contains(&label_filter) {
+                return;
+            }
+        }
+
+        let in_other_window = pane_ws.is_some_and(|ws_id| {
+            let owned_by_extra = self.extra_windows.iter().any(|ew| ew.workspace_id == ws_id);
+            if owned_by_extra {
+                // Workspace has a dedicated extra window — "other" if
+                // that window isn't the one we're currently rendering.
+                self.extra_windows.iter().any(|ew| {
+                    ew.workspace_id == ws_id && self.current_window_id.as_ref() != Some(&ew.id)
+                })
+            } else {
+                // Workspace lives in the main window — "other" only
+                // when we're rendering from an extra window.
+                self.current_window_id.is_some()
+            }
+        });
+
+        let is_active = self.pane_state.active_pane_id == Some(pane.id);
+
+        let (resp, painter) = ui.allocate_painter(
+            egui::vec2(ui.available_width(), theme::SESSION_ROW_H),
+            egui::Sense::click_and_drag(),
+        );
+        let row_rect = resp.rect;
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+
+        // Paint background — animated hover transition
+        let row_hovered = resp.hovered();
+        let hover_id = egui::Id::new(("sess_row_hover", pane.id));
+        let hover_t = crate::app::ui::animation::animated_hover(ui.ctx(), hover_id, row_hovered);
+        let t = theme::active();
+        let bg = if is_active {
+            t.bg_row_active
+        } else {
+            theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
+        };
+        painter.rect_filled(row_rect, theme::R_MD, bg);
+
+        // Full-height workspace color bar on the left edge
+        if let Some(c) = ws_color {
+            let bar_rect = egui::Rect::from_min_size(
+                egui::pos2(row_rect.min.x, row_rect.min.y),
+                egui::vec2(theme::WS_BORDER_W - 1.0, row_rect.height()),
+            );
+            let left_rounding = egui::Rounding {
+                nw: theme::R_MD,
+                sw: theme::R_MD,
+                ne: 0.0,
+                se: 0.0,
+            };
+            painter.rect_filled(bar_rect, left_rounding, theme::from_rgb(c));
+        }
+
+        // Close button — hidden when row is idle, fades in on hover/active
+        let show_close = is_active || row_hovered;
+        let close_anim_t = crate::app::ui::animation::animated_hover(
+            ui.ctx(),
+            egui::Id::new(("sess_close_anim", pane.id)),
+            show_close,
+        );
+        let quit_resp = if close_anim_t > 0.01 {
+            let quit_rect = egui::Rect::from_min_size(
+                egui::pos2(row_rect.max.x - theme::BTN_W, row_rect.min.y),
+                egui::vec2(theme::BTN_W, row_rect.height()),
+            );
+            let close_color = t.danger_fg.gamma_multiply(close_anim_t);
+            let result = ui_kit::icon_button(
+                ui,
+                egui::Id::new(("pane_quit", pane.id)),
+                quit_rect,
+                "\u{00d7}",
+                theme::FONT_TERM,
+                close_color,
+                ui_kit::IconButtonStyle::Danger,
+            );
+            Some((result, quit_rect))
+        } else {
+            None
+        };
+        let (quit_rect_opt, quit_clicked) = match &quit_resp {
+            Some((r, rect)) => (Some(*rect), r.clicked()),
+            None => (None, false),
+        };
+
+        let win_icon_w: f32 = if in_other_window {
+            theme::FONT_TERM
+        } else {
+            0.0
+        };
+
+        if in_other_window {
+            let icon_x = row_rect.max.x
+                - quit_rect_opt.map_or(0.0, |_| theme::BTN_W)
+                - win_icon_w / 2.0
+                - 1.0;
+            painter.text(
+                egui::pos2(icon_x, row_rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                "\u{2197}",
+                egui::FontId::proportional(theme::FONT_UI_SM),
+                theme::active().blue,
+            );
+        }
+
+        // ── Label icons ──────────────────────────────────────
+        let effective_btn_w = if close_anim_t > 0.01 {
+            theme::BTN_W
+        } else {
+            0.0
+        };
+        let max_visible_labels: usize = 4;
+        let label_icon_size = theme::ICON_SM;
+        let label_gap = theme::SP_1;
+        let pane_labels = &pane.labels;
+        let has_overflow = pane_labels.len() > max_visible_labels;
+        let icons_to_show = if has_overflow {
+            max_visible_labels - 1
+        } else {
+            pane_labels.len()
+        };
+        let rendered_slots = icons_to_show + if has_overflow { 1 } else { 0 };
+        let labels_total_w = if rendered_slots > 0 {
+            rendered_slots as f32 * (label_icon_size + label_gap) + label_gap
+        } else {
+            0.0
+        };
+        let labels_right = row_rect.max.x - effective_btn_w - win_icon_w - theme::SP_1;
+
+        if !pane_labels.is_empty() {
+            let row_bg_rgb = if is_active {
+                t.surface0_rgb
+            } else {
+                t.base_rgb
+            };
+            for (i, &lid) in pane_labels.iter().take(icons_to_show).enumerate() {
+                if let Some(ldef) = self.label_registry.get(lid) {
+                    let x = labels_right - labels_total_w
+                        + (i as f32) * (label_icon_size + label_gap)
+                        + label_gap;
+                    let icon_pos = egui::pos2(x, row_rect.center().y);
+                    let color = theme::ensure_readable(
+                        [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                        row_bg_rgb,
+                    );
+                    painter.text(
+                        icon_pos,
+                        egui::Align2::LEFT_CENTER,
+                        &ldef.icon,
+                        egui::FontId::proportional(label_icon_size),
+                        color,
+                    );
+                    let icon_rect = egui::Rect::from_min_size(
+                        egui::pos2(x, row_rect.min.y),
+                        egui::vec2(label_icon_size + label_gap, row_rect.height()),
+                    );
+                    if ui.rect_contains_pointer(icon_rect) {
+                        egui::show_tooltip_at_pointer(
+                            ui.ctx(),
+                            ui.layer_id(),
+                            egui::Id::new(("label_tip", pane.id, lid)),
+                            |ui| {
+                                ui.label(&ldef.name);
+                            },
+                        );
+                    }
+                }
+            }
+            if has_overflow {
+                let x = labels_right - label_icon_size - label_gap;
+                painter.text(
+                    egui::pos2(x, row_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "\u{2026}",
+                    egui::FontId::proportional(label_icon_size),
+                    theme::active().subtext0,
+                );
+                let overflow_rect = egui::Rect::from_min_size(
+                    egui::pos2(x, row_rect.min.y),
+                    egui::vec2(label_icon_size + label_gap, row_rect.height()),
+                );
+                if ui.rect_contains_pointer(overflow_rect) {
+                    let remaining: Vec<String> = pane_labels
+                        .iter()
+                        .skip(icons_to_show)
+                        .filter_map(|&lid| self.label_registry.get(lid))
+                        .map(|l| format!("{} {}", l.icon, l.name))
+                        .collect();
+                    egui::show_tooltip_at_pointer(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        egui::Id::new(("label_overflow_tip", pane.id)),
+                        |ui| {
+                            ui.label(remaining.join("\n"));
+                        },
+                    );
+                }
+            }
+        }
+
+        // Title text: consistent left padding regardless of workspace bar
+        let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+        let clip_max = labels_right - labels_total_w;
+        let is_being_dragged = matches!(
+            &self.drag_state.payload,
+            Some(crate::app::drag::DragPayload::Session(sid))
+                if matches!(&pane.content, PaneContent::Terminal(psid) if *psid == *sid)
+        );
+        let text_color = if dimmed {
+            theme::active().overlay0
+        } else if is_active {
+            theme::active().text
+        } else {
+            theme::active().subtext0
+        };
+        let text_color = if is_being_dragged {
+            text_color.gamma_multiply(0.4)
+        } else {
+            text_color
+        };
+        let available_w = (clip_max - text_x).max(0.0);
+        let mut job = egui::text::LayoutJob::single_section(
+            label.clone(),
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(theme::FONT_UI_MD),
+                color: text_color,
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping {
+            max_width: available_w,
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
+        };
+        let galley = ui.fonts(|f| f.layout_job(job));
+        painter.galley(
+            egui::pos2(text_x, row_rect.center().y - galley.rect.height() / 2.0),
+            galley,
+            text_color,
+        );
+
+        let resp = if in_other_window {
+            resp.on_hover_text(format!("{} (switch window)", label))
+        } else {
+            resp.on_hover_text(&label)
+        };
+
+        if quit_clicked {
+            actions.quit_pane_id = Some(pane.id);
+        } else if resp.clicked() {
+            actions.clicked_sidebar_pane_id = Some(pane.id);
+        }
+
+        // ── Right-click context menu ────────────────────────
+        let pane_id = pane.id;
+        let pane_labels_snapshot = pane.labels.clone();
+        resp.context_menu(|ui| {
+            if ui.button("Duplicate").clicked() {
+                actions.duplicate_session = true;
+                ui.close_menu();
+            }
+            ui.separator();
+
+            ui.menu_button("Labels", |ui| {
+                ui.set_min_width(160.0);
+                let mut current_cat: Option<crate::app::labels::LabelCategory> = None;
+                for ldef in self.label_registry.all() {
+                    if current_cat.as_ref() != Some(&ldef.category) {
+                        if current_cat.is_some() {
+                            ui.separator();
+                        }
+                        let header = match &ldef.category {
+                            crate::app::labels::LabelCategory::Status => "Status",
+                            crate::app::labels::LabelCategory::Intent => "Intent",
+                            crate::app::labels::LabelCategory::Priority => "Priority",
+                            crate::app::labels::LabelCategory::Custom => "Custom",
+                        };
+                        ui.label(
+                            egui::RichText::new(header)
+                                .size(theme::FONT_UI_XS)
+                                .strong()
+                                .color(theme::active().subtext0),
+                        );
+                        current_cat = Some(ldef.category.clone());
+                    }
+                    let is_set = pane_labels_snapshot.contains(&ldef.id);
+                    let check = if is_set { "\u{2713} " } else { "    " };
+                    let menu_bg = theme::active().base_rgb;
+                    let color = theme::ensure_readable(
+                        [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                        menu_bg,
+                    );
+                    let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
+                    let btn = ui.button(
+                        egui::RichText::new(label_text)
+                            .size(theme::FONT_UI_MD)
+                            .color(color),
+                    );
+                    if btn.clicked() {
+                        actions.toggle_label = Some((pane_id, ldef.id));
+                    }
+                }
+                ui.separator();
+                if ui
+                    .button(
+                        egui::RichText::new("+ New label\u{2026}")
+                            .size(theme::FONT_UI_MD)
+                            .color(theme::active().accent),
+                    )
+                    .clicked()
+                {
+                    actions.show_new_label_for_pane = Some(pane_id);
+                    ui.close_menu();
+                }
+            });
+
+            ui.separator();
+            if ui
+                .button(egui::RichText::new("Close").color(theme::active().danger_fg))
+                .clicked()
+            {
+                actions.quit_pane_id = Some(pane_id);
+                ui.close_menu();
+            }
+        });
+
+        // Drag source: start dragging this session row
+        if resp.drag_started() {
+            if let PaneContent::Terminal(sid) = &pane.content {
+                let origin = resp.interact_pointer_pos().unwrap_or_default();
+                self.drag_state.set_payload(
+                    crate::app::drag::DragPayload::Session(*sid),
+                    origin,
+                    &label,
+                );
+            }
+        }
     }
 }
