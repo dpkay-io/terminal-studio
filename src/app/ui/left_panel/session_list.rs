@@ -1026,9 +1026,11 @@ impl App {
         let t = theme::active();
         let bg = match state {
             sections::RowState::Focused => t.bg_row_active,
-            sections::RowState::Visible => {
-                theme::lerp_color(t.bg_row_active, egui::Color32::TRANSPARENT, 0.5)
-            }
+            // Half-strength active fill. gamma_multiply scales only alpha, so
+            // the hue survives — lerping toward Color32::TRANSPARENT would
+            // drag the RGB channels toward black too, darkening the fill
+            // instead of softening it, which is worst in the light themes.
+            sections::RowState::Visible => t.bg_row_active.gamma_multiply(0.5),
             sections::RowState::Background => {
                 theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_row_hover, hover_t)
             }

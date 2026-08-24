@@ -816,6 +816,7 @@ impl App {
             &mut self.session_workspace_filter,
             &mut view.session_workspace_filter,
         );
+        swap(&mut self.session_sort_cache, &mut view.session_sort_cache);
         {
             let temp = view.focused_group_id;
             view.focused_group_id = Some(self.pane_state.focused_group_id);
