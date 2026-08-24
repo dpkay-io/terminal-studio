@@ -163,6 +163,15 @@ impl App {
             self.drag_state.drop_target = Some(crate::app::drag::DropTarget::NewWindow);
         }
 
+        // Drop an unconsumed scroll request. The row clears it when it draws,
+        // but a target that is filtered out, sitting in a section with no
+        // visible rows, or hidden behind the global-search view never gets the
+        // chance — and a value left here would re-scroll on every later frame.
+        // Must run before the deferred actions below, which can set a fresh one.
+        // ponytail: the first window to render wins; a pane only visible in
+        // another viewport loses its scroll. Key it per window if that bites.
+        self.scroll_to_pane = None;
+
         // ── Process deferred actions ──────────────────────────────────────────
         self.process_left_panel_actions(ctx, sess_actions, ws_actions, active_fg);
     }

@@ -293,6 +293,14 @@ impl App {
         let Some(qpid) = clicked_sidebar_pane_id else {
             return;
         };
+        // Visiting the session acknowledges its completed-command badge. The
+        // list row is the only place a user can clear one by hand.
+        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == qpid) {
+            if let PaneContent::Terminal(sid) = &pane.content {
+                let sid = *sid;
+                self.completed_badges.remove(&sid);
+            }
+        }
         let group_opt = self
             .pane_state
             .panes

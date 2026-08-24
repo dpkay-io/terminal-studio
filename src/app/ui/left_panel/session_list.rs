@@ -12,6 +12,11 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
 
+/// Radius of the completed-process dot. Bounded by the gutter between the
+/// left-edge markers and the title text — see the placement comment in
+/// `render_session_row`.
+const BADGE_R: f32 = 2.5;
+
 /// Display data for one session-list row, computed once per row per frame.
 ///
 /// The label computation takes a read lock on the terminal session, so it must
@@ -1019,6 +1024,19 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
+        // Title text x: consistent left padding regardless of workspace bar.
+        // Bound early — the completed badge below is positioned off it.
+        let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+
+        // Scroll a freshly activated pane into view. The list is the only
+        // session navigator, so this is the sole consumer; the field is
+        // cleared unconditionally in `render_left_panel` for the frames where
+        // the target row is filtered out and this never runs.
+        if self.scroll_to_pane == Some(pane.id) {
+            ui.scroll_to_rect(row_rect, Some(egui::Align::Center));
+            self.scroll_to_pane = None;
+        }
+
         // Paint background — animated hover transition
         let row_hovered = resp.hovered();
         let hover_id = egui::Id::new(("sess_row_hover", pane.id));
@@ -1036,6 +1054,14 @@ impl App {
             }
         };
         painter.rect_filled(row_rect, theme::R_MD, bg);
+
+        // Row flash (copy path, session spawned into this row, …). The tab bar
+        // used to be the only render site for `FlashTarget::Tab`.
+        self.flash.render_on_rect(
+            &painter,
+            row_rect,
+            crate::app::feedback::FlashTarget::Tab(pane.id),
+        );
 
         // Full-height workspace color bar on the left edge
         if let Some(c) = ws_color {
@@ -1214,8 +1240,23 @@ impl App {
             }
         }
 
-        // Title text: consistent left padding regardless of workspace bar
-        let text_x = row_rect.min.x + theme::SP_4 + theme::WS_BORDER_W;
+        // Completed-process badge, in the gutter between the left-edge markers
+        // and the title. That gutter is exactly 5px wide in the worst case:
+        // the workspace bar owns [min.x, min.x + WS_BORDER_W - 1] = 3px, the
+        // visible-split marker is drawn immediately after it and owns 2px
+        // more, and the title starts at SP_4 + WS_BORDER_W = 12px. So the dot
+        // spans [min.x + 5, min.x + 10] — flush against the marker, SP_1 clear
+        // of the text — and BADGE_R cannot grow past 2.5 without overlapping.
+        if let PaneContent::Terminal(sid) = &pane.content {
+            if self.completed_badges.contains(sid) {
+                painter.circle_filled(
+                    egui::pos2(text_x - theme::SP_1 - BADGE_R, row_rect.center().y),
+                    BADGE_R,
+                    t.green,
+                );
+            }
+        }
+
         let clip_max = labels_right - labels_total_w;
         let is_being_dragged = matches!(
             &self.drag_state.payload,
@@ -1258,13 +1299,21 @@ impl App {
             text_color,
         );
 
-        let resp = if in_other_window {
-            resp.on_hover_text(format!("{} (switch window)", label))
+        // Full title + CWD + workspace. Built only for the hovered row: it
+        // takes a session read lock and formats a title, and this list redraws
+        // every frame.
+        let resp = if resp.hovered() {
+            let tip = self.tab_tooltip_text(pane_idx);
+            if in_other_window {
+                resp.on_hover_text(format!("{} (switch window)", tip))
+            } else {
+                resp.on_hover_text(tip)
+            }
         } else {
-            resp.on_hover_text(label)
+            resp
         };
 
-        if quit_clicked {
+        if quit_clicked || resp.clicked_by(egui::PointerButton::Middle) {
             actions.quit_pane_id = Some(pane.id);
         } else if resp.clicked() {
             actions.clicked_sidebar_pane_id = Some(pane.id);
