@@ -723,6 +723,13 @@ impl App {
         ui.spacing_mut().scroll.bar_width = 0.0;
         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         ui.spacing_mut().scroll.floating_width = 0.0;
+        // Visible viewport of the list, measured on the OUTER ui: the scroll
+        // area fills the remaining panel space, whereas the inner ui's
+        // `max_rect` is the virtual content area and can extend far past what
+        // is on screen. `rect_contains_pointer` also honours the clip rect and
+        // any layer painted on top, so an open menu does not count as "inside".
+        let list_rect = ui.available_rect_before_wrap();
+        let pointer_inside = ui.rect_contains_pointer(list_rect);
         egui::ScrollArea::vertical()
             .id_source(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
@@ -730,12 +737,20 @@ impl App {
                 ui.set_min_width(outer_w);
                 ui.set_max_width(outer_w);
                 let matcher = SkimMatcherV2::default();
-                let mut sorted_indices: Vec<usize> = (0..self.pane_state.panes.len()).collect();
-                sorted_indices.sort_by(|&a, &b| {
-                    self.pane_state.panes[b]
-                        .last_active_at
-                        .cmp(&self.pane_state.panes[a].last_active_at)
-                });
+                let recency: Vec<(u32, u64)> = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .map(|p| (p.id, p.last_active_at))
+                    .collect();
+                let ordered_ids = self.session_sort_cache.order(&recency, pointer_inside);
+                // ponytail: linear id lookup per row — O(n²) over the pane
+                // count, which is tens at most. Build an id→index map if a
+                // session list ever gets large enough to show up in a profile.
+                let sorted_indices: Vec<usize> = ordered_ids
+                    .iter()
+                    .filter_map(|id| self.pane_state.panes.iter().position(|p| p.id == *id))
+                    .collect();
                 // Pass 1: compute each row's label and apply the filters, so a
                 // section with no surviving rows never draws its header.
                 let visible: Vec<(usize, RowLabel)> = sorted_indices

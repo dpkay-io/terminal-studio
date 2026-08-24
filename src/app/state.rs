@@ -214,6 +214,7 @@ impl App {
                 Duration::from_millis(200),
             ),
             global_search_selected: 0,
+            session_sort_cache: Default::default(),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
             detection_lines_hash: HashMap::new(),

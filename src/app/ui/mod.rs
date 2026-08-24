@@ -5,7 +5,7 @@ pub(super) mod conflict_resolver;
 pub(crate) mod debounce;
 mod dialogs;
 mod info_bar;
-mod left_panel;
+pub(in crate::app) mod left_panel;
 mod pane_labels;
 mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;

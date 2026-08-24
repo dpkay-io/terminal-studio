@@ -1,5 +1,5 @@
 mod context_menu;
-mod sections;
+pub(in crate::app) mod sections;
 mod session_list;
 mod workspace_section;
 
