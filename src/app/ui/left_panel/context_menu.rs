@@ -24,6 +24,8 @@ impl App {
             self.show_new_label_dialog = Some(pane_id);
         }
         self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
+        self.process_row_path_actions(&sess_actions);
+        self.process_row_rename(&mut sess_actions);
         // Consume async folder picker result if available
         let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
             d.remove_temp::<std::path::PathBuf>(egui::Id::new("pending_folder_pick"))
@@ -34,6 +36,66 @@ impl App {
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
         if sess_actions.new_file | std::mem::replace(&mut self.deferred_new_file, false) {
             self.create_new_file_pane();
+        }
+    }
+
+    /// Copy a row's directory to the clipboard, or reveal it in the OS file
+    /// manager. A clipboard the OS refuses is swallowed on purpose — not worth
+    /// a dialog — and the flash only fires on the success path, so the
+    /// feedback never claims a copy that did not happen.
+    fn process_row_path_actions(&mut self, sess_actions: &SessionListActions) {
+        if let Some(pid) = sess_actions.copy_path_pane_id {
+            if let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
+                if let Some(cwd) = self.pane_cwd(idx) {
+                    if let Ok(mut clip) = arboard::Clipboard::new() {
+                        let _ = clip.set_text(cwd.to_string_lossy().into_owned());
+                    }
+                    self.flash.trigger(
+                        crate::app::feedback::FlashTarget::Tab(pid),
+                        crate::app::feedback::FlashKind::Success,
+                    );
+                }
+            }
+        }
+        if let Some(pid) = sess_actions.open_in_explorer_pane_id {
+            if let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
+                if let Some(cwd) = self.pane_cwd(idx) {
+                    let _ = open::that(cwd);
+                }
+            }
+        }
+    }
+
+    /// Open the inline rename editor on a row, and apply a committed one.
+    /// Only terminals have a settable title; the menu entry is hidden for
+    /// everything else, so a commit that reaches here for one is a no-op.
+    fn process_row_rename(&mut self, sess_actions: &mut SessionListActions) {
+        // Drop a rename whose pane has since been closed, so its buffer cannot
+        // outlive the row. Checked here rather than in each close path —
+        // `process_quit_pane`, `close_pane_full` and the close-all routes all
+        // remove panes independently, and this covers every one of them.
+        if let Some(pid) = self.rename_pane_id {
+            if !self.pane_state.panes.iter().any(|p| p.id == pid) {
+                self.rename_pane_id = None;
+                self.rename_text.clear();
+            }
+        }
+        if let Some(pid) = sess_actions.start_rename_pane_id {
+            let idx = self.pane_state.panes.iter().position(|p| p.id == pid);
+            self.rename_pane_id = Some(pid);
+            self.rename_text = idx.map(|i| self.tab_display_text(i)).unwrap_or_default();
+        }
+        if let Some((pid, title)) = sess_actions.commit_rename.take() {
+            if !title.is_empty() {
+                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
+                    if let PaneContent::Terminal(sid) = &pane.content {
+                        if let Some(e) = self.session_state.find(*sid) {
+                            // `set_title` takes &self and locks internally.
+                            e.session.read().set_title(title);
+                        }
+                    }
+                }
+            }
         }
     }
 
