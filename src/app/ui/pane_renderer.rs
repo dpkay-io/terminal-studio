@@ -928,6 +928,34 @@ fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
     }
 }
 
+/// Translucent preview of the half a split-edge drop will fill.
+fn paint_split_preview(ui: &egui::Ui, rect: egui::Rect, dir: SplitDir, before: bool) {
+    let half = match (dir, before) {
+        (SplitDir::Horizontal, true) => {
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() / 2.0, rect.height()))
+        }
+        (SplitDir::Horizontal, false) => egui::Rect::from_min_size(
+            egui::pos2(rect.center().x, rect.min.y),
+            egui::vec2(rect.width() / 2.0, rect.height()),
+        ),
+        (SplitDir::Vertical, true) => {
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), rect.height() / 2.0))
+        }
+        (SplitDir::Vertical, false) => egui::Rect::from_min_size(
+            egui::pos2(rect.min.x, rect.center().y),
+            egui::vec2(rect.width(), rect.height() / 2.0),
+        ),
+    };
+    let t = theme::active();
+    ui.painter()
+        .rect_filled(half, theme::R_MD, t.accent.gamma_multiply(0.25));
+    ui.painter().rect_stroke(
+        half,
+        theme::R_MD,
+        egui::Stroke::new(theme::STROKE_THIN, t.accent),
+    );
+}
+
 /// Apply a deferred action produced by a split's info bar header.
 fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Context) {
     match action {
@@ -1193,13 +1221,33 @@ fn render_group_node(
             let ctx = leaf_ui.ctx().clone();
             apply_info_bar_action(app, info_bar_action, &ctx);
 
-            // Convert PaneArea to GroupArea for group-aware drop routing
+            // Route this leaf's drop target: near an edge the drop splits the
+            // group, anywhere else it joins the group.
+            //
+            // The gate is the PaneArea the content renderer set, not a fresh
+            // hit test — it already established that the pointer is over this
+            // pane and that the payload is one a pane accepts (a Workspace
+            // drag never gets this far, so it can never draw a split preview).
             if matches!(
                 app.drag_state.drop_target,
                 Some(crate::app::drag::DropTarget::PaneArea)
             ) {
-                app.drag_state.drop_target =
-                    Some(crate::app::drag::DropTarget::GroupArea(group_id));
+                let edge = leaf_ui
+                    .ctx()
+                    .input(|i| i.pointer.hover_pos())
+                    .and_then(|pos| crate::app::drag::edge_zone(content_rect, pos));
+                let target = match edge {
+                    Some((dir, before)) => {
+                        paint_split_preview(&leaf_ui, content_rect, dir, before);
+                        crate::app::drag::DropTarget::SplitEdge {
+                            group_id,
+                            dir,
+                            before,
+                        }
+                    }
+                    None => crate::app::drag::DropTarget::GroupArea(group_id),
+                };
+                app.drag_state.drop_target = Some(target);
             }
 
             // Click-to-focus: if clicked in this group's area, set focus
