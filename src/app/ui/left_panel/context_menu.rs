@@ -91,7 +91,15 @@ impl App {
                     if let PaneContent::Terminal(sid) = &pane.content {
                         if let Some(e) = self.session_state.find(*sid) {
                             // `set_title` takes &self and locks internally.
-                            e.session.read().set_title(title);
+                            let s = e.session.read();
+                            s.set_title(title);
+                            // Hold the name against the shell. EventProxy drops
+                            // incoming OSC titles only while this is set, and
+                            // most prompts re-emit one every command — without
+                            // the lock a rename would not survive the next
+                            // prompt. Sending input to the session unlocks it
+                            // again, matching the restored-title path.
+                            s.lock_title();
                         }
                     }
                 }
