@@ -397,6 +397,47 @@ impl PaneState {
         }
     }
 
+    /// Step through the focused group's own pane order, wrapping at the ends.
+    ///
+    /// `allowed` is the set of pane ids that pass the active tab filter; panes
+    /// outside it are skipped so cycling never lands on a hidden pane that
+    /// would render as the "filtered out" empty state. Returns `None` when
+    /// there is nothing else in this group to cycle to.
+    fn step_pane_in_focused_group(
+        &self,
+        current: u32,
+        allowed: &[u32],
+        forward: bool,
+    ) -> Option<u32> {
+        let group = self.groups.get(&self.focused_group_id)?;
+        let cycle: Vec<u32> = group
+            .pane_ids
+            .iter()
+            .copied()
+            .filter(|pid| allowed.contains(pid))
+            .collect();
+        if cycle.len() < 2 {
+            return None;
+        }
+        let pos = cycle.iter().position(|&p| p == current).unwrap_or(0);
+        let next = if forward {
+            (pos + 1) % cycle.len()
+        } else {
+            (pos + cycle.len() - 1) % cycle.len()
+        };
+        Some(cycle[next])
+    }
+
+    /// The pane after `current` in the focused group's own order, wrapping.
+    pub(super) fn next_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
+        self.step_pane_in_focused_group(current, allowed, true)
+    }
+
+    /// The pane before `current` in the focused group's own order, wrapping.
+    pub(super) fn prev_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
+        self.step_pane_in_focused_group(current, allowed, false)
+    }
+
     /// Remove `pane_id` from whichever group holds it, deleting that group and
     /// collapsing the layout if it became empty. Returns true if a pane was
     /// actually detached.
@@ -1025,6 +1066,84 @@ mod tests {
         state.add_pane_to_group(1, 4, Some(1));
         let g = state.groups.get(&1).unwrap();
         assert_eq!(g.pane_ids, vec![1, 4, 2]);
+    }
+
+    /// Group 1 holds [1, 2, 3] and is focused; group 2 holds [8, 9].
+    fn make_cycle_state() -> PaneState {
+        let mut state = PaneState::new();
+        for id in [1, 2, 3, 8, 9] {
+            state.panes.push(make_pane(id));
+        }
+        state.next_pane_id = 10;
+        let g1 = state.create_group(1);
+        state.groups.get_mut(&g1).unwrap().insert_pane(2, None);
+        state.groups.get_mut(&g1).unwrap().insert_pane(3, None);
+        let g2 = state.create_group(8);
+        state.groups.get_mut(&g2).unwrap().insert_pane(9, None);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        let split_id = state.next_split_id;
+        state.next_split_id += 1;
+        state
+            .group_layout
+            .split_group(g1, g2, split_id, SplitDir::Horizontal, false);
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+        state
+    }
+
+    #[test]
+    fn next_pane_in_group_wraps_within_group() {
+        let ps = make_cycle_state();
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 2, 3]), Some(2));
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 2, 3]), Some(1));
+    }
+
+    #[test]
+    fn prev_pane_in_group_wraps_within_group() {
+        let ps = make_cycle_state();
+        assert_eq!(ps.prev_pane_in_focused_group(2, &[1, 2, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 2, 3]), Some(3));
+    }
+
+    #[test]
+    fn next_pane_in_group_ignores_other_groups() {
+        let ps = make_cycle_state();
+        // 8 and 9 live in the unfocused group; cycling must never reach them
+        // even though they pass the filter.
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 2, 3, 8, 9]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 2, 3, 8, 9]), Some(3));
+    }
+
+    #[test]
+    fn next_pane_in_group_single_pane_is_none() {
+        let mut ps = make_cycle_state();
+        ps.focused_group_id = 2; // group 2 filtered down to one pane
+        assert_eq!(ps.next_pane_in_focused_group(8, &[8]), None);
+        assert_eq!(ps.prev_pane_in_focused_group(8, &[8]), None);
+    }
+
+    #[test]
+    fn next_pane_in_group_respects_filter() {
+        let ps = make_cycle_state();
+        // Pane 2 is hidden by the tab filter, so cycling skips over it.
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 3]), Some(3));
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 3]), Some(3));
+    }
+
+    #[test]
+    fn cycle_from_pane_outside_the_group_starts_at_the_first() {
+        let ps = make_cycle_state();
+        // `current` belongs to the other group — fall back to the head of the
+        // cycle rather than returning None, so the key never feels dead.
+        assert_eq!(ps.next_pane_in_focused_group(9, &[1, 2, 3]), Some(2));
+    }
+
+    #[test]
+    fn cycle_in_unknown_focused_group_is_none() {
+        let mut ps = make_cycle_state();
+        ps.focused_group_id = 999;
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 2, 3]), None);
     }
 
     #[test]

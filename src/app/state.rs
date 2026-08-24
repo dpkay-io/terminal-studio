@@ -635,6 +635,17 @@ impl App {
         )
     }
 
+    /// Ids of every pane the active tab filter lets through — the candidate set
+    /// for Ctrl+Tab cycling.
+    pub(super) fn tab_cycle_candidates(&self) -> Vec<u32> {
+        self.pane_state
+            .panes
+            .iter()
+            .filter(|p| self.pane_passes_tab_filter(p))
+            .map(|p| p.id)
+            .collect()
+    }
+
     pub(super) fn has_active_tab_filter(&self) -> bool {
         self.session_workspace_filter.is_some() || self.session_label_filter.is_some()
     }
