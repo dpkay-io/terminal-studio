@@ -430,7 +430,7 @@ fn render_file_editor_leaf(
         if previewing {
             if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
                 if let Some(ref text) = et.1 {
-                    egui::ScrollArea::both()
+                    egui::ScrollArea::vertical()
                         .id_source(("editor_preview_scroll", pane_id))
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
