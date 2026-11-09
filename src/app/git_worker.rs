@@ -357,7 +357,7 @@ impl GitWorker {
                                     &["log", "--oneline", "@{upstream}..HEAD"],
                                     &cwd,
                                 )
-                                .map(&parse_log)
+                                .map(parse_log)
                                 .or_else(|| {
                                     for remote_branch in &["origin/main", "origin/master"] {
                                         let range = format!("{remote_branch}..HEAD");
@@ -365,7 +365,7 @@ impl GitWorker {
                                             &["log", "--oneline", &range],
                                             &cwd,
                                         )
-                                        .map(&parse_log)
+                                        .map(parse_log)
                                         {
                                             return Some(commits);
                                         }
