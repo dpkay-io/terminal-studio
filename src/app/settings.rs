@@ -61,7 +61,7 @@ impl Default for AppSettings {
             scroll_on_output: false,
             scroll_lines: 3,
             default_shell: None,
-            show_sys_monitor: true,
+            show_sys_monitor: false,
             diff_view_mode: DiffViewMode::Inline,
             max_closed_sessions: 50,
             save_scrollback_on_close: true,
@@ -122,7 +122,7 @@ mod tests {
         assert!(s.cursor_blink);
         assert!(!s.scroll_on_output);
         assert_eq!(s.default_shell, None);
-        assert!(s.show_sys_monitor);
+        assert!(!s.show_sys_monitor);
     }
 
     #[test]
@@ -149,7 +149,7 @@ mod tests {
             default_workspace_id: Some(42),
             scroll_on_output: true,
             default_shell: Some("/bin/zsh".into()),
-            show_sys_monitor: false,
+            show_sys_monitor: true,
             ..AppSettings::default()
         };
         let json = serde_json::to_string(&original).unwrap();
@@ -162,7 +162,7 @@ mod tests {
         assert_eq!(restored.default_workspace_id, Some(42));
         assert!(restored.scroll_on_output);
         assert_eq!(restored.default_shell, Some("/bin/zsh".into()));
-        assert!(!restored.show_sys_monitor);
+        assert!(restored.show_sys_monitor);
     }
 
     #[test]
@@ -177,6 +177,14 @@ mod tests {
         assert_eq!(s.restore_last_session, d.restore_last_session);
         assert_eq!(s.default_workspace_id, d.default_workspace_id);
         assert_eq!(s.theme_id, d.theme_id);
+        assert_eq!(s.show_sys_monitor, d.show_sys_monitor);
+    }
+
+    #[test]
+    fn test_saved_sys_monitor_choice_overrides_default() {
+        // Users who saved the monitor as visible keep it visible.
+        let s: AppSettings = serde_json::from_str(r#"{"show_sys_monitor": true}"#).unwrap();
+        assert!(s.show_sys_monitor);
     }
 
     #[test]
