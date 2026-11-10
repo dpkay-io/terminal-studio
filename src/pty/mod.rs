@@ -1,5 +1,6 @@
 pub mod foreground;
 pub mod foreground_worker;
+pub mod hangup;
 pub mod reader;
 pub mod shell_integration;
 
@@ -191,6 +192,7 @@ type SpawnResult = (
     Arc<AtomicBool>,
     Arc<AtomicBool>, // is_active: true when this session is the focused pane
     usize,           // injected scrollback history lines (0 if none)
+    hangup::ShellHangup,
 );
 
 pub struct SessionManager {
@@ -245,6 +247,7 @@ impl SessionManager {
 
         let mut child = pty_pair.slave.spawn_command(cmd)?;
         let shell_pid = child.process_id().unwrap_or(u32::MAX);
+        let hangup = hangup::ShellHangup::new(child.clone_killer());
 
         let reader = pty_pair.master.try_clone_reader()?;
 
@@ -333,10 +336,12 @@ impl SessionManager {
         // pipe stays open, so this is the primary exit-detection path.
         let alive_for_reaper = Arc::clone(&alive);
         let ctx_for_reaper = self.ctx.clone();
+        let hangup_for_reaper = hangup.clone();
         thread::Builder::new()
             .name(format!("pty-reaper-{}", id))
             .spawn(move || {
                 let _ = child.wait();
+                hangup_for_reaper.disarm();
                 alive_for_reaper.store(false, std::sync::atomic::Ordering::SeqCst);
                 ctx_for_reaper.request_repaint();
                 log::info!("Session {id} shell process exited");
@@ -351,6 +356,7 @@ impl SessionManager {
             alive,
             is_active,
             injected_history_lines,
+            hangup,
         ))
     }
 

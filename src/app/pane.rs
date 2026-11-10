@@ -124,6 +124,17 @@ pub(super) struct SessionEntry {
     pub(super) restore_scroll_ready: bool,
     pub(super) restore_title: Option<String>,
     pub(super) claude_session_id: Option<String>,
+    /// Ends the shell when this entry is dropped (tab closed).
+    pub(super) hangup: crate::pty::hangup::ShellHangup,
+}
+
+/// Every way a session leaves the app (closing its tab, Close All, deleting
+/// its workspace, quitting) drops its entry, so this is the one place that
+/// ends the shell. A shell that already exited is left alone.
+impl Drop for SessionEntry {
+    fn drop(&mut self) {
+        self.hangup.hang_up();
+    }
 }
 
 #[cfg(test)]

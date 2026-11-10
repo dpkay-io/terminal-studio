@@ -438,7 +438,17 @@ impl App {
             self.settings.scrollback_lines,
             pre_inject,
         ) {
-            Ok((id, session, master, pty_tx, shell_pid, alive, is_active, injected_lines)) => {
+            Ok((
+                id,
+                session,
+                master,
+                pty_tx,
+                shell_pid,
+                alive,
+                is_active,
+                injected_lines,
+                hangup,
+            )) => {
                 let entry = SessionEntry {
                     id,
                     session,
@@ -457,6 +467,7 @@ impl App {
                     },
                     restore_title: None,
                     claude_session_id: None,
+                    hangup,
                 };
                 if self.session_state.active_id.is_none() {
                     self.session_state.active_id = Some(id);
