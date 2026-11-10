@@ -64,44 +64,6 @@ impl App {
         }
 
         {
-            use egui::{Rounding, Shadow, Stroke, Visuals};
-            let t = theme::active();
-            let mut vis = if t.is_light {
-                Visuals::light()
-            } else {
-                Visuals::dark()
-            };
-            vis.panel_fill = t.bg_panel_fill;
-            vis.window_fill = t.bg_term;
-            vis.window_rounding = Rounding::same(theme::R_LG);
-            vis.window_shadow = Shadow::NONE;
-            vis.popup_shadow = Shadow::NONE;
-            vis.widgets.noninteractive.bg_fill = t.surface0;
-            vis.widgets.inactive.bg_fill = t.surface0;
-            vis.widgets.hovered.bg_fill = t.surface1;
-            vis.widgets.active.bg_fill = t.surface2;
-            vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
-            vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
-            vis.selection.bg_fill = t.selection_bg;
-            for state in [
-                &mut vis.widgets.noninteractive,
-                &mut vis.widgets.inactive,
-                &mut vis.widgets.hovered,
-                &mut vis.widgets.active,
-                &mut vis.widgets.open,
-            ] {
-                state.rounding = Rounding::same(theme::R_MD);
-            }
-            vis.override_text_color = Some(t.text);
-            cc.egui_ctx.set_visuals(vis);
-
-            let mut style = (*cc.egui_ctx.style()).clone();
-            style.spacing.scroll = theme::scroll_style();
-            style.always_scroll_the_only_direction = true;
-            cc.egui_ctx.set_style(style);
-        }
-
-        {
             use egui::{FontData, FontDefinitions, FontFamily};
             let mut fonts = FontDefinitions::default();
             let mut loaded = false;
@@ -217,6 +179,7 @@ impl App {
             closed_sessions_cache: None,
             shortcut_registry: ShortcutRegistry::new(),
             settings: loaded_settings,
+            applied_theme: None,
             active_term_geo: None,
             last_focused_sid: None,
             active_term_ui_id: None,
@@ -341,6 +304,10 @@ impl App {
             let rows = ((est_h / CELL_H) as u16).max(24);
             (cols, rows)
         };
+
+        // Settings load (above) selects the saved theme. Apply visuals after that
+        // so a non-default theme is not left on the default palette.
+        app.apply_theme_visuals(&cc.egui_ctx);
 
         app.load_windows();
 
@@ -1965,42 +1932,17 @@ impl App {
         }
     }
 
-    pub(super) fn apply_theme_visuals(&self, ctx: &egui::Context) {
-        use egui::{Rounding, Shadow, Stroke, Visuals};
-        let t = theme::active();
-        let mut vis = if t.is_light {
-            Visuals::light()
-        } else {
-            Visuals::dark()
-        };
-        vis.panel_fill = t.bg_panel_fill;
-        vis.window_fill = t.bg_term;
-        vis.window_rounding = Rounding::same(theme::R_LG);
-        vis.window_shadow = Shadow::NONE;
-        vis.popup_shadow = Shadow::NONE;
-        vis.widgets.noninteractive.bg_fill = t.surface0;
-        vis.widgets.inactive.bg_fill = t.surface0;
-        vis.widgets.hovered.bg_fill = t.surface1;
-        vis.widgets.active.bg_fill = t.surface2;
-        vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
-        vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
-        vis.selection.bg_fill = t.selection_bg;
-        for state in [
-            &mut vis.widgets.noninteractive,
-            &mut vis.widgets.inactive,
-            &mut vis.widgets.hovered,
-            &mut vis.widgets.active,
-            &mut vis.widgets.open,
-        ] {
-            state.rounding = Rounding::same(theme::R_MD);
+    pub(super) fn apply_theme_visuals(&mut self, ctx: &egui::Context) {
+        let current = theme::current_id();
+        if self.applied_theme == Some(current) {
+            return;
         }
-        vis.override_text_color = Some(t.text);
-        ctx.set_visuals(vis);
-
+        ctx.set_visuals(theme::visuals_for(theme::active()));
         let mut style = (*ctx.style()).clone();
         style.spacing.scroll = theme::scroll_style();
         style.always_scroll_the_only_direction = true;
         ctx.set_style(style);
+        self.applied_theme = Some(current);
     }
 
     pub(super) fn extract_selected_text(&self, session_idx: usize) -> String {

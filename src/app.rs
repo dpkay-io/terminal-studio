@@ -128,6 +128,8 @@ pub struct App {
     closed_sessions_cache: Option<closed_sessions::ClosedSessionManifest>,
     shortcut_registry: ShortcutRegistry,
     settings: AppSettings,
+    /// Theme whose egui visuals are currently installed. `None` until the first apply.
+    applied_theme: Option<theme::ThemeId>,
 
     // Per-frame terminal geometry for mouse coordinate conversion
     active_term_geo: Option<TerminalGeometry>,

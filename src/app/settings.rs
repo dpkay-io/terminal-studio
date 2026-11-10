@@ -27,6 +27,10 @@ pub enum InfoBarPosition {
 pub(super) struct AppSettings {
     pub(super) default_workspace_id: Option<u64>,
     pub(super) restore_last_session: bool,
+    #[serde(
+        default = "default_theme_id",
+        deserialize_with = "deserialize_theme_id"
+    )]
     pub(super) theme_id: theme::ThemeId,
     pub(super) last_update_check: Option<u64>,
     pub(super) skip_version: Option<String>,
@@ -98,6 +102,21 @@ impl AppSettings {
 
 pub(super) fn windows_data_path() -> Option<PathBuf> {
     util::data_file("windows.json")
+}
+
+fn default_theme_id() -> theme::ThemeId {
+    theme::ThemeId::CatppuccinMocha
+}
+
+/// Unknown theme names fall back to the default so one bad value cannot reset
+/// the rest of the settings file.
+fn deserialize_theme_id<'de, D>(deserializer: D) -> Result<theme::ThemeId, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    let quoted = serde_json::to_string(&name).unwrap_or_default();
+    Ok(serde_json::from_str(&quoted).unwrap_or_else(|_| default_theme_id()))
 }
 
 fn settings_data_path() -> Option<PathBuf> {
@@ -191,6 +210,29 @@ mod tests {
         assert_eq!(s.cursor_style, CursorStyle::Block);
         assert!(s.restore_last_session);
         assert_eq!(s.theme_id, theme::ThemeId::CatppuccinMocha);
+    }
+
+    #[test]
+    fn github_light_roundtrips() {
+        let original = AppSettings {
+            theme_id: theme::ThemeId::GitHubLight,
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert!(
+            json.contains("\"GitHubLight\""),
+            "serialized theme id should be GitHubLight, got {json}"
+        );
+        let restored: AppSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.theme_id, theme::ThemeId::GitHubLight);
+    }
+
+    #[test]
+    fn unknown_theme_id_falls_back_to_default() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"theme_id":"Nope","font_size":16.0}"#).unwrap();
+        assert_eq!(s.theme_id, theme::ThemeId::CatppuccinMocha);
+        assert!((s.font_size - 16.0).abs() < f32::EPSILON);
     }
 
     #[test]

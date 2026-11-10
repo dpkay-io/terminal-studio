@@ -131,6 +131,7 @@ mod tests {
 
     #[test]
     fn test_flash_color_returns_valid_color() {
+        let _guard = crate::theme::test_support::lock_theme(crate::theme::ThemeId::CatppuccinMocha);
         crate::theme::set_theme(crate::theme::ThemeId::CatppuccinMocha);
         let color = FlashManager::flash_color(FlashKind::Neutral, 60);
         assert_eq!(color.a(), 60);
