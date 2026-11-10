@@ -481,7 +481,10 @@ pub const R_LG: f32 = 8.0;
 pub const TITLEBAR_H: f32 = 28.0;
 pub const TITLEBAR_BTN_W: f32 = 44.0;
 pub const TITLEBAR_ICON_GAP: f32 = 4.0;
-pub const SYSMON_W: f32 = 100.0;
+pub const SYSMON_W: f32 = 204.0;
+pub const SYSMON_BAR_W: f32 = 40.0;
+pub const SYSMON_BAR_H: f32 = 4.0;
+pub const SYSMON_CONTENT_H: f32 = 11.0;
 pub const UPDATE_BTN_W: f32 = 110.0;
 pub const HEADER_H: f32 = 26.0;
 pub const INFO_BAR_H: f32 = 22.0;
@@ -830,24 +833,6 @@ pub fn ensure_readable(fg: [u8; 3], bg: [u8; 3]) -> Color32 {
     }
 }
 
-pub fn header_bg(ws_color: Option<[u8; 3]>, is_active: bool) -> Color32 {
-    match (ws_color, is_active) {
-        (Some(c), true) => from_rgb(tinted(c, BLEND_STRONG)),
-        (Some(c), false) => from_rgb(tinted(c, BLEND_LIGHT + 0.05)),
-        (None, true) => active().surface0,
-        (None, false) => {
-            let base = active().base_rgb;
-            let s0 = active().surface0_rgb;
-            let mid = [
-                ((base[0] as u16 + s0[0] as u16) / 2) as u8,
-                ((base[1] as u16 + s0[1] as u16) / 2) as u8,
-                ((base[2] as u16 + s0[2] as u16) / 2) as u8,
-            ];
-            from_rgb(mid)
-        }
-    }
-}
-
 pub fn short_path(p: &std::path::Path) -> String {
     let parts: Vec<&str> = p
         .components()
@@ -995,37 +980,6 @@ mod tests {
         assert_eq!(color.r(), 137);
         assert_eq!(color.g(), 180);
         assert_eq!(color.b(), 250);
-    }
-
-    #[test]
-    fn test_header_bg_active_with_color() {
-        let _guard = super::test_support::lock_theme(ThemeId::CatppuccinMocha);
-        set_theme(ThemeId::CatppuccinMocha);
-        let c = Some([100u8, 140, 230]);
-        let active_bg = header_bg(c, true);
-        let inactive = header_bg(c, false);
-        assert_ne!(active_bg, inactive);
-    }
-
-    #[test]
-    fn test_header_bg_no_color() {
-        let _guard = super::test_support::lock_theme(ThemeId::CatppuccinMocha);
-        set_theme(ThemeId::CatppuccinMocha);
-        let active_bg = header_bg(None, true);
-        let inactive = header_bg(None, false);
-        assert_eq!(active_bg, active().surface0);
-        assert_ne!(active_bg, inactive);
-    }
-
-    #[test]
-    fn test_header_bg_midpoint_no_overflow() {
-        let a: u8 = 200;
-        let b: u8 = 200;
-        let correct = ((a as u16 + b as u16) / 2) as u8;
-        assert_eq!(
-            correct, 200,
-            "midpoint of 200,200 should be 200, not truncated"
-        );
     }
 
     #[test]

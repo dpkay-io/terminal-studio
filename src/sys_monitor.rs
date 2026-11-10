@@ -127,15 +127,3 @@ fn sleep_interruptible(duration: Duration, alive: &AtomicBool) -> bool {
     }
     alive.load(Ordering::Relaxed)
 }
-
-pub fn format_bytes_rate(bps: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * 1024;
-    if bps >= MB {
-        format!("{:.1}M", bps as f64 / MB as f64)
-    } else if bps >= KB {
-        format!("{:.0}K", bps as f64 / KB as f64)
-    } else {
-        format!("{}B", bps)
-    }
-}

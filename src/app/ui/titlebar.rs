@@ -7,90 +7,115 @@ use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
 
+mod sysmon;
+
+use sysmon::sysmon_rect;
+
+fn titlebar_fill(t: &theme::Theme, _ws_color: Option<egui::Color32>) -> egui::Color32 {
+    t.bg_panel
+}
+
+fn title_content_rect(clip: egui::Rect, content_width: f32) -> egui::Rect {
+    egui::Rect::from_center_size(
+        clip.center(),
+        egui::vec2(
+            content_width.min(clip.width()).max(theme::SP_0),
+            clip.height(),
+        ),
+    )
+}
+
+fn title_clip_rect(bar: egui::Rect, switcher_end_x: f32, clip_max_x: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(switcher_end_x + theme::TITLEBAR_ICON_GAP, bar.min.y),
+        egui::pos2(clip_max_x, bar.max.y),
+    )
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn non_macos_title_clip_rect(
+    bar: egui::Rect,
+    switcher_end_x: f32,
+    history_button_width: f32,
+    clip_max_x: f32,
+) -> egui::Rect {
+    title_clip_rect(bar, switcher_end_x + history_button_width, clip_max_x)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_title_clip_rect(
+    bar: egui::Rect,
+    switcher_end_x: f32,
+    sysmon_start_x: f32,
+    update_button_start_x: Option<f32>,
+) -> egui::Rect {
+    let trailing_controls_start_x = update_button_start_x.unwrap_or(sysmon_start_x);
+    title_clip_rect(
+        bar,
+        switcher_end_x,
+        trailing_controls_start_x - theme::TITLEBAR_ICON_GAP,
+    )
+}
+
 fn paint_titlebar_title(
-    ui: &egui::Ui,
-    clipped: &egui::Painter,
-    r: egui::Rect,
+    ui: &mut egui::Ui,
+    clip_rect: egui::Rect,
     session_title: &Option<String>,
     ws_name: &Option<String>,
     git_branch: &Option<String>,
-    bright: egui::Color32,
 ) {
-    let title_font = egui::FontId::proportional(theme::FONT_SM);
-    let branch_font = egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into()));
-    let dim = bright.linear_multiply(0.55);
-    let extra_dim = bright.linear_multiply(0.35);
-
-    let branch_text = git_branch
-        .as_ref()
-        .filter(|b| !b.is_empty())
-        .map(|b| format!("  {} {b}", ui_kit::icon::GIT_BRANCH));
-
-    let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
-
-    match (session_title, ws_name) {
-        (Some(session), Some(ws)) => {
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
-                bright,
-            ));
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
-                dim,
-            ));
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), dim)),
-                dim,
-            ));
-            if let Some(ref bt) = branch_text {
-                segments.push((
-                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
-                    extra_dim,
-                ));
-            }
-        }
-        (Some(session), None) => {
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
-                bright,
-            ));
-        }
-        (None, Some(ws)) => {
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
-                dim,
-            ));
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
-                dim,
-            ));
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), bright)),
-                bright,
-            ));
-            if let Some(ref bt) = branch_text {
-                segments.push((
-                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
-                    extra_dim,
-                ));
-            }
-        }
-        (None, None) => {
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
-                dim,
-            ));
-        }
+    let t = theme::active();
+    let font = egui::FontId::proportional(theme::FONT_MD);
+    let mut segments = vec![(
+        session_title.as_deref().unwrap_or("Terminal Studio"),
+        t.fg_strong,
+    )];
+    if let Some(workspace) = ws_name.as_deref() {
+        segments.push((workspace, t.fg));
     }
-
-    let total_w: f32 = segments.iter().map(|(g, _)| g.size().x).sum();
-    let mut x = r.center().x - total_w / 2.0;
-    for (galley, color) in segments {
-        let y = r.center().y - galley.size().y / 2.0;
-        let w = galley.size().x;
-        clipped.galley(egui::pos2(x, y), galley, color);
-        x += w;
+    if let Some(branch) = git_branch.as_deref().filter(|branch| !branch.is_empty()) {
+        segments.push((branch, t.fg_muted));
     }
+    let separator = " \u{00b7} ";
+    let separator_width = ui.fonts(|fonts| {
+        fonts
+            .layout_no_wrap(separator.to_owned(), font.clone(), t.fg_muted)
+            .size()
+            .x
+    });
+    let separators_width = separator_width * segments.len().saturating_sub(1) as f32;
+    let segment_width =
+        ((clip_rect.width() - separators_width) / segments.len() as f32).max(theme::SP_0);
+    let content_width = ui.fonts(|fonts| {
+        segments
+            .iter()
+            .map(|(text, color)| {
+                fonts
+                    .layout_no_wrap((*text).to_owned(), font.clone(), *color)
+                    .size()
+                    .x
+                    .min(segment_width)
+            })
+            .sum::<f32>()
+            + separators_width
+    });
+    let content_rect = title_content_rect(clip_rect, content_width);
+
+    ui.allocate_ui_at_rect(content_rect, |ui| {
+        ui.set_clip_rect(clip_rect);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            for (index, (text, color)) in segments.into_iter().enumerate() {
+                if index > 0 {
+                    ui.label(
+                        egui::RichText::new(separator)
+                            .font(font.clone())
+                            .color(t.fg_muted),
+                    );
+                }
+                ui_kit::truncate_label(ui, text, font.clone(), color, segment_width);
+            }
+        });
+    });
 }
 
 impl App {
@@ -191,7 +216,9 @@ impl App {
             (None, Some(ws)) => format!("Terminal Studio — {ws}"),
             (None, None) => "Terminal Studio".to_string(),
         };
-        let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
+        let active_ws_color = self
+            .active_workspace()
+            .map(|workspace| theme::from_rgb(workspace.color));
         // Only send the title command when it changes. Sending every frame
         // produces a SetWindowTextW syscall on Windows for no reason.
         if self.last_title_sent.as_deref() != Some(ws_title.as_str()) {
@@ -200,13 +227,9 @@ impl App {
         }
 
         // ── Custom titlebar ─────────────────────────────────────────────────
-        let tb_bg = match active_ws_color {
-            Some(c) => theme::from_rgb(c),
-            None => theme::active().bg_panel_fill,
-        };
-        let tb_fg = active_ws_color
-            .map(theme::text_on)
-            .unwrap_or(theme::active().subtext1);
+        let t = theme::active();
+        let tb_bg = titlebar_fill(t, active_ws_color);
+        let tb_fg = t.fg;
 
         egui::TopBottomPanel::top(self.vp_id("titlebar"))
             .exact_height(theme::TITLEBAR_H)
@@ -218,7 +241,7 @@ impl App {
                 // Bottom border
                 painter.line_segment(
                     [egui::pos2(r.min.x, r.max.y), egui::pos2(r.max.x, r.max.y)],
-                    egui::Stroke::new(theme::STROKE_THIN, theme::active().border_subtle),
+                    egui::Stroke::new(theme::STROKE_THIN, t.border),
                 );
 
                 // Drag the whole bar to move the window; double-click to maximize/restore
@@ -302,7 +325,7 @@ impl App {
                         ui,
                         self.vp_id("tb_left_toggle"),
                         left_tbr,
-                        ui_kit::icon::MENU,
+                        ui_kit::icon::PANEL_LEFT,
                         mac_icon_sz,
                         tb_fg,
                         ui_kit::IconButtonStyle::Toggle {
@@ -317,24 +340,29 @@ impl App {
                     );
 
                     // Switcher button (after left toggle)
+                    let switcher_end_x;
                     {
                         let hint_text = self
                             .shortcut_registry
                             .label_for(AppAction::OpenQuickSwitcher)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
+                        let hint_font = egui::FontId::monospace(theme::FONT_SM);
                         let hint_galley =
-                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
-                        let hint_w = if self.show_quick_switcher {
-                            0.0
-                        } else {
-                            hint_galley.size().x + theme::SP_3
-                        };
-                        let total_w = mac_btn_w + hint_w;
+                            painter.layout_no_wrap(hint_text.to_owned(), hint_font, tb_fg);
+                        let switch_galley = painter.layout_no_wrap(
+                            "Switch".to_owned(),
+                            egui::FontId::proportional(theme::FONT_SM),
+                            tb_fg,
+                        );
+                        let total_w = mac_btn_w
+                            + switch_galley.size().x
+                            + hint_galley.size().x
+                            + theme::SP_6 * 2.0;
                         let sw_tbr = egui::Rect::from_min_size(
                             egui::pos2(r.min.x + 72.0 + mac_btn_w, r.min.y),
                             egui::vec2(total_w, r.height()),
                         );
+                        switcher_end_x = sw_tbr.max.x;
                         let sw_resp =
                             ui.interact(sw_tbr, self.vp_id("tb_switcher"), egui::Sense::click());
                         if sw_resp.hovered() {
@@ -346,36 +374,40 @@ impl App {
                             sw_resp.hovered(),
                         );
                         let sw_bg = if self.show_quick_switcher {
-                            theme::active().surface2
+                            t.bg_raised
                         } else {
-                            theme::lerp_color(
-                                egui::Color32::TRANSPARENT,
-                                theme::active().surface1,
-                                sw_hover_t,
-                            )
+                            theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_raised, sw_hover_t)
                         };
                         painter.rect_filled(sw_tbr, theme::R_MD, sw_bg);
-                        let icon_center =
-                            egui::pos2(sw_tbr.min.x + mac_btn_w * 0.5, sw_tbr.center().y);
-                        let sw_icon_color =
-                            theme::lerp_color(tb_fg, theme::active().fg_secondary, sw_hover_t);
-                        painter.text(
-                            icon_center,
-                            egui::Align2::CENTER_CENTER,
-                            ui_kit::icon::ARROW_LEFT_RIGHT,
-                            egui::FontId::new(mac_icon_sz, egui::FontFamily::Name("icons".into())),
-                            sw_icon_color,
+                        ui.allocate_ui_at_rect(
+                            sw_tbr.shrink2(egui::vec2(theme::SP_2, theme::SP_0)),
+                            |ui| {
+                                ui.set_clip_rect(sw_tbr);
+                                ui.spacing_mut().item_spacing.x = theme::SP_2;
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center)
+                                        .with_main_align(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(ui_kit::icon(
+                                            ui_kit::icon::ARROW_LEFT_RIGHT,
+                                            mac_icon_sz,
+                                            tb_fg,
+                                        ));
+                                        ui.label(
+                                            egui::RichText::new("Switch")
+                                                .size(theme::FONT_SM)
+                                                .color(t.fg),
+                                        );
+                                        if let Some(shortcut) = self
+                                            .shortcut_registry
+                                            .find_shortcut(AppAction::OpenQuickSwitcher)
+                                        {
+                                            ui_kit::kbd_combo(ui, shortcut);
+                                        }
+                                    },
+                                );
+                            },
                         );
-                        if !self.show_quick_switcher {
-                            let hint_x = sw_tbr.min.x + mac_btn_w + theme::SP_1;
-                            painter.text(
-                                egui::pos2(hint_x, sw_tbr.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                hint_text,
-                                hint_font,
-                                theme::active().subtext0,
-                            );
-                        }
                         if sw_resp.clicked() {
                             self.show_quick_switcher = !self.show_quick_switcher;
                             if !self.show_quick_switcher {
@@ -552,10 +584,11 @@ impl App {
                             egui::pos2(sysmon_mac_x, r.min.y),
                             egui::vec2(theme::SYSMON_W, r.height()),
                         );
-                        self.paint_sys_monitor(&painter, sr, tb_fg);
+                        self.paint_sys_monitor(&painter, sysmon_rect(sr, theme::SYSMON_W));
                     }
 
                     // Update button (macOS) — left of sys monitor when visible
+                    let mut update_button_start_x = None;
                     if let Some(ref uc) = self.workers.update_checker {
                         let update_state = uc.state();
                         let show_update_btn = matches!(
@@ -567,7 +600,9 @@ impl App {
                                 UpdateStatus::UpdateAvailable { version, .. } => {
                                     format!("{} Update v{version}", ui_kit::icon::DOWNLOAD)
                                 }
-                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
+                                UpdateStatus::RestartRequired => {
+                                    format!("{} Restart to update", ui_kit::icon::DOWNLOAD)
+                                }
                                 _ => String::new(),
                             };
                             let update_x =
@@ -607,18 +642,17 @@ impl App {
                                     _ => {}
                                 }
                             }
+                            update_button_start_x = Some(update_x);
                         }
                     }
 
                     // Title centered — clipped to avoid overlapping traffic lights and right buttons
-                    let mac_clip_min_x =
-                        r.min.x + 72.0 + mac_btn_w * 2.0 + theme::TITLEBAR_ICON_GAP;
-                    let mac_clip_max_x = sysmon_mac_x - theme::TITLEBAR_ICON_GAP;
-                    let mac_clip_rect = egui::Rect::from_min_max(
-                        egui::pos2(mac_clip_min_x, r.min.y),
-                        egui::pos2(mac_clip_max_x, r.max.y),
+                    let mac_clip_rect = macos_title_clip_rect(
+                        r,
+                        switcher_end_x,
+                        sysmon_mac_x,
+                        update_button_start_x,
                     );
-                    let mac_clipped = painter.with_clip_rect(mac_clip_rect);
                     let (ws_name, ws_id) = match self.active_workspace() {
                         Some(w) => (Some(w.name.clone()), Some(w.id)),
                         None => (None, None),
@@ -627,12 +661,10 @@ impl App {
                         .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
                     paint_titlebar_title(
                         ui,
-                        &mac_clipped,
-                        r,
+                        mac_clip_rect,
                         &active_session_title,
                         &ws_name,
                         &git_branch,
-                        tb_fg,
                     );
                 }
 
@@ -658,7 +690,7 @@ impl App {
                             ui,
                             self.vp_id("tb_left_toggle"),
                             br,
-                            ui_kit::icon::MENU,
+                            ui_kit::icon::PANEL_LEFT,
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -680,15 +712,18 @@ impl App {
                             .shortcut_registry
                             .label_for(AppAction::OpenQuickSwitcher)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
+                        let hint_font = egui::FontId::monospace(theme::FONT_SM);
                         let hint_galley =
-                            painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
-                        let hint_w = if self.show_quick_switcher {
-                            0.0
-                        } else {
-                            hint_galley.size().x + theme::SP_3
-                        };
-                        let total_w = btn_w + hint_w;
+                            painter.layout_no_wrap(hint_text.to_owned(), hint_font, tb_fg);
+                        let switch_galley = painter.layout_no_wrap(
+                            "Switch".to_owned(),
+                            egui::FontId::proportional(theme::FONT_SM),
+                            tb_fg,
+                        );
+                        let total_w = btn_w
+                            + switch_galley.size().x
+                            + hint_galley.size().x
+                            + theme::SP_6 * 2.0;
                         let sw_x = r.min.x + btn_w;
                         switcher_end_x = sw_x + total_w;
                         let br = egui::Rect::from_min_size(
@@ -705,35 +740,40 @@ impl App {
                             resp.hovered(),
                         );
                         let bg = if self.show_quick_switcher {
-                            theme::active().surface2
+                            t.bg_raised
                         } else {
-                            theme::lerp_color(
-                                egui::Color32::TRANSPARENT,
-                                theme::active().surface1,
-                                sw_hover_t,
-                            )
+                            theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_raised, sw_hover_t)
                         };
                         painter.rect_filled(br, theme::R_MD, bg);
-                        let icon_center = egui::pos2(br.min.x + btn_w * 0.5, br.center().y);
-                        let sw_icon_color =
-                            theme::lerp_color(tb_fg, theme::active().fg_secondary, sw_hover_t);
-                        painter.text(
-                            icon_center,
-                            egui::Align2::CENTER_CENTER,
-                            ui_kit::icon::ARROW_LEFT_RIGHT,
-                            egui::FontId::new(icon_sz, egui::FontFamily::Name("icons".into())),
-                            sw_icon_color,
+                        ui.allocate_ui_at_rect(
+                            br.shrink2(egui::vec2(theme::SP_2, theme::SP_0)),
+                            |ui| {
+                                ui.set_clip_rect(br);
+                                ui.spacing_mut().item_spacing.x = theme::SP_2;
+                                ui.with_layout(
+                                    egui::Layout::left_to_right(egui::Align::Center)
+                                        .with_main_align(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(ui_kit::icon(
+                                            ui_kit::icon::ARROW_LEFT_RIGHT,
+                                            icon_sz,
+                                            tb_fg,
+                                        ));
+                                        ui.label(
+                                            egui::RichText::new("Switch")
+                                                .size(theme::FONT_SM)
+                                                .color(t.fg),
+                                        );
+                                        if let Some(shortcut) = self
+                                            .shortcut_registry
+                                            .find_shortcut(AppAction::OpenQuickSwitcher)
+                                        {
+                                            ui_kit::kbd_combo(ui, shortcut);
+                                        }
+                                    },
+                                );
+                            },
                         );
-                        if !self.show_quick_switcher {
-                            let hint_x = br.min.x + btn_w + theme::SP_1;
-                            painter.text(
-                                egui::pos2(hint_x, br.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                hint_text,
-                                hint_font,
-                                theme::active().subtext0,
-                            );
-                        }
                         if resp.clicked() {
                             self.show_quick_switcher = !self.show_quick_switcher;
                             if !self.show_quick_switcher {
@@ -916,7 +956,7 @@ impl App {
                             egui::pos2(sysmon_x, r.min.y),
                             egui::vec2(theme::SYSMON_W, r.height()),
                         );
-                        self.paint_sys_monitor(&painter, sr, tb_fg);
+                        self.paint_sys_monitor(&painter, sysmon_rect(sr, theme::SYSMON_W));
                     }
 
                     // Update button — visible only when update is available or restart required
@@ -932,7 +972,9 @@ impl App {
                                 UpdateStatus::UpdateAvailable { version, .. } => {
                                     format!("{} Update v{version}", ui_kit::icon::DOWNLOAD)
                                 }
-                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
+                                UpdateStatus::RestartRequired => {
+                                    format!("{} Restart to update", ui_kit::icon::DOWNLOAD)
+                                }
                                 _ => String::new(),
                             };
                             let update_x =
@@ -1021,13 +1063,8 @@ impl App {
                         }
                     }
                     // Title between switcher button and update button (or sys monitor)
-                    let clip_min_x = switcher_end_x + theme::TITLEBAR_ICON_GAP;
                     let clip_max_x = update_btn_end_x - theme::TITLEBAR_ICON_GAP;
-                    let clip_rect = egui::Rect::from_min_max(
-                        egui::pos2(clip_min_x, r.min.y),
-                        egui::pos2(clip_max_x, r.max.y),
-                    );
-                    let clipped = painter.with_clip_rect(clip_rect);
+                    let clip_rect = non_macos_title_clip_rect(r, switcher_end_x, btn_w, clip_max_x);
                     let (ws_name, ws_id) = match self.active_workspace() {
                         Some(w) => (Some(w.name.clone()), Some(w.id)),
                         None => (None, None),
@@ -1036,14 +1073,77 @@ impl App {
                         .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
                     paint_titlebar_title(
                         ui,
-                        &clipped,
-                        r,
+                        clip_rect,
                         &active_session_title,
                         &ws_name,
                         &git_branch,
-                        tb_fg,
                     );
                 }
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn titlebar_fill_ignores_workspace_color() {
+        let _guard = theme::test_support::lock_theme(theme::ThemeId::CatppuccinMocha);
+        theme::set_theme(theme::ThemeId::CatppuccinMocha);
+        let t = theme::active();
+
+        assert_eq!(titlebar_fill(t, Some(egui::Color32::BLUE)), t.bg_panel);
+        assert_eq!(titlebar_fill(t, None), t.bg_panel);
+    }
+
+    #[test]
+    fn sysmon_rect_is_vertically_centered() {
+        let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, 28.0));
+        let rect = sysmon_rect(bar, theme::SYSMON_W);
+
+        assert_eq!(rect.center().y, bar.center().y);
+        assert!(bar.contains_rect(rect));
+    }
+
+    #[test]
+    fn title_content_rect_is_centered() {
+        let clip = egui::Rect::from_min_size(egui::pos2(20.0, 10.0), egui::vec2(300.0, 28.0));
+        let rect = title_content_rect(clip, 80.0);
+
+        assert_eq!(rect.center(), clip.center());
+        assert!(clip.contains_rect(rect));
+    }
+
+    #[test]
+    fn macos_title_clip_starts_after_switcher() {
+        let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 28.0));
+        let switcher_end_x = 220.0;
+        let clip = title_clip_rect(bar, switcher_end_x, 600.0);
+
+        assert!(clip.min.x >= switcher_end_x);
+    }
+
+    #[test]
+    fn windows_linux_title_clip_starts_after_history() {
+        let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 28.0));
+        let switcher_end_x = 220.0;
+        let clip = non_macos_title_clip_rect(bar, switcher_end_x, theme::TITLEBAR_BTN_W, 600.0);
+
+        assert_eq!(
+            clip.min.x,
+            switcher_end_x + theme::TITLEBAR_BTN_W + theme::TITLEBAR_ICON_GAP
+        );
+    }
+
+    #[test]
+    fn macos_title_clip_ends_before_update() {
+        let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 28.0));
+        let switcher_end_x = 220.0;
+        let sysmon_start_x = 600.0;
+        let update_start_x = 480.0;
+        let clip = macos_title_clip_rect(bar, switcher_end_x, sysmon_start_x, Some(update_start_x));
+
+        assert_eq!(clip.max.x, update_start_x - theme::TITLEBAR_ICON_GAP);
     }
 }
