@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use super::super::super::App;
 use super::WorkspaceSectionActions;
 use crate::app::ui::search_bar::search_bar_persistent;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 
@@ -64,7 +65,15 @@ impl App {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                     if collapse_resp
-                        .on_hover_text("Ctrl+Shift+PgUp / PgDn to switch")
+                        .on_hover_text(format!(
+                            "{} / {} to switch",
+                            self.shortcut_registry
+                                .label_for(AppAction::PrevWorkspace)
+                                .unwrap_or_default(),
+                            self.shortcut_registry
+                                .label_for(AppAction::NextWorkspace)
+                                .unwrap_or_default(),
+                        ))
                         .clicked()
                     {
                         self.workspace_panel_collapsed = !self.workspace_panel_collapsed;

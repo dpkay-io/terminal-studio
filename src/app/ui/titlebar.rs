@@ -1,11 +1,17 @@
 use super::super::pane::{PaneContent, RightTab};
 use super::super::title::effective_title;
+use super::super::window_state;
 use super::super::App;
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
+
+/// Shown wherever a binding is listed that the OS takes first.
+pub(in crate::app) const OS_RESERVED_NOTE: &str = "used by the system";
+/// Hover text explaining how to resolve an OS-reserved binding.
+pub(in crate::app) const OS_RESERVED_HELP: &str = "The operating system takes this shortcut before Terminal Studio sees it. Turn it off in the system's keyboard shortcut settings, or change it in keybindings.json.";
 
 fn paint_titlebar_title(
     ui: &egui::Ui,
@@ -94,8 +100,11 @@ fn paint_titlebar_title(
 }
 
 impl App {
-    fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
+    pub(in crate::app) fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
         match self.shortcut_registry.label_for(action) {
+            Some(label) if self.shortcut_registry.is_os_reserved(action) => {
+                format!("{desc} ({label}, {OS_RESERVED_NOTE})")
+            }
             Some(label) => format!("{desc} ({label})"),
             None => desc.to_string(),
         }
@@ -224,12 +233,12 @@ impl App {
                 // Drag the whole bar to move the window; double-click to maximize/restore
                 let drag_resp =
                     ui.interact(r, self.vp_id("tb_drag"), egui::Sense::click_and_drag());
-                if drag_resp.dragged() {
+                let fullscreen = ctx.input(|i| window_state::is_fullscreen(i.viewport()));
+                if drag_resp.dragged() && !fullscreen {
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
-                if drag_resp.double_clicked() {
-                    let is_max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_max));
+                if drag_resp.double_clicked() && !fullscreen {
+                    window_state::toggle_maximized(ctx);
                 }
 
                 // ── macOS: traffic lights on the left ──────────────────────
@@ -280,14 +289,12 @@ impl App {
                                         self.show_quit_confirm = true;
                                     }
                                 }
-                                1 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                                _ => {
-                                    let is_max =
-                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                        !is_max,
-                                    ));
+                                1 => window_state::minimize(ctx),
+                                _ if ctx.input(|i| i.modifiers.alt) => {
+                                    // Option+green is the macOS convention for zoom.
+                                    window_state::toggle_maximized(ctx);
                                 }
+                                _ => window_state::toggle_fullscreen(ctx),
                             }
                         }
                     }
@@ -1002,14 +1009,8 @@ impl App {
                                         self.show_quit_confirm = true;
                                     }
                                 }
-                                1 => {
-                                    let is_max =
-                                        ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                        !is_max,
-                                    ));
-                                }
-                                2 => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                                1 => window_state::toggle_maximized(ctx),
+                                2 => window_state::minimize(ctx),
                                 _ => {}
                             }
                         }

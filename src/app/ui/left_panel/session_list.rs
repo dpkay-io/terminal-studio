@@ -4,6 +4,7 @@ use super::super::super::{App, CloseAllTarget};
 use super::SessionListActions;
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
 use crate::pty::foreground::ForegroundProcess;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -214,17 +215,14 @@ impl App {
         actions: &mut SessionListActions,
         shells: &[crate::pty::ShellKind],
     ) {
+        // Buttons are laid out first (right to left) so the title only gets the
+        // width that is left and truncates with an ellipsis instead of being
+        // drawn underneath them in a narrow sidebar.
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), theme::HEADER_H),
-            egui::Layout::left_to_right(egui::Align::Center),
+            egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                let session_count = self.pane_state.panes.len();
-                ui.label(
-                    egui::RichText::new(format!("Sessions ({})", session_count))
-                        .strong()
-                        .size(theme::FONT_UI_MD),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                {
                     let default_shell = self.configured_shell();
                     let shortcut_label = self
                         .shortcut_registry
@@ -316,12 +314,26 @@ impl App {
                     if let Some(ref fp) = active_fg {
                         if ui
                             .button(egui::RichText::new("Duplicate").size(theme::FONT_UI_MD))
-                            .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
+                            .on_hover_text(self.shortcut_tooltip(
+                                &format!("Duplicate: {}", fp.name),
+                                AppAction::DuplicateSession,
+                            ))
                             .clicked()
                         {
                             actions.duplicate_session = true;
                         }
                     }
+                }
+                let session_count = self.pane_state.panes.len();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("Sessions ({})", session_count))
+                                .strong()
+                                .size(theme::FONT_UI_MD),
+                        )
+                        .truncate(),
+                    );
                 });
             },
         );

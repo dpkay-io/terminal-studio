@@ -4,6 +4,7 @@ use super::super::title::effective_title;
 use super::super::App;
 use crate::editor_group::{EditorGroup, GroupId};
 use crate::pane_tree::SplitDir;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 
@@ -399,7 +400,9 @@ impl App {
                             }
 
                             if close_resp
-                                .on_hover_text("Close tab (Ctrl+Shift+W)")
+                                .on_hover_text(
+                                    self.shortcut_tooltip("Close tab", AppAction::CloseCurrentPane),
+                                )
                                 .clicked()
                                 || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
@@ -555,7 +558,9 @@ impl App {
                 p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
             }
             if split_h_resp
-                .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
+                .on_hover_text(
+                    self.shortcut_tooltip("Split horizontal", AppAction::SplitHorizontal),
+                )
                 .clicked()
             {
                 split_request = Some(SplitDir::Horizontal);
@@ -587,7 +592,7 @@ impl App {
                 p.line_segment([r.left_center(), r.right_center()], sv_stroke);
             }
             if split_v_resp
-                .on_hover_text("Split vertical (Ctrl+Shift+-)")
+                .on_hover_text(self.shortcut_tooltip("Split vertical", AppAction::SplitVertical))
                 .clicked()
             {
                 split_request = Some(SplitDir::Vertical);
@@ -981,7 +986,9 @@ impl App {
                             }
 
                             if close_resp
-                                .on_hover_text("Close tab (Ctrl+Shift+W)")
+                                .on_hover_text(
+                                    self.shortcut_tooltip("Close tab", AppAction::CloseCurrentPane),
+                                )
                                 .clicked()
                                 || tab_resp.clicked_by(egui::PointerButton::Middle)
                             {
@@ -1116,7 +1123,9 @@ impl App {
                 p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
             }
             if split_h_resp
-                .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
+                .on_hover_text(
+                    self.shortcut_tooltip("Split horizontal", AppAction::SplitHorizontal),
+                )
                 .clicked()
             {
                 split_request = Some((group_id, SplitDir::Horizontal));
@@ -1148,7 +1157,7 @@ impl App {
                 p.line_segment([r.left_center(), r.right_center()], sv_stroke);
             }
             if split_v_resp
-                .on_hover_text("Split vertical (Ctrl+Shift+-)")
+                .on_hover_text(self.shortcut_tooltip("Split vertical", AppAction::SplitVertical))
                 .clicked()
             {
                 split_request = Some((group_id, SplitDir::Vertical));
