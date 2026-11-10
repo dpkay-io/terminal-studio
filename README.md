@@ -153,6 +153,8 @@ The update downloads in the background. When ready, click **Restart to finish up
 | `Ctrl+Shift+Tab` | Previous tab |
 | `Ctrl+Shift+,` | Open settings |
 
+**On macOS** the keys are the same; use `⌘` where these say `Ctrl` (`⇧⌘P` opens the command palette, `⇧⌘\` splits). The few chords macOS reserves keep their key and drop Shift or swap the modifier: tabs are `⌘1`–`⌘9`, help is `⌘/`, focus terminal is `` ⌃` ``, the quick switcher is `⌃⇧Space`, and full screen is `⌃⌘F` instead of `F11`. `⌘C` and `⌘V` also copy and paste. Press `⌘/` to see the full list.
+
 Terminal key sequences (`Ctrl+L`, `Ctrl+D`, `Ctrl+C`, etc.) pass through directly to the running shell. All shortcuts are customizable in Settings or via `keybindings.json`.
 
 ### Managing panes
