@@ -32,6 +32,8 @@ mod git_diff;
 mod git_worker;
 mod input;
 mod labels;
+#[cfg(target_os = "macos")]
+mod macos_quit;
 mod markdown;
 mod multi_window;
 mod pane;
@@ -45,6 +47,7 @@ mod state;
 mod title;
 mod ui;
 mod watcher;
+mod window_state;
 mod worker_manager;
 mod workspace_git_worker;
 mod workspace_ui;
@@ -353,24 +356,12 @@ impl eframe::App for App {
                 )
             })
             .unwrap_or(false);
-        let any_overlay = self.workspace_dialog.is_some()
-            || self.workspace_edit_dialog.is_some()
-            || self.open_folder_dialog.is_some()
-            || self.show_settings
-            || self.show_shortcut_help
-            || self.show_quick_switcher
-            || self.palette_open
+        let any_overlay = self.any_modal_open()
             || self.term_search.active
             || self.text_search.active
             || self.show_global_search
             || self.session_search_active
-            || self.dir_search_active
-            || self.show_quit_confirm
-            || self.show_commit_dialog
-            || self.show_push_dialog
-            || self.show_stage_all_confirm
-            || self.revert_confirm_file.is_some()
-            || self.delete_confirm_file.is_some();
+            || self.dir_search_active;
         let notes_has_focus = _ctx.memory(|m| {
             m.focused()
                 .map(|id| id == self.vp_id("notes_textedit"))
@@ -412,13 +403,19 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
 
+        #[cfg(target_os = "macos")]
+        if macos_quit::take_request() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
         // ── Enforce minimum window size (decorations(false) means the OS won't) ──
         {
             let inner_rect = ctx.input(|i| i.viewport().inner_rect);
             if let Some(rect) = inner_rect {
                 let w = rect.width();
                 let h = rect.height();
-                if w < theme::MIN_WINDOW_W || h < theme::MIN_WINDOW_H {
+                let fullscreen = ctx.input(|i| window_state::is_fullscreen(i.viewport()));
+                if !fullscreen && (w < theme::MIN_WINDOW_W || h < theme::MIN_WINDOW_H) {
                     if self.first_frame {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
                     } else {
@@ -1323,8 +1320,27 @@ impl App {
             .ok();
     }
 
+    /// True while a dialog or overlay owns the keyboard instead of the terminal.
+    fn any_modal_open(&self) -> bool {
+        self.workspace_dialog.is_some()
+            || self.workspace_edit_dialog.is_some()
+            || self.open_folder_dialog.is_some()
+            || self.show_settings
+            || self.show_shortcut_help
+            || self.show_quick_switcher
+            || self.show_closed_sessions
+            || self.palette_open
+            || self.show_close_all_confirm
+            || self.show_commit_dialog
+            || self.show_push_dialog
+            || self.show_stage_all_confirm
+            || self.revert_confirm_file.is_some()
+            || self.delete_confirm_file.is_some()
+            || self.show_quit_confirm
+    }
+
     fn handle_frameless_resize(ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+        if !ctx.input(|i| window_state::allows_edge_resize(i.viewport())) {
             return;
         }
 
@@ -1370,7 +1386,7 @@ impl App {
     }
 
     fn render_window_body(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+        if ctx.input(|i| window_state::is_minimized(i.viewport())) {
             return;
         }
 
@@ -1378,17 +1394,13 @@ impl App {
 
         // Consume Ctrl+Shift+N before any panels render, so it works even
         // when no terminal panes exist and the CentralPanel shows a placeholder.
-        {
-            let cs = egui::Modifiers {
-                alt: false,
-                ctrl: true,
-                shift: true,
-                mac_cmd: false,
-                command: false,
-            };
-            if ctx.input_mut(|i| i.consume_key(cs, egui::Key::N)) {
-                self.deferred_spawn = Some(self.configured_shell());
-            }
+        let new_tab_pressed = ctx.input_mut(|i| {
+            self.shortcut_registry
+                .consume_where(i, |action| action == AppAction::NewTerminalTab)
+                .is_some()
+        });
+        if new_tab_pressed {
+            self.deferred_spawn = Some(self.configured_shell());
         }
 
         self.render_titlebar(ctx);
@@ -1641,7 +1653,7 @@ impl App {
                                                         t.accent,
                                                     );
                                                 }
-                                                resp.on_hover_text("Ctrl+Shift+D");
+                                                resp.on_hover_text(self.shortcut_tooltip("Directory", AppAction::RightTabDirectory));
                                             }
 
                                             if is_git {
@@ -1706,7 +1718,7 @@ impl App {
                                                         t.accent,
                                                     );
                                                 }
-                                                resp.on_hover_text("Ctrl+Shift+G");
+                                                resp.on_hover_text(self.shortcut_tooltip("Git changes", AppAction::RightTabGitDiff));
                                             }
 
                                             if !md_tabs.is_empty() {
@@ -1755,7 +1767,7 @@ impl App {
                                                         egui::Button::new(
                                                             egui::RichText::new("×").size(theme::FONT_UI_MD).color(t.overlay1),
                                                         ).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H)),
-                                                    ).on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
+                                                    ).on_hover_text(self.shortcut_tooltip("Close tab", AppAction::CloseCurrentPane)).clicked() {
                                                         close_tab = Some(path.clone());
                                                     }
                                                 } else {
@@ -2285,7 +2297,7 @@ impl App {
                                                 ))
                                                 .frame(false),
                                             )
-                                            .on_hover_text("Toggle notes (Ctrl+Shift+J)")
+                                            .on_hover_text(self.shortcut_tooltip("Toggle notes", AppAction::ToggleNotes))
                                             .clicked()
                                         {
                                             self.notes_panel_collapsed =
@@ -2726,8 +2738,8 @@ impl App {
                     if !self.detected_urls.is_empty() {
                         let t = theme::active();
                         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                        let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
-                        if ctrl_held {
+                        let link_modifier_held = ui.input(|i| input::is_link_modifier(&i.modifiers));
+                        if link_modifier_held {
                             if let Some(pos) = pointer_pos {
                                 if let Some((col, row)) = geo.to_cell(pos) {
                                     let session = entry.session.read();
@@ -2749,7 +2761,7 @@ impl App {
                         }
 
                         let clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
-                        if ctrl_held && clicked {
+                        if link_modifier_held && clicked {
                             if let Some(pos) = pointer_pos {
                                 if let Some((col, row)) = geo.to_cell(pos) {
                                     let session = entry.session.read();
@@ -2768,8 +2780,8 @@ impl App {
                     if !self.detected_md_paths.is_empty() {
                         let t = theme::active();
                         let pointer_pos = ui.input(|i| i.pointer.hover_pos());
-                        let ctrl_held = ui.input(|i| i.modifiers.ctrl && !i.modifiers.shift);
-                        if ctrl_held {
+                        let link_modifier_held = ui.input(|i| input::is_link_modifier(&i.modifiers));
+                        if link_modifier_held {
                             if let Some(pos) = pointer_pos {
                                 if let Some((col, row)) = geo.to_cell(pos) {
                                     let session = entry.session.read();
@@ -2791,7 +2803,7 @@ impl App {
                         }
 
                         let clicked = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
-                        if ctrl_held && clicked {
+                        if link_modifier_held && clicked {
                             if let Some(pos) = pointer_pos {
                                 if let Some((col, row)) = geo.to_cell(pos) {
                                     let session = entry.session.read();
@@ -2945,49 +2957,13 @@ impl App {
                 let term_id = self.active_term_ui_id;
                 ctx.memory(|m| m.focused().map(|id| Some(id) != term_id).unwrap_or(false))
             };
-            let modal_open = self.workspace_dialog.is_some()
-                || self.workspace_edit_dialog.is_some()
-                || self.show_settings
-                || self.show_shortcut_help
-                || self.show_quick_switcher
-                || self.palette_open
-                || self.open_folder_dialog.is_some()
-                || self.show_close_all_confirm
-                || self.show_commit_dialog
-                || self.show_push_dialog
-                || self.show_stage_all_confirm
-                || self.revert_confirm_file.is_some()
-                || self.delete_confirm_file.is_some()
-                || self.show_quit_confirm;
+            let modal_open = self.any_modal_open();
 
             // Global shortcuts that work even when a modal/dialog is open
             {
                 let consumed = ctx.input_mut(|i| {
-                    let cs = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false };
-                    if i.consume_key(cs, egui::Key::Slash) || i.consume_key(cs, egui::Key::Questionmark) {
-                        Some(AppAction::ToggleShortcutHelp)
-                    } else if i.consume_key(cs, egui::Key::Comma) {
-                        Some(AppAction::OpenSettings)
-                    } else if i.consume_key(cs, egui::Key::F) {
-                        Some(AppAction::FocusSessionSearch)
-                    } else if i.consume_key(cs, egui::Key::P) {
-                        Some(AppAction::CommandPalette)
-                    } else if i.consume_key(cs, egui::Key::D) {
-                        Some(AppAction::RightTabDirectory)
-                    } else if i.consume_key(cs, egui::Key::Space) {
-                        Some(AppAction::OpenQuickSwitcher)
-                    } else if i.consume_key(cs, egui::Key::N) {
-                        Some(AppAction::NewTerminalTab)
-                    } else if i.consume_key(cs, egui::Key::Z) {
-                        Some(AppAction::ZoomPane)
-                    } else if i.consume_key(cs, egui::Key::T) {
-                        Some(AppAction::SearchAllSessions)
-                    } else if i.consume_key(cs, egui::Key::R) {
-                        Some(AppAction::ReopenClosedSession)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::P) {
-                        Some(AppAction::OpenFileFinder)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
-                        Some(AppAction::SearchTerminal)
+                    if let Some(action) = self.shortcut_registry.consume_where(i, AppAction::is_global) {
+                        Some(action)
                     } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                         if self.show_global_search {
                             Some(AppAction::SearchAllSessions)
@@ -3155,9 +3131,9 @@ impl App {
                 let context_menu_open = self.context_menu_pos.is_some();
                 let mut events = ctx.input(|inp| inp.events.clone());
                 events.append(&mut self.raw_intercepted_keys);
-                for event in &events {
+                for (event_index, event) in events.iter().enumerate() {
                     match event {
-                        egui::Event::Text(text) if !context_menu_open => {
+                        egui::Event::Text(text) if !context_menu_open && !input::follows_translated_alt_key(&events, event_index) => {
                             if let Some(sid) = active_session_id {
                                 self.term_selection = None;
                                 self.term_selection_sid = None;
@@ -3399,7 +3375,7 @@ impl App {
                                     }
                                     self.term_selection = None;
                                     self.term_selection_sid = None;
-                                } else {
+                                } else if input::COPY_KEY_INTERRUPTS {
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                         self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
@@ -3441,8 +3417,8 @@ impl App {
                             if let Some(sid) = hovered_sid.or(active_session_id) {
                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                     // Shift bypasses mouse reporting for native text selection;
-                                    // Ctrl bypasses it for URL/path click-to-open
-                                    let (has_mouse, sgr) = if modifiers.shift || modifiers.ctrl {
+                                    // The link modifier bypasses it for URL/path click-to-open
+                                    let (has_mouse, sgr) = if modifiers.shift || modifiers.command {
                                         (false, false)
                                     } else {
                                         let s = self.session_state.sessions[idx].session.read();
@@ -3805,7 +3781,7 @@ impl App {
                                         close_context_menu = true;
                                     }
                                     ui.separator();
-                                    if ui.add(egui::Button::new("Search (Ctrl+F)").min_size(egui::vec2(0.0, 22.0))).clicked() {
+                                    if ui.add(egui::Button::new(self.shortcut_tooltip("Search", AppAction::SearchTerminal)).min_size(egui::vec2(0.0, 22.0))).clicked() {
                                         self.term_search.active = true;
                                         close_context_menu = true;
                                     }

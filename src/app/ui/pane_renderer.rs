@@ -587,7 +587,9 @@ fn render_file_editor_leaf(
             render_text_search_bar(ui, pane_rect, current_text, rctx.text_search);
         }
 
-        if ui.input(|inp| inp.modifiers.ctrl && inp.key_pressed(egui::Key::S)) {
+        // Match on the key event's own modifiers: a quick Cmd+S can be released
+        // before the frame samples the live modifier state.
+        if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
             rctx.editor_saves.push(pane_id);
         }
     }

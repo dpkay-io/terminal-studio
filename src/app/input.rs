@@ -1,5 +1,32 @@
+/// Whether the OS copy key doubles as SIGINT when nothing is selected.
+/// Elsewhere it is Ctrl+C; on macOS it is Cmd+C, which must never interrupt.
+pub(super) const COPY_KEY_INTERRUPTS: bool = !cfg!(target_os = "macos");
+
+/// Held while clicking to open a URL or path: Cmd on macOS (where Ctrl+click
+/// means right-click), Ctrl elsewhere. Shift is reserved for selection.
+pub(super) fn is_link_modifier(modifiers: &egui::Modifiers) -> bool {
+    modifiers.command && !modifiers.shift
+}
+
+/// Option+letter arrives as a key press (sent as a Meta sequence) immediately
+/// followed by its composed text. Only the Meta sequence may reach the shell,
+/// or a stray character is typed alongside it. Other text in the same frame is
+/// genuine typing and must be kept.
+pub(super) fn follows_translated_alt_key(events: &[egui::Event], index: usize) -> bool {
+    let previous = index.checked_sub(1).and_then(|i| events.get(i));
+    matches!(
+        previous,
+        Some(egui::Event::Key { key, pressed: true, modifiers, .. })
+            if modifiers.alt && key_to_pty_bytes(key, modifiers).is_some()
+    )
+}
+
 pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key::*;
+    // Cmd combinations belong to the app and the OS, never to the shell.
+    if modifiers.mac_cmd {
+        return None;
+    }
     let ctrl = modifiers.ctrl;
     let shift = modifiers.shift;
     let alt = modifiers.alt;
@@ -225,6 +252,65 @@ pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn test_only_text_after_option_key_is_dropped() {
+        let events = [
+            egui::Event::Text("x".into()),
+            key_press(egui::Key::B, mods(false, false, true)),
+            egui::Event::Text("\u{222B}".into()),
+            egui::Event::Text("y".into()),
+        ];
+        assert!(!follows_translated_alt_key(&events, 0));
+        assert!(follows_translated_alt_key(&events, 2));
+        assert!(!follows_translated_alt_key(&events, 3));
+    }
+
+    #[test]
+    fn test_plain_typing_keeps_its_text() {
+        let events = [
+            key_press(egui::Key::B, mods(false, false, false)),
+            egui::Event::Text("b".into()),
+        ];
+        assert!(!follows_translated_alt_key(&events, 1));
+    }
+
+    #[test]
+    fn test_cmd_keys_never_reach_the_shell() {
+        let cmd = egui::Modifiers {
+            mac_cmd: true,
+            command: true,
+            ..Default::default()
+        };
+        for key in [egui::Key::C, egui::Key::ArrowLeft, egui::Key::Enter] {
+            assert_eq!(key_to_pty_bytes(&key, &cmd), None);
+        }
+    }
+
+    #[test]
+    fn test_link_modifier_excludes_shift() {
+        let command = egui::Modifiers {
+            command: true,
+            ..Default::default()
+        };
+        let with_shift = egui::Modifiers {
+            shift: true,
+            ..command
+        };
+        assert!(is_link_modifier(&command));
+        assert!(!is_link_modifier(&with_shift));
+        assert!(!is_link_modifier(&egui::Modifiers::CTRL));
+    }
 
     fn mods(ctrl: bool, shift: bool, alt: bool) -> egui::Modifiers {
         egui::Modifiers {

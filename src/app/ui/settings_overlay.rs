@@ -1,5 +1,6 @@
 use super::super::settings::CursorStyle;
 use super::super::App;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
@@ -90,7 +91,10 @@ impl App {
                                 }
                                 ui.add_space(theme::SP_2);
                                 ui.label(ui_kit::label_muted(
-                                    "Saves closed terminal sessions so they can be restored later (Ctrl+Shift+T).",
+                                    self.shortcut_tooltip(
+                                        "Saves closed terminal sessions so they can be restored later",
+                                        AppAction::ReopenClosedSession,
+                                    ),
                                 ));
                             }
 

@@ -2,6 +2,7 @@ use super::super::pane::{PaneContent, PaneEntry};
 use super::super::workspace_ui::PRESET_COLORS;
 use super::super::{App, CloseAllTarget};
 use crate::pane_tree::PaneNode;
+use crate::shortcuts::{primary_modifier_label, AppAction};
 use crate::theme;
 use crate::ui_kit;
 use crate::workspace::Workspace;
@@ -229,10 +230,14 @@ impl App {
                             let shortcut_fg =
                                 theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                             ui.label(
-                                egui::RichText::new("Ctrl+Shift+Space")
-                                    .size(theme::FONT_UI_SM)
-                                    .color(shortcut_fg)
-                                    .background_color(t.surface1),
+                                egui::RichText::new(
+                                    self.shortcut_registry
+                                        .label_for(AppAction::OpenQuickSwitcher)
+                                        .unwrap_or_default(),
+                                )
+                                .size(theme::FONT_UI_SM)
+                                .color(shortcut_fg)
+                                .background_color(t.surface1),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -1451,12 +1456,15 @@ impl App {
                 {
                     cancel_clicked = true;
                 }
-                ui.label(ui_kit::hint("Ctrl+Enter to commit"));
+                ui.label(ui_kit::hint(format!(
+                    "{}+Enter to commit",
+                    primary_modifier_label()
+                )));
             });
         });
 
-        // Ctrl+Enter shortcut (outside dialog closure)
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter))
+        // Primary+Enter shortcut (outside dialog closure)
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter))
             && !self.commit_message.trim().is_empty()
         {
             do_commit = true;

@@ -88,16 +88,7 @@ impl App {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
                         });
                         let ctrl_enter = ctx.input_mut(|i| {
-                            i.consume_key(
-                                egui::Modifiers {
-                                    alt: false,
-                                    ctrl: true,
-                                    shift: false,
-                                    mac_cmd: false,
-                                    command: false,
-                                },
-                                egui::Key::Enter,
-                            )
+                            i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)
                         });
 
                         // Search input
@@ -388,7 +379,10 @@ impl App {
                             let hints = if command_mode {
                                 "\u{2191}\u{2193} navigate  \u{23CE} run  Esc close"
                             } else {
-                                "\u{2191}\u{2193} navigate  \u{23CE} open  Ctrl+\u{23CE} external  Esc close  > commands"
+                                &format!(
+                                    "\u{2191}\u{2193} navigate  \u{23CE} open  {}+\u{23CE} external  Esc close  > commands",
+                                    crate::shortcuts::primary_modifier_label(),
+                                )
                             };
                             ui.label(
                                 egui::RichText::new(hints)

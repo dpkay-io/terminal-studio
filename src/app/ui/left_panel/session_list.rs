@@ -4,6 +4,7 @@ use super::super::super::{App, CloseAllTarget};
 use super::SessionListActions;
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
 use crate::pty::foreground::ForegroundProcess;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -316,7 +317,10 @@ impl App {
                     if let Some(ref fp) = active_fg {
                         if ui
                             .button(egui::RichText::new("Duplicate").size(theme::FONT_UI_MD))
-                            .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
+                            .on_hover_text(self.shortcut_tooltip(
+                                &format!("Duplicate: {}", fp.name),
+                                AppAction::DuplicateSession,
+                            ))
                             .clicked()
                         {
                             actions.duplicate_session = true;

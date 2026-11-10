@@ -253,6 +253,47 @@ impl AppAction {
             _ => None,
         }
     }
+
+    /// Actions that stay available while a modal or dialog is open, and
+    /// regardless of which widget has keyboard focus.
+    pub fn is_global(self) -> bool {
+        matches!(
+            self,
+            Self::ToggleShortcutHelp
+                | Self::OpenSettings
+                | Self::FocusSessionSearch
+                | Self::CommandPalette
+                | Self::RightTabDirectory
+                | Self::OpenQuickSwitcher
+                | Self::NewTerminalTab
+                | Self::ZoomPane
+                | Self::SearchAllSessions
+                | Self::ReopenClosedSession
+                | Self::OpenFileFinder
+                | Self::SearchTerminal
+        )
+    }
+}
+
+const IS_MAC: bool = cfg!(target_os = "macos");
+const MAC_CONTROL_SYMBOL: &str = "\u{2303}";
+
+/// Display name of the platform's primary shortcut modifier.
+pub fn primary_modifier_label() -> &'static str {
+    if IS_MAC {
+        "\u{2318}"
+    } else {
+        "Ctrl"
+    }
+}
+
+/// egui reports the shifted symbol for some keys; bindings store the base key.
+fn unshifted_key(key: egui::Key) -> egui::Key {
+    match key {
+        egui::Key::Questionmark => egui::Key::Slash,
+        egui::Key::Pipe => egui::Key::Backslash,
+        other => other,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -274,25 +315,42 @@ impl Shortcut {
     }
 
     pub fn matches(&self, key: &egui::Key, mods: &egui::Modifiers) -> bool {
-        if *key != self.key || mods.shift != self.shift || mods.alt != self.alt {
+        self.matches_on(key, mods, IS_MAC)
+    }
+
+    fn matches_on(&self, key: &egui::Key, mods: &egui::Modifiers, is_mac: bool) -> bool {
+        if unshifted_key(*key) != self.key || mods.shift != self.shift || mods.alt != self.alt {
             return false;
         }
         if self.ctrl {
-            // On macOS, accept both Ctrl and Cmd for app shortcuts
-            mods.ctrl || mods.mac_cmd
+            let ctrl_is_for_the_shell = is_mac && !self.shift && !self.alt;
+            if ctrl_is_for_the_shell {
+                // Plain Ctrl+letter is readline on macOS (Ctrl+P history,
+                // Ctrl+F forward-char), so only Cmd may trigger the app here.
+                mods.mac_cmd && !mods.ctrl
+            } else {
+                mods.ctrl || mods.mac_cmd
+            }
         } else {
             !mods.ctrl && !mods.mac_cmd
+        }
+    }
+
+    /// macOS reserves many Cmd+Shift combinations before apps see them (which
+    /// ones varies by machine), so the Ctrl form is the only one that can be
+    /// promised for Shift shortcuts there. Cmd is still accepted when free.
+    fn displayed_primary(&self, is_mac: bool) -> &'static str {
+        if is_mac && self.shift {
+            MAC_CONTROL_SYMBOL
+        } else {
+            primary_modifier_label()
         }
     }
 
     pub fn label(&self) -> String {
         let mut parts = Vec::new();
         if self.ctrl {
-            if cfg!(target_os = "macos") {
-                parts.push("\u{2318}");
-            } else {
-                parts.push("Ctrl");
-            }
+            parts.push(self.displayed_primary(IS_MAC));
         }
         if self.alt {
             if cfg!(target_os = "macos") {
@@ -666,6 +724,32 @@ impl ShortcutRegistry {
             .map(|(_, a)| *a)
     }
 
+    /// Removes the first pressed key whose binding satisfies `wanted`.
+    pub fn consume_where(
+        &self,
+        input: &mut egui::InputState,
+        wanted: impl Fn(AppAction) -> bool,
+    ) -> Option<AppAction> {
+        let index = input
+            .events
+            .iter()
+            .position(|event| self.pressed_action(event).is_some_and(&wanted))?;
+        let event = input.events.remove(index);
+        self.pressed_action(&event)
+    }
+
+    fn pressed_action(&self, event: &egui::Event) -> Option<AppAction> {
+        match event {
+            egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } => self.match_event(key, modifiers),
+            _ => None,
+        }
+    }
+
     pub fn label_for(&self, action: AppAction) -> Option<&str> {
         self.labels.get(&action).map(|s| s.as_str())
     }
@@ -805,7 +889,7 @@ mod tests {
     fn label_generation() {
         let reg = ShortcutRegistry::new();
         let expected_toggle = if cfg!(target_os = "macos") {
-            "\u{2318}+\u{21E7}+B"
+            "\u{2303}+\u{21E7}+B"
         } else {
             "Ctrl+Shift+B"
         };
@@ -814,7 +898,7 @@ mod tests {
             Some(expected_toggle)
         );
         let expected_split = if cfg!(target_os = "macos") {
-            "\u{2318}+\u{21E7}+\\"
+            "\u{2303}+\u{21E7}+\\"
         } else {
             "Ctrl+Shift+\\"
         };
@@ -868,6 +952,166 @@ mod tests {
         assert!(
             total_entries >= 15,
             "Expected at least 15 entries in help groups"
+        );
+    }
+
+    // ── Platform-aware matching ────────────────────────────────────────────
+
+    const MAC: bool = true;
+    const OTHER: bool = false;
+
+    fn pressed(ctrl: bool, mac_cmd: bool, shift: bool) -> egui::Modifiers {
+        egui::Modifiers {
+            ctrl,
+            mac_cmd,
+            shift,
+            command: mac_cmd,
+            alt: false,
+        }
+    }
+
+    fn plain(key: egui::Key) -> Shortcut {
+        Shortcut {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            key,
+        }
+    }
+
+    #[test]
+    fn mac_cmd_triggers_shifted_shortcut() {
+        let quick = Shortcut::cs(egui::Key::Space);
+        assert!(quick.matches_on(&egui::Key::Space, &pressed(false, true, true), MAC));
+    }
+
+    #[test]
+    fn mac_ctrl_remains_an_alias_for_shifted_shortcut() {
+        let quick = Shortcut::cs(egui::Key::Space);
+        assert!(quick.matches_on(&egui::Key::Space, &pressed(true, false, true), MAC));
+    }
+
+    #[test]
+    fn mac_plain_ctrl_letter_stays_with_the_shell() {
+        let finder = plain(egui::Key::P);
+        assert!(!finder.matches_on(&egui::Key::P, &pressed(true, false, false), MAC));
+        assert!(finder.matches_on(&egui::Key::P, &pressed(false, true, false), MAC));
+    }
+
+    #[test]
+    fn other_platforms_keep_plain_ctrl_shortcuts() {
+        let finder = plain(egui::Key::P);
+        assert!(finder.matches_on(&egui::Key::P, &pressed(true, false, false), OTHER));
+    }
+
+    #[test]
+    fn shifted_symbols_match_their_base_key() {
+        let help = Shortcut::cs(egui::Key::Slash);
+        let split = Shortcut::cs(egui::Key::Backslash);
+        let mods = pressed(false, true, true);
+        assert!(help.matches_on(&egui::Key::Questionmark, &mods, MAC));
+        assert!(split.matches_on(&egui::Key::Pipe, &mods, MAC));
+    }
+
+    // ── consume_where ──────────────────────────────────────────────────────
+
+    fn registry() -> ShortcutRegistry {
+        let bindings = ShortcutRegistry::default_bindings();
+        let labels = bindings.iter().map(|(s, a)| (*a, s.label())).collect();
+        ShortcutRegistry { bindings, labels }
+    }
+
+    fn key_event(key: egui::Key, pressed_down: bool, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: pressed_down,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    fn secondary() -> egui::Modifiers {
+        if cfg!(target_os = "macos") {
+            pressed(false, true, true)
+        } else {
+            pressed(true, false, true)
+        }
+    }
+
+    #[test]
+    fn consume_removes_only_the_matching_event() {
+        let mut input = egui::InputState::default();
+        input.events.push(egui::Event::Text("x".into()));
+        input
+            .events
+            .push(key_event(egui::Key::Space, true, secondary()));
+        let action = registry().consume_where(&mut input, AppAction::is_global);
+        assert_eq!(action, Some(AppAction::OpenQuickSwitcher));
+        assert_eq!(input.events, vec![egui::Event::Text("x".into())]);
+    }
+
+    #[test]
+    fn consume_ignores_key_release() {
+        let mut input = egui::InputState::default();
+        input
+            .events
+            .push(key_event(egui::Key::Space, false, secondary()));
+        assert_eq!(
+            registry().consume_where(&mut input, AppAction::is_global),
+            None
+        );
+        assert_eq!(input.events.len(), 1);
+    }
+
+    #[test]
+    fn consume_skips_actions_the_caller_does_not_want() {
+        let mut input = egui::InputState::default();
+        input
+            .events
+            .push(key_event(egui::Key::B, true, secondary()));
+        assert_eq!(
+            registry().consume_where(&mut input, AppAction::is_global),
+            None
+        );
+        assert_eq!(input.events.len(), 1);
+    }
+
+    #[test]
+    fn every_global_action_has_a_default_binding() {
+        let bound: Vec<AppAction> = ShortcutRegistry::default_bindings()
+            .into_iter()
+            .map(|(_, action)| action)
+            .collect();
+        let globals = [
+            AppAction::ToggleShortcutHelp,
+            AppAction::OpenSettings,
+            AppAction::FocusSessionSearch,
+            AppAction::CommandPalette,
+            AppAction::RightTabDirectory,
+            AppAction::OpenQuickSwitcher,
+            AppAction::NewTerminalTab,
+            AppAction::ZoomPane,
+            AppAction::SearchAllSessions,
+            AppAction::ReopenClosedSession,
+            AppAction::OpenFileFinder,
+            AppAction::SearchTerminal,
+        ];
+        for action in globals {
+            assert!(action.is_global());
+            assert!(bound.contains(&action), "{action:?} has no default binding");
+        }
+    }
+
+    #[test]
+    fn mac_shows_control_only_for_shifted_shortcuts() {
+        assert_eq!(
+            Shortcut::cs(egui::Key::Space).displayed_primary(MAC),
+            MAC_CONTROL_SYMBOL
+        );
+        assert_eq!(
+            plain(egui::Key::P).displayed_primary(MAC),
+            primary_modifier_label()
         );
     }
 }
