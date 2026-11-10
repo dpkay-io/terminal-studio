@@ -510,6 +510,7 @@ pub const TAB_ACTIVE_HIGHLIGHT_H: f32 = 2.0;
 pub const TAB_PAD_X: f32 = 8.0;
 pub const TAB_ACTIONS_W: f32 = 82.0;
 pub const TAB_ACTION_GAP: f32 = 2.0;
+pub const TAB_SELECTED_BAR_H: f32 = 2.0;
 
 // ── Terminal inner padding ──────────────────────────────────────────────────
 
@@ -617,11 +618,14 @@ pub const FLASH_DURATION_MS: u64 = 350;
 
 pub const BTN_SQ: f32 = 22.0;
 pub const BTN_H_ACTION: f32 = 28.0;
+pub const TOGGLE_W: f32 = 36.0;
+pub const TOGGLE_H: f32 = 20.0;
 
 // ── Dialog layout ──────────────────────────────────────────────────────────
 
 pub const DIALOG_MARGIN: f32 = SP_6;
 pub const DIALOG_ITEM_H: f32 = 26.0;
+pub const DIALOG_BTN_H: f32 = 34.0;
 pub const DIALOG_TOP_OFFSET: f32 = 80.0;
 
 // ── Panel divider ──────────────────────────────────────────────────────────

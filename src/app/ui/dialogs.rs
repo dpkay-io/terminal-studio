@@ -727,7 +727,7 @@ impl App {
                     let trimmed = dlg.name.trim();
                     !trimmed.is_empty() && !self.workspace_store.is_name_taken(trimmed, None)
                 };
-                ui_kit::dialog_footer(ui, |ui| {
+                ui_kit::dialog_footer_custom(ui, |ui| {
                     if ui_kit::action_button(
                         ui,
                         "Save",
@@ -891,7 +891,7 @@ impl App {
                                 .workspace_store
                                 .is_name_taken(trimmed, Some(dlg.workspace_id))
                     };
-                    ui_kit::dialog_footer(ui, |ui| {
+                    ui_kit::dialog_footer_custom(ui, |ui| {
                         if ui_kit::action_button(
                             ui,
                             "Save",
@@ -1069,7 +1069,7 @@ impl App {
                 if count == 1 { "" } else { "s" }
             ));
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(ui, "Close All", true, ui_kit::ActionButtonStyle::Danger)
                     .clicked()
                 {
@@ -1363,7 +1363,7 @@ impl App {
                 ui.label("Are you sure you want to quit?");
             }
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(ui, "Quit", true, ui_kit::ActionButtonStyle::Danger)
                     .clicked()
                 {
@@ -1436,7 +1436,7 @@ impl App {
             }
 
             let can_commit = !self.commit_message.trim().is_empty();
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(
                     ui,
                     "Commit",
@@ -1510,7 +1510,7 @@ impl App {
                 );
             }
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if self.push_force {
                     if ui_kit::action_button(
                         ui,
@@ -1578,7 +1578,7 @@ impl App {
 
             ui.label("Stage all modified and untracked files?");
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(ui, "Yes", true, ui_kit::ActionButtonStyle::Primary)
                     .clicked()
                 {
@@ -1635,7 +1635,7 @@ impl App {
                     .color(crate::theme::active().error),
             );
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(ui, "Yes", true, ui_kit::ActionButtonStyle::Danger)
                     .clicked()
                 {
@@ -1687,7 +1687,7 @@ impl App {
                     .color(crate::theme::active().error),
             );
 
-            ui_kit::dialog_footer(ui, |ui| {
+            ui_kit::dialog_footer_custom(ui, |ui| {
                 if ui_kit::action_button(ui, "Delete", true, ui_kit::ActionButtonStyle::Danger)
                     .clicked()
                 {
@@ -1887,7 +1887,7 @@ impl App {
                     true
                 };
 
-                ui_kit::dialog_footer(ui, |ui| {
+                ui_kit::dialog_footer_custom(ui, |ui| {
                     if ui_kit::action_button(
                         ui,
                         "Open",
