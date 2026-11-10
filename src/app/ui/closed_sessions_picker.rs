@@ -1,5 +1,6 @@
 use crate::app::closed_sessions::ClosedSessionManifest;
 use crate::theme;
+use crate::ui_kit;
 
 use super::super::App;
 
@@ -45,6 +46,7 @@ impl App {
 
         let mut restore_id: Option<u64> = None;
         let mut delete_id: Option<u64> = None;
+        let mut close_picker = false;
 
         egui::Area::new(self.vp_id("closed_sessions_dialog"))
             .fixed_pos(dialog_pos)
@@ -302,9 +304,20 @@ impl App {
                                     }
                                 });
                         }
+                        if ui_kit::dialog_footer(
+                            ui,
+                            &[ui_kit::DialogButton::Secondary("Close")],
+                        )
+                        .is_some()
+                        {
+                            close_picker = true;
+                        }
                     });
             });
 
+        if close_picker {
+            self.close_closed_sessions_picker();
+        }
         if let Some(id) = restore_id {
             self.close_closed_sessions_picker();
             self.restore_closed_session(id);

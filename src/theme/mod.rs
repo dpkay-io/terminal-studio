@@ -631,6 +631,12 @@ pub const DIALOG_MARGIN: f32 = SP_6;
 pub const DIALOG_ITEM_H: f32 = 26.0;
 pub const DIALOG_BTN_H: f32 = 34.0;
 pub const DIALOG_TOP_OFFSET: f32 = 80.0;
+pub const QUICK_SWITCHER_W: f32 = 640.0;
+pub const QUICK_SWITCHER_MAX_H: f32 = 560.0;
+pub const QUICK_SWITCHER_ROW_H: f32 = 44.0;
+pub const QUIT_DIALOG_W: f32 = 460.0;
+pub const QUIT_DIALOG_MAX_H: f32 = 360.0;
+pub const QUIT_TAB_CHIP_MAX_W: f32 = 128.0;
 
 // ── Panel divider ──────────────────────────────────────────────────────────
 
@@ -877,6 +883,11 @@ pub fn blend_colors(base: Color32, overlay: Color32, factor: f32) -> Color32 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn switcher_width_is_640() {
+        assert_eq!(QUICK_SWITCHER_W, 640.0);
+    }
 
     #[test]
     fn test_tinted_at_zero_returns_base() {

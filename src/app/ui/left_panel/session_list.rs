@@ -143,57 +143,54 @@ impl App {
 
         // ── New custom label dialog ──────────────────────────────
         if let Some(target_pane_id) = self.show_new_label_dialog {
-            // Use egui::Id-keyed booleans to communicate button results out of the closure.
-            let create_id = egui::Id::new("new_label_dialog_create");
-            let cancel_id = egui::Id::new("new_label_dialog_cancel");
-
-            egui::Window::new("New Label")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Name:");
-                        ui.text_edit_singleline(&mut self.new_label_name);
-                    });
+            let mut created = false;
+            let mut cancelled = false;
+            let response = ui_kit::dialog(
+                ctx,
+                self.vp_id("new_label_dialog"),
+                ui_kit::DialogConfig {
+                    width: ui_kit::DialogWidth::Fixed(340.0),
+                    max_height: 280.0,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui_kit::dialog_header(ui, "New Label");
+                    ui.label(ui_kit::label_secondary("Name"));
+                    ui.text_edit_singleline(&mut self.new_label_name);
                     ui.add_space(theme::SP_2);
-                    ui.label("Icon:");
+                    ui.label(ui_kit::label_secondary("Icon"));
                     ui.horizontal_wrapped(|ui| {
                         for (i, &icon) in crate::app::labels::CUSTOM_ICON_PALETTE.iter().enumerate()
                         {
                             let is_selected = self.new_label_icon_idx == i;
-                            let btn = ui.selectable_label(
+                            let button = ui.selectable_label(
                                 is_selected,
                                 egui::RichText::new(icon).size(theme::FONT_LG),
                             );
-                            if btn.clicked() {
+                            if button.clicked() {
                                 self.new_label_icon_idx = i;
                             }
                         }
                     });
-                    ui.add_space(theme::SP_3);
-                    ui.horizontal(|ui| {
-                        let can_create = !ui
-                            .data(|d| d.get_temp::<String>(create_id))
-                            .as_deref()
-                            .unwrap_or("")
-                            .is_empty();
-                        let _ = can_create;
-                        if ui.button("Create").clicked() && !self.new_label_name.trim().is_empty() {
-                            ui.data_mut(|d| d.insert_temp(create_id, true));
+                    let can_create = !self.new_label_name.trim().is_empty();
+                    let create_button = if can_create {
+                        ui_kit::DialogButton::Primary("Create")
+                    } else {
+                        ui_kit::DialogButton::DisabledPrimary("Create")
+                    };
+                    if let Some(index) = ui_kit::dialog_footer(
+                        ui,
+                        &[ui_kit::DialogButton::Secondary("Cancel"), create_button],
+                    ) {
+                        match index {
+                            0 => cancelled = true,
+                            1 if can_create => created = true,
+                            _ => {}
                         }
-                        if ui.button("Cancel").clicked() {
-                            ui.data_mut(|d| d.insert_temp(cancel_id, true));
-                        }
-                    });
-                });
-
-            let created = ctx
-                .data_mut(|d| d.remove_temp::<bool>(create_id))
-                .unwrap_or(false);
-            let cancelled = ctx
-                .data_mut(|d| d.remove_temp::<bool>(cancel_id))
-                .unwrap_or(false);
+                    }
+                },
+            );
+            cancelled |= response.dismissed;
 
             if created {
                 let name = self.new_label_name.trim().to_string();

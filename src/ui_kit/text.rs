@@ -91,10 +91,6 @@ fn kbd_combo_parts<'a>(ui: &mut Ui, labels: impl IntoIterator<Item = &'a str>) {
     });
 }
 
-pub fn heading(text: impl Into<String>) -> egui::RichText {
-    egui::RichText::new(text).strong().size(theme::FONT_MD)
-}
-
 pub fn label(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).size(theme::FONT_SM)
 }

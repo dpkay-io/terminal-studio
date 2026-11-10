@@ -162,39 +162,37 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
 
 // ── Dialog footer ──────────────────────────────────────────────────────────
 
-pub fn dialog_footer_custom(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) {
-    ui.add_space(theme::SP_4);
-    ui.horizontal(add_buttons);
-}
-
-#[allow(dead_code)] // Consumed by later dialog migration tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DialogButton {
     Secondary(&'static str),
     Primary(&'static str),
+    DisabledPrimary(&'static str),
     Destructive(&'static str),
 }
 
-#[allow(dead_code)] // Consumed by later dialog migration tasks.
 pub fn dialog_footer(ui: &mut egui::Ui, buttons: &[DialogButton]) -> Option<usize> {
     struct ButtonLayout {
         galley: std::sync::Arc<egui::Galley>,
         width: f32,
         fill: egui::Color32,
         text: egui::Color32,
+        enabled: bool,
     }
 
     let t = theme::active();
     let layouts: Vec<_> = buttons
         .iter()
         .map(|button| {
-            let (label, fill, text) = match button {
-                DialogButton::Secondary(label) => (*label, t.bg_raised, t.fg_muted_raised),
+            let (label, fill, text, enabled) = match button {
+                DialogButton::Secondary(label) => (*label, t.bg_raised, t.fg_muted_raised, true),
                 DialogButton::Primary(label) => {
                     let text = theme::text_on([t.accent.r(), t.accent.g(), t.accent.b()]);
-                    (*label, t.accent, text)
+                    (*label, t.accent, text, true)
                 }
-                DialogButton::Destructive(label) => (*label, t.danger, t.danger_text),
+                DialogButton::DisabledPrimary(label) => {
+                    (*label, t.bg_panel, t.fg_muted_raised, false)
+                }
+                DialogButton::Destructive(label) => (*label, t.danger, t.danger_text, true),
             };
             let galley = ui.painter().layout_no_wrap(
                 label.to_owned(),
@@ -206,6 +204,7 @@ pub fn dialog_footer(ui: &mut egui::Ui, buttons: &[DialogButton]) -> Option<usiz
                 galley,
                 fill,
                 text,
+                enabled,
             }
         })
         .collect();
@@ -236,7 +235,11 @@ pub fn dialog_footer(ui: &mut egui::Ui, buttons: &[DialogButton]) -> Option<usiz
         let response = ui.interact(
             rect,
             ui.id().with(("dialog_footer_button", index)),
-            egui::Sense::click(),
+            if layout.enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            },
         );
         if response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
