@@ -4,8 +4,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use egui::FontId;
-
 use crate::editor_group::NavigationDir;
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 use crate::pty::{default_shell, SessionManager, ShellKind};
@@ -174,9 +172,8 @@ pub struct App {
     current_window_id: Option<WindowId>,
 
     // ── Per-frame UI caches ───────────────────────────────────────────────
-    /// Cached cell dimensions for the central panel font measurement.
-    /// Invalidated when font_size changes.
-    cached_cell_size: Option<(f32, f32, f32)>,
+    /// Cached terminal dimensions keyed by `(font_size, pixels_per_point)`.
+    cached_cell_size: Option<(f32, f32, f32, f32)>,
     /// Cache of `fs::read_dir` results for expanded subdirectories in the
     /// file browser, keyed by absolute path. Without this the dir tree
     /// re-reads disk on every frame for every expanded node.
@@ -1925,7 +1922,6 @@ impl App {
                                                     ui.add(
                                                         egui::Label::new(
                                                             egui::RichText::new(theme::short_path(cwd))
-                                                                .monospace()
                                                                 .size(theme::FONT_XS)
                                                                 .color(theme::active().fg_path),
                                                         )
@@ -2323,7 +2319,7 @@ impl App {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
                                             .id(self.vp_id("notes_textedit"))
-                                            .font(egui::TextStyle::Monospace)
+                                            .font(egui::FontId::proportional(theme::FONT_SM))
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
                                             .frame(false),
@@ -2579,14 +2575,24 @@ impl App {
             .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
             .show(ctx, |ui| {
             let panel_rect = ui.max_rect();
-            let font_id    = FontId::monospace(self.settings.font_size);
+            let pixels_per_point = ctx.pixels_per_point();
             let (cw, ch) = match self.cached_cell_size {
-                Some((fs, w, h)) if fs == self.settings.font_size => (w, h),
-                _ => {
-                    let w = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
-                    let h = ui.fonts(|f| f.row_height(&font_id));
-                    self.cached_cell_size = Some((self.settings.font_size, w, h));
+                Some((fs, ppp, w, h))
+                    if fs == self.settings.font_size && ppp == pixels_per_point =>
+                {
                     (w, h)
+                }
+                _ => {
+                    let metrics: crate::renderer::CellMetrics = ui.fonts(|fonts| {
+                        crate::renderer::terminal_cell_metrics(fonts, self.settings.font_size)
+                    });
+                    self.cached_cell_size = Some((
+                        self.settings.font_size,
+                        pixels_per_point,
+                        metrics.w,
+                        metrics.h,
+                    ));
+                    (metrics.w, metrics.h)
                 }
             };
             resize_cell_w  = cw;
@@ -2855,7 +2861,7 @@ impl App {
                             input_rect,
                             egui::TextEdit::singleline(&mut self.term_search.query)
                                 .desired_width(input_rect.width())
-                                .font(egui::FontId::monospace(theme::FONT_SM))
+                                .font(egui::FontId::proportional(theme::FONT_SM))
                                 .hint_text("Search\u{2026}"),
                         );
                         if resp.changed() {
@@ -2934,7 +2940,7 @@ impl App {
                             egui::pos2(count_center_x, bar_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             &count_text,
-                            egui::FontId::monospace(theme::FONT_XS),
+                            egui::FontId::proportional(theme::FONT_XS),
                             t.subtext0,
                         );
                     }

@@ -652,7 +652,7 @@ impl App {
                             ),
                             egui::Align2::LEFT_CENTER,
                             &display,
-                            egui::FontId::monospace(theme::FONT_XS),
+                            egui::FontId::proportional(theme::FONT_XS),
                             if selected { t.text } else { t.subtext0 },
                         );
 

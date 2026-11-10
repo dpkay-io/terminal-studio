@@ -122,8 +122,7 @@ pub fn dialog(
 pub fn dialog_header(ui: &mut egui::Ui, title: &str) {
     ui.label(
         egui::RichText::new(title)
-            .strong()
-            .size(theme::FONT_MD)
+            .font(egui::FontId::new(theme::FONT_MD, crate::fonts::ui_bold()))
             .color(theme::active().text),
     );
     ui.add_space(theme::SP_4);
@@ -132,7 +131,10 @@ pub fn dialog_header(ui: &mut egui::Ui, title: &str) {
 pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(title).strong().size(theme::FONT_MD));
+        ui.label(
+            egui::RichText::new(title)
+                .font(egui::FontId::new(theme::FONT_MD, crate::fonts::ui_bold())),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
                 egui::Button::new(

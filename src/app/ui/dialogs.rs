@@ -688,7 +688,6 @@ impl App {
 
                 ui.label(
                     egui::RichText::new(theme::short_path(&dlg.path))
-                        .monospace()
                         .size(theme::FONT_XS)
                         .color(theme::active().fg_path),
                 )
@@ -1748,7 +1747,6 @@ impl App {
                 // Path display
                 ui.label(
                     egui::RichText::new(theme::short_path(&dlg.path))
-                        .monospace()
                         .size(theme::FONT_XS)
                         .color(t.fg_path),
                 )

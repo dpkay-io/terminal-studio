@@ -168,20 +168,17 @@ fn render_terminal_leaf(
 
 fn paint_search_highlights(
     painter: &egui::Painter,
-    text_origin: egui::Pos2,
+    origin_y: f32,
     line_h: f32,
-    char_w: f32,
-    matches: &[(usize, usize, usize)],
+    spans: &[(usize, f32, f32)],
     current_idx: Option<usize>,
     clip: egui::Rect,
 ) {
-    for (i, &(line, col_start, col_end)) in matches.iter().enumerate() {
-        let y = text_origin.y + line as f32 * line_h;
+    for (i, &(line, x0, x1)) in spans.iter().enumerate() {
+        let y = origin_y + line as f32 * line_h;
         if y + line_h < clip.min.y || y > clip.max.y {
             continue;
         }
-        let x0 = text_origin.x + col_start as f32 * char_w;
-        let x1 = text_origin.x + col_end as f32 * char_w;
         let color = if Some(i) == current_idx {
             egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
         } else {
@@ -193,6 +190,67 @@ fn paint_search_highlights(
             color,
         );
     }
+}
+
+/// Character-boundary x positions for one proportional line, measured from its galley.
+///
+/// `edges[col]` is the advance up to that character. The last entry is the line width.
+fn proportional_glyph_edges(ui: &egui::Ui, font: &egui::FontId, line: &str) -> Vec<f32> {
+    if line.is_empty() {
+        return vec![0.0];
+    }
+    ui.fonts(|fonts| {
+        let galley =
+            fonts.layout_no_wrap(line.to_owned(), font.clone(), egui::Color32::TRANSPARENT);
+        let mut edges = Vec::new();
+        if let Some(row) = galley.rows.first() {
+            for glyph in &row.glyphs {
+                edges.push(glyph.pos.x);
+            }
+            if let Some(last) = row.glyphs.last() {
+                edges.push(last.max_x());
+            }
+        }
+        if edges.is_empty() {
+            edges.push(0.0);
+        }
+        edges
+    })
+}
+
+fn proportional_highlight_spans(
+    ui: &egui::Ui,
+    font: &egui::FontId,
+    text: &str,
+    origin_x: f32,
+    matches: &[(usize, usize, usize)],
+) -> Vec<(usize, f32, f32)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cached: Vec<Option<Vec<f32>>> = vec![None; lines.len()];
+    matches
+        .iter()
+        .map(|&(line, col_start, col_end)| {
+            let edges = if let Some(slot) = cached.get_mut(line) {
+                if slot.is_none() {
+                    *slot = Some(proportional_glyph_edges(
+                        ui,
+                        font,
+                        lines.get(line).copied().unwrap_or(""),
+                    ));
+                }
+                slot.as_ref().unwrap()
+            } else {
+                return (line, origin_x, origin_x);
+            };
+            let x_at = |col: usize| {
+                edges
+                    .get(col)
+                    .copied()
+                    .unwrap_or_else(|| edges.last().copied().unwrap_or(0.0))
+            };
+            (line, origin_x + x_at(col_start), origin_x + x_at(col_end))
+        })
+        .collect()
 }
 
 #[allow(dead_code)]
@@ -240,7 +298,7 @@ fn render_text_search_bar(
         input_rect,
         egui::TextEdit::singleline(&mut search.query)
             .desired_width(input_rect.width())
-            .font(egui::FontId::monospace(theme::FONT_SM))
+            .font(egui::FontId::proportional(theme::FONT_SM))
             .hint_text("Search\u{2026}"),
     );
     if resp.changed() {
@@ -323,7 +381,7 @@ fn render_text_search_bar(
         egui::pos2(count_center_x, bar_rect.center().y),
         egui::Align2::CENTER_CENTER,
         &count_text,
-        egui::FontId::monospace(theme::FONT_XS),
+        egui::FontId::proportional(theme::FONT_XS),
         t.subtext0,
     );
 
@@ -553,12 +611,22 @@ fn render_file_editor_leaf(
                                         .rect
                                         .width()
                                 });
+                                let origin = te_resp.rect.min;
+                                let spans: Vec<(usize, f32, f32)> = search_highlights
+                                    .iter()
+                                    .map(|&(line, col_start, col_end)| {
+                                        (
+                                            line,
+                                            origin.x + col_start as f32 * cw,
+                                            origin.x + col_end as f32 * cw,
+                                        )
+                                    })
+                                    .collect();
                                 paint_search_highlights(
                                     ui.painter(),
-                                    te_resp.rect.min,
+                                    origin.y,
                                     line_h,
-                                    cw,
-                                    &search_highlights,
+                                    &spans,
                                     search_current_idx,
                                     ui.clip_rect(),
                                 );
@@ -647,27 +715,29 @@ fn render_note_editor_leaf(
                 .id_source(("note_editor_scroll", pane_id))
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                    let note_font = egui::FontId::proportional(theme::FONT_SM);
+                    let line_h = ui.fonts(|fonts| fonts.row_height(&note_font));
                     let te_resp = ui.add(
                         egui::TextEdit::multiline(text)
-                            .font(egui::TextStyle::Monospace)
+                            .font(note_font.clone())
                             .desired_width(f32::INFINITY)
                             .hint_text("Notes for this workspace\u{2026}")
                             .frame(false),
                     );
                     if !search_highlights.is_empty() {
-                        let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
-                        let cw = ui.fonts(|f| {
-                            f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
-                                .rect
-                                .width()
-                        });
+                        let origin = te_resp.rect.min;
+                        let spans = proportional_highlight_spans(
+                            ui,
+                            &note_font,
+                            text,
+                            origin.x,
+                            &search_highlights,
+                        );
                         paint_search_highlights(
                             ui.painter(),
-                            te_resp.rect.min,
+                            origin.y,
                             line_h,
-                            cw,
-                            &search_highlights,
+                            &spans,
                             search_current_idx,
                             ui.clip_rect(),
                         );
@@ -735,7 +805,7 @@ fn render_file_diff_leaf(
         .id_source(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
-            match d.diff_mode {
+            let rows = match d.diff_mode {
                 super::super::diff_parser::DiffViewMode::Inline => {
                     super::super::git_diff::render_inline_diff_full(
                         ui,
@@ -745,7 +815,7 @@ fn render_file_diff_leaf(
                         d.old_highlights.as_deref(),
                         d.new_highlights.as_deref(),
                         scroll_target,
-                    );
+                    )
                 }
                 super::super::diff_parser::DiffViewMode::SideBySide => {
                     super::super::git_diff::render_side_by_side_diff(
@@ -756,17 +826,15 @@ fn render_file_diff_leaf(
                         d.old_highlights.as_deref(),
                         d.new_highlights.as_deref(),
                         scroll_target,
-                    );
+                    )
                 }
-            }
+            };
             if is_focused {
                 if let Some(m) = rctx.text_search.current_match() {
-                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
-                    let spacing = ui.spacing().item_spacing.y;
-                    let target_y = m.line as f32 * (line_h + spacing);
+                    let target_y = rows.first_row_top + m.line as f32 * rows.row_pitch;
                     let scroll_rect = egui::Rect::from_min_size(
                         egui::pos2(0.0, target_y),
-                        egui::vec2(1.0, line_h),
+                        egui::vec2(1.0, rows.line_h),
                     );
                     ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
                 }

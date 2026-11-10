@@ -3,6 +3,7 @@
 mod app;
 mod editor_group;
 mod file_search_worker;
+mod fonts;
 mod git;
 mod keybindings;
 pub(crate) mod logging;

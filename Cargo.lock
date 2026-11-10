@@ -3751,6 +3751,7 @@ dependencies = [
  "tempfile",
  "tracing-appender",
  "tracing-subscriber",
+ "ttf-parser",
  "vte 0.13.1",
  "windows-sys 0.52.0",
  "winres",

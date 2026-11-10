@@ -260,7 +260,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::FONT_XS),
+                        egui::FontId::proportional(theme::FONT_XS),
                         badge_fg,
                     );
                     let label_max = (ui.available_width()).max(20.0);
@@ -268,9 +268,7 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path)
-                                        .monospace()
-                                        .size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click()),
@@ -438,7 +436,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::FONT_XS),
+                        egui::FontId::proportional(theme::FONT_XS),
                         badge_fg,
                     );
                     let btn_reserve = theme::SP_4 + 20.0;
@@ -447,9 +445,7 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path)
-                                        .monospace()
-                                        .size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -558,7 +554,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::FONT_XS),
+                        egui::FontId::proportional(theme::FONT_XS),
                         badge_fg,
                     );
                     let can_revert = entry.kind != FileChangeKind::Untracked;
@@ -568,9 +564,7 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path)
-                                        .monospace()
-                                        .size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -948,6 +942,40 @@ fn compute_hunk_start_indices(
     starts
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct DiffRowLayout {
+    /// Screen-space top of display row 0, including rows skipped by virtualization.
+    pub first_row_top: f32,
+    pub line_h: f32,
+    /// `line_h` plus the vertical item spacing used between rows.
+    pub row_pitch: f32,
+}
+
+fn diff_text_font() -> egui::FontId {
+    egui::FontId::proportional(theme::FONT_XS)
+}
+
+fn diff_line_height(ui: &egui::Ui, font: &egui::FontId) -> f32 {
+    ui.fonts(|fonts| fonts.row_height(font))
+}
+
+fn diff_row_pitch(ui: &egui::Ui, line_h: f32) -> f32 {
+    line_h + ui.spacing().item_spacing.y
+}
+
+fn diff_row_layout(ui: &egui::Ui, first_row_top: f32) -> (egui::FontId, DiffRowLayout) {
+    let font = diff_text_font();
+    let line_h = diff_line_height(ui, &font);
+    (
+        font,
+        DiffRowLayout {
+            first_row_top,
+            line_h,
+            row_pitch: diff_row_pitch(ui, line_h),
+        },
+    )
+}
+
 pub(super) fn render_inline_diff_full(
     ui: &mut egui::Ui,
     old_content: &str,
@@ -956,24 +984,23 @@ pub(super) fn render_inline_diff_full(
     old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
     new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
     scroll_to_hunk: Option<usize>,
-) {
+) -> DiffRowLayout {
     use super::diff_parser::build_full_diff_lines;
 
     let lines = build_full_diff_lines(old_content, new_content, hunks);
     let t = theme::active();
     let gutter_w = 36.0_f32;
     let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_XS);
-    let gutter_font = egui::FontId::monospace(theme::FONT_XS);
-    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+    let content_top = ui.cursor().top();
+    let (font_mono, rows) = diff_row_layout(ui, content_top);
+    let gutter_font = font_mono.clone();
+    let line_h = rows.line_h;
 
     let hunk_starts = compute_hunk_start_indices(&lines, hunks);
     let scroll_target_line = scroll_to_hunk.and_then(|idx| hunk_starts.get(idx).copied());
 
     let line_count = lines.len();
-    let spacing = ui.spacing().item_spacing.y;
-    let row_h = line_h + spacing;
-    let content_top = ui.cursor().top();
+    let row_h = rows.row_pitch;
     let clip = ui.clip_rect();
     let buffer = 5_usize;
     let first_visible = ((clip.min.y - content_top) / row_h).floor().max(0.0) as usize;
@@ -1074,6 +1101,7 @@ pub(super) fn render_inline_diff_full(
             egui::Rect::from_min_size(egui::pos2(0.0, target_y), egui::vec2(1.0, row_h));
         ui.scroll_to_rect(target_rect, Some(egui::Align::Center));
     }
+    rows
 }
 
 fn compute_sbs_hunk_start_indices(
@@ -1112,7 +1140,7 @@ pub(super) fn render_side_by_side_diff(
     old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
     new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
     scroll_to_hunk: Option<usize>,
-) {
+) -> DiffRowLayout {
     use super::diff_parser::{build_full_diff_lines, build_side_by_side_lines};
 
     let full = build_full_diff_lines(old_content, new_content, hunks);
@@ -1123,9 +1151,9 @@ pub(super) fn render_side_by_side_diff(
     let half_w = (total_w / 2.0 - 1.0).max(100.0);
     let gutter_w = 36.0_f32;
     let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_XS);
-    let gutter_font = egui::FontId::monospace(theme::FONT_XS);
-    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+    let font_mono = diff_text_font();
+    let gutter_font = font_mono.clone();
+    let line_h = diff_line_height(ui, &font_mono);
 
     ui.horizontal(|ui| {
         let (left_header, _) =
@@ -1165,9 +1193,13 @@ pub(super) fn render_side_by_side_diff(
     let scroll_target_line = scroll_to_hunk.and_then(|idx| sbs_hunk_starts.get(idx).copied());
 
     let line_count = left_lines.len();
-    let spacing = ui.spacing().item_spacing.y;
-    let row_h = line_h + spacing;
     let content_top = ui.cursor().top();
+    let rows = DiffRowLayout {
+        first_row_top: content_top,
+        line_h,
+        row_pitch: diff_row_pitch(ui, line_h),
+    };
+    let row_h = rows.row_pitch;
     let clip = ui.clip_rect();
     let buffer = 5_usize;
     let first_visible = ((clip.min.y - content_top) / row_h).floor().max(0.0) as usize;
@@ -1212,6 +1244,7 @@ pub(super) fn render_side_by_side_diff(
             egui::Rect::from_min_size(egui::pos2(0.0, target_y), egui::vec2(1.0, row_h));
         ui.scroll_to_rect(target_rect, Some(egui::Align::Center));
     }
+    rows
 }
 
 struct SbsLayout<'a> {

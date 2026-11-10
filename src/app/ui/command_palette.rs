@@ -112,7 +112,7 @@ impl App {
                                 .id(search_id)
                                 .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
                                 .hint_text(placeholder)
-                                .font(egui::FontId::monospace(theme::FONT_SM)),
+                                .font(egui::FontId::proportional(theme::FONT_SM)),
                         );
                         if resp.changed() {
                             self.palette_selected = 0;
@@ -663,7 +663,7 @@ fn render_file_row(
             } else {
                 ext.clone()
             };
-            let badge_font = egui::FontId::monospace(theme::FONT_XS);
+            let badge_font = egui::FontId::proportional(theme::FONT_XS);
             let badge_galley = painter.layout_no_wrap(badge_text, badge_font, t.accent_muted);
             let badge_w = badge_galley.size().x + theme::SP_2 * 2.0;
             let badge_h = badge_galley.size().y + theme::SP_1;

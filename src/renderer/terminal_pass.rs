@@ -7,12 +7,33 @@ use alacritty_terminal::{
     term::{cell::Flags, TermMode},
     vte::ansi::{Color, NamedColor, Rgb},
 };
-use egui::{vec2, FontId, Pos2, Rect, Sense};
+use egui::{vec2, FontFamily, FontId, Pos2, Rect, Sense};
 use parking_lot::RwLock;
 
 use crate::app::settings::CursorStyle;
 use crate::terminal::Session;
 use crate::theme::{self, Theme};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CellMetrics {
+    pub w: f32,
+    pub h: f32,
+    pub glyph_y_off: f32,
+}
+
+/// Resolve terminal dimensions once so PTY sizing and painting cannot drift.
+pub fn terminal_cell_metrics(fonts: &egui::text::Fonts, font_size: f32) -> CellMetrics {
+    let font_id = FontId::monospace(font_size);
+    let row_height = fonts.row_height(&font_id);
+    let height = (font_size * theme::TERM_LINE_HEIGHT)
+        .round()
+        .max(row_height);
+    CellMetrics {
+        w: fonts.glyph_width(&font_id, 'M'),
+        h: height,
+        glyph_y_off: (height - row_height) * 0.5,
+    }
+}
 
 pub struct SelectionRange {
     pub start_col: u16,
@@ -119,9 +140,9 @@ impl TerminalView {
         let t = theme::active();
         painter.rect_filled(outer_rect, 0.0, t.bg_term);
 
-        let font_id = FontId::monospace(font_size);
-        let cell_height = ui.fonts(|f| f.row_height(&font_id));
-        let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
+        let metrics = ui.fonts(|fonts| terminal_cell_metrics(fonts, font_size));
+        let cell_height = metrics.h;
+        let cell_width = metrics.w;
 
         let rect = Rect::from_min_max(
             egui::pos2(
@@ -276,6 +297,7 @@ impl TerminalView {
         // (col * cell_width) to prevent cumulative glyph-advance drift
         // that occurs when rendering multi-character strings.
         let base_font = FontId::monospace(font_size);
+        let bold_font = FontId::new(font_size, FontFamily::Name(crate::fonts::MONO_BOLD.into()));
 
         RENDER_BUF.with(|buf| {
             let buf = buf.borrow();
@@ -324,32 +346,34 @@ impl TerminalView {
                     }
                     let x = rect.min.x + col as f32 * cell_width;
                     let pos = egui::pos2(x, y);
+                    let cell_rect =
+                        egui::Rect::from_min_size(pos, egui::vec2(cell_width, cell_height));
+                    if draw_box_char(&painter, c.ch, cell_rect, c.fg) {
+                        continue;
+                    }
+                    let font = if c.bold { &bold_font } else { &base_font };
                     if c.wide {
                         let wide_rect = egui::Rect::from_min_size(
                             pos,
                             egui::vec2(2.0 * cell_width, cell_height),
                         );
-                        let galley =
-                            painter.layout_no_wrap(c.ch.to_string(), base_font.clone(), c.fg);
+                        let galley = painter.layout_no_wrap(c.ch.to_string(), font.clone(), c.fg);
                         painter.galley(
                             egui::pos2(
                                 wide_rect.min.x + (wide_rect.width() - galley.size().x) * 0.5,
-                                wide_rect.min.y,
+                                wide_rect.min.y + metrics.glyph_y_off,
                             ),
                             galley,
                             egui::Color32::TRANSPARENT,
                         );
                     } else {
-                        painter.text(pos, egui::Align2::LEFT_TOP, c.ch, base_font.clone(), c.fg);
-                        if c.bold {
-                            painter.text(
-                                egui::pos2(x + 1.0, y),
-                                egui::Align2::LEFT_TOP,
-                                c.ch,
-                                base_font.clone(),
-                                c.fg,
-                            );
-                        }
+                        painter.text(
+                            pos + egui::vec2(0.0, metrics.glyph_y_off),
+                            egui::Align2::LEFT_TOP,
+                            c.ch,
+                            font.clone(),
+                            c.fg,
+                        );
                     }
                 }
 
@@ -634,6 +658,206 @@ impl TerminalView {
     }
 }
 
+fn draw_box_char(painter: &egui::Painter, ch: char, cell: Rect, color: egui::Color32) -> bool {
+    if ('\u{2580}'..='\u{259f}').contains(&ch) {
+        draw_block_char(painter, ch, cell, color);
+        return true;
+    }
+    if !('\u{2500}'..='\u{257f}').contains(&ch) {
+        return false;
+    }
+
+    let center = cell.center();
+    let stroke_width = if matches!(
+        ch,
+        '\u{2501}' | '\u{2503}' | '\u{2505}' | '\u{2507}' | '\u{2509}' | '\u{250b}' | '\u{2578}'
+            ..='\u{257b}'
+    ) {
+        2.0
+    } else {
+        1.0_f32
+    };
+    let stroke = egui::Stroke::new(stroke_width, color);
+
+    if ch == '\u{2571}' || ch == '\u{2573}' {
+        painter.line_segment([cell.left_bottom(), cell.right_top()], stroke);
+    }
+    if ch == '\u{2572}' || ch == '\u{2573}' {
+        painter.line_segment([cell.left_top(), cell.right_bottom()], stroke);
+    }
+    if ('\u{2571}'..='\u{2573}').contains(&ch) {
+        return true;
+    }
+
+    let mut left = false;
+    let mut right = false;
+    let mut up = false;
+    let mut down = false;
+
+    match ch {
+        '\u{2500}' | '\u{2501}' | '\u{2504}' | '\u{2505}' | '\u{2508}' | '\u{2509}'
+        | '\u{254c}' | '\u{254d}' | '\u{2550}' | '\u{257c}' | '\u{257e}' => {
+            left = true;
+            right = true;
+        }
+        '\u{2502}' | '\u{2503}' | '\u{2506}' | '\u{2507}' | '\u{250a}' | '\u{250b}'
+        | '\u{254e}' | '\u{254f}' | '\u{2551}' | '\u{257d}' | '\u{257f}' => {
+            up = true;
+            down = true;
+        }
+        '\u{250c}'..='\u{250f}' | '\u{2552}'..='\u{2554}' | '\u{256d}' => {
+            right = true;
+            down = true;
+        }
+        '\u{2510}'..='\u{2513}' | '\u{2555}'..='\u{2557}' | '\u{256e}' => {
+            left = true;
+            down = true;
+        }
+        '\u{2514}'..='\u{2517}' | '\u{2558}'..='\u{255a}' | '\u{2570}' => {
+            right = true;
+            up = true;
+        }
+        '\u{2518}'..='\u{251b}' | '\u{255b}'..='\u{255d}' | '\u{256f}' => {
+            left = true;
+            up = true;
+        }
+        '\u{251c}'..='\u{2523}' | '\u{255e}'..='\u{2560}' => {
+            right = true;
+            up = true;
+            down = true;
+        }
+        '\u{2524}'..='\u{252b}' | '\u{2561}'..='\u{2563}' => {
+            left = true;
+            up = true;
+            down = true;
+        }
+        '\u{252c}'..='\u{2533}' | '\u{2564}'..='\u{2566}' => {
+            left = true;
+            right = true;
+            down = true;
+        }
+        '\u{2534}'..='\u{253b}' | '\u{2567}'..='\u{2569}' => {
+            left = true;
+            right = true;
+            up = true;
+        }
+        '\u{253c}'..='\u{254b}' | '\u{256a}'..='\u{256c}' => {
+            left = true;
+            right = true;
+            up = true;
+            down = true;
+        }
+        '\u{2574}' | '\u{2578}' => left = true,
+        '\u{2575}' | '\u{2579}' => up = true,
+        '\u{2576}' | '\u{257a}' => right = true,
+        '\u{2577}' | '\u{257b}' => down = true,
+        _ => {
+            left = true;
+            right = true;
+            up = true;
+            down = true;
+        }
+    }
+
+    if left && right {
+        painter.line_segment([cell.left_center(), cell.right_center()], stroke);
+    } else if left {
+        painter.line_segment([cell.left_center(), center], stroke);
+    } else if right {
+        painter.line_segment([center, cell.right_center()], stroke);
+    }
+    if up && down {
+        painter.line_segment([cell.center_top(), cell.center_bottom()], stroke);
+    } else if up {
+        painter.line_segment([cell.center_top(), center], stroke);
+    } else if down {
+        painter.line_segment([center, cell.center_bottom()], stroke);
+    }
+    true
+}
+
+fn draw_block_char(painter: &egui::Painter, ch: char, cell: Rect, color: egui::Color32) {
+    let fill = |rect: Rect| {
+        painter.rect_filled(rect, 0.0, color);
+    };
+    let x_fraction = |fraction: f32| cell.left() + cell.width() * fraction;
+    let y_fraction = |fraction: f32| cell.top() + cell.height() * fraction;
+
+    match ch {
+        '\u{2580}' => fill(Rect::from_min_max(
+            cell.min,
+            egui::pos2(cell.right(), cell.center().y),
+        )),
+        '\u{2581}'..='\u{2588}' => {
+            let eighths = ch as u32 - '\u{2580}' as u32;
+            fill(Rect::from_min_max(
+                egui::pos2(cell.left(), y_fraction(1.0 - eighths as f32 / 8.0)),
+                cell.max,
+            ));
+        }
+        '\u{2589}'..='\u{258f}' => {
+            let eighths = 8 - (ch as u32 - '\u{2588}' as u32);
+            fill(Rect::from_min_max(
+                cell.min,
+                egui::pos2(x_fraction(eighths as f32 / 8.0), cell.bottom()),
+            ));
+        }
+        '\u{2590}' => fill(Rect::from_min_max(
+            egui::pos2(cell.center().x, cell.top()),
+            cell.max,
+        )),
+        '\u{2591}' => {
+            painter.rect_filled(cell, 0.0, color.linear_multiply(0.25));
+        }
+        '\u{2592}' => {
+            painter.rect_filled(cell, 0.0, color.linear_multiply(0.5));
+        }
+        '\u{2593}' => {
+            painter.rect_filled(cell, 0.0, color.linear_multiply(0.75));
+        }
+        '\u{2594}' => fill(Rect::from_min_max(
+            cell.min,
+            egui::pos2(cell.right(), y_fraction(0.125)),
+        )),
+        '\u{2595}' => fill(Rect::from_min_max(
+            egui::pos2(x_fraction(0.875), cell.top()),
+            cell.max,
+        )),
+        '\u{2596}'..='\u{259f}' => {
+            let quadrants = match ch {
+                '\u{2596}' => 0b0100,
+                '\u{2597}' => 0b1000,
+                '\u{2598}' => 0b0001,
+                '\u{2599}' => 0b1101,
+                '\u{259a}' => 0b1001,
+                '\u{259b}' => 0b0111,
+                '\u{259c}' => 0b1011,
+                '\u{259d}' => 0b0010,
+                '\u{259e}' => 0b0110,
+                _ => 0b1110,
+            };
+            let rects = [
+                Rect::from_min_max(cell.min, cell.center()),
+                Rect::from_min_max(
+                    egui::pos2(cell.center().x, cell.top()),
+                    egui::pos2(cell.right(), cell.center().y),
+                ),
+                Rect::from_min_max(
+                    egui::pos2(cell.left(), cell.center().y),
+                    egui::pos2(cell.center().x, cell.bottom()),
+                ),
+                Rect::from_min_max(cell.center(), cell.max),
+            ];
+            for (index, rect) in rects.into_iter().enumerate() {
+                if quadrants & (1 << index) != 0 {
+                    fill(rect);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn resolve_color(color: Color, is_fg: bool, t: &Theme) -> egui::Color32 {
     match color {
         Color::Named(named) => resolve_named(named, is_fg, t),
@@ -829,5 +1053,161 @@ mod tests {
         assert_eq!(ansi_indexed(255, t), (238, 238, 238));
         // Index 243 → v = 8 + 11*10 = 118
         assert_eq!(ansi_indexed(243, t), (118, 118, 118));
+    }
+
+    fn test_fonts(ppp: f32) -> egui::text::Fonts {
+        egui::text::Fonts::new(ppp, 2048, crate::fonts::font_definitions(None))
+    }
+
+    #[test]
+    fn cell_h_is_font_size_times_line_height() {
+        let fonts = test_fonts(1.0);
+        let size = 14.0_f32;
+        let metrics = terminal_cell_metrics(&fonts, size);
+        let row_h = fonts.row_height(&egui::FontId::monospace(size));
+        let scaled = (size * theme::TERM_LINE_HEIGHT).round();
+        assert_eq!(metrics.h, scaled.max(row_h));
+        assert!((metrics.glyph_y_off - (metrics.h - row_h) * 0.5).abs() < 0.01);
+        assert!(metrics.w > 0.0);
+    }
+
+    #[test]
+    fn pty_rows_equal_render_rows() {
+        let fonts = test_fonts(1.5);
+        let size = theme::FONT_TERM;
+        let metrics = terminal_cell_metrics(&fonts, size);
+        let content_h = 480.0_f32;
+        let render_rows = (content_h / metrics.h) as u16;
+        let pty_rows = (content_h / metrics.h) as u16;
+        assert_eq!(pty_rows, render_rows);
+        let row_h = fonts.row_height(&egui::FontId::monospace(size));
+        assert_eq!(
+            metrics.h,
+            (size * theme::TERM_LINE_HEIGHT).round().max(row_h)
+        );
+        assert!(metrics.h + 0.01 >= row_h);
+    }
+
+    #[test]
+    fn box_char_vertical_spans_full_cell() {
+        let ctx = egui::Context::default();
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new("box-test"));
+        let painter = egui::Painter::new(ctx, layer, Rect::EVERYTHING);
+        let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(8.0, 26.0));
+        assert!(draw_box_char(
+            &painter,
+            '\u{2502}',
+            cell,
+            egui::Color32::WHITE
+        ));
+        let mut spans_full = false;
+        painter.for_each_shape(|clipped| {
+            if let egui::Shape::LineSegment { points, .. } = clipped.shape {
+                let ys = [points[0].y, points[1].y];
+                let min_y = ys[0].min(ys[1]);
+                let max_y = ys[0].max(ys[1]);
+                if (min_y - cell.min.y).abs() < 0.01 && (max_y - cell.max.y).abs() < 0.01 {
+                    spans_full = true;
+                }
+            }
+        });
+        assert!(
+            spans_full,
+            "vertical box glyph must span the full cell height"
+        );
+    }
+
+    #[test]
+    fn non_box_char_returns_false() {
+        let ctx = egui::Context::default();
+        let layer = egui::LayerId::new(egui::Order::Background, egui::Id::new("box-test-none"));
+        let painter = egui::Painter::new(ctx, layer, Rect::EVERYTHING);
+        let cell = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 18.0));
+        assert!(!draw_box_char(&painter, 'A', cell, egui::Color32::WHITE));
+        assert!(!draw_box_char(&painter, 'é', cell, egui::Color32::WHITE));
+        assert!(!draw_box_char(
+            &painter,
+            '\u{24FF}',
+            cell,
+            egui::Color32::WHITE
+        ));
+        let mut painted = false;
+        painter.for_each_shape(|_| painted = true);
+        assert!(!painted);
+    }
+
+    /// Arms that actually touch the cell edges: (left, right, up, down).
+    fn painted_box_arms(ch: char) -> (bool, bool, bool, bool) {
+        let ctx = egui::Context::default();
+        let layer = egui::LayerId::new(
+            egui::Order::Background,
+            egui::Id::new(("box-arms", ch as u32)),
+        );
+        let painter = egui::Painter::new(ctx, layer, Rect::EVERYTHING);
+        let cell = Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 20.0));
+        assert!(draw_box_char(&painter, ch, cell, egui::Color32::WHITE));
+        let center = cell.center();
+        let eps = 0.05;
+        let mut left = false;
+        let mut right = false;
+        let mut up = false;
+        let mut down = false;
+        painter.for_each_shape(|clipped| {
+            if let egui::Shape::LineSegment { points, .. } = &clipped.shape {
+                let (a, b) = (points[0], points[1]);
+                let horizontal = (a.y - center.y).abs() < eps && (b.y - center.y).abs() < eps;
+                let vertical = (a.x - center.x).abs() < eps && (b.x - center.x).abs() < eps;
+                if horizontal {
+                    let min_x = a.x.min(b.x);
+                    let max_x = a.x.max(b.x);
+                    if (min_x - cell.left()).abs() < eps {
+                        left = true;
+                    }
+                    if (max_x - cell.right()).abs() < eps {
+                        right = true;
+                    }
+                }
+                if vertical {
+                    let min_y = a.y.min(b.y);
+                    let max_y = a.y.max(b.y);
+                    if (min_y - cell.top()).abs() < eps {
+                        up = true;
+                    }
+                    if (max_y - cell.bottom()).abs() < eps {
+                        down = true;
+                    }
+                }
+            }
+        });
+        (left, right, up, down)
+    }
+
+    #[test]
+    fn box_char_2555_connects_down_and_left() {
+        assert_eq!(painted_box_arms('\u{2555}'), (true, false, false, true));
+    }
+
+    #[test]
+    fn box_char_255b_connects_up_and_left() {
+        assert_eq!(painted_box_arms('\u{255B}'), (true, false, true, false));
+    }
+
+    #[test]
+    fn box_char_2567_connects_up_and_horizontal() {
+        assert_eq!(painted_box_arms('\u{2567}'), (true, true, true, false));
+    }
+
+    #[test]
+    fn box_char_256a_and_256b_are_full_crosses() {
+        assert_eq!(painted_box_arms('\u{256A}'), (true, true, true, true));
+        assert_eq!(painted_box_arms('\u{256B}'), (true, true, true, true));
+    }
+
+    #[test]
+    fn heavy_half_lines_point_in_named_direction() {
+        assert_eq!(painted_box_arms('\u{2578}'), (true, false, false, false));
+        assert_eq!(painted_box_arms('\u{2579}'), (false, false, true, false));
+        assert_eq!(painted_box_arms('\u{257A}'), (false, true, false, false));
+        assert_eq!(painted_box_arms('\u{257B}'), (false, false, false, true));
     }
 }

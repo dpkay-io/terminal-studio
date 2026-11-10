@@ -63,69 +63,7 @@ impl App {
             }
         }
 
-        {
-            use egui::{FontData, FontDefinitions, FontFamily};
-            let mut fonts = FontDefinitions::default();
-            let mut loaded = false;
-
-            #[cfg(target_os = "windows")]
-            {
-                let win_root =
-                    std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-                let font_path = std::path::PathBuf::from(&win_root)
-                    .join("Fonts")
-                    .join("seguisym.ttf");
-                if let Ok(data) = std::fs::read(&font_path) {
-                    fonts
-                        .font_data
-                        .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
-                    loaded = true;
-                }
-            }
-
-            #[cfg(target_os = "linux")]
-            {
-                let candidates = [
-                    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-                    "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
-                    "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
-                    "/usr/share/fonts/TTF/NotoSansSymbols2-Regular.ttf",
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-                    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-                ];
-                for path in candidates {
-                    if let Ok(data) = std::fs::read(path) {
-                        fonts
-                            .font_data
-                            .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
-                        loaded = true;
-                        break;
-                    }
-                }
-            }
-
-            #[cfg(target_os = "macos")]
-            {
-                let path = "/System/Library/Fonts/Apple Symbols.ttf";
-                if let Ok(data) = std::fs::read(path) {
-                    fonts
-                        .font_data
-                        .insert("symbol_fallback".to_owned(), FontData::from_owned(data));
-                    loaded = true;
-                }
-            }
-
-            if loaded {
-                for family in [&FontFamily::Proportional, &FontFamily::Monospace] {
-                    fonts
-                        .families
-                        .entry(family.clone())
-                        .or_default()
-                        .push("symbol_fallback".to_owned());
-                }
-                cc.egui_ctx.set_fonts(fonts);
-            }
-        }
+        crate::fonts::install_fonts(&cc.egui_ctx);
 
         let mgr = SessionManager::new(ctx.clone());
         let loaded_settings = AppSettings::load();
@@ -2010,7 +1948,7 @@ impl App {
         let bar_w = rect.width() - 8.0;
         let x0 = rect.min.x + 4.0;
 
-        let font = egui::FontId::monospace(theme::FONT_XS);
+        let font = egui::FontId::proportional(theme::FONT_XS);
         let t = theme::active();
 
         struct Row<'a> {
@@ -2069,7 +2007,7 @@ impl App {
             egui::pos2(rect.center().x, rect.max.y - 2.0),
             egui::Align2::CENTER_BOTTOM,
             &net_text,
-            egui::FontId::monospace(theme::FONT_XS),
+            egui::FontId::proportional(theme::FONT_XS),
             fg.linear_multiply(0.7),
         );
     }
