@@ -524,68 +524,60 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
     bindings
 }
 
-/// macOS: Command chords in the style of Terminal, iTerm2, VS Code and
-/// browsers, chosen to avoid every shortcut macOS reserves by default.
-/// Command never reaches the shell, so these never take keys from it.
+/// macOS: the same keys as every other platform, as in VS Code. The primary
+/// modifier is Command instead of Ctrl (`Shortcut::ctrl` already means that),
+/// and Shift and Option stay as they are. Command never reaches the shell, so
+/// these never take keys from it.
+///
+/// The only departures are chords macOS itself owns; see
+/// [`mac_system_override`].
 fn mac_default_bindings() -> Vec<(Shortcut, AppAction)> {
-    use egui::Key::*;
-    let cmd = Shortcut::primary;
-    let shift_cmd = |key| Shortcut::primary(key).with_shift();
-    let opt_cmd = |key| Shortcut::primary(key).with_alt();
-    let ctrl_cmd = |key| Shortcut::primary(key).with_control();
-    let mut bindings = vec![
-        (cmd(B), AppAction::ToggleLeftSidebar),
-        (opt_cmd(B), AppAction::ToggleRightSidebar),
-        (
-            Shortcut::key(Backtick).with_control(),
-            AppAction::FocusTerminal,
-        ),
-        (cmd(T), AppAction::NewTerminalTab),
-        (cmd(W), AppAction::CloseCurrentPane),
-        (shift_cmd(OpenBracket), AppAction::PreviousTab),
-        (shift_cmd(CloseBracket), AppAction::NextTab),
-        (cmd(D), AppAction::SplitHorizontal),
-        (shift_cmd(D), AppAction::SplitVertical),
-        (cmd(Comma), AppAction::OpenSettings),
-        (ctrl_cmd(CloseBracket), AppAction::NextWorkspace),
-        (ctrl_cmd(OpenBracket), AppAction::PrevWorkspace),
-        (shift_cmd(E), AppAction::RightTabDirectory),
-        (shift_cmd(G), AppAction::RightTabGitDiff),
-        // Shift-Command-J/K/N are commonly taken by global hotkey utilities.
-        (opt_cmd(N), AppAction::ToggleNotes),
-        (opt_cmd(T), AppAction::DuplicateSession),
-        (cmd(C), AppAction::CopySelection),
-        (shift_cmd(L), AppAction::FocusSessionSearch),
-        (shift_cmd(P), AppAction::CommandPalette),
-        (cmd(P), AppAction::OpenFileFinder),
-        (cmd(Slash), AppAction::ToggleShortcutHelp),
-        (shift_cmd(O), AppAction::OpenQuickSwitcher),
-        (cmd(F), AppAction::SearchTerminal),
-        (opt_cmd(F), AppAction::SearchAllSessions),
-        (shift_cmd(Enter), AppAction::ZoomPane),
-        (shift_cmd(T), AppAction::ReopenClosedSession),
-        (opt_cmd(ArrowRight), AppAction::FocusNextGroup),
-        (opt_cmd(ArrowLeft), AppAction::FocusPrevGroup),
-        (opt_cmd(ArrowDown), AppAction::FocusGroupDown),
-        (opt_cmd(ArrowUp), AppAction::FocusGroupUp),
-        (
-            opt_cmd(ArrowRight).with_shift(),
-            AppAction::MoveTabToNextGroup,
-        ),
-        (
-            opt_cmd(ArrowLeft).with_shift(),
-            AppAction::MoveTabToPrevGroup,
-        ),
-        (
-            opt_cmd(ArrowDown).with_shift(),
-            AppAction::MoveTabToDownGroup,
-        ),
-        (opt_cmd(ArrowUp).with_shift(), AppAction::MoveTabToUpGroup),
-        (opt_cmd(R), AppAction::RevealInExplorer),
-        (ctrl_cmd(F), AppAction::ToggleFullscreen),
-    ];
-    bindings.extend(tab_bindings(cmd));
-    bindings
+    standard_default_bindings()
+        .into_iter()
+        .map(|(shortcut, action)| {
+            let mac = mac_system_override(action, &shortcut).unwrap_or(shortcut);
+            (mac, action)
+        })
+        .collect()
+}
+
+/// The Mac chord for actions whose standard chord macOS reserves. Every
+/// override keeps the same key and changes only modifiers, except full
+/// screen, which uses the Mac's own standard chord.
+fn mac_system_override(action: AppAction, standard: &Shortcut) -> Option<Shortcut> {
+    let without_shift = Shortcut {
+        shift: false,
+        ..standard.clone()
+    };
+    // The physical Control key in place of Command: the same chord as on
+    // Windows and Linux.
+    let with_control = Shortcut {
+        ctrl: false,
+        control: true,
+        ..standard.clone()
+    };
+    match action {
+        // Shift-Command-3/4/5/6 take screenshots; Command-1…9 is the Mac norm.
+        _ if action.tab_index().is_some() => Some(without_shift),
+        // Shift-Command-/ opens the Help menu search.
+        AppAction::ToggleShortcutHelp => Some(without_shift),
+        // Command-` (with or without Shift) cycles windows; VS Code uses Control-`.
+        AppAction::FocusTerminal => Some(Shortcut {
+            shift: false,
+            ..with_control
+        }),
+        // Every Command-Space chord is taken (Spotlight, Finder search, input
+        // sources, character viewer).
+        AppAction::OpenQuickSwitcher => Some(with_control),
+        // Option chords alone type characters on a Mac; VS Code adds Command.
+        AppAction::RevealInExplorer => Some(Shortcut {
+            ctrl: true,
+            ..without_shift
+        }),
+        // F11 shows the desktop on a Mac; Control-Command-F is the Mac standard.
+        AppAction::ToggleFullscreen => Some(Shortcut::primary(egui::Key::F).with_control()),
+        _ => None,
+    }
 }
 
 pub fn key_name(key: egui::Key) -> &'static str {
@@ -1139,28 +1131,63 @@ mod tests {
         }
     }
 
+    /// Actions whose Mac key differs from every other platform's, because
+    /// macOS owns the standard key (F11 shows the desktop).
+    const MAC_DIFFERENT_KEY: &[AppAction] = &[AppAction::ToggleFullscreen];
+
     #[test]
-    fn familiar_mac_chords() {
+    fn mac_uses_the_same_key_as_other_platforms() {
+        let standard = standard_default_bindings();
+        for (mac, action) in mac_default_bindings() {
+            if MAC_DIFFERENT_KEY.contains(&action) {
+                continue;
+            }
+            let (other, _) = standard
+                .iter()
+                .find(|(_, a)| *a == action)
+                .expect("same actions on every platform");
+            assert_eq!(mac.key, other.key, "{action:?} uses a different key on Mac");
+        }
+    }
+
+    #[test]
+    fn mac_only_swaps_ctrl_for_command_unless_macos_owns_the_chord() {
+        let standard = standard_default_bindings();
+        let mac = mac_default_bindings();
+        assert_eq!(mac.len(), standard.len());
+        for ((mac_chord, action), (other, _)) in mac.iter().zip(&standard) {
+            if mac_system_override(*action, other).is_none() {
+                // `ctrl` is the primary modifier, so equal chords mean
+                // Command on the Mac where it is Ctrl elsewhere.
+                assert_eq!(mac_chord, other, "{action:?} changed on Mac");
+            }
+        }
+    }
+
+    #[test]
+    fn mac_chords_follow_the_shared_keymap() {
         let find = |action| {
             mac_default_bindings()
                 .into_iter()
                 .find(|(_, a)| *a == action)
                 .map(|(s, _)| s.label_on(MAC))
         };
-        assert_eq!(
-            find(AppAction::NewTerminalTab).as_deref(),
-            Some("\u{2318}T")
-        );
-        assert_eq!(
-            find(AppAction::CloseCurrentPane).as_deref(),
-            Some("\u{2318}W")
-        );
-        assert_eq!(find(AppAction::SwitchToTab1).as_deref(), Some("\u{2318}1"));
-        assert_eq!(find(AppAction::OpenSettings).as_deref(), Some("\u{2318},"));
-        assert_eq!(
-            find(AppAction::ToggleFullscreen).as_deref(),
-            Some("\u{2303}\u{2318}F")
-        );
+        let cases = [
+            (AppAction::NewTerminalTab, "\u{21E7}\u{2318}N"),
+            (AppAction::CloseCurrentPane, "\u{21E7}\u{2318}W"),
+            (AppAction::SplitHorizontal, "\u{21E7}\u{2318}\\"),
+            (AppAction::CommandPalette, "\u{21E7}\u{2318}P"),
+            (AppAction::OpenFileFinder, "\u{2318}P"),
+            (AppAction::SwitchToTab1, "\u{2318}1"),
+            (AppAction::ToggleShortcutHelp, "\u{2318}/"),
+            (AppAction::FocusTerminal, "\u{2303}`"),
+            (AppAction::OpenQuickSwitcher, "\u{2303}\u{21E7}Space"),
+            (AppAction::RevealInExplorer, "\u{2325}\u{2318}R"),
+            (AppAction::ToggleFullscreen, "\u{2303}\u{2318}F"),
+        ];
+        for (action, label) in cases {
+            assert_eq!(find(action).as_deref(), Some(label), "{action:?}");
+        }
     }
 
     // ── Matching ───────────────────────────────────────────────────────────
