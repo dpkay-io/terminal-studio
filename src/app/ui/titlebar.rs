@@ -103,6 +103,7 @@ fn paint_titlebar_title(
 
     ui.allocate_ui_at_rect(content_rect, |ui| {
         ui.set_clip_rect(clip_rect);
+        ui.style_mut().interaction.selectable_labels = false;
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             for (index, (text, color)) in segments.into_iter().enumerate() {
                 if index > 0 {
@@ -115,6 +116,39 @@ fn paint_titlebar_title(
                 ui_kit::truncate_label(ui, text, font.clone(), color, segment_width);
             }
         });
+    });
+}
+
+fn paint_switcher_contents(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    icon_sz: f32,
+    icon_color: egui::Color32,
+    shortcut: Option<&crate::shortcuts::Shortcut>,
+) {
+    let t = theme::active();
+    ui.allocate_ui_at_rect(rect.shrink2(egui::vec2(theme::SP_2, theme::SP_0)), |ui| {
+        ui.set_clip_rect(rect);
+        ui.style_mut().interaction.selectable_labels = false;
+        ui.spacing_mut().item_spacing.x = theme::SP_2;
+        ui.with_layout(
+            egui::Layout::left_to_right(egui::Align::Center).with_main_align(egui::Align::Center),
+            |ui| {
+                ui.label(ui_kit::icon(
+                    ui_kit::icon::ARROW_LEFT_RIGHT,
+                    icon_sz,
+                    icon_color,
+                ));
+                ui.label(
+                    egui::RichText::new("Switch")
+                        .size(theme::FONT_SM)
+                        .color(t.fg),
+                );
+                if let Some(shortcut) = shortcut {
+                    ui_kit::kbd_combo(ui, shortcut);
+                }
+            },
+        );
     });
 }
 
@@ -379,34 +413,13 @@ impl App {
                             theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_raised, sw_hover_t)
                         };
                         painter.rect_filled(sw_tbr, theme::R_MD, sw_bg);
-                        ui.allocate_ui_at_rect(
-                            sw_tbr.shrink2(egui::vec2(theme::SP_2, theme::SP_0)),
-                            |ui| {
-                                ui.set_clip_rect(sw_tbr);
-                                ui.spacing_mut().item_spacing.x = theme::SP_2;
-                                ui.with_layout(
-                                    egui::Layout::left_to_right(egui::Align::Center)
-                                        .with_main_align(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(ui_kit::icon(
-                                            ui_kit::icon::ARROW_LEFT_RIGHT,
-                                            mac_icon_sz,
-                                            tb_fg,
-                                        ));
-                                        ui.label(
-                                            egui::RichText::new("Switch")
-                                                .size(theme::FONT_SM)
-                                                .color(t.fg),
-                                        );
-                                        if let Some(shortcut) = self
-                                            .shortcut_registry
-                                            .find_shortcut(AppAction::OpenQuickSwitcher)
-                                        {
-                                            ui_kit::kbd_combo(ui, shortcut);
-                                        }
-                                    },
-                                );
-                            },
+                        paint_switcher_contents(
+                            ui,
+                            sw_tbr,
+                            mac_icon_sz,
+                            tb_fg,
+                            self.shortcut_registry
+                                .find_shortcut(AppAction::OpenQuickSwitcher),
                         );
                         if sw_resp.clicked() {
                             self.show_quick_switcher = !self.show_quick_switcher;
@@ -745,34 +758,13 @@ impl App {
                             theme::lerp_color(egui::Color32::TRANSPARENT, t.bg_raised, sw_hover_t)
                         };
                         painter.rect_filled(br, theme::R_MD, bg);
-                        ui.allocate_ui_at_rect(
-                            br.shrink2(egui::vec2(theme::SP_2, theme::SP_0)),
-                            |ui| {
-                                ui.set_clip_rect(br);
-                                ui.spacing_mut().item_spacing.x = theme::SP_2;
-                                ui.with_layout(
-                                    egui::Layout::left_to_right(egui::Align::Center)
-                                        .with_main_align(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(ui_kit::icon(
-                                            ui_kit::icon::ARROW_LEFT_RIGHT,
-                                            icon_sz,
-                                            tb_fg,
-                                        ));
-                                        ui.label(
-                                            egui::RichText::new("Switch")
-                                                .size(theme::FONT_SM)
-                                                .color(t.fg),
-                                        );
-                                        if let Some(shortcut) = self
-                                            .shortcut_registry
-                                            .find_shortcut(AppAction::OpenQuickSwitcher)
-                                        {
-                                            ui_kit::kbd_combo(ui, shortcut);
-                                        }
-                                    },
-                                );
-                            },
+                        paint_switcher_contents(
+                            ui,
+                            br,
+                            icon_sz,
+                            tb_fg,
+                            self.shortcut_registry
+                                .find_shortcut(AppAction::OpenQuickSwitcher),
                         );
                         if resp.clicked() {
                             self.show_quick_switcher = !self.show_quick_switcher;
@@ -1119,9 +1111,9 @@ mod tests {
     fn macos_title_clip_starts_after_switcher() {
         let bar = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 28.0));
         let switcher_end_x = 220.0;
-        let clip = title_clip_rect(bar, switcher_end_x, 600.0);
+        let clip = macos_title_clip_rect(bar, switcher_end_x, 600.0, None);
 
-        assert!(clip.min.x >= switcher_end_x);
+        assert_eq!(clip.min.x, switcher_end_x + theme::TITLEBAR_ICON_GAP);
     }
 
     #[test]
@@ -1145,5 +1137,61 @@ mod tests {
         let clip = macos_title_clip_rect(bar, switcher_end_x, sysmon_start_x, Some(update_start_x));
 
         assert_eq!(clip.max.x, update_start_x - theme::TITLEBAR_ICON_GAP);
+    }
+
+    #[test]
+    fn switcher_label_click_reaches_overlay() {
+        let ctx = crate::ui_kit::test_harness::ctx_with_fonts();
+        let overlay = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(180.0, 28.0));
+        let shortcut = crate::shortcuts::Shortcut {
+            ctrl: true,
+            shift: false,
+            alt: false,
+            key: egui::Key::P,
+        };
+        let mut overlay_clicked = false;
+        let _ = crate::ui_kit::test_harness::click_at(&ctx, overlay.center(), |ui| {
+            let response = ui.interact(
+                overlay,
+                egui::Id::new("tb_switcher_test"),
+                egui::Sense::click(),
+            );
+            paint_switcher_contents(ui, overlay, 12.0, egui::Color32::WHITE, Some(&shortcut));
+            if response.clicked() {
+                overlay_clicked = true;
+            }
+        });
+
+        assert!(
+            overlay_clicked,
+            "Switch labels and shortcut chips must not steal the overlay click"
+        );
+    }
+
+    #[test]
+    fn title_labels_do_not_steal_bar_clicks() {
+        let ctx = crate::ui_kit::test_harness::ctx_with_fonts();
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 28.0));
+        let clip = egui::Rect::from_min_size(egui::pos2(80.0, 0.0), egui::vec2(240.0, 28.0));
+        let session = Some("main".to_string());
+        let workspace = Some("workspace".to_string());
+        let branch = Some("feat".to_string());
+        let mut bar_clicked = false;
+        let _ = crate::ui_kit::test_harness::click_at(&ctx, clip.center(), |ui| {
+            let response = ui.interact(
+                bar,
+                egui::Id::new("tb_bar_test"),
+                egui::Sense::click_and_drag(),
+            );
+            paint_titlebar_title(ui, clip, &session, &workspace, &branch);
+            if response.clicked() {
+                bar_clicked = true;
+            }
+        });
+
+        assert!(
+            bar_clicked,
+            "title labels must not steal titlebar drag/click hits"
+        );
     }
 }
