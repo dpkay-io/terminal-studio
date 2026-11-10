@@ -1,9 +1,127 @@
 use super::super::settings::CursorStyle;
 use super::super::App;
+use super::settings::theme_grid::{grid_columns, theme_card};
 use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
+
+const SETTINGS_DIALOG_MIN_WIDTH: f32 = 560.0;
+const SETTINGS_DIALOG_MAX_WIDTH: f32 = 680.0;
+
+#[derive(Clone, Copy)]
+struct ToggleSettingDescriptor {
+    label: &'static str,
+    hint: &'static str,
+}
+
+const TOGGLE_SETTINGS: [ToggleSettingDescriptor; 6] = [
+    ToggleSettingDescriptor {
+        label: "Restore last session on launch",
+        hint: "When disabled, always opens a fresh session on launch.",
+    },
+    ToggleSettingDescriptor {
+        label: "Save terminal output on exit",
+        hint: "Preserves terminal scrollback so it is visible when the app restarts.",
+    },
+    ToggleSettingDescriptor {
+        label: "Remember closed sessions",
+        hint: "Keeps recently closed terminal sessions available to restore.",
+    },
+    ToggleSettingDescriptor {
+        label: "Show system monitor in titlebar",
+        hint: "Displays live CPU, memory, and network activity in the titlebar.",
+    },
+    ToggleSettingDescriptor {
+        label: "Cursor blink",
+        hint: "Animates the terminal cursor while the terminal is focused.",
+    },
+    ToggleSettingDescriptor {
+        label: "Scroll to bottom on new output",
+        hint: "Follows new terminal output unless you have scrolled up.",
+    },
+];
+
+fn whole_point_font_size(value: f32) -> f32 {
+    value.round().clamp(8.0, 28.0)
+}
+
+fn section_header(ui: &mut egui::Ui, label: &str) {
+    ui.label(
+        egui::RichText::new(label)
+            .size(theme::FONT_XS)
+            .color(theme::active().fg_muted)
+            .strong(),
+    );
+}
+
+fn section_break(ui: &mut egui::Ui) {
+    ui.add_space(theme::SP_6);
+    let separator = ui
+        .allocate_space(egui::vec2(ui.available_width(), theme::STROKE_THIN))
+        .1;
+    ui_kit::gradient_separator(ui.painter(), separator);
+    ui.add_space(theme::SP_4);
+}
+
+fn toggle_setting_row(
+    ui: &mut egui::Ui,
+    descriptor: ToggleSettingDescriptor,
+    hint: impl Into<String>,
+    value: &mut bool,
+) -> egui::Response {
+    let hint = hint.into();
+    let previous_value = *value;
+    let row = ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new(descriptor.label)
+                    .size(theme::FONT_MD)
+                    .color(theme::active().fg),
+            );
+            ui.label(
+                egui::RichText::new(hint)
+                    .size(theme::FONT_SM)
+                    .color(theme::active().fg_muted),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui_kit::toggle_switch(ui, value)
+        })
+        .inner
+    });
+    let mut response = row.inner;
+    if *value != previous_value {
+        response.mark_changed();
+    }
+    response
+}
+
+fn setting_control_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    add_control: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .size(theme::FONT_MD)
+                .color(theme::active().fg),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.scope(|ui| {
+                let bg = theme::active().bg_base;
+                ui.visuals_mut().widgets.inactive.bg_fill = bg;
+                ui.visuals_mut().widgets.hovered.bg_fill = bg;
+                ui.visuals_mut().widgets.active.bg_fill = bg;
+                add_control(ui)
+            })
+            .inner
+        })
+        .inner
+    })
+    .inner
+}
 
 fn closed_sessions_hint(registry: &ShortcutRegistry) -> String {
     let shortcut = registry
@@ -25,8 +143,8 @@ impl App {
                 ui_kit::DialogConfig {
                     width: ui_kit::DialogWidth::Responsive {
                         pct: 0.38,
-                        min: 320.0,
-                        max: 520.0,
+                        min: SETTINGS_DIALOG_MIN_WIDTH,
+                        max: SETTINGS_DIALOG_MAX_WIDTH,
                     },
                     max_height: dialog_h,
                     anchor: ui_kit::DialogAnchor::Center,
@@ -52,79 +170,75 @@ impl App {
                         .show(ui, |ui| {
                             ui.add_space(theme::SP_4);
 
-                            // Restore last session
                             let mut restore = self.settings.restore_last_session;
-                            if ui
-                                .checkbox(&mut restore, "Restore last session on launch")
-                                .changed()
+                            if toggle_setting_row(
+                                ui,
+                                TOGGLE_SETTINGS[0],
+                                TOGGLE_SETTINGS[0].hint,
+                                &mut restore,
+                            )
+                            .changed()
                             {
                                 self.settings.restore_last_session = restore;
                                 settings_changed = true;
                             }
                             ui.add_space(theme::SP_2);
-                            ui.label(ui_kit::label_muted(
-                                "When disabled, always opens a fresh session on launch.",
-                            ));
 
-                            ui.add_space(theme::SP_4);
-
-                            // Save scrollback on exit
                             {
                                 let mut save_exit = self.settings.save_scrollback_on_exit;
-                                if ui
-                                    .checkbox(&mut save_exit, "Save terminal output on exit")
-                                    .changed()
+                                if toggle_setting_row(
+                                    ui,
+                                    TOGGLE_SETTINGS[1],
+                                    TOGGLE_SETTINGS[1].hint,
+                                    &mut save_exit,
+                                )
+                                .changed()
                                 {
                                     self.settings.save_scrollback_on_exit = save_exit;
                                     settings_changed = true;
                                 }
-                                ui.add_space(theme::SP_2);
-                                ui.label(ui_kit::label_muted(
-                                    "Preserves terminal scrollback so it is visible when the app restarts.",
-                                ));
                             }
 
-                            ui.add_space(theme::SP_4);
+                            ui.add_space(theme::SP_2);
 
-                            // Save scrollback on close
                             {
                                 let mut save_close = self.settings.save_scrollback_on_close;
-                                if ui
-                                    .checkbox(&mut save_close, "Remember closed sessions")
-                                    .changed()
+                                if toggle_setting_row(
+                                    ui,
+                                    TOGGLE_SETTINGS[2],
+                                    closed_sessions_hint(&self.shortcut_registry),
+                                    &mut save_close,
+                                )
+                                .changed()
                                 {
                                     self.settings.save_scrollback_on_close = save_close;
                                     settings_changed = true;
                                 }
-                                ui.add_space(theme::SP_2);
-                                ui.label(ui_kit::label_muted(closed_sessions_hint(
-                                    &self.shortcut_registry,
-                                )));
                             }
 
                             ui.add_space(theme::SP_4);
 
-                            // Max closed sessions
-                            ui.horizontal(|ui| {
-                                ui.label("Max closed sessions to remember:");
-                                let mut max = self.settings.max_closed_sessions;
-                                if ui
-                                    .add(egui::DragValue::new(&mut max).range(5..=100).speed(1.0))
-                                    .changed()
-                                {
-                                    self.settings.max_closed_sessions = max;
-                                    settings_changed = true;
-                                }
-                            });
+                            let mut max = self.settings.max_closed_sessions;
+                            if setting_control_row(ui, "Max closed sessions to remember", |ui| {
+                                ui.add(egui::DragValue::new(&mut max).range(5..=100).speed(1.0))
+                            })
+                            .changed()
+                            {
+                                self.settings.max_closed_sessions = max;
+                                settings_changed = true;
+                            }
 
                             ui.add_space(theme::SP_4);
 
-                            // Show system monitor
                             {
                                 let mut show = self.settings.show_sys_monitor;
-                                if ui
-                                    .checkbox(&mut show, "Show system monitor in titlebar")
-                                    .changed()
+                                if toggle_setting_row(
+                                    ui,
+                                    TOGGLE_SETTINGS[3],
+                                    TOGGLE_SETTINGS[3].hint,
+                                    &mut show,
+                                )
+                                .changed()
                                 {
                                     self.settings.show_sys_monitor = show;
                                     if show {
@@ -142,234 +256,137 @@ impl App {
                                 }
                             }
 
-                            ui.add_space(theme::SP_6);
-                            {
-                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
-                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
-                            }
-                            ui.add_space(theme::SP_4);
+                            section_break(ui);
 
-                            // Theme picker
-                            ui.label(
-                                egui::RichText::new("THEME")
-                                    .size(theme::FONT_XS)
-                                    .color(theme::active().fg_secondary)
-                                    .strong(),
-                            );
+                            section_header(ui, "THEME");
                             ui.add_space(theme::SP_2);
                             let current = self.settings.theme_id;
-                            egui::ScrollArea::vertical()
-                                .id_source("settings_theme_scroll")
-                                .max_height(160.0)
-                                .show(ui, |ui| {
-                                    let swatch_outer_w = 52.0 + theme::SP_2 * 2.0;
-                                    let swatch_color_h = 20.0;
-                                    let label_h = theme::FONT_XS + theme::SP_1;
-                                    let swatch_outer_h = swatch_color_h + label_h + theme::SP_2 * 2.0;
-                                    let available_w = ui.available_width();
-                                    let cols = ((available_w / swatch_outer_w).floor() as usize).max(1);
-
-                                    let themes: Vec<_> = theme::ThemeId::ALL.to_vec();
-                                    for row_themes in themes.chunks(cols) {
-                                        ui.horizontal(|ui| {
-                                            for &id in row_themes {
-                                                let t_data = &theme::all_themes()[id.index()];
-                                                let is_selected = id == current;
-                                                let t_cur = theme::active();
-
-                                                let (outer_rect, resp) = ui.allocate_exact_size(
-                                                    egui::vec2(swatch_outer_w, swatch_outer_h),
-                                                    egui::Sense::click(),
-                                                );
-
-                                                let bg_color = if resp.hovered() {
-                                                    t_cur.surface1
-                                                } else {
-                                                    t_cur.surface0
-                                                };
-                                                ui.painter().rect_filled(outer_rect, theme::R_MD, bg_color);
-
-                                                if is_selected {
-                                                    ui.painter().rect_stroke(
-                                                        outer_rect,
-                                                        theme::R_MD,
-                                                        egui::Stroke::new(theme::STROKE_THIN, t_cur.accent),
-                                                    );
-                                                }
-
-                                                let color_rect = egui::Rect::from_min_size(
-                                                    egui::pos2(
-                                                        outer_rect.min.x + theme::SP_2,
-                                                        outer_rect.min.y + theme::SP_2,
-                                                    ),
-                                                    egui::vec2(52.0, swatch_color_h),
-                                                );
-                                                let sw = color_rect.width() / 4.0;
-                                                for (i, &color) in [t_data.base, t_data.surface0, t_data.blue, t_data.green]
-                                                    .iter()
-                                                    .enumerate()
-                                                {
-                                                    let seg = egui::Rect::from_min_size(
-                                                        egui::pos2(
-                                                            color_rect.min.x + i as f32 * sw,
-                                                            color_rect.min.y,
-                                                        ),
-                                                        egui::vec2(sw, swatch_color_h),
-                                                    );
-                                                    let rounding = if i == 0 {
-                                                        egui::Rounding {
-                                                            nw: theme::R_SM,
-                                                            sw: theme::R_SM,
-                                                            ne: 0.0,
-                                                            se: 0.0,
-                                                        }
-                                                    } else if i == 3 {
-                                                        egui::Rounding {
-                                                            nw: 0.0,
-                                                            sw: 0.0,
-                                                            ne: theme::R_SM,
-                                                            se: theme::R_SM,
-                                                        }
-                                                    } else {
-                                                        egui::Rounding::ZERO
-                                                    };
-                                                    ui.painter().rect_filled(seg, rounding, color);
-                                                }
-
-                                                let name_color = if is_selected {
-                                                    t_cur.text
-                                                } else {
-                                                    t_cur.fg_muted
-                                                };
-                                                let name_pos = egui::pos2(
-                                                    color_rect.min.x,
-                                                    color_rect.max.y + theme::SP_1,
-                                                );
-                                                ui.painter().text(
-                                                    name_pos,
-                                                    egui::Align2::LEFT_TOP,
-                                                    id.name(),
-                                                    egui::FontId::proportional(theme::FONT_XS),
-                                                    name_color,
-                                                );
-
-                                                if resp.clicked() && !is_selected {
-                                                    self.settings.theme_id = id;
-                                                    theme::set_theme(id);
-                                                    settings_changed = true;
-                                                }
+                            let columns = grid_columns(theme::ThemeId::ALL.len());
+                            let card_width = (ui.available_width()
+                                - theme::SP_2 * (columns.saturating_sub(1)) as f32)
+                                / columns as f32;
+                            for row in theme::all_themes().chunks(columns) {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = theme::SP_2;
+                                    for theme_data in row {
+                                        ui.allocate_ui(egui::vec2(card_width, 0.0), |ui| {
+                                            ui.set_width(card_width);
+                                            if theme_card(ui, theme_data, theme_data.id == current)
+                                                .clicked()
+                                                && theme_data.id != current
+                                            {
+                                                self.settings.theme_id = theme_data.id;
+                                                theme::set_theme(theme_data.id);
+                                                settings_changed = true;
                                             }
                                         });
-                                        ui.add_space(theme::SP_1);
                                     }
                                 });
+                                ui.add_space(theme::SP_1);
+                            }
 
                             // ── Terminal ──────────────────────────────────────────
-                            ui.add_space(theme::SP_6);
-                            {
-                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
-                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
+                            section_break(ui);
+                            section_header(ui, "TERMINAL");
+                            ui.add_space(theme::SP_2);
+
+                            let mut font_size = self.settings.font_size;
+                            let font_response = setting_control_row(ui, "Font size", |ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut font_size)
+                                        .range(8.0..=28.0)
+                                        .speed(1.0)
+                                        .fixed_decimals(0),
+                                )
+                            });
+                            if font_response.changed() {
+                                self.settings.font_size = whole_point_font_size(font_size);
+                                self.cached_cell_size = None;
                             }
-                            ui.add_space(theme::SP_4);
-                            ui.label(
-                                egui::RichText::new("TERMINAL")
-                                    .size(theme::FONT_XS)
-                                    .color(theme::active().fg_secondary)
-                                    .strong(),
-                            );
+                            if font_response.drag_stopped()
+                                || (font_response.changed() && !font_response.dragged())
+                            {
+                                settings_changed = true;
+                            }
                             ui.add_space(theme::SP_2);
 
-                            // Font size
-                            ui.horizontal(|ui| {
-                                ui.label("Font size:");
-                                let mut fs = self.settings.font_size;
-                                if ui
-                                    .add(egui::DragValue::new(&mut fs).range(8.0..=28.0).speed(0.1))
-                                    .changed()
-                                {
-                                    self.settings.font_size = fs;
-                                    settings_changed = true;
-                                }
+                            let mut scrollback_lines = self.settings.scrollback_lines;
+                            if setting_control_row(ui, "Scrollback lines", |ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut scrollback_lines)
+                                        .range(1_000..=1_000_000)
+                                        .speed(1000.0),
+                                )
+                            })
+                            .changed()
+                            {
+                                self.settings.scrollback_lines = scrollback_lines;
+                                settings_changed = true;
+                            }
+                            ui.add_space(theme::SP_2);
+
+                            let previous_cursor_style = self.settings.cursor_style;
+                            setting_control_row(ui, "Cursor", |ui| {
+                                ui_kit::segmented(
+                                    ui,
+                                    &mut self.settings.cursor_style,
+                                    &[
+                                        (CursorStyle::Block, "Block"),
+                                        (CursorStyle::Beam, "Beam"),
+                                        (CursorStyle::Underline, "Underline"),
+                                    ],
+                                )
                             });
+                            if self.settings.cursor_style != previous_cursor_style {
+                                settings_changed = true;
+                            }
                             ui.add_space(theme::SP_2);
 
-                            // Scrollback lines
-                            ui.horizontal(|ui| {
-                                ui.label("Scrollback lines:");
-                                let mut sl = self.settings.scrollback_lines;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut sl)
-                                            .range(1_000..=1_000_000)
-                                            .speed(1000.0),
-                                    )
-                                    .changed()
-                                {
-                                    self.settings.scrollback_lines = sl;
-                                    settings_changed = true;
-                                }
-                            });
-                            ui.add_space(theme::SP_2);
-
-                            // Cursor style
-                            ui.horizontal(|ui| {
-                                ui.label("Cursor:");
-                                let styles = [
-                                    CursorStyle::Block,
-                                    CursorStyle::Underline,
-                                    CursorStyle::Beam,
-                                ];
-                                let names = ["Block", "Underline", "Beam"];
-                                for (style, name) in styles.iter().zip(names.iter()) {
-                                    if ui
-                                        .selectable_label(
-                                            self.settings.cursor_style == *style,
-                                            *name,
-                                        )
-                                        .clicked()
-                                    {
-                                        self.settings.cursor_style = *style;
-                                        settings_changed = true;
-                                    }
-                                }
-                            });
-                            ui.add_space(theme::SP_2);
-
-                            // Cursor blink
                             {
                                 let mut blink = self.settings.cursor_blink;
-                                if ui.checkbox(&mut blink, "Cursor blink").changed() {
+                                if toggle_setting_row(
+                                    ui,
+                                    TOGGLE_SETTINGS[4],
+                                    TOGGLE_SETTINGS[4].hint,
+                                    &mut blink,
+                                )
+                                .changed()
+                                {
                                     self.settings.cursor_blink = blink;
                                     settings_changed = true;
                                 }
                             }
                             ui.add_space(theme::SP_2);
 
-                            // Scroll on output
                             {
-                                let mut soo = self.settings.scroll_on_output;
-                                if ui
-                                    .checkbox(&mut soo, "Scroll to bottom on new output")
-                                    .changed()
+                                let mut scroll_on_output = self.settings.scroll_on_output;
+                                if toggle_setting_row(
+                                    ui,
+                                    TOGGLE_SETTINGS[5],
+                                    TOGGLE_SETTINGS[5].hint,
+                                    &mut scroll_on_output,
+                                )
+                                .changed()
                                 {
-                                    self.settings.scroll_on_output = soo;
+                                    self.settings.scroll_on_output = scroll_on_output;
                                     settings_changed = true;
                                 }
                             }
                             ui.add_space(theme::SP_2);
 
-                            // Scroll lines per tick
-                            ui.horizontal(|ui| {
-                                ui.label("Lines per scroll tick:");
-                                let mut sl = self.settings.scroll_lines;
-                                if ui
-                                    .add(egui::DragValue::new(&mut sl).range(1..=20).speed(0.1))
-                                    .changed()
-                                {
-                                    self.settings.scroll_lines = sl;
-                                    settings_changed = true;
-                                }
-                            });
+                            let mut scroll_lines = self.settings.scroll_lines;
+                            if setting_control_row(ui, "Lines per scroll tick", |ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut scroll_lines)
+                                        .range(1..=20)
+                                        .speed(1.0),
+                                )
+                            })
+                            .changed()
+                            {
+                                self.settings.scroll_lines = scroll_lines;
+                                settings_changed = true;
+                            }
                             ui.add_space(theme::SP_2);
 
                             // Default shell
@@ -413,18 +430,8 @@ impl App {
                             }
 
                             // ── Logging ──────────────────────────────────────────
-                            ui.add_space(theme::SP_6);
-                            {
-                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
-                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
-                            }
-                            ui.add_space(theme::SP_4);
-                            ui.label(
-                                egui::RichText::new("LOGGING")
-                                    .size(theme::FONT_XS)
-                                    .color(theme::active().fg_secondary)
-                                    .strong(),
-                            );
+                            section_break(ui);
+                            section_header(ui, "LOGGING");
                             ui.add_space(theme::SP_2);
 
                             ui.horizontal(|ui| {
@@ -436,7 +443,11 @@ impl App {
                                         for &level in crate::logging::LogLevel::ALL {
                                             let resp = ui.selectable_label(
                                                 current_level == level,
-                                                format!("{} — {}", level.name(), level.description()),
+                                                format!(
+                                                    "{} — {}",
+                                                    level.name(),
+                                                    level.description()
+                                                ),
                                             );
                                             if resp.clicked() && current_level != level {
                                                 self.settings.log_level = level;
@@ -458,18 +469,8 @@ impl App {
                             }
 
                             // ── About / Updates ───────────────────────────────────
-                            ui.add_space(theme::SP_6);
-                            {
-                                let sep_rect = ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
-                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
-                            }
-                            ui.add_space(theme::SP_4);
-                            ui.label(
-                                egui::RichText::new("ABOUT")
-                                    .size(theme::FONT_XS)
-                                    .color(theme::active().fg_secondary)
-                                    .strong(),
-                            );
+                            section_break(ui);
+                            section_header(ui, "ABOUT");
                             ui.add_space(theme::SP_2);
                             ui.horizontal(|ui| {
                                 ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
@@ -487,7 +488,7 @@ impl App {
                                                     ui.label(
                                                         egui::RichText::new("Up to date")
                                                             .size(theme::FONT_SM)
-                                                            .color(theme::active().green),
+                                                            .color(theme::active().success),
                                                     );
                                                     if ui.small_button("Check again").clicked() {
                                                         uc.trigger_check();
@@ -524,7 +525,7 @@ impl App {
                                                     ui.label(
                                                         egui::RichText::new(msg)
                                                             .size(theme::FONT_XS)
-                                                            .color(theme::active().red),
+                                                            .color(theme::active().danger_text),
                                                     );
                                                     if ui.small_button("Retry").clicked() {
                                                         uc.trigger_check();
@@ -578,6 +579,64 @@ mod tests {
     use super::*;
     use crate::keybindings::KeybindingsConfig;
     use crate::shortcuts::ShortcutRegistry;
+    use crate::theme::{self, ThemeId};
+    use crate::ui_kit::test_harness::{ctx_with_fonts, run_ui};
+
+    #[test]
+    fn theme_grid_is_four_columns_for_sixteen() {
+        let columns = grid_columns(16);
+        let rows = 16_usize.div_ceil(columns);
+
+        assert_eq!(columns, 4);
+        assert_eq!(rows, 4);
+    }
+
+    #[test]
+    fn theme_card_shows_full_name() {
+        let _guard = theme::test_support::lock_theme(ThemeId::CatppuccinMocha);
+        let ctx = ctx_with_fonts();
+        let available_card_width =
+            (SETTINGS_DIALOG_MIN_WIDTH - theme::SP_4 * 2.0 - theme::SP_2 * 3.0) / 4.0;
+
+        for theme_data in theme::all_themes() {
+            let expected_width = ctx.fonts(|fonts| {
+                fonts
+                    .layout_no_wrap(
+                        theme_data.id.name().to_owned(),
+                        egui::FontId::proportional(theme::FONT_MD),
+                        theme::active().fg,
+                    )
+                    .size()
+                    .x
+            });
+            assert!(
+                expected_width <= available_card_width,
+                "{} needs {expected_width}px but only {available_card_width}px is available",
+                theme_data.id.name()
+            );
+
+            let output = run_ui(&ctx, egui::RawInput::default(), |ui| {
+                ui.set_width(available_card_width);
+                let response = theme_card(ui, theme_data, false);
+                assert!(response.rect.width() >= expected_width);
+            });
+            assert!(!output.shapes.is_empty());
+        }
+    }
+
+    #[test]
+    fn settings_setting_rows_have_hints() {
+        assert_eq!(TOGGLE_SETTINGS.len(), 6);
+        assert!(TOGGLE_SETTINGS
+            .iter()
+            .all(|setting| !setting.hint.trim().is_empty()));
+    }
+
+    #[test]
+    fn font_size_uses_whole_point_steps() {
+        assert_eq!(whole_point_font_size(13.49), 13.0);
+        assert_eq!(whole_point_font_size(13.5), 14.0);
+    }
 
     #[test]
     fn closed_sessions_hint_uses_registry_display_string() {

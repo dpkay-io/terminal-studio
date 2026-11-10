@@ -9,6 +9,7 @@ mod left_panel;
 mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
+mod settings;
 mod settings_overlay;
 mod shortcuts_dialog;
 mod tab_bar;
