@@ -7,6 +7,30 @@ use crate::pane_tree::SplitDir;
 use crate::theme;
 use crate::ui_kit;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TabVisual {
+    text: egui::Color32,
+    bar: Option<egui::Color32>,
+    fill: Option<egui::Color32>,
+    outline: bool,
+}
+
+fn tab_visual(selected: bool, t: &theme::Theme) -> TabVisual {
+    TabVisual {
+        text: if selected { t.fg_strong } else { t.fg_muted },
+        bar: selected.then_some(t.accent),
+        fill: None,
+        outline: false,
+    }
+}
+
+fn workspace_strip_rect(tab_rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(
+        tab_rect.min,
+        egui::vec2(theme::TAB_COLOR_STRIP_W, tab_rect.height()),
+    )
+}
+
 /// Result of rendering the tab bar, consumed by the caller.
 #[allow(dead_code)]
 pub(in crate::app) struct TabBarResult {
@@ -50,7 +74,7 @@ impl App {
         let mut tab_scroll_offset_x: f32 = 0.0;
         ui.allocate_ui_at_rect(tab_bar_rect, |ui| {
             ui.painter()
-                .rect_filled(tab_bar_rect, 0.0, theme::active().bg_toolbar);
+                .rect_filled(tab_bar_rect, theme::R_NONE, theme::active().bg_panel);
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             let scroll_out = egui::ScrollArea::horizontal()
                 .id_source(self.vp_id("tab_bar_scroll"))
@@ -118,96 +142,62 @@ impl App {
                                 tab_resp.hovered(),
                             );
 
-                            let tab_rounding = egui::Rounding {
-                                nw: theme::R_MD,
-                                ne: theme::R_MD,
-                                sw: 0.0,
-                                se: 0.0,
-                            };
+                            let t = theme::active();
+                            let visual = tab_visual(is_active, t);
+                            let title_color = visual.text;
 
-                            let title_color = if is_active {
-                                theme::active().text
-                            } else {
-                                theme::lerp_color(
-                                    theme::active().subtext0,
-                                    theme::active().subtext1,
-                                    tab_hover_t,
-                                )
-                            };
-
-                            if is_active {
-                                painter.rect_filled(
-                                    tab_rect,
-                                    tab_rounding,
-                                    theme::active().bg_tab_active,
-                                );
+                            if let Some(fill) = visual.fill {
+                                painter.rect_filled(tab_rect, theme::R_NONE, fill);
+                            }
+                            if visual.outline {
                                 painter.rect_stroke(
                                     tab_rect,
-                                    tab_rounding,
-                                    egui::Stroke::new(
-                                        theme::STROKE_THIN,
-                                        theme::active().border_subtle,
-                                    ),
+                                    theme::R_NONE,
+                                    egui::Stroke::new(theme::STROKE_THIN, t.border),
                                 );
-                                // Erase bottom border to connect tab to content
-                                painter.line_segment(
-                                    [
-                                        egui::pos2(tab_rect.min.x + 1.0, tab_rect.max.y),
-                                        egui::pos2(tab_rect.max.x - 1.0, tab_rect.max.y),
-                                    ],
-                                    egui::Stroke::new(
-                                        theme::STROKE_THIN + 0.5,
-                                        theme::active().bg_tab_active,
+                            }
+                            if let Some(bar) = visual.bar {
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(
+                                            tab_rect.min.x,
+                                            tab_rect.max.y - theme::TAB_SELECTED_BAR_H,
+                                        ),
+                                        tab_rect.max,
                                     ),
+                                    theme::R_NONE,
+                                    bar,
                                 );
                             } else if tab_hover_t > 0.01 {
                                 // Inactive: animated hover background
                                 let hover_bg = theme::lerp_color(
                                     egui::Color32::TRANSPARENT,
-                                    theme::active().bg_row_hover,
+                                    t.bg_row_hover,
                                     tab_hover_t,
                                 );
-                                painter.rect_filled(tab_rect, tab_rounding, hover_bg);
+                                painter.rect_filled(tab_rect, theme::R_NONE, hover_bg);
                             }
 
                             // Workspace colour strip on left edge
                             if let Some(c) = ws_color {
                                 painter.rect_filled(
-                                    egui::Rect::from_min_size(
-                                        tab_rect.min,
-                                        egui::vec2(theme::TAB_COLOR_STRIP_W, tab_h),
-                                    ),
-                                    0.0,
+                                    workspace_strip_rect(tab_rect),
+                                    theme::R_NONE,
                                     theme::from_rgb(c),
                                 );
                             }
 
-                            // Active indicator dot
-                            if is_active {
-                                let dot_radius = 3.0;
-                                let dot_x = tab_rect.min.x
-                                    + theme::TAB_PAD_X
-                                    + if ws_color.is_some() {
-                                        theme::TAB_COLOR_STRIP_W
-                                    } else {
-                                        0.0
-                                    }
-                                    + dot_radius;
-                                let raw_dot = ws_color
-                                    .map(theme::from_rgb)
-                                    .unwrap_or(theme::active().accent);
-                                let tab_bg = theme::active().bg_tab_active;
-                                let dot_color = theme::ensure_term_contrast(raw_dot, tab_bg);
-                                let dot_center = egui::pos2(dot_x, tab_rect.center().y);
-                                let ring_color =
-                                    theme::text_on([tab_bg.r(), tab_bg.g(), tab_bg.b()]);
-                                painter.circle_stroke(
-                                    dot_center,
-                                    dot_radius + 1.0,
-                                    egui::Stroke::new(1.0_f32, ring_color.gamma_multiply(0.35)),
-                                );
-                                painter.circle_filled(dot_center, dot_radius, dot_color);
-                            }
+                            let status_color = match &self.pane_state.panes[i].content {
+                                PaneContent::Terminal(sid) => {
+                                    let alive =
+                                        self.session_state.find(*sid).is_some_and(|entry| {
+                                            entry.alive.load(std::sync::atomic::Ordering::Relaxed)
+                                        });
+                                    Some(if alive { t.success } else { t.fg_muted })
+                                }
+                                PaneContent::DeferredTerminal { .. } => Some(t.fg_muted),
+                                _ => None,
+                            };
 
                             // Flash feedback overlay on tab
                             self.flash.render_on_rect(
@@ -227,7 +217,6 @@ impl App {
                                         .get(&r)
                                         .is_some_and(|t| t.leaf_ids().len() > 1)
                                 });
-                            let t = theme::active();
                             if same_group_next {
                                 let line_h = tab_h * 0.5;
                                 let line_y = tab_rect.center().y - line_h * 0.5;
@@ -284,7 +273,7 @@ impl App {
                             };
 
                             // Title text (clipped before close button)
-                            let dot_offset = if is_active { 10.0 } else { 0.0 };
+                            let status_offset = if status_color.is_some() { 10.0 } else { 0.0 };
                             let split_icon_offset = if is_in_split { 12.0 } else { 0.0 };
                             let text_x = tab_rect.min.x
                                 + theme::TAB_PAD_X
@@ -293,8 +282,26 @@ impl App {
                                 } else {
                                     0.0
                                 }
-                                + dot_offset
+                                + status_offset
                                 + split_icon_offset;
+
+                            if let Some(color) = status_color {
+                                painter.circle_filled(
+                                    egui::pos2(
+                                        tab_rect.min.x
+                                            + theme::TAB_PAD_X
+                                            + if ws_color.is_some() {
+                                                theme::TAB_COLOR_STRIP_W
+                                            } else {
+                                                0.0
+                                            }
+                                            + 3.0,
+                                        tab_rect.center().y,
+                                    ),
+                                    3.0,
+                                    color,
+                                );
+                            }
 
                             // Split-group icon (two vertical bars)
                             if is_in_split {
@@ -372,30 +379,20 @@ impl App {
                                     self.tab_rename_text.clear();
                                 }
                             } else {
-                                painter
-                                    .with_clip_rect(egui::Rect::from_min_max(
-                                        egui::pos2(text_x, tab_rect.min.y),
-                                        egui::pos2(close_rect.min.x - theme::SP_1, tab_rect.max.y),
-                                    ))
-                                    .text(
-                                        egui::pos2(text_x, tab_rect.center().y),
-                                        egui::Align2::LEFT_CENTER,
-                                        display,
-                                        egui::FontId::proportional(theme::FONT_SM),
-                                        title_color,
-                                    );
-                            }
-
-                            // Completed process badge (green dot)
-                            if let PaneContent::Terminal(sid) = &self.pane_state.panes[i].content {
-                                if self.completed_badges.contains(sid) {
-                                    let dot_r = 3.5;
-                                    let dot_pos = egui::pos2(
-                                        text_x - theme::SP_1 - dot_r,
-                                        tab_rect.center().y,
-                                    );
-                                    painter.circle_filled(dot_pos, dot_r, theme::active().green);
-                                }
+                                let max_text_w =
+                                    (close_rect.min.x - theme::SP_1 - text_x).max(theme::SP_0);
+                                let galley = ui_kit::truncate_galley(
+                                    &painter,
+                                    display,
+                                    egui::FontId::proportional(theme::FONT_SM),
+                                    title_color,
+                                    max_text_w,
+                                );
+                                painter.galley(
+                                    egui::pos2(text_x, tab_rect.center().y - galley.size().y * 0.5),
+                                    galley,
+                                    title_color,
+                                );
                             }
 
                             if close_resp
@@ -512,7 +509,7 @@ impl App {
         // ── Tab-bar action buttons (split / close-all) ──────────
         ui.allocate_ui_at_rect(tab_actions_rect, |ui| {
             ui.painter()
-                .rect_filled(tab_actions_rect, 0.0, theme::active().bg_toolbar);
+                .rect_filled(tab_actions_rect, theme::R_NONE, theme::active().bg_panel);
             // Left separator
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(
@@ -604,7 +601,7 @@ impl App {
         ui: &mut egui::Ui,
         group: &EditorGroup,
         group_id: GroupId,
-        is_focused: bool,
+        _is_focused: bool,
         tab_h: f32,
         tab_bar_rect: egui::Rect,
     ) -> GroupTabBarResult {
@@ -632,25 +629,8 @@ impl App {
 
         ui.allocate_ui_at_rect(scroll_rect, |ui| {
             let t = theme::active();
-            let bar_bg = if is_focused && has_multiple_groups {
-                // Subtle tint to indicate focus when there are multiple groups
-                theme::lerp_color(t.bg_toolbar, t.surface1, 0.3)
-            } else {
-                t.bg_toolbar
-            };
-            ui.painter().rect_filled(scroll_rect, 0.0, bar_bg);
-
-            // Focus indicator line at bottom when multiple groups exist
-            if is_focused && has_multiple_groups {
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_size(
-                        egui::pos2(scroll_rect.min.x, scroll_rect.max.y - 2.0),
-                        egui::vec2(scroll_rect.width(), 2.0),
-                    ),
-                    0.0,
-                    t.accent.gamma_multiply(0.5),
-                );
-            }
+            ui.painter()
+                .rect_filled(scroll_rect, theme::R_NONE, t.bg_panel);
 
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             let scroll_id_source = self.vp_id(&format!("group_tab_scroll_{group_id}"));
@@ -728,34 +708,31 @@ impl App {
                                 tab_resp.hovered(),
                             );
 
-                            let tab_rounding = egui::Rounding {
-                                nw: theme::R_MD,
-                                ne: theme::R_MD,
-                                sw: 0.0,
-                                se: 0.0,
-                            };
-
                             let t = theme::active();
-                            let title_color = if is_active {
-                                t.text
-                            } else {
-                                theme::lerp_color(t.subtext0, t.subtext1, tab_hover_t)
-                            };
+                            let visual = tab_visual(is_active, t);
+                            let title_color = visual.text;
 
-                            if is_active {
-                                painter.rect_filled(tab_rect, tab_rounding, t.bg_tab_active);
+                            if let Some(fill) = visual.fill {
+                                painter.rect_filled(tab_rect, theme::R_NONE, fill);
+                            }
+                            if visual.outline {
                                 painter.rect_stroke(
                                     tab_rect,
-                                    tab_rounding,
-                                    egui::Stroke::new(theme::STROKE_THIN, t.border_subtle),
+                                    theme::R_NONE,
+                                    egui::Stroke::new(theme::STROKE_THIN, t.border),
                                 );
-                                // Erase bottom border to connect tab to content
-                                painter.line_segment(
-                                    [
-                                        egui::pos2(tab_rect.min.x + 1.0, tab_rect.max.y),
-                                        egui::pos2(tab_rect.max.x - 1.0, tab_rect.max.y),
-                                    ],
-                                    egui::Stroke::new(theme::STROKE_THIN + 0.5, t.bg_tab_active),
+                            }
+                            if let Some(bar) = visual.bar {
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(
+                                            tab_rect.min.x,
+                                            tab_rect.max.y - theme::TAB_SELECTED_BAR_H,
+                                        ),
+                                        tab_rect.max,
+                                    ),
+                                    theme::R_NONE,
+                                    bar,
                                 );
                             } else if tab_hover_t > 0.01 {
                                 let hover_bg = theme::lerp_color(
@@ -763,46 +740,29 @@ impl App {
                                     t.bg_row_hover,
                                     tab_hover_t,
                                 );
-                                painter.rect_filled(tab_rect, tab_rounding, hover_bg);
+                                painter.rect_filled(tab_rect, theme::R_NONE, hover_bg);
                             }
 
                             // Workspace colour strip on left edge
                             if let Some(c) = ws_color {
                                 painter.rect_filled(
-                                    egui::Rect::from_min_size(
-                                        tab_rect.min,
-                                        egui::vec2(theme::TAB_COLOR_STRIP_W, tab_h),
-                                    ),
-                                    0.0,
+                                    workspace_strip_rect(tab_rect),
+                                    theme::R_NONE,
                                     theme::from_rgb(*c),
                                 );
                             }
 
-                            // Active indicator dot (tinted by workspace color)
-                            if is_active {
-                                let color_strip_offset = if ws_color.is_some() {
-                                    theme::TAB_COLOR_STRIP_W
-                                } else {
-                                    0.0
-                                };
-                                let dot_radius = 3.0;
-                                let dot_x = tab_rect.min.x
-                                    + theme::TAB_PAD_X
-                                    + color_strip_offset
-                                    + dot_radius;
-                                let raw_dot = ws_color.map(theme::from_rgb).unwrap_or(t.accent);
-                                let tab_bg = t.bg_tab_active;
-                                let dot_color = theme::ensure_term_contrast(raw_dot, tab_bg);
-                                let dot_center = egui::pos2(dot_x, tab_rect.center().y);
-                                let ring_color =
-                                    theme::text_on([tab_bg.r(), tab_bg.g(), tab_bg.b()]);
-                                painter.circle_stroke(
-                                    dot_center,
-                                    dot_radius + 1.0,
-                                    egui::Stroke::new(1.0_f32, ring_color.gamma_multiply(0.35)),
-                                );
-                                painter.circle_filled(dot_center, dot_radius, dot_color);
-                            }
+                            let status_color = match &self.pane_state.panes[pane_idx].content {
+                                PaneContent::Terminal(sid) => {
+                                    let alive =
+                                        self.session_state.find(*sid).is_some_and(|entry| {
+                                            entry.alive.load(std::sync::atomic::Ordering::Relaxed)
+                                        });
+                                    Some(if alive { t.success } else { t.fg_muted })
+                                }
+                                PaneContent::DeferredTerminal { .. } => Some(t.fg_muted),
+                                _ => None,
+                            };
 
                             // Flash feedback overlay on tab
                             self.flash.render_on_rect(
@@ -852,14 +812,30 @@ impl App {
                             };
 
                             // Title text (clipped before close button)
-                            let dot_offset = if is_active { 10.0 } else { 0.0 };
+                            let status_offset = if status_color.is_some() { 10.0 } else { 0.0 };
                             let color_strip_offset = if ws_color.is_some() {
                                 theme::TAB_COLOR_STRIP_W
                             } else {
                                 0.0
                             };
-                            let text_x =
-                                tab_rect.min.x + theme::TAB_PAD_X + color_strip_offset + dot_offset;
+                            let text_x = tab_rect.min.x
+                                + theme::TAB_PAD_X
+                                + color_strip_offset
+                                + status_offset;
+
+                            if let Some(color) = status_color {
+                                painter.circle_filled(
+                                    egui::pos2(
+                                        tab_rect.min.x
+                                            + theme::TAB_PAD_X
+                                            + color_strip_offset
+                                            + 3.0,
+                                        tab_rect.center().y,
+                                    ),
+                                    3.0,
+                                    color,
+                                );
+                            }
 
                             let is_renaming = self.tab_rename_pane_id == Some(pane_id);
                             if is_renaming {
@@ -912,32 +888,20 @@ impl App {
                                     self.tab_rename_text.clear();
                                 }
                             } else {
-                                painter
-                                    .with_clip_rect(egui::Rect::from_min_max(
-                                        egui::pos2(text_x, tab_rect.min.y),
-                                        egui::pos2(close_rect.min.x - theme::SP_1, tab_rect.max.y),
-                                    ))
-                                    .text(
-                                        egui::pos2(text_x, tab_rect.center().y),
-                                        egui::Align2::LEFT_CENTER,
-                                        display,
-                                        egui::FontId::proportional(theme::FONT_SM),
-                                        title_color,
-                                    );
-                            }
-
-                            // Completed process badge (green dot)
-                            if let PaneContent::Terminal(sid) =
-                                &self.pane_state.panes[pane_idx].content
-                            {
-                                if self.completed_badges.contains(sid) {
-                                    let dot_r = 3.5;
-                                    let dot_pos = egui::pos2(
-                                        text_x - theme::SP_1 - dot_r,
-                                        tab_rect.center().y,
-                                    );
-                                    painter.circle_filled(dot_pos, dot_r, t.green);
-                                }
+                                let max_text_w =
+                                    (close_rect.min.x - theme::SP_1 - text_x).max(theme::SP_0);
+                                let galley = ui_kit::truncate_galley(
+                                    &painter,
+                                    display,
+                                    egui::FontId::proportional(theme::FONT_SM),
+                                    title_color,
+                                    max_text_w,
+                                );
+                                painter.galley(
+                                    egui::pos2(text_x, tab_rect.center().y - galley.size().y * 0.5),
+                                    galley,
+                                    title_color,
+                                );
                             }
 
                             // Tooltip on hover (skip when renaming or hovering close button)
@@ -1044,12 +1008,8 @@ impl App {
         // ── Tab-bar action buttons (split / close-all) ──────────
         ui.allocate_ui_at_rect(tab_actions_rect, |ui| {
             let t = theme::active();
-            let bar_bg = if is_focused && has_multiple_groups {
-                theme::lerp_color(t.bg_toolbar, t.surface1, 0.3)
-            } else {
-                t.bg_toolbar
-            };
-            ui.painter().rect_filled(tab_actions_rect, 0.0, bar_bg);
+            ui.painter()
+                .rect_filled(tab_actions_rect, theme::R_NONE, t.bg_panel);
             // Left separator
             ui.painter().rect_filled(
                 egui::Rect::from_min_size(
@@ -1360,5 +1320,41 @@ impl App {
             }),
             PaneContent::ConflictResolver(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::ThemeId;
+
+    #[test]
+    fn active_tab_style() {
+        let _guard = theme::test_support::lock_theme(ThemeId::CatppuccinMocha);
+        let t = theme::active();
+
+        let selected = tab_visual(true, t);
+        assert_eq!(selected.bar, Some(t.accent));
+        assert_eq!(selected.fill, None);
+        assert!(!selected.outline);
+        assert_eq!(selected.text, t.fg_strong);
+
+        let unselected = tab_visual(false, t);
+        assert_eq!(unselected.bar, None);
+        assert_eq!(unselected.fill, None);
+        assert!(!unselected.outline);
+        assert_eq!(unselected.text, t.fg_muted);
+    }
+
+    #[test]
+    fn workspace_strip_is_thin() {
+        let tab_rect =
+            egui::Rect::from_min_size(egui::pos2(12.0, 8.0), egui::vec2(180.0, theme::TAB_H));
+
+        let strip = workspace_strip_rect(tab_rect);
+
+        assert_eq!(strip.width(), theme::TAB_COLOR_STRIP_W);
+        assert_eq!(strip.height(), tab_rect.height());
+        assert_eq!(strip.min, tab_rect.min);
     }
 }
