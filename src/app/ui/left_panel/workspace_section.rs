@@ -51,14 +51,18 @@ impl App {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let arrow = if self.workspace_panel_collapsed {
-                        "\u{25b6}"
+                        ui_kit::icon::CHEVRON_RIGHT
                     } else {
-                        "\u{25bc}"
+                        ui_kit::icon::CHEVRON_DOWN
                     };
                     let collapse_resp = ui.add(
-                        egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_SM))
-                            .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
-                            .frame(false),
+                        egui::Button::new(ui_kit::icon(
+                            arrow,
+                            theme::FONT_SM,
+                            theme::active().text,
+                        ))
+                        .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
+                        .frame(false),
                     );
                     if collapse_resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -83,7 +87,7 @@ impl App {
         let sb = search_bar_persistent(
             ui,
             &mut self.workspace_search_query,
-            "\u{1f50d}",
+            ui_kit::icon::SEARCH,
             "Filter workspaces\u{2026}",
             search_id,
             false,
@@ -290,8 +294,8 @@ impl App {
             if data.has_note {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
-                        "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(theme::FONT_SM),
+                        ui_kit::icon::PENCIL.to_string(),
+                        egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into())),
                         fg,
                     )
                 });
@@ -311,7 +315,7 @@ impl App {
                     self.drag_state.set_payload(
                         crate::app::drag::DragPayload::Note(data.id),
                         origin,
-                        format!("\u{1f4dd} {}", data.name),
+                        format!("Note: {}", data.name),
                     );
                 }
             }
@@ -329,8 +333,8 @@ impl App {
                         full_rect.min.y + theme::HEADER_H / 2.0,
                     ),
                     egui::Align2::CENTER_CENTER,
-                    "\u{2699}",
-                    egui::FontId::proportional(theme::FONT_SM),
+                    ui_kit::icon::SETTINGS,
+                    egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into())),
                     gear_fg,
                 );
             }
@@ -487,14 +491,14 @@ impl App {
             }
 
             let other_name = if other_active {
-                "\u{25b6} Other".to_string()
+                format!("{} Other", ui_kit::icon::CHEVRON_RIGHT)
             } else {
                 "Other".to_string()
             };
             let other_galley = ui.fonts(|f| {
                 f.layout_no_wrap(
                     other_name,
-                    egui::FontId::proportional(theme::FONT_MD),
+                    egui::FontId::new(theme::FONT_MD, egui::FontFamily::Name("icons".into())),
                     other_fg,
                 )
             });
@@ -508,8 +512,8 @@ impl App {
             if other_has_note {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
-                        "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(theme::FONT_SM),
+                        ui_kit::icon::PENCIL.to_string(),
+                        egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into())),
                         other_fg,
                     )
                 });

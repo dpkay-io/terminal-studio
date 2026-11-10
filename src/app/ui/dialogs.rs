@@ -239,9 +239,11 @@ impl App {
                                 |ui| {
                                     if ui
                                         .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("×").size(theme::FONT_MD),
-                                            )
+                                            egui::Button::new(ui_kit::icon(
+                                                ui_kit::icon::X,
+                                                theme::FONT_MD,
+                                                t.text,
+                                            ))
                                             .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
                                         )
                                         .clicked()

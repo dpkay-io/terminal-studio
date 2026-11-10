@@ -11,28 +11,28 @@ pub(crate) struct SearchBarResponse {
 pub(crate) fn search_bar(
     ui: &mut egui::Ui,
     query: &mut String,
-    icon: &str,
+    glyph: char,
     hint: &str,
     id: egui::Id,
 ) -> SearchBarResponse {
-    search_bar_inner(ui, query, icon, hint, id, false)
+    search_bar_inner(ui, query, glyph, hint, id, false)
 }
 
 pub(crate) fn search_bar_persistent(
     ui: &mut egui::Ui,
     query: &mut String,
-    icon: &str,
+    glyph: char,
     hint: &str,
     id: egui::Id,
     request_focus: bool,
 ) -> SearchBarResponse {
-    search_bar_inner(ui, query, icon, hint, id, request_focus)
+    search_bar_inner(ui, query, glyph, hint, id, request_focus)
 }
 
 fn search_bar_inner(
     ui: &mut egui::Ui,
     query: &mut String,
-    icon: &str,
+    glyph: char,
     hint: &str,
     id: egui::Id,
     request_focus: bool,
@@ -65,11 +65,7 @@ fn search_bar_inner(
     ui.allocate_ui_at_rect(inner_rect, |ui| {
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = theme::SP_2;
-            ui.label(
-                egui::RichText::new(icon)
-                    .size(theme::FONT_XS)
-                    .color(t.fg_muted),
-            );
+            ui.label(crate::ui_kit::icon(glyph, theme::FONT_XS, t.fg_muted));
             let te = egui::TextEdit::singleline(query)
                 .desired_width(ui.available_width())
                 .hint_text(hint)

@@ -137,11 +137,11 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
-                egui::Button::new(
-                    egui::RichText::new("\u{00d7}")
-                        .size(theme::FONT_MD)
-                        .color(theme::active().fg_muted),
-                )
+                egui::Button::new(crate::ui_kit::icon(
+                    crate::ui_kit::icon::X,
+                    theme::FONT_MD,
+                    theme::active().fg_muted,
+                ))
                 .rounding(theme::R_MD)
                 .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
             );

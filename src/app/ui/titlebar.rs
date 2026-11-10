@@ -17,14 +17,14 @@ fn paint_titlebar_title(
     bright: egui::Color32,
 ) {
     let title_font = egui::FontId::proportional(theme::FONT_SM);
-    let branch_font = egui::FontId::proportional(theme::FONT_XS);
+    let branch_font = egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into()));
     let dim = bright.linear_multiply(0.55);
     let extra_dim = bright.linear_multiply(0.35);
 
     let branch_text = git_branch
         .as_ref()
         .filter(|b| !b.is_empty())
-        .map(|b| format!("  \u{2387} {b}"));
+        .map(|b| format!("  {} {b}", ui_kit::icon::GIT_BRANCH));
 
     let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
 
@@ -302,7 +302,7 @@ impl App {
                         ui,
                         self.vp_id("tb_left_toggle"),
                         left_tbr,
-                        "≡",
+                        ui_kit::icon::MENU,
                         mac_icon_sz,
                         tb_fg,
                         ui_kit::IconButtonStyle::Toggle {
@@ -362,8 +362,8 @@ impl App {
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
-                            "\u{21C6}",
-                            egui::FontId::proportional(mac_icon_sz),
+                            ui_kit::icon::ARROW_LEFT_RIGHT,
+                            egui::FontId::new(mac_icon_sz, egui::FontFamily::Name("icons".into())),
                             sw_icon_color,
                         );
                         if !self.show_quick_switcher {
@@ -400,7 +400,7 @@ impl App {
                             ui,
                             self.vp_id("tb_closed_sessions"),
                             rc_tbr,
-                            "\u{23EA}",
+                            ui_kit::icon::HISTORY,
                             mac_icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -430,7 +430,7 @@ impl App {
                         ui,
                         self.vp_id("tb_settings"),
                         gear_mac_tbr,
-                        "⚙",
+                        ui_kit::icon::SETTINGS,
                         mac_icon_sz,
                         tb_fg,
                         ui_kit::IconButtonStyle::Toggle {
@@ -454,7 +454,7 @@ impl App {
                             ui,
                             self.vp_id("tb_right_toggle"),
                             right_tbr,
-                            "⊞",
+                            ui_kit::icon::PANEL_RIGHT,
                             mac_icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -515,8 +515,8 @@ impl App {
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
-                            "⌨",
-                            egui::FontId::proportional(mac_icon_sz),
+                            ui_kit::icon::KEYBOARD,
+                            egui::FontId::new(mac_icon_sz, egui::FontFamily::Name("icons".into())),
                             kb_icon_color,
                         );
                         if !self.show_shortcut_help {
@@ -565,7 +565,7 @@ impl App {
                         if show_update_btn {
                             let label = match &update_state.status {
                                 UpdateStatus::UpdateAvailable { version, .. } => {
-                                    format!("\u{2B06} Update v{version}")
+                                    format!("{} Update v{version}", ui_kit::icon::DOWNLOAD)
                                 }
                                 UpdateStatus::RestartRequired => "Restart to update".to_string(),
                                 _ => String::new(),
@@ -589,7 +589,10 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(theme::FONT_XS),
+                                egui::FontId::new(
+                                    theme::FONT_XS,
+                                    egui::FontFamily::Name("icons".into()),
+                                ),
                                 update_btn_fg,
                             );
                             if resp.clicked() {
@@ -639,10 +642,10 @@ impl App {
                     let btn_w = theme::TITLEBAR_BTN_W;
                     let icon_sz = theme::FONT_MD;
                     // right-to-left: close(0), maximize(1), minimize(2)
-                    let btns: &[(&str, usize, bool)] = &[
-                        ("×", 0, true),  // close   — danger colour on hover
-                        ("□", 1, false), // maximize
-                        ("–", 2, false), // minimize
+                    let btns: &[(char, usize, bool)] = &[
+                        (ui_kit::icon::X, 0, true),
+                        (ui_kit::icon::MAXIMIZE, 1, false),
+                        (ui_kit::icon::MINIMIZE, 2, false),
                     ];
 
                     // Left panel toggle — leftmost button
@@ -655,7 +658,7 @@ impl App {
                             ui,
                             self.vp_id("tb_left_toggle"),
                             br,
-                            "≡",
+                            ui_kit::icon::MENU,
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -717,8 +720,8 @@ impl App {
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
-                            "\u{21C6}",
-                            egui::FontId::proportional(icon_sz),
+                            ui_kit::icon::ARROW_LEFT_RIGHT,
+                            egui::FontId::new(icon_sz, egui::FontFamily::Name("icons".into())),
                             sw_icon_color,
                         );
                         if !self.show_quick_switcher {
@@ -755,7 +758,7 @@ impl App {
                             ui,
                             self.vp_id("tb_closed_sessions"),
                             rc_br,
-                            "\u{23EA}",
+                            ui_kit::icon::HISTORY,
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -787,7 +790,7 @@ impl App {
                             ui,
                             self.vp_id("tb_settings"),
                             br,
-                            "⚙",
+                            ui_kit::icon::SETTINGS,
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -813,7 +816,7 @@ impl App {
                             ui,
                             self.vp_id("tb_right_toggle"),
                             br,
-                            "⊞",
+                            ui_kit::icon::PANEL_RIGHT,
                             icon_sz,
                             tb_fg,
                             ui_kit::IconButtonStyle::Toggle {
@@ -876,8 +879,8 @@ impl App {
                         painter.text(
                             icon_center,
                             egui::Align2::CENTER_CENTER,
-                            "⌨",
-                            egui::FontId::proportional(icon_sz),
+                            ui_kit::icon::KEYBOARD,
+                            egui::FontId::new(icon_sz, egui::FontFamily::Name("icons".into())),
                             kb_icon_color,
                         );
                         if !self.show_shortcut_help {
@@ -927,7 +930,7 @@ impl App {
                         if show_update_btn {
                             let label = match &update_state.status {
                                 UpdateStatus::UpdateAvailable { version, .. } => {
-                                    format!("\u{2B06} Update v{version}")
+                                    format!("{} Update v{version}", ui_kit::icon::DOWNLOAD)
                                 }
                                 UpdateStatus::RestartRequired => "Restart to update".to_string(),
                                 _ => String::new(),
@@ -951,7 +954,10 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(theme::FONT_XS),
+                                egui::FontId::new(
+                                    theme::FONT_XS,
+                                    egui::FontFamily::Name("icons".into()),
+                                ),
                                 update_btn_fg,
                             );
                             if resp.clicked() {

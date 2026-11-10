@@ -1728,7 +1728,7 @@ impl App {
                                                 };
 
                                                 if md_count == 1 {
-                                                    // Single MD file: simple tab with ×
+                                                    // Single Markdown file: simple tab with close button
                                                     let path = &md_tabs[0];
                                                     let resp = ui.selectable_label(
                                                         is_any_md_active,
@@ -1751,9 +1751,11 @@ impl App {
                                                     }
                                                     ui.add_space(theme::SP_1);
                                                     if ui.add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new("×").size(theme::FONT_SM).color(t.overlay1),
-                                                        ).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H)),
+                                                        egui::Button::new(crate::ui_kit::icon(
+                                                            crate::ui_kit::icon::X,
+                                                            theme::FONT_SM,
+                                                            t.overlay1,
+                                                        )).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H)),
                                                     ).on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
                                                         close_tab = Some(path.clone());
                                                     }
@@ -1782,11 +1784,15 @@ impl App {
                                                         ui.painter().rect_filled(underline_rect, egui::Rounding::same(1.0), t.accent);
                                                     }
                                                     // Chevron
-                                                    ui.label(
-                                                        egui::RichText::new(if is_popup_open { "▴" } else { "▾" })
-                                                            .size(theme::FONT_XS)
-                                                            .color(t.overlay1),
-                                                    );
+                                                    ui.label(crate::ui_kit::icon(
+                                                        if is_popup_open {
+                                                            crate::ui_kit::icon::CHEVRON_UP
+                                                        } else {
+                                                            crate::ui_kit::icon::CHEVRON_DOWN
+                                                        },
+                                                        theme::FONT_XS,
+                                                        t.overlay1,
+                                                    ));
 
                                                     if is_popup_open {
                                                         let screen_h = ui.ctx().screen_rect().height();
@@ -1814,9 +1820,11 @@ impl App {
                                                                             }
                                                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                                                 if ui.add(
-                                                                                    egui::Button::new(
-                                                                                        egui::RichText::new("×").size(theme::FONT_XS).color(t.overlay1),
-                                                                                    ).frame(false),
+                                                                                    egui::Button::new(crate::ui_kit::icon(
+                                                                                        crate::ui_kit::icon::X,
+                                                                                        theme::FONT_XS,
+                                                                                        t.overlay1,
+                                                                                    )).frame(false),
                                                                                 ).on_hover_text("Close").clicked() {
                                                                                     close_tab = Some(path.clone());
                                                                                 }
@@ -1851,8 +1859,11 @@ impl App {
                                         ui.painter().text(
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,
-                                            "\u{2039}",
-                                            egui::FontId::proportional(theme::FONT_XS),
+                                            crate::ui_kit::icon::ARROW_LEFT_RIGHT,
+                                            egui::FontId::new(
+                                                theme::FONT_XS,
+                                                egui::FontFamily::Name("icons".into()),
+                                            ),
                                             theme::active().text,
                                         );
                                     }
@@ -1865,8 +1876,11 @@ impl App {
                                         ui.painter().text(
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,
-                                            "\u{203a}",
-                                            egui::FontId::proportional(theme::FONT_XS),
+                                            crate::ui_kit::icon::ARROW_LEFT_RIGHT,
+                                            egui::FontId::new(
+                                                theme::FONT_XS,
+                                                egui::FontFamily::Name("icons".into()),
+                                            ),
                                             theme::active().text,
                                         );
                                     }
@@ -1911,11 +1925,11 @@ impl App {
                                                         .truncate(),
                                                     )
                                                     .on_hover_text(&ws.name);
-                                                    ui.label(
-                                                        egui::RichText::new("›")
-                                                            .size(theme::FONT_XS)
-                                                            .color(theme::active().overlay0),
-                                                    );
+                                                    ui.label(crate::ui_kit::icon(
+                                                        crate::ui_kit::icon::CHEVRON_RIGHT,
+                                                        theme::FONT_XS,
+                                                        theme::active().overlay0,
+                                                    ));
                                                 }
                                                 let path_max = (ui.available_width() - save_btn_reserve).max(20.0);
                                                 ui.allocate_ui(egui::vec2(path_max, ui.spacing().interact_size.y), |ui| {
@@ -1931,11 +1945,11 @@ impl App {
                                                 });
                                                 if !already_saved {
                                                     let save_btn = ui.add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new("+")
-                                                                .size(theme::FONT_XS)
-                                                                .color(theme::active().accent_strong),
-                                                        )
+                                                        egui::Button::new(crate::ui_kit::icon(
+                                                            crate::ui_kit::icon::PLUS,
+                                                            theme::FONT_XS,
+                                                            theme::active().accent_strong,
+                                                        ))
                                                         .rounding(theme::R_MD),
                                                     );
                                                     if save_btn.on_hover_text("Save as workspace").clicked() {
@@ -1950,7 +1964,7 @@ impl App {
                                                 let sb = crate::app::ui::search_bar::search_bar_persistent(
                                                     ui,
                                                     &mut self.dir_search_query,
-                                                    "\u{1f50d}",
+                                                    crate::ui_kit::icon::SEARCH,
                                                     "Search files\u{2026}",
                                                     dir_search_id,
                                                     focus,
@@ -2111,13 +2125,31 @@ impl App {
                                     }
                                     RightTab::Markdown(md_path) => {
                                         ui.horizontal(|ui| {
+                                            let mut open_in_pane_text =
+                                                egui::text::LayoutJob::default();
+                                            crate::ui_kit::icon(
+                                                crate::ui_kit::icon::MAXIMIZE,
+                                                theme::FONT_XS,
+                                                theme::active().text,
+                                            )
+                                            .append_to(
+                                                &mut open_in_pane_text,
+                                                ui.style(),
+                                                egui::FontSelection::Default,
+                                                egui::Align::Center,
+                                            );
+                                            egui::RichText::new(" Open in Pane")
+                                                .size(theme::FONT_XS)
+                                                .append_to(
+                                                    &mut open_in_pane_text,
+                                                    ui.style(),
+                                                    egui::FontSelection::Default,
+                                                    egui::Align::Center,
+                                                );
                                             if ui
                                                 .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("\u{2B1C} Open in Pane")
-                                                            .size(theme::FONT_XS),
-                                                    )
-                                                    .rounding(theme::R_SM),
+                                                    egui::Button::new(open_in_pane_text)
+                                                        .rounding(theme::R_SM),
                                                 )
                                                 .on_hover_text("Open this file in the main editor area")
                                                 .clicked()
@@ -2267,16 +2299,17 @@ impl App {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         let arrow = if self.notes_panel_collapsed {
-                                            "▶"
+                                            crate::ui_kit::icon::CHEVRON_RIGHT
                                         } else {
-                                            "▼"
+                                            crate::ui_kit::icon::CHEVRON_DOWN
                                         };
                                         if ui
                                             .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new(arrow)
-                                                        .size(theme::FONT_SM),
-                                                )
+                                                egui::Button::new(crate::ui_kit::icon(
+                                                    arrow,
+                                                    theme::FONT_SM,
+                                                    theme::active().text,
+                                                ))
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
                                                     theme::HEADER_H,
@@ -2291,10 +2324,11 @@ impl App {
                                         }
                                         if ui
                                             .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("\u{2B1C}")
-                                                        .size(theme::FONT_SM),
-                                                )
+                                                egui::Button::new(crate::ui_kit::icon(
+                                                    crate::ui_kit::icon::MAXIMIZE,
+                                                    theme::FONT_SM,
+                                                    theme::active().text,
+                                                ))
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
                                                     theme::HEADER_H,
@@ -2890,11 +2924,11 @@ impl App {
                         );
                         let bar_id = ui.id().with("term_search_bar");
                         let prev_clicked = crate::ui_kit::icon_button(
-                            ui, bar_id.with("prev"), prev_rect, "\u{25B2}",
+                            ui, bar_id.with("prev"), prev_rect, crate::ui_kit::icon::CHEVRON_UP,
                             theme::FONT_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
                         ).clicked();
                         let next_clicked = crate::ui_kit::icon_button(
-                            ui, bar_id.with("next"), next_rect, "\u{25BC}",
+                            ui, bar_id.with("next"), next_rect, crate::ui_kit::icon::CHEVRON_DOWN,
                             theme::FONT_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
                         ).clicked();
 

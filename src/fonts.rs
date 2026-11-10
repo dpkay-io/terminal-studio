@@ -6,6 +6,7 @@ const INTER: &str = "Inter";
 const INTER_SEMIBOLD: &str = "Inter-SemiBold";
 const JETBRAINS_MONO: &str = "JetBrainsMono";
 const JETBRAINS_MONO_BOLD: &str = "JetBrainsMono-Bold";
+const LUCIDE: &str = "lucide";
 pub const MONO_BOLD: &str = "mono_bold";
 const ICONS: &str = "icons";
 const SYMBOL_FALLBACK: &str = "symbol_fallback";
@@ -46,6 +47,10 @@ pub(crate) fn font_definitions(symbol: Option<Vec<u8>>) -> FontDefinitions {
     definitions.font_data.insert(
         JETBRAINS_MONO_BOLD.to_owned(),
         FontData::from_static(include_bytes!("../assets/fonts/JetBrainsMono-Bold.ttf")),
+    );
+    definitions.font_data.insert(
+        LUCIDE.to_owned(),
+        FontData::from_static(include_bytes!("../assets/fonts/lucide-subset.ttf")),
     );
 
     let symbol_name = symbol.map(|bytes| {
@@ -91,9 +96,10 @@ pub(crate) fn font_definitions(symbol: Option<Vec<u8>>) -> FontDefinitions {
     definitions
         .families
         .insert(FontFamily::Name(MONO_BOLD.into()), mono_bold);
-    definitions
-        .families
-        .insert(FontFamily::Name(ICONS.into()), vec![INTER.to_owned()]);
+    definitions.families.insert(
+        FontFamily::Name(ICONS.into()),
+        vec![LUCIDE.to_owned(), INTER.to_owned()],
+    );
 
     definitions
 }
@@ -244,8 +250,16 @@ mod tests {
         }
         assert_eq!(
             family(&defs, FontFamily::Name("icons".into())),
-            vec!["Inter".to_owned()]
+            vec!["lucide".to_owned(), "Inter".to_owned()]
         );
+        for family_name in [FontFamily::Proportional, FontFamily::Monospace] {
+            assert!(
+                !family(&defs, family_name.clone())
+                    .iter()
+                    .any(|name| name == "lucide"),
+                "lucide leaked into {family_name:?}"
+            );
+        }
         assert!(
             family(&defs, FontFamily::Name("ui_bold".into()))[0]
                 .to_ascii_lowercase()
@@ -269,6 +283,7 @@ mod tests {
             "Inter-SemiBold",
             "JetBrainsMono",
             "JetBrainsMono-Bold",
+            "lucide",
         ] {
             let data = defs
                 .font_data

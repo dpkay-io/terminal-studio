@@ -33,7 +33,7 @@ impl App {
             let sb = search_bar_persistent(
                 ui,
                 &mut self.session_search_query,
-                "\u{1f50d}",
+                ui_kit::icon::SEARCH,
                 "Filter sessions\u{2026}",
                 search_id,
                 focus,
@@ -53,7 +53,7 @@ impl App {
             let sb = search_bar(
                 ui,
                 &mut self.global_search_query,
-                "\u{1f50d}",
+                ui_kit::icon::SEARCH,
                 "Search in all sessions\u{2026}",
                 search_id,
             );
@@ -231,7 +231,13 @@ impl App {
                         .find_shortcut(crate::shortcuts::AppAction::NewTerminalTab)
                         .map(|s| s.label());
                     ui.menu_button(
-                        egui::RichText::new("+ New \u{25be}").size(theme::FONT_SM),
+                        egui::RichText::new(format!(
+                            "{} New {}",
+                            ui_kit::icon::PLUS,
+                            ui_kit::icon::CHEVRON_DOWN
+                        ))
+                        .family(egui::FontFamily::Name("icons".into()))
+                        .size(theme::FONT_SM),
                         |ui| {
                             let label = if let Some(ref key) = shortcut_label {
                                 format!("{}    {}", default_shell.display_name(), key)
@@ -382,11 +388,15 @@ impl App {
         );
 
         let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
-        let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
+        let chevron = if is_open {
+            ui_kit::icon::CHEVRON_UP
+        } else {
+            ui_kit::icon::CHEVRON_DOWN
+        };
         let chevron_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
-                egui::FontId::proportional(theme::FONT_XS),
+                egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into())),
                 t.fg_muted,
             )
         });
@@ -481,11 +491,15 @@ impl App {
         );
 
         let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
-        let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
+        let chevron = if is_open {
+            ui_kit::icon::CHEVRON_UP
+        } else {
+            ui_kit::icon::CHEVRON_DOWN
+        };
         let chevron_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
-                egui::FontId::proportional(theme::FONT_XS),
+                egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into())),
                 t.fg_muted,
             )
         });
@@ -905,7 +919,7 @@ impl App {
                             ui,
                             egui::Id::new(("pane_quit", pane.id)),
                             quit_rect,
-                            "\u{00d7}",
+                            ui_kit::icon::X,
                             theme::FONT_TERM,
                             close_color,
                             ui_kit::IconButtonStyle::Danger,
@@ -933,8 +947,11 @@ impl App {
                         painter.text(
                             egui::pos2(icon_x, row_rect.center().y),
                             egui::Align2::CENTER_CENTER,
-                            "\u{2197}",
-                            egui::FontId::proportional(theme::FONT_XS),
+                            ui_kit::icon::MAXIMIZE,
+                            egui::FontId::new(
+                                theme::FONT_XS,
+                                egui::FontFamily::Name("icons".into()),
+                            ),
                             theme::active().blue,
                         );
                     }

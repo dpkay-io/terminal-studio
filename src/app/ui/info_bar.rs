@@ -2,7 +2,7 @@ use super::super::pane::PaneContent;
 use super::super::settings::InfoBarPosition;
 use super::super::App;
 use crate::theme;
-use crate::ui_kit::{icon_button, IconButtonStyle};
+use crate::ui_kit::{icon, icon_button, IconButtonStyle};
 
 const BTN_SIZE: f32 = 16.0;
 const TOGGLE_ICON_SIZE: f32 = 14.0;
@@ -46,9 +46,9 @@ impl App {
             ),
         );
 
-        // Text segments: session · workspace  ⎇ branch
+        // Text segments: session · workspace · branch
         let title_font = egui::FontId::proportional(theme::FONT_XS);
-        let branch_font = egui::FontId::proportional(theme::FONT_XS);
+        let branch_font = egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into()));
 
         let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
 
@@ -75,7 +75,7 @@ impl App {
                 segments.push((
                     ui.fonts(|f| {
                         f.layout_no_wrap(
-                            format!("  \u{2387} {branch}"),
+                            format!("  {} {branch}", icon::GIT_BRANCH),
                             branch_font.clone(),
                             extra_dim,
                         )
@@ -118,7 +118,11 @@ impl App {
 
         // Action buttons on the right
         let is_top = self.settings.info_bar_position == InfoBarPosition::Top;
-        let toggle_icon = if is_top { "▼" } else { "▲" };
+        let toggle_icon = if is_top {
+            icon::CHEVRON_DOWN
+        } else {
+            icon::CHEVRON_UP
+        };
         let toggle_tooltip = if is_top {
             "Move to bottom"
         } else {
@@ -140,7 +144,7 @@ impl App {
             ui.id().with("info_bar_toggle"),
             toggle_rect,
             toggle_icon,
-            theme::ICON_SM,
+            theme::FONT_XS,
             fg,
             IconButtonStyle::Default,
         )
@@ -158,8 +162,8 @@ impl App {
             ui,
             ui.id().with("info_bar_hide"),
             hide_rect,
-            "×",
-            theme::ICON_SM,
+            icon::X,
+            theme::FONT_XS,
             fg,
             IconButtonStyle::Default,
         )
@@ -192,8 +196,8 @@ impl App {
             ui,
             ui.id().with("info_bar_show"),
             btn_rect,
-            "ℹ",
-            theme::ICON_SM,
+            icon::ROWS_2,
+            theme::FONT_XS,
             t.overlay0,
             IconButtonStyle::Default,
         )

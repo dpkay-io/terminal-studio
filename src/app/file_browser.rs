@@ -225,11 +225,22 @@ pub(super) fn render_dir_tree(
             if is_reveal_ancestor && !state.is_open() {
                 state.set_open(true);
             }
-            let chevron = if state.is_open() { "▼" } else { "▶" };
+            let (chevron, folder) = if state.is_open() {
+                (
+                    crate::ui_kit::icon::CHEVRON_DOWN,
+                    crate::ui_kit::icon::FOLDER_OPEN,
+                )
+            } else {
+                (
+                    crate::ui_kit::icon::CHEVRON_RIGHT,
+                    crate::ui_kit::icon::FOLDER,
+                )
+            };
             let resp = ui
                 .add(
                     egui::Label::new(
-                        egui::RichText::new(format!("{} {}", chevron, entry.name))
+                        egui::RichText::new(format!("{chevron} {folder} {}", entry.name))
+                            .family(egui::FontFamily::Name("icons".into()))
                             .color(theme::active().fg_dir_entry)
                             .size(theme::FONT_SM),
                     )
@@ -279,6 +290,7 @@ pub(super) fn render_dir_tree(
                 base_color
             };
             let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), entry.name))
+                .family(egui::FontFamily::Name("icons".into()))
                 .color(text_color)
                 .size(theme::FONT_SM);
             if is_highlighted {
@@ -376,6 +388,7 @@ pub(super) fn render_flat_file_list(
             .add(
                 egui::Label::new(
                     egui::RichText::new(format!("{} {}", file_icon(ext), display))
+                        .family(egui::FontFamily::Name("icons".into()))
                         .color(color)
                         .size(theme::FONT_SM),
                 )
@@ -443,16 +456,9 @@ fn dir_entry_context_menu(ui: &mut egui::Ui, path: &Path) {
     }
 }
 
-pub(super) fn file_icon(ext: &str) -> &'static str {
+pub(super) fn file_icon(ext: &str) -> char {
     match ext {
-        "rs" => "⚙",
-        "md" => "📝",
-        "toml" | "yaml" | "yml" => "≡",
-        "json" => "≡",
-        "txt" => "≡",
-        "sh" | "bat" | "ps1" | "cmd" => "▸",
-        "py" => "▸",
-        "js" | "ts" | "jsx" | "tsx" => "▸",
-        _ => "·",
+        "md" | "toml" | "yaml" | "yml" | "json" | "txt" => crate::ui_kit::icon::FILE_TEXT,
+        _ => crate::ui_kit::icon::FILE,
     }
 }

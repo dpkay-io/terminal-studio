@@ -93,11 +93,11 @@ pub(super) fn render_git_diff(
                 );
             } else {
                 let btn = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new("\u{21BB}")
-                            .size(theme::FONT_SM)
-                            .color(t.text),
-                    )
+                    egui::Button::new(crate::ui_kit::icon(
+                        crate::ui_kit::icon::REFRESH_CW,
+                        theme::FONT_SM,
+                        t.text,
+                    ))
                     .frame(false),
                 );
                 if btn.clicked() {
@@ -391,12 +391,11 @@ pub(super) fn render_git_diff(
                     ui.add_space(theme::SP_4);
                     if ui
                         .add(
-                            egui::Button::new(
-                                egui::RichText::new("\u{2212}")
-                                    .monospace()
-                                    .size(theme::FONT_TERM)
-                                    .color(theme::active().git_removed),
-                            )
+                            egui::Button::new(crate::ui_kit::icon(
+                                crate::ui_kit::icon::X,
+                                theme::FONT_SM,
+                                theme::active().git_removed,
+                            ))
                             .frame(false),
                         )
                         .on_hover_text("Unstage All")
@@ -488,12 +487,11 @@ pub(super) fn render_git_diff(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(theme::SP_4);
                         let btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("\u{2212}")
-                                    .monospace()
-                                    .size(theme::FONT_TERM)
-                                    .color(theme::active().git_removed),
-                            )
+                            egui::Button::new(crate::ui_kit::icon(
+                                crate::ui_kit::icon::X,
+                                theme::FONT_SM,
+                                theme::active().git_removed,
+                            ))
                             .frame(false),
                         );
                         if btn.on_hover_text("Unstage").clicked() {
@@ -620,12 +618,11 @@ pub(super) fn render_git_diff(
                         }
                         if can_revert {
                             let revert_btn = ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new("\u{21BA}")
-                                        .monospace()
-                                        .size(theme::FONT_TERM)
-                                        .color(theme::active().error),
-                                )
+                                egui::Button::new(crate::ui_kit::icon(
+                                    crate::ui_kit::icon::REFRESH_CW,
+                                    theme::FONT_SM,
+                                    theme::active().error,
+                                ))
                                 .frame(false),
                             );
                             if revert_btn.on_hover_text("Revert changes").clicked() {
@@ -633,12 +630,11 @@ pub(super) fn render_git_diff(
                             }
                         } else {
                             let del_btn = ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new("\u{2715}")
-                                        .monospace()
-                                        .size(theme::FONT_TERM)
-                                        .color(theme::active().error),
-                                )
+                                egui::Button::new(crate::ui_kit::icon(
+                                    crate::ui_kit::icon::TRASH,
+                                    theme::FONT_SM,
+                                    theme::active().error,
+                                ))
                                 .frame(false),
                             );
                             if del_btn.on_hover_text("Delete file").clicked() {
@@ -820,11 +816,11 @@ pub(super) fn render_diff_toolbar(
 
             let prev_btn = ui.add_enabled(
                 has_prev,
-                egui::Button::new(
-                    egui::RichText::new("\u{2191}")
-                        .size(theme::FONT_SM)
-                        .color(if has_prev { t.text } else { t.overlay0 }),
-                )
+                egui::Button::new(crate::ui_kit::icon(
+                    crate::ui_kit::icon::CHEVRON_UP,
+                    theme::FONT_SM,
+                    if has_prev { t.text } else { t.overlay0 },
+                ))
                 .frame(false),
             );
             if prev_btn.hovered() && has_prev {
@@ -842,11 +838,11 @@ pub(super) fn render_diff_toolbar(
 
             let next_btn = ui.add_enabled(
                 has_next,
-                egui::Button::new(
-                    egui::RichText::new("\u{2193}")
-                        .size(theme::FONT_SM)
-                        .color(if has_next { t.text } else { t.overlay0 }),
-                )
+                egui::Button::new(crate::ui_kit::icon(
+                    crate::ui_kit::icon::CHEVRON_DOWN,
+                    theme::FONT_SM,
+                    if has_next { t.text } else { t.overlay0 },
+                ))
                 .frame(false),
             );
             if next_btn.hovered() && has_next {

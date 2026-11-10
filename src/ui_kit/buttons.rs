@@ -12,7 +12,7 @@ pub fn icon_button(
     ui: &mut egui::Ui,
     id: egui::Id,
     rect: egui::Rect,
-    icon: &str,
+    glyph: char,
     font_size: f32,
     fg: egui::Color32,
     style: IconButtonStyle,
@@ -69,8 +69,8 @@ pub fn icon_button(
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        icon,
-        egui::FontId::proportional(font_size),
+        glyph,
+        egui::FontId::new(font_size, egui::FontFamily::Name("icons".into())),
         text_color,
     );
 

@@ -268,7 +268,7 @@ impl App {
                                     ui,
                                     egui::Id::new(("tab_close", pane_id)),
                                     close_rect,
-                                    "\u{00d7}",
+                                    ui_kit::icon::X,
                                     theme::FONT_TERM,
                                     close_fg,
                                     ui_kit::IconButtonStyle::Danger,
@@ -526,34 +526,18 @@ impl App {
             let t = theme::active();
             let mut x = tab_actions_rect.min.x + theme::SP_1;
 
-            let icon_stroke = egui::Stroke::new(1.2_f32, t.subtext1);
-            let icon_hover_stroke = egui::Stroke::new(1.2_f32, t.text);
-            let icon_inset = theme::ICON_INSET;
-
             // Split horizontal (side-by-side)
             let split_h_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-            let split_h_resp = ui.interact(
-                split_h_rect,
+            let split_h_resp = ui_kit::icon_button(
+                ui,
                 self.vp_id("tab_split_h"),
-                egui::Sense::click(),
+                split_h_rect,
+                ui_kit::icon::COLUMNS_2,
+                theme::FONT_SM,
+                t.subtext1,
+                ui_kit::IconButtonStyle::Default,
             );
-            if split_h_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let sh_stroke = if split_h_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_h_rect, theme::R_MD, t.surface2);
-                icon_hover_stroke
-            } else {
-                icon_stroke
-            };
-            {
-                let r = split_h_rect.shrink(icon_inset);
-                let p = ui.painter();
-                p.rect_stroke(r, 1.0, sh_stroke);
-                p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
-            }
             if split_h_resp
                 .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
                 .clicked()
@@ -565,27 +549,15 @@ impl App {
             // Split vertical (top-bottom)
             let split_v_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-            let split_v_resp = ui.interact(
-                split_v_rect,
+            let split_v_resp = ui_kit::icon_button(
+                ui,
                 self.vp_id("tab_split_v"),
-                egui::Sense::click(),
+                split_v_rect,
+                ui_kit::icon::ROWS_2,
+                theme::FONT_SM,
+                t.subtext1,
+                ui_kit::IconButtonStyle::Default,
             );
-            if split_v_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let sv_stroke = if split_v_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_v_rect, theme::R_MD, t.surface2);
-                icon_hover_stroke
-            } else {
-                icon_stroke
-            };
-            {
-                let r = split_v_rect.shrink(icon_inset);
-                let p = ui.painter();
-                p.rect_stroke(r, 1.0, sv_stroke);
-                p.line_segment([r.left_center(), r.right_center()], sv_stroke);
-            }
             if split_v_resp
                 .on_hover_text("Split vertical (Ctrl+Shift+-)")
                 .clicked()
@@ -601,7 +573,7 @@ impl App {
                 ui,
                 self.vp_id("tab_close_all"),
                 close_all_rect,
-                "\u{2716}",
+                ui_kit::icon::X,
                 theme::FONT_SM,
                 t.danger_fg,
                 ui_kit::IconButtonStyle::Danger,
@@ -866,7 +838,7 @@ impl App {
                                     ui,
                                     egui::Id::new(("gtab_close", group_id, pane_id)),
                                     close_rect,
-                                    "\u{00d7}",
+                                    ui_kit::icon::X,
                                     theme::FONT_TERM,
                                     close_fg,
                                     ui_kit::IconButtonStyle::Danger,
@@ -1090,31 +1062,19 @@ impl App {
             let icon_sz = egui::vec2(theme::BTN_W, tab_h);
             let mut x = tab_actions_rect.min.x + theme::SP_1;
 
-            let icon_stroke = egui::Stroke::new(1.2_f32, t.subtext1);
-            let icon_hover_stroke = egui::Stroke::new(1.2_f32, t.text);
-            let icon_inset = theme::ICON_INSET;
-
             // Split horizontal (side-by-side)
             let split_h_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
             let split_h_id = self.vp_id(&format!("gtab_split_h_{group_id}"));
-            let split_h_resp = ui.interact(split_h_rect, split_h_id, egui::Sense::click());
-            if split_h_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let sh_stroke = if split_h_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_h_rect, theme::R_MD, t.surface2);
-                icon_hover_stroke
-            } else {
-                icon_stroke
-            };
-            {
-                let r = split_h_rect.shrink(icon_inset);
-                let p = ui.painter();
-                p.rect_stroke(r, 1.0, sh_stroke);
-                p.line_segment([r.center_top(), r.center_bottom()], sh_stroke);
-            }
+            let split_h_resp = ui_kit::icon_button(
+                ui,
+                split_h_id,
+                split_h_rect,
+                ui_kit::icon::COLUMNS_2,
+                theme::FONT_SM,
+                t.subtext1,
+                ui_kit::IconButtonStyle::Default,
+            );
             if split_h_resp
                 .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
                 .clicked()
@@ -1126,27 +1086,15 @@ impl App {
             // Split vertical (top-bottom)
             let split_v_rect =
                 egui::Rect::from_min_size(egui::pos2(x, tab_actions_rect.min.y), icon_sz);
-            let split_v_resp = ui.interact(
-                split_v_rect,
+            let split_v_resp = ui_kit::icon_button(
+                ui,
                 self.vp_id(&format!("gtab_split_v_{group_id}")),
-                egui::Sense::click(),
+                split_v_rect,
+                ui_kit::icon::ROWS_2,
+                theme::FONT_SM,
+                t.subtext1,
+                ui_kit::IconButtonStyle::Default,
             );
-            if split_v_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            let sv_stroke = if split_v_resp.hovered() {
-                ui.painter()
-                    .rect_filled(split_v_rect, theme::R_MD, t.surface2);
-                icon_hover_stroke
-            } else {
-                icon_stroke
-            };
-            {
-                let r = split_v_rect.shrink(icon_inset);
-                let p = ui.painter();
-                p.rect_stroke(r, 1.0, sv_stroke);
-                p.line_segment([r.left_center(), r.right_center()], sv_stroke);
-            }
             if split_v_resp
                 .on_hover_text("Split vertical (Ctrl+Shift+-)")
                 .clicked()
@@ -1191,7 +1139,7 @@ impl App {
                 ui,
                 self.vp_id(&format!("gtab_close_all_{group_id}")),
                 close_all_rect,
-                "\u{2716}",
+                ui_kit::icon::X,
                 theme::FONT_SM,
                 t.danger_fg,
                 ui_kit::IconButtonStyle::Danger,
