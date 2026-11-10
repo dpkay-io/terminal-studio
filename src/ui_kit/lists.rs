@@ -7,7 +7,8 @@ pub fn selectable_row(
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> egui::Response {
     let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click_and_drag());
     let t = theme::active();
     let fill = if selected {
         Some(t.accent_bg)

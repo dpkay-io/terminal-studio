@@ -48,13 +48,9 @@ fn search_bar_inner(
     );
 
     let has_focus = ui.memory(|m| m.has_focus(id));
-    let border_color = if has_focus {
-        t.border_focus
-    } else {
-        t.border_subtle
-    };
+    let border_color = if has_focus { t.border_focus } else { t.border };
 
-    ui.painter().rect_filled(rect, theme::R_SM, t.bg_input);
+    ui.painter().rect_filled(rect, theme::R_SM, t.bg_base);
     ui.painter().rect_stroke(
         rect,
         theme::R_SM,
@@ -86,5 +82,52 @@ fn search_bar_inner(
     SearchBarResponse {
         response: inner_resp.unwrap(),
         escaped,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::theme::{self, ThemeId};
+    use crate::ui_kit::test_harness::{ctx_with_fonts, run_ui};
+
+    fn has_rect_color(
+        shape: &egui::Shape,
+        color: egui::Color32,
+        select: impl Fn(&egui::epaint::RectShape) -> egui::Color32 + Copy,
+    ) -> bool {
+        match shape {
+            egui::Shape::Rect(rect) => select(rect) == color,
+            egui::Shape::Vec(shapes) => shapes
+                .iter()
+                .any(|shape| has_rect_color(shape, color, select)),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn search_bar_uses_base_fill_and_border() {
+        let _guard = theme::test_support::lock_theme(ThemeId::CatppuccinMocha);
+        let ctx = ctx_with_fonts();
+        let mut query = String::new();
+        let out = run_ui(&ctx, egui::RawInput::default(), |ui| {
+            super::search_bar(
+                ui,
+                &mut query,
+                crate::ui_kit::icon::SEARCH,
+                "Search",
+                egui::Id::new("base-search"),
+            );
+        });
+
+        assert!(out.shapes.iter().any(|clipped| has_rect_color(
+            &clipped.shape,
+            theme::active().bg_base,
+            |rect| rect.fill,
+        )));
+        assert!(out.shapes.iter().any(|clipped| has_rect_color(
+            &clipped.shape,
+            theme::active().border,
+            |rect| rect.stroke.color,
+        )));
     }
 }

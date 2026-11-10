@@ -32,13 +32,6 @@ pub fn drag_divider(
     resp.drag_delta().y
 }
 
-// ── Active bar ─────────────────────────────────────────────────────────────
-
-pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::Rounding) {
-    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(theme::CARD_BAR_W, rect.height()));
-    painter.rect_filled(bar, rounding, theme::active().green);
-}
-
 /// Draws a horizontal gradient separator: transparent → color → transparent.
 pub fn gradient_separator(painter: &egui::Painter, rect: egui::Rect) {
     let color = theme::active().border_subtle;

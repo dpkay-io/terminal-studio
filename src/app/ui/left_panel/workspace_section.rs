@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::super::super::App;
-use super::WorkspaceSectionActions;
+use super::{section_header, WorkspaceSectionActions};
 use crate::app::ui::search_bar::search_bar_persistent;
 use crate::theme;
 use crate::ui_kit;
@@ -16,6 +16,35 @@ struct WorkspaceCardData {
     last_activated: u64,
     git_branch: String,
     git_diff_count: usize,
+}
+
+fn render_workspace_git_row(ui: &mut egui::Ui, branch: &str, changed_count: usize, width: f32) {
+    let t = theme::active();
+    let font = egui::FontId::proportional(theme::FONT_XS);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width.max(theme::SP_0), theme::GIT_ROW_H),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = theme::SP_1;
+            if changed_count > 0 {
+                ui.label(
+                    egui::RichText::new(format!("{changed_count} changed"))
+                        .font(font.clone())
+                        .color(t.warning),
+                );
+            }
+            if !branch.is_empty() {
+                if changed_count > 0 {
+                    ui.label(
+                        egui::RichText::new("\u{00b7}")
+                            .font(font.clone())
+                            .color(t.fg_muted),
+                    );
+                }
+                crate::ui_kit::truncate_label(ui, branch, font, t.fg_muted, ui.available_width());
+            }
+        },
+    );
 }
 
 impl App {
@@ -44,11 +73,7 @@ impl App {
             egui::vec2(ui.available_width(), theme::HEADER_H),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.label(
-                    egui::RichText::new(format!("Workspaces ({})", ws_count))
-                        .strong()
-                        .size(theme::FONT_SM),
-                );
+                ui.label(section_header("WORKSPACES", ws_count));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let arrow = if self.workspace_panel_collapsed {
                         ui_kit::icon::CHEVRON_RIGHT
@@ -59,7 +84,7 @@ impl App {
                         egui::Button::new(ui_kit::icon(
                             arrow,
                             theme::FONT_SM,
-                            theme::active().text,
+                            theme::active().fg_muted,
                         ))
                         .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
                         .frame(false),
@@ -207,20 +232,8 @@ impl App {
             theme::HEADER_H
         };
 
-        let base_tint_factor = if active {
-            theme::TINT_ACTIVE
-        } else {
-            theme::TINT_INACTIVE
-        };
-
-        let full_w = ui.available_width();
-        let stroke_val = if active {
-            egui::Stroke::new(theme::STROKE_THIN, theme::active().border_subtle)
-        } else {
-            egui::Stroke::NONE
-        };
-        let (full_rect, _) =
-            ui.allocate_exact_size(egui::vec2(full_w, card_h), egui::Sense::hover());
+        let row_resp = ui_kit::selectable_row(ui, active, card_h, |_| {});
+        let full_rect = row_resp.rect;
         let gear_rect = egui::Rect::from_min_size(
             egui::pos2(full_rect.max.x - theme::CARD_GEAR_W, full_rect.min.y),
             egui::vec2(theme::CARD_GEAR_W, theme::HEADER_H),
@@ -246,49 +259,37 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
 
-        // Animated hover tint: brighten card background when hovered
-        let card_hover_id = egui::Id::new(("ws_card_hover", data.id));
-        let card_hovered = name_resp.hovered() || gear_resp.hovered();
-        let hover_t =
-            crate::app::ui::animation::animated_hover(ui.ctx(), card_hover_id, card_hovered);
-        let hover_boost = 0.08_f32;
-        let effective_tint = (base_tint_factor + hover_boost * hover_t).min(1.0);
-        let fill = theme::from_rgb(theme::tinted(data.color, effective_tint));
-        let fg = theme::text_on(theme::tinted(data.color, effective_tint));
+        let t = theme::active();
+        let fg = if active { t.fg_strong } else { t.fg };
 
         if ui.is_rect_visible(full_rect) {
-            let rounding = egui::Rounding::same(theme::R_MD);
-            ui.painter().rect_filled(full_rect, rounding, fill);
-            ui.painter().rect_stroke(full_rect, rounding, stroke_val);
-
-            // Active session indicator: colored bar on left edge
-            if data.has_active_session {
-                let left_rounding = egui::Rounding {
-                    nw: theme::R_MD,
-                    sw: theme::R_MD,
-                    ne: 0.0,
-                    se: 0.0,
-                };
-                ui_kit::active_bar(ui.painter(), full_rect, left_rounding);
-            }
+            ui.painter().circle_filled(
+                egui::pos2(
+                    full_rect.left() + theme::SP_3,
+                    full_rect.min.y + theme::HEADER_H / 2.0,
+                ),
+                theme::SP_2,
+                theme::from_rgb(data.color),
+            );
 
             // Name text
-            let name_str = data.name.clone();
-            let name_galley = ui.fonts(|f| {
-                f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_SM), fg)
-            });
+            let name_x = full_rect.left() + theme::SP_6;
+            let name_max_w = (gear_rect.left() - theme::SP_2 - name_x).max(theme::SP_0);
+            let name_galley = ui_kit::truncate_galley(
+                ui.painter(),
+                &data.name,
+                egui::FontId::proportional(theme::FONT_MD),
+                fg,
+                name_max_w,
+            );
             let name_h = name_galley.size().y;
             let name_y = if has_git_row {
-                full_rect.min.y + (theme::HEADER_H - name_h) / 2.0 - 1.0
+                full_rect.min.y + (theme::HEADER_H - name_h) / 2.0 - theme::SP_1
             } else {
                 full_rect.center().y - name_h / 2.0
             };
-            let name_x = full_rect.left() + theme::SP_4 + theme::CARD_BAR_W;
-            ui.painter().with_clip_rect(name_rect).galley(
-                egui::pos2(name_x, name_y),
-                name_galley,
-                fg,
-            );
+            ui.painter()
+                .galley(egui::pos2(name_x, name_y), name_galley, fg);
 
             // Note icon (interactive — supports drag to open as pane)
             if data.has_note {
@@ -296,15 +297,15 @@ impl App {
                     f.layout_no_wrap(
                         ui_kit::icon::PENCIL.to_string(),
                         egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into())),
-                        fg,
+                        t.fg_muted,
                     )
                 });
-                let note_x = gear_rect.left() - 4.0 - note_galley.size().x;
+                let note_x = gear_rect.left() - theme::SP_2 - note_galley.size().x;
                 let note_y = full_rect.min.y + (theme::HEADER_H - note_galley.size().y) / 2.0;
                 let note_rect =
                     egui::Rect::from_min_size(egui::pos2(note_x, note_y), note_galley.size());
                 ui.painter()
-                    .galley(egui::pos2(note_x, note_y), note_galley, fg);
+                    .galley(egui::pos2(note_x, note_y), note_galley, t.fg_muted);
                 let note_resp = ui.interact(
                     note_rect,
                     egui::Id::new(("ws_note", data.id)),
@@ -323,9 +324,9 @@ impl App {
             // Gear icon — always visible (muted), brightens on hover
             {
                 let gear_fg = if gear_resp.hovered() {
-                    theme::active().text
+                    t.fg
                 } else {
-                    fg.gamma_multiply(0.4)
+                    t.fg_muted
                 };
                 ui.painter().text(
                     egui::pos2(
@@ -341,49 +342,18 @@ impl App {
 
             // Git info row
             if has_git_row {
-                let mut git_job = egui::text::LayoutJob::default();
-                let git_font = egui::FontId::proportional(theme::FONT_XS);
-                let muted_fg = fg.gamma_multiply(0.6);
-                if !data.git_branch.is_empty() {
-                    git_job.append(
-                        &data.git_branch,
-                        0.0,
-                        egui::TextFormat {
-                            font_id: git_font.clone(),
-                            color: muted_fg,
-                            ..Default::default()
-                        },
-                    );
-                }
-                if data.git_diff_count > 0 {
-                    if !data.git_branch.is_empty() {
-                        git_job.append(
-                            " \u{00b7} ",
-                            0.0,
-                            egui::TextFormat {
-                                font_id: git_font.clone(),
-                                color: muted_fg,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    git_job.append(
-                        &format!("{} changed", data.git_diff_count),
-                        0.0,
-                        egui::TextFormat {
-                            font_id: git_font.clone(),
-                            color: theme::active().warning,
-                            ..Default::default()
-                        },
-                    );
-                }
-                let git_galley = ui.fonts(|f| f.layout_job(git_job));
-                let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
-                ui.painter().with_clip_rect(full_rect).galley(
-                    egui::pos2(full_rect.left() + theme::SP_4 + theme::CARD_BAR_W, git_y),
-                    git_galley,
-                    egui::Color32::PLACEHOLDER,
+                let git_rect = egui::Rect::from_min_max(
+                    egui::pos2(name_x, full_rect.min.y + theme::HEADER_H),
+                    egui::pos2(gear_rect.left() - theme::SP_2, full_rect.bottom()),
                 );
+                ui.allocate_ui_at_rect(git_rect, |ui| {
+                    render_workspace_git_row(
+                        ui,
+                        &data.git_branch,
+                        data.git_diff_count,
+                        git_rect.width(),
+                    );
+                });
             }
         }
 
@@ -454,57 +424,21 @@ impl App {
     ) {
         let other_active = active_group_snap.is_none();
         let other_has_note = !self.note_store.get(None).is_empty();
-        let other_fill = if other_active {
-            theme::active().surface2
-        } else {
-            theme::active().surface0
-        };
-        let other_fg = if other_active {
-            theme::active().text
-        } else {
-            theme::active().subtext0
-        };
-        let other_stroke = if other_active {
-            egui::Stroke::new(theme::STROKE_BOLD, theme::active().text)
-        } else {
-            egui::Stroke::new(theme::STROKE_THIN, theme::active().overlay0)
-        };
-        let other_w = ui.available_width();
-        let (other_rect, other_resp) =
-            ui.allocate_exact_size(egui::vec2(other_w, 28.0), egui::Sense::click());
-        if other_resp.hovered() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
+        let other_resp = ui_kit::selectable_row(ui, other_active, theme::HEADER_H, |_| {});
+        let other_rect = other_resp.rect;
+        let t = theme::active();
+        let other_fg = if other_active { t.fg_strong } else { t.fg };
         if ui.is_rect_visible(other_rect) {
-            let rounding = egui::Rounding::same(theme::R_MD);
-            ui.painter().rect_filled(other_rect, rounding, other_fill);
-            ui.painter().rect_stroke(other_rect, rounding, other_stroke);
-
-            if has_active_session {
-                let left_rounding = egui::Rounding {
-                    nw: theme::R_MD,
-                    sw: theme::R_MD,
-                    ne: 0.0,
-                    se: 0.0,
-                };
-                ui_kit::active_bar(ui.painter(), other_rect, left_rounding);
-            }
-
-            let other_name = if other_active {
-                format!("{} Other", ui_kit::icon::CHEVRON_RIGHT)
-            } else {
-                "Other".to_string()
-            };
             let other_galley = ui.fonts(|f| {
                 f.layout_no_wrap(
-                    other_name,
-                    egui::FontId::new(theme::FONT_MD, egui::FontFamily::Name("icons".into())),
+                    "Other".to_string(),
+                    egui::FontId::proportional(theme::FONT_MD),
                     other_fg,
                 )
             });
             let text_y = other_rect.center().y - other_galley.size().y / 2.0;
             ui.painter().galley(
-                egui::pos2(other_rect.left() + 8.0, text_y),
+                egui::pos2(other_rect.left() + theme::SP_4, text_y),
                 other_galley,
                 other_fg,
             );
@@ -514,12 +448,12 @@ impl App {
                     f.layout_no_wrap(
                         ui_kit::icon::PENCIL.to_string(),
                         egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into())),
-                        other_fg,
+                        t.fg_muted,
                     )
                 });
-                let note_x = other_rect.right() - 8.0 - note_galley.size().x;
+                let note_x = other_rect.right() - theme::SP_4 - note_galley.size().x;
                 ui.painter()
-                    .galley(egui::pos2(note_x, text_y), note_galley, other_fg);
+                    .galley(egui::pos2(note_x, text_y), note_galley, t.fg_muted);
             }
         }
         if other_resp.clicked() {
@@ -538,5 +472,59 @@ impl App {
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::theme::{self, ThemeId};
+    use crate::ui_kit::test_harness::{ctx_with_fonts, run_ui};
+
+    fn painted_text(out: &egui::FullOutput) -> Vec<String> {
+        fn collect(shape: &egui::Shape, text: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(text_shape) => {
+                    text.extend(
+                        text_shape
+                            .galley
+                            .rows
+                            .iter()
+                            .map(|row| row.text().to_owned()),
+                    );
+                }
+                egui::Shape::Vec(shapes) => {
+                    for shape in shapes {
+                        collect(shape, text);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut text = Vec::new();
+        for clipped in &out.shapes {
+            collect(&clipped.shape, &mut text);
+        }
+        text
+    }
+
+    #[test]
+    fn workspace_card_changed_count_truncates() {
+        let _guard = theme::test_support::lock_theme(ThemeId::CatppuccinMocha);
+        let ctx = ctx_with_fonts();
+        let out = run_ui(&ctx, egui::RawInput::default(), |ui| {
+            super::render_workspace_git_row(ui, "feature/very-long-branch-name-here", 12, 160.0);
+        });
+        let text = painted_text(&out);
+
+        assert!(
+            text.iter()
+                .any(|value| value.ends_with('\u{2026}') && value.starts_with("feature/")),
+            "branch should truncate with an ellipsis: {text:?}"
+        );
+        assert!(
+            text.iter().any(|value| value == "12 changed"),
+            "changed count should remain whole: {text:?}"
+        );
     }
 }

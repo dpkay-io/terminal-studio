@@ -47,17 +47,6 @@ pub(super) struct LabelDef {
     pub(super) builtin: bool,
 }
 
-impl LabelDef {
-    pub(super) fn color(&self) -> Color32 {
-        Color32::from_rgba_premultiplied(
-            self.color_rgba[0],
-            self.color_rgba[1],
-            self.color_rgba[2],
-            self.color_rgba[3],
-        )
-    }
-}
-
 // ── Registry ─────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

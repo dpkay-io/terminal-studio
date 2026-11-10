@@ -10,6 +10,18 @@ use crate::ui_kit;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+fn section_header(label: &str, count: usize) -> egui::text::LayoutJob {
+    egui::text::LayoutJob::single_section(
+        format!("{label} \u{00b7} {count}"),
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(theme::FONT_XS),
+            color: theme::active().fg_muted,
+            extra_letter_spacing: theme::SP_1 / 2.0,
+            ..Default::default()
+        },
+    )
+}
+
 /// Deferred actions collected while rendering the session list section.
 pub(in crate::app) struct SessionListActions {
     pub spawn_new_session: Option<ShellKind>,
