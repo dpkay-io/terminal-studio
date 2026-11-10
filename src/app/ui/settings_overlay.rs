@@ -631,16 +631,7 @@ impl App {
                                                         egui::Align::Center,
                                                     ),
                                                     |ui| {
-                                                        let label = shortcut.label();
-                                                        let shortcut_fg = theme::ensure_readable(
-                                                            t.subtext0_rgb,
-                                                            t.surface1_rgb,
-                                                        );
-                                                        let badge = egui::RichText::new(&label)
-                                                            .size(theme::FONT_UI_SM)
-                                                            .color(shortcut_fg)
-                                                            .background_color(t.surface1);
-                                                        ui.label(badge);
+                                                        ui_kit::shortcut_badge(ui, &shortcut.label());
                                                         if os_reserved.contains(action) {
                                                             let warning_fg = theme::ensure_readable(
                                                                 t.yellow_rgb,
@@ -670,16 +661,9 @@ impl App {
                             ui.add_space(theme::SP_2);
                             ui.horizontal(|ui| {
                                 let t = theme::active();
-                                let split_shortcut_fg =
-                                    theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{}Arrow",
-                                        crate::shortcuts::alt_modifier_label()
-                                    ))
-                                        .size(theme::FONT_UI_SM)
-                                        .color(split_shortcut_fg)
-                                        .background_color(t.surface1),
+                                ui_kit::shortcut_badge(
+                                    ui,
+                                    &format!("{}Arrow", crate::shortcuts::alt_modifier_label()),
                                 );
                                 ui.label(
                                     egui::RichText::new("Move focus between split panes")

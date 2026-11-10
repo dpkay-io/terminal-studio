@@ -551,7 +551,8 @@ fn mac_default_bindings() -> Vec<(Shortcut, AppAction)> {
         (ctrl_cmd(OpenBracket), AppAction::PrevWorkspace),
         (shift_cmd(E), AppAction::RightTabDirectory),
         (shift_cmd(G), AppAction::RightTabGitDiff),
-        (shift_cmd(J), AppAction::ToggleNotes),
+        // Shift-Command-J/K/N are commonly taken by global hotkey utilities.
+        (opt_cmd(N), AppAction::ToggleNotes),
         (opt_cmd(T), AppAction::DuplicateSession),
         (cmd(C), AppAction::CopySelection),
         (shift_cmd(L), AppAction::FocusSessionSearch),

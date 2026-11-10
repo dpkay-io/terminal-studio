@@ -227,17 +227,11 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(ui_kit::heading("Quick Switcher").color(t.text));
                             ui.add_space(theme::SP_6);
-                            let shortcut_fg =
-                                theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
-                            ui.label(
-                                egui::RichText::new(
-                                    self.shortcut_registry
-                                        .label_for(AppAction::OpenQuickSwitcher)
-                                        .unwrap_or_default(),
-                                )
-                                .size(theme::FONT_UI_SM)
-                                .color(shortcut_fg)
-                                .background_color(t.surface1),
+                            ui_kit::shortcut_badge(
+                                ui,
+                                self.shortcut_registry
+                                    .label_for(AppAction::OpenQuickSwitcher)
+                                    .unwrap_or_default(),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
