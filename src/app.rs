@@ -23,6 +23,7 @@ use alacritty_terminal::{
 pub(crate) mod claude_session;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
+mod cursor_blink;
 mod diff_parser;
 mod drag;
 mod feedback;
@@ -152,7 +153,7 @@ pub struct App {
     // Shells available on this system, computed once at startup.
     available_shells: Vec<ShellKind>,
     cursor_alpha: f32,
-    cursor_blink_start: Instant,
+    cursor_blink: cursor_blink::CursorBlink,
     // Timer for periodic egui memory GC to evict stale widget state from dead pane/session IDs.
     last_egui_gc: Instant,
 
@@ -517,21 +518,29 @@ impl eframe::App for App {
             ctx.set_cursor_icon(egui::CursorIcon::Grab);
         }
 
-        // Cursor blink — only schedule repaint when a terminal pane is focused.
+        // Cursor blink: repaint only when the cursor switches between shown and
+        // hidden, and not at all once it has settled (see `cursor_blink`).
         {
-            let has_active_terminal = self
-                .pane_state
-                .active_pane_id
-                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                .map(|p| matches!(p.content, PaneContent::Terminal(_)))
-                .unwrap_or(false);
-            if self.settings.cursor_blink && has_active_terminal {
-                let elapsed = self.cursor_blink_start.elapsed().as_secs_f32();
-                let t = (elapsed % 1.0) * std::f32::consts::TAU;
-                self.cursor_alpha = 0.5 + 0.5 * t.cos();
-                ctx.request_repaint_after(Duration::from_millis(33));
-            } else {
-                self.cursor_alpha = 1.0;
+            let active_terminal = self.pane_state.active_pane_id.filter(|pid| {
+                self.pane_state
+                    .panes
+                    .iter()
+                    .any(|p| p.id == *pid && matches!(p.content, PaneContent::Terminal(_)))
+            });
+            let (window_focused, had_input) = ctx.input(|i| {
+                (
+                    i.focused,
+                    i.events.iter().any(cursor_blink::is_blink_restarting_event),
+                )
+            });
+            let blinking =
+                self.settings.cursor_blink && window_focused && active_terminal.is_some();
+            let frame =
+                self.cursor_blink
+                    .frame(Instant::now(), blinking, had_input, active_terminal);
+            self.cursor_alpha = frame.alpha;
+            if let Some(next_change) = frame.next_change {
+                ctx.request_repaint_after(next_change);
             }
         }
 

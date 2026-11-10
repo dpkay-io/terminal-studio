@@ -215,17 +215,14 @@ impl App {
         actions: &mut SessionListActions,
         shells: &[crate::pty::ShellKind],
     ) {
+        // Buttons are laid out first (right to left) so the title only gets the
+        // width that is left and truncates with an ellipsis instead of being
+        // drawn underneath them in a narrow sidebar.
         ui.allocate_ui_with_layout(
             egui::vec2(ui.available_width(), theme::HEADER_H),
-            egui::Layout::left_to_right(egui::Align::Center),
+            egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                let session_count = self.pane_state.panes.len();
-                ui.label(
-                    egui::RichText::new(format!("Sessions ({})", session_count))
-                        .strong()
-                        .size(theme::FONT_UI_MD),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                {
                     let default_shell = self.configured_shell();
                     let shortcut_label = self
                         .shortcut_registry
@@ -326,6 +323,17 @@ impl App {
                             actions.duplicate_session = true;
                         }
                     }
+                }
+                let session_count = self.pane_state.panes.len();
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("Sessions ({})", session_count))
+                                .strong()
+                                .size(theme::FONT_UI_MD),
+                        )
+                        .truncate(),
+                    );
                 });
             },
         );
