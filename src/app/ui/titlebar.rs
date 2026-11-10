@@ -8,6 +8,11 @@ use crate::ui_kit;
 use crate::updater::UpdateStatus;
 use std::time::Duration;
 
+/// Shown wherever a binding is listed that the OS takes first.
+pub(in crate::app) const OS_RESERVED_NOTE: &str = "used by the system";
+/// Hover text explaining how to resolve an OS-reserved binding.
+pub(in crate::app) const OS_RESERVED_HELP: &str = "The operating system takes this shortcut before Terminal Studio sees it. Turn it off in the system's keyboard shortcut settings, or change it in keybindings.json.";
+
 fn paint_titlebar_title(
     ui: &egui::Ui,
     clipped: &egui::Painter,
@@ -97,6 +102,9 @@ fn paint_titlebar_title(
 impl App {
     pub(in crate::app) fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
         match self.shortcut_registry.label_for(action) {
+            Some(label) if self.shortcut_registry.is_os_reserved(action) => {
+                format!("{desc} ({label}, {OS_RESERVED_NOTE})")
+            }
             Some(label) => format!("{desc} ({label})"),
             None => desc.to_string(),
         }

@@ -595,6 +595,11 @@ impl App {
                         .show(ui, |ui| {
                             let t = theme::active();
                             let groups = self.shortcut_registry.groups();
+                            let os_reserved: Vec<AppAction> = groups
+                                .iter()
+                                .flat_map(|g| g.entries.iter().map(|(a, _)| *a))
+                                .filter(|a| self.shortcut_registry.is_os_reserved(*a))
+                                .collect();
                             let half = groups.len().div_ceil(2);
 
                             ui.columns(2, |cols| {
@@ -636,6 +641,18 @@ impl App {
                                                             .color(shortcut_fg)
                                                             .background_color(t.surface1);
                                                         ui.label(badge);
+                                                        if os_reserved.contains(action) {
+                                                            let warning_fg = theme::ensure_readable(
+                                                                t.yellow_rgb,
+                                                                t.surface0_rgb,
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(super::titlebar::OS_RESERVED_NOTE)
+                                                                    .size(theme::FONT_UI_XS)
+                                                                    .color(warning_fg),
+                                                            )
+                                                            .on_hover_text(super::titlebar::OS_RESERVED_HELP);
+                                                        }
                                                     },
                                                 );
                                             });
@@ -656,7 +673,10 @@ impl App {
                                 let split_shortcut_fg =
                                     theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                                 ui.label(
-                                    egui::RichText::new("Alt+Arrow")
+                                    egui::RichText::new(format!(
+                                        "{}Arrow",
+                                        crate::shortcuts::alt_modifier_label()
+                                    ))
                                         .size(theme::FONT_UI_SM)
                                         .color(split_shortcut_fg)
                                         .background_color(t.surface1),

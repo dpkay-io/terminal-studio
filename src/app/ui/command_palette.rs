@@ -380,8 +380,8 @@ impl App {
                                 "\u{2191}\u{2193} navigate  \u{23CE} run  Esc close"
                             } else {
                                 &format!(
-                                    "\u{2191}\u{2193} navigate  \u{23CE} open  {}+\u{23CE} external  Esc close  > commands",
-                                    crate::shortcuts::primary_modifier_label(),
+                                    "\u{2191}\u{2193} navigate  \u{23CE} open  {} external  Esc close  > commands",
+                                    crate::shortcuts::Shortcut::primary(egui::Key::Enter).label(),
                                 )
                             };
                             ui.label(

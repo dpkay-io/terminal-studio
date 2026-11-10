@@ -3052,6 +3052,7 @@ impl App {
                             self.workers.search_worker.cancel();
                         }
                     }
+                    Some(AppAction::ToggleFullscreen) => window_state::toggle_fullscreen(ctx),
                     Some(AppAction::ZoomPane) => {
                         if self.zoomed_pane_id.is_some() {
                             self.zoomed_pane_id = None;

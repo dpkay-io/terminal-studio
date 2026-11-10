@@ -2,7 +2,7 @@ use super::super::pane::{PaneContent, PaneEntry};
 use super::super::workspace_ui::PRESET_COLORS;
 use super::super::{App, CloseAllTarget};
 use crate::pane_tree::PaneNode;
-use crate::shortcuts::{primary_modifier_label, AppAction};
+use crate::shortcuts::{AppAction, Shortcut};
 use crate::theme;
 use crate::ui_kit;
 use crate::workspace::Workspace;
@@ -1457,8 +1457,8 @@ impl App {
                     cancel_clicked = true;
                 }
                 ui.label(ui_kit::hint(format!(
-                    "{}+Enter to commit",
-                    primary_modifier_label()
+                    "{} to commit",
+                    Shortcut::primary(egui::Key::Enter).label()
                 )));
             });
         });

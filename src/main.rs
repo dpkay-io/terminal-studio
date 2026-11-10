@@ -6,6 +6,10 @@ mod file_search_worker;
 mod git;
 mod keybindings;
 pub(crate) mod logging;
+#[cfg(target_os = "macos")]
+mod macos_hotkeys;
+#[cfg(target_os = "macos")]
+mod macos_objc;
 mod md_detector;
 mod pane_tree;
 mod pty;

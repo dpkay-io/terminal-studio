@@ -3,15 +3,20 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::shortcuts::{key_from_name, key_name, AppAction, Shortcut};
+use crate::shortcuts::{default_bindings, key_from_name, key_name, AppAction, Shortcut};
 use crate::util;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct KeyBinding {
     pub action: String,
+    /// The primary modifier: Command on macOS, Ctrl elsewhere.
     pub ctrl: bool,
     pub shift: bool,
     pub alt: bool,
+    /// The physical Control key on macOS (as in Control-Command-F). Absent in
+    /// older files, where it defaults to off.
+    #[serde(default)]
+    pub control: bool,
     pub key: String,
 }
 
@@ -45,415 +50,16 @@ impl KeybindingsConfig {
         }
     }
 
+    /// The platform defaults from `shortcuts::default_bindings`, in file form.
     pub fn default_bindings() -> Vec<KeyBinding> {
-        let defaults: Vec<(Shortcut, AppAction)> = vec![
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::B,
-                },
-                AppAction::ToggleLeftSidebar,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::E,
-                },
-                AppAction::ToggleRightSidebar,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Backtick,
-                },
-                AppAction::FocusTerminal,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::N,
-                },
-                AppAction::NewTerminalTab,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::W,
-                },
-                AppAction::CloseCurrentPane,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num1,
-                },
-                AppAction::SwitchToTab1,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num2,
-                },
-                AppAction::SwitchToTab2,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num3,
-                },
-                AppAction::SwitchToTab3,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num4,
-                },
-                AppAction::SwitchToTab4,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num5,
-                },
-                AppAction::SwitchToTab5,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num6,
-                },
-                AppAction::SwitchToTab6,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num7,
-                },
-                AppAction::SwitchToTab7,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num8,
-                },
-                AppAction::SwitchToTab8,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Num9,
-                },
-                AppAction::SwitchToTab9,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::OpenBracket,
-                },
-                AppAction::PreviousTab,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::CloseBracket,
-                },
-                AppAction::NextTab,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Backslash,
-                },
-                AppAction::SplitHorizontal,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Minus,
-                },
-                AppAction::SplitVertical,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Comma,
-                },
-                AppAction::OpenSettings,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::PageDown,
-                },
-                AppAction::NextWorkspace,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::PageUp,
-                },
-                AppAction::PrevWorkspace,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::D,
-                },
-                AppAction::RightTabDirectory,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::G,
-                },
-                AppAction::RightTabGitDiff,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::J,
-                },
-                AppAction::ToggleNotes,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::K,
-                },
-                AppAction::DuplicateSession,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::C,
-                },
-                AppAction::CopySelection,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::F,
-                },
-                AppAction::FocusSessionSearch,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::P,
-                },
-                AppAction::CommandPalette,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: false,
-                    key: egui::Key::P,
-                },
-                AppAction::OpenFileFinder,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Slash,
-                },
-                AppAction::ToggleShortcutHelp,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Space,
-                },
-                AppAction::OpenQuickSwitcher,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: false,
-                    key: egui::Key::F,
-                },
-                AppAction::SearchTerminal,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::T,
-                },
-                AppAction::SearchAllSessions,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::Z,
-                },
-                AppAction::ZoomPane,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::R,
-                },
-                AppAction::ReopenClosedSession,
-            ),
-            // Group navigation
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: true,
-                    key: egui::Key::ArrowRight,
-                },
-                AppAction::FocusNextGroup,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: true,
-                    key: egui::Key::ArrowLeft,
-                },
-                AppAction::FocusPrevGroup,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: true,
-                    key: egui::Key::ArrowRight,
-                },
-                AppAction::MoveTabToNextGroup,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: true,
-                    key: egui::Key::ArrowLeft,
-                },
-                AppAction::MoveTabToPrevGroup,
-            ),
-            // Vertical group navigation
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: true,
-                    key: egui::Key::ArrowDown,
-                },
-                AppAction::FocusGroupDown,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: false,
-                    alt: true,
-                    key: egui::Key::ArrowUp,
-                },
-                AppAction::FocusGroupUp,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: true,
-                    key: egui::Key::ArrowDown,
-                },
-                AppAction::MoveTabToDownGroup,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: true,
-                    key: egui::Key::ArrowUp,
-                },
-                AppAction::MoveTabToUpGroup,
-            ),
-            (
-                Shortcut {
-                    ctrl: true,
-                    shift: true,
-                    alt: false,
-                    key: egui::Key::R,
-                },
-                AppAction::RevealInExplorer,
-            ),
-        ];
-
-        defaults
+        default_bindings()
             .into_iter()
             .map(|(s, a)| KeyBinding {
                 action: a.name().to_string(),
                 ctrl: s.ctrl,
                 shift: s.shift,
                 alt: s.alt,
+                control: s.control,
                 key: key_name(s.key).to_string(),
             })
             .collect()
@@ -472,6 +78,7 @@ impl KeybindingsConfig {
                         ctrl: kb.ctrl,
                         shift: kb.shift,
                         alt: kb.alt,
+                        control: kb.control,
                         key,
                     },
                     action,
@@ -483,4 +90,44 @@ impl KeybindingsConfig {
 
 fn keybindings_data_path() -> Option<PathBuf> {
     util::data_file("keybindings.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_round_trip_through_the_file_form() {
+        let config = KeybindingsConfig {
+            bindings: KeybindingsConfig::default_bindings(),
+        };
+        assert_eq!(config.to_shortcut_pairs(), default_bindings());
+    }
+
+    #[test]
+    fn older_files_without_control_still_load() {
+        let json =
+            r#"[{"action":"new_terminal_tab","ctrl":true,"shift":true,"alt":false,"key":"N"}]"#;
+        let bindings: Vec<KeyBinding> = serde_json::from_str(json).expect("parses");
+        let pairs = KeybindingsConfig { bindings }.to_shortcut_pairs();
+        assert_eq!(
+            pairs,
+            vec![(
+                Shortcut::primary(egui::Key::N).with_shift(),
+                AppAction::NewTerminalTab
+            )]
+        );
+    }
+
+    #[test]
+    fn unknown_actions_and_keys_are_skipped() {
+        let json = r#"[
+            {"action":"no_such_action","ctrl":true,"shift":false,"alt":false,"key":"N"},
+            {"action":"new_terminal_tab","ctrl":true,"shift":false,"alt":false,"key":"NoSuchKey"}
+        ]"#;
+        let bindings: Vec<KeyBinding> = serde_json::from_str(json).expect("parses");
+        assert!(KeybindingsConfig { bindings }
+            .to_shortcut_pairs()
+            .is_empty());
+    }
 }

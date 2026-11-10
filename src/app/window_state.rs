@@ -32,21 +32,34 @@ fn is_maximized(info: &ViewportInfo) -> bool {
     info.maximized.unwrap_or(false)
 }
 
-/// The frameless edge-resize handles only make sense for a floating window.
+/// The app's own edge-resize handles, for a floating window. macOS resizes
+/// the window natively (winit cannot start a resize drag there), so the app
+/// stays out of the way.
 pub(super) fn allows_edge_resize(info: &ViewportInfo) -> bool {
-    !is_maximized(info) && !is_fullscreen(info)
+    allows_edge_resize_on(info, IS_MAC)
+}
+
+fn allows_edge_resize_on(info: &ViewportInfo, is_mac: bool) -> bool {
+    !is_mac && !is_maximized(info) && !is_fullscreen(info)
 }
 
 fn current(ctx: &Context, read: impl Fn(&ViewportInfo) -> bool) -> bool {
     ctx.input(|i| read(i.viewport()))
 }
 
+/// On macOS, AppKit's own zoom, which knows the live state even after other
+/// apps resize the window. Elsewhere egui's flag is refreshed every frame.
+#[cfg(target_os = "macos")]
+pub(super) fn toggle_maximized(_ctx: &Context) {
+    crate::macos_objc::zoom_key_window();
+}
+
+#[cfg(not(target_os = "macos"))]
 pub(super) fn toggle_maximized(ctx: &Context) {
     let maximized = current(ctx, is_maximized);
     ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
 }
 
-#[cfg(target_os = "macos")]
 pub(super) fn toggle_fullscreen(ctx: &Context) {
     let fullscreen = current(ctx, is_fullscreen);
     ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
@@ -114,15 +127,20 @@ mod tests {
             fullscreen: Some(fullscreen),
             ..Default::default()
         };
-        assert!(allows_edge_resize(&with(false, false)));
-        assert!(!allows_edge_resize(&with(true, false)));
-        assert!(!allows_edge_resize(&with(false, true)));
+        assert!(allows_edge_resize_on(&with(false, false), OTHER));
+        assert!(!allows_edge_resize_on(&with(true, false), OTHER));
+        assert!(!allows_edge_resize_on(&with(false, true), OTHER));
+    }
+
+    #[test]
+    fn mac_leaves_resizing_to_appkit() {
+        assert!(!allows_edge_resize_on(&ViewportInfo::default(), MAC));
     }
 
     #[test]
     fn missing_state_defaults_to_floating_and_windowed() {
         let unknown = ViewportInfo::default();
         assert!(!is_fullscreen(&unknown));
-        assert!(allows_edge_resize(&unknown));
+        assert!(allows_edge_resize_on(&unknown, OTHER));
     }
 }
