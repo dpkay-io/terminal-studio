@@ -2010,7 +2010,7 @@ impl App {
         let bar_w = rect.width() - 8.0;
         let x0 = rect.min.x + 4.0;
 
-        let font = egui::FontId::monospace(theme::FONT_SYS_SM);
+        let font = egui::FontId::monospace(theme::FONT_XS);
         let t = theme::active();
 
         struct Row<'a> {
@@ -2069,7 +2069,7 @@ impl App {
             egui::pos2(rect.center().x, rect.max.y - 2.0),
             egui::Align2::CENTER_BOTTOM,
             &net_text,
-            egui::FontId::monospace(theme::FONT_SYS_XS),
+            egui::FontId::monospace(theme::FONT_XS),
             fg.linear_multiply(0.7),
         );
     }

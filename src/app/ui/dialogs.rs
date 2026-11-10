@@ -230,7 +230,7 @@ impl App {
                                 theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                             ui.label(
                                 egui::RichText::new("Ctrl+Shift+Space")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(shortcut_fg)
                                     .background_color(t.surface1),
                             );
@@ -240,7 +240,7 @@ impl App {
                                     if ui
                                         .add(
                                             egui::Button::new(
-                                                egui::RichText::new("×").size(theme::FONT_UI_LG),
+                                                egui::RichText::new("×").size(theme::FONT_MD),
                                             )
                                             .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
                                         )
@@ -282,14 +282,14 @@ impl App {
                                 };
                                 ui.label(
                                     egui::RichText::new(key)
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .strong()
                                         .color(fg)
                                         .background_color(bg),
                                 );
                                 ui.label(
                                     egui::RichText::new(desc)
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(t.subtext0),
                                 );
                                 ui.add_space(theme::SP_5);
@@ -301,14 +301,14 @@ impl App {
                                 let ws_badge_fg = theme::ensure_readable(t.base_rgb, t.green_rgb);
                                 ui.label(
                                     egui::RichText::new(&badge)
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .strong()
                                         .color(ws_badge_fg)
                                         .background_color(t.green),
                                 );
                                 ui.label(
                                     egui::RichText::new("selected")
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(t.subtext0),
                                 );
                                 ui.add_space(theme::SP_5);
@@ -513,7 +513,7 @@ impl App {
                                                                 " {} ",
                                                                 ws_number
                                                             ))
-                                                            .size(theme::FONT_UI_SM)
+                                                            .size(theme::FONT_XS)
                                                             .strong()
                                                             .color(header_fg)
                                                             .background_color(
@@ -587,7 +587,7 @@ impl App {
                                                                     " {} ",
                                                                     letter
                                                                 ))
-                                                                .size(theme::FONT_UI_SM)
+                                                                .size(theme::FONT_XS)
                                                                 .strong()
                                                                 .color(session_badge_fg)
                                                                 .background_color(badge_bg),
@@ -680,7 +680,7 @@ impl App {
                 if ws_name_conflict {
                     ui.label(
                         egui::RichText::new("A workspace with this name already exists")
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .color(theme::active().error),
                     );
                 }
@@ -689,7 +689,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(theme::short_path(&dlg.path))
                         .monospace()
-                        .size(theme::FONT_UI_SM)
+                        .size(theme::FONT_XS)
                         .color(theme::active().fg_path),
                 )
                 .on_hover_text(dlg.path.display().to_string());
@@ -817,7 +817,7 @@ impl App {
                 if edit_name_conflict {
                     ui.label(
                         egui::RichText::new("A workspace with this name already exists")
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .color(theme::active().error),
                     );
                 }
@@ -1504,7 +1504,7 @@ impl App {
                 ui.add_space(theme::SP_1);
                 ui.label(
                     egui::RichText::new("\u{26a0} This will overwrite remote history. Commits others have pulled may be lost.")
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .color(theme::active().error),
                 );
             }
@@ -1625,12 +1625,12 @@ impl App {
 
             ui.label(
                 egui::RichText::new(format!("Discard all changes to \"{}\"?", file_path))
-                    .size(crate::theme::FONT_UI_MD),
+                    .size(crate::theme::FONT_SM),
             );
             ui.add_space(crate::theme::SP_1);
             ui.label(
                 egui::RichText::new("This cannot be undone.")
-                    .size(crate::theme::FONT_UI_SM)
+                    .size(crate::theme::FONT_XS)
                     .color(crate::theme::active().error),
             );
 
@@ -1677,12 +1677,12 @@ impl App {
 
             ui.label(
                 egui::RichText::new(format!("Delete \"{}\"?", file_path))
-                    .size(crate::theme::FONT_UI_MD),
+                    .size(crate::theme::FONT_SM),
             );
             ui.add_space(crate::theme::SP_1);
             ui.label(
                 egui::RichText::new("This cannot be undone.")
-                    .size(crate::theme::FONT_UI_SM)
+                    .size(crate::theme::FONT_XS)
                     .color(crate::theme::active().error),
             );
 
@@ -1749,7 +1749,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(theme::short_path(&dlg.path))
                         .monospace()
-                        .size(theme::FONT_UI_SM)
+                        .size(theme::FONT_XS)
                         .color(t.fg_path),
                 )
                 .on_hover_text(dlg.path.display().to_string());
@@ -1761,7 +1761,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(warn_text)
-                                .size(theme::FONT_UI_SM)
+                                .size(theme::FONT_XS)
                                 .color(t.warning),
                         );
                     });
@@ -1769,7 +1769,7 @@ impl App {
                         .add(
                             egui::Button::new(
                                 egui::RichText::new(format!("Open \"{}\" instead", parent_name))
-                                    .size(theme::FONT_UI_SM),
+                                    .size(theme::FONT_XS),
                             )
                             .rounding(theme::R_SM),
                         )
@@ -1826,7 +1826,7 @@ impl App {
                     if name_conflict {
                         ui.label(
                             egui::RichText::new("A workspace with this name already exists")
-                                .size(theme::FONT_UI_XS)
+                                .size(theme::FONT_XS)
                                 .color(t.error),
                         );
                     }
@@ -1864,7 +1864,7 @@ impl App {
                     if color_conflict {
                         ui.label(
                             egui::RichText::new("This color is already used by another workspace")
-                                .size(theme::FONT_UI_XS)
+                                .size(theme::FONT_XS)
                                 .color(t.warning),
                         );
                     }

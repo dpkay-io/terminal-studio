@@ -565,8 +565,8 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         .text_styles
         .get(&egui::TextStyle::Body)
         .map(|f| f.size)
-        .unwrap_or(13.0)
-        .max(theme::FONT_UI_LG);
+        .unwrap_or(theme::FONT_MD)
+        .max(theme::FONT_MD);
 
     let th = theme::active();
     let mut rc = RenderCtx {
@@ -658,7 +658,7 @@ fn render_block(ui: &mut egui::Ui, block: &Block, rc: &mut RenderCtx, tone: Tone
                 1 => theme::FONT_HEADING_1 + 4.0,
                 2 => theme::FONT_HEADING_1,
                 3 => theme::FONT_HEADING_2,
-                4 => theme::FONT_STATUS,
+                4 => theme::FONT_LG,
                 _ => rc.body + 1.0,
             };
             let color = if *level >= 6 {
@@ -838,10 +838,10 @@ fn is_external_url(url: &str) -> bool {
 fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
     let th = theme::active();
     let id = rc.next_id();
-    let font = FontId::monospace(theme::FONT_UI_MD);
+    let font = FontId::monospace(theme::FONT_SM);
     let bg = [th.md_code_bg.r(), th.md_code_bg.g(), th.md_code_bg.b()];
     let plain_fg = theme::ensure_readable([th.md_code.r(), th.md_code.g(), th.md_code.b()], bg);
-    let line_height = Some((theme::FONT_UI_MD * 1.4).round());
+    let line_height = Some((theme::FONT_SM * 1.4).round());
 
     let mut job = LayoutJob::default();
     let syn = if lang.is_empty() {
@@ -884,7 +884,7 @@ fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
             if !lang.is_empty() {
                 ui.label(
                     egui::RichText::new(lang)
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .color(th.fg_muted),
                 );
                 ui.add_space(theme::SP_2);

@@ -67,13 +67,13 @@ fn search_bar_inner(
             ui.spacing_mut().item_spacing.x = theme::SP_2;
             ui.label(
                 egui::RichText::new(icon)
-                    .size(theme::FONT_UI_XS)
+                    .size(theme::FONT_XS)
                     .color(t.fg_muted),
             );
             let te = egui::TextEdit::singleline(query)
                 .desired_width(ui.available_width())
                 .hint_text(hint)
-                .font(egui::FontId::proportional(theme::FONT_UI_SM))
+                .font(egui::FontId::proportional(theme::FONT_XS))
                 .frame(false)
                 .id(id);
             let r = ui.add(te);

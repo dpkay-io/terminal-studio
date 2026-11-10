@@ -339,7 +339,7 @@ impl App {
                                             egui::TextEdit::singleline(&mut self.tab_rename_text)
                                                 .id(edit_id)
                                                 .desired_width(edit_rect.width())
-                                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                                .font(egui::FontId::proportional(theme::FONT_SM))
                                                 .frame(true)
                                                 .text_color(title_color),
                                         )
@@ -381,7 +381,7 @@ impl App {
                                         egui::pos2(text_x, tab_rect.center().y),
                                         egui::Align2::LEFT_CENTER,
                                         display,
-                                        egui::FontId::proportional(theme::FONT_UI_MD),
+                                        egui::FontId::proportional(theme::FONT_SM),
                                         title_color,
                                     );
                             }
@@ -602,7 +602,7 @@ impl App {
                 self.vp_id("tab_close_all"),
                 close_all_rect,
                 "\u{2716}",
-                theme::FONT_UI_MD,
+                theme::FONT_SM,
                 t.danger_fg,
                 ui_kit::IconButtonStyle::Danger,
             );
@@ -907,7 +907,7 @@ impl App {
                                             egui::TextEdit::singleline(&mut self.tab_rename_text)
                                                 .id(edit_id)
                                                 .desired_width(edit_rect.width())
-                                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                                .font(egui::FontId::proportional(theme::FONT_SM))
                                                 .frame(true)
                                                 .text_color(title_color),
                                         )
@@ -949,7 +949,7 @@ impl App {
                                         egui::pos2(text_x, tab_rect.center().y),
                                         egui::Align2::LEFT_CENTER,
                                         display,
-                                        egui::FontId::proportional(theme::FONT_UI_MD),
+                                        egui::FontId::proportional(theme::FONT_SM),
                                         title_color,
                                     );
                             }
@@ -1192,7 +1192,7 @@ impl App {
                 self.vp_id(&format!("gtab_close_all_{group_id}")),
                 close_all_rect,
                 "\u{2716}",
-                theme::FONT_UI_MD,
+                theme::FONT_SM,
                 t.danger_fg,
                 ui_kit::IconButtonStyle::Danger,
             );

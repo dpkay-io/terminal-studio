@@ -240,7 +240,7 @@ fn render_text_search_bar(
         input_rect,
         egui::TextEdit::singleline(&mut search.query)
             .desired_width(input_rect.width())
-            .font(egui::FontId::monospace(theme::FONT_UI_MD))
+            .font(egui::FontId::monospace(theme::FONT_SM))
             .hint_text("Search\u{2026}"),
     );
     if resp.changed() {
@@ -273,7 +273,7 @@ fn render_text_search_bar(
         bar_id.with("prev"),
         prev_rect,
         "\u{25B2}",
-        theme::FONT_UI_XS,
+        theme::FONT_XS,
         t.subtext0,
         crate::ui_kit::IconButtonStyle::Default,
     )
@@ -283,7 +283,7 @@ fn render_text_search_bar(
         bar_id.with("next"),
         next_rect,
         "\u{25BC}",
-        theme::FONT_UI_XS,
+        theme::FONT_XS,
         t.subtext0,
         crate::ui_kit::IconButtonStyle::Default,
     )
@@ -323,7 +323,7 @@ fn render_text_search_bar(
         egui::pos2(count_center_x, bar_rect.center().y),
         egui::Align2::CENTER_CENTER,
         &count_text,
-        egui::FontId::monospace(theme::FONT_UI_SM),
+        egui::FontId::monospace(theme::FONT_XS),
         t.subtext0,
     );
 
@@ -350,7 +350,7 @@ fn render_file_editor_leaf(
         ui.centered_and_justified(|ui| {
             ui.label(
                 egui::RichText::new("Binary file — cannot display as text")
-                    .size(theme::FONT_STATUS)
+                    .size(theme::FONT_LG)
                     .color(theme::active().overlay0),
             );
         });
@@ -375,7 +375,7 @@ fn render_file_editor_leaf(
                 let raw_resp = ui.add(
                     egui::Button::new(
                         egui::RichText::new("Raw")
-                            .size(theme::FONT_UI_SM)
+                            .size(theme::FONT_XS)
                             .color(raw_color),
                     )
                     .fill(raw_bg)
@@ -392,7 +392,7 @@ fn render_file_editor_leaf(
                 let preview_resp = ui.add(
                     egui::Button::new(
                         egui::RichText::new("Preview")
-                            .size(theme::FONT_UI_SM)
+                            .size(theme::FONT_XS)
                             .color(preview_color),
                     )
                     .fill(preview_bg)
@@ -611,7 +611,7 @@ fn render_note_editor_leaf(
         ui.label(
             egui::RichText::new(label)
                 .strong()
-                .size(theme::FONT_UI_LG)
+                .size(theme::FONT_MD)
                 .color(t.text),
         );
     });
@@ -713,7 +713,7 @@ fn render_file_diff_leaf(
         ui.label(
             egui::RichText::new(format!("\u{21c4} {}", d.path.display()))
                 .strong()
-                .size(theme::FONT_UI_LG)
+                .size(theme::FONT_MD)
                 .color(theme::active().git_filename),
         );
     });
@@ -801,7 +801,7 @@ fn render_loading_indicator(ui: &mut egui::Ui, path: &std::path::Path) {
         };
         ui.label(
             egui::RichText::new(format!("Loading {filename}{dots}"))
-                .size(theme::FONT_STATUS)
+                .size(theme::FONT_LG)
                 .color(t.overlay0),
         );
         ui.ctx()
@@ -1062,7 +1062,7 @@ fn render_group_node(
                         ui.label(
                             egui::RichText::new("No sessions match the current filter")
                                 .color(t.overlay0)
-                                .size(theme::FONT_UI_MD),
+                                .size(theme::FONT_SM),
                         );
                     });
                 });
@@ -1449,7 +1449,7 @@ impl App {
                 content_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Drop file(s) to paste path",
-                egui::FontId::proportional(theme::FONT_STATUS),
+                egui::FontId::proportional(theme::FONT_LG),
                 t.text,
             );
         }

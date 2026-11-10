@@ -88,7 +88,7 @@ impl App {
                 if !status.is_empty() {
                     ui.label(
                         egui::RichText::new(&status)
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .color(theme::active().subtext0),
                     );
                 }
@@ -145,7 +145,7 @@ impl App {
                             let is_selected = self.new_label_icon_idx == i;
                             let btn = ui.selectable_label(
                                 is_selected,
-                                egui::RichText::new(icon).size(theme::FONT_HEADING_2),
+                                egui::RichText::new(icon).size(theme::FONT_LG),
                             );
                             if btn.clicked() {
                                 self.new_label_icon_idx = i;
@@ -222,7 +222,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(format!("Sessions ({})", session_count))
                         .strong()
-                        .size(theme::FONT_UI_MD),
+                        .size(theme::FONT_SM),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let default_shell = self.configured_shell();
@@ -231,7 +231,7 @@ impl App {
                         .find_shortcut(crate::shortcuts::AppAction::NewTerminalTab)
                         .map(|s| s.label());
                     ui.menu_button(
-                        egui::RichText::new("+ New \u{25be}").size(theme::FONT_UI_MD),
+                        egui::RichText::new("+ New \u{25be}").size(theme::FONT_SM),
                         |ui| {
                             let label = if let Some(ref key) = shortcut_label {
                                 format!("{}    {}", default_shell.display_name(), key)
@@ -303,7 +303,7 @@ impl App {
                                 "Close All"
                             };
                             if ui
-                                .button(egui::RichText::new(btn_label).size(theme::FONT_UI_MD))
+                                .button(egui::RichText::new(btn_label).size(theme::FONT_SM))
                                 .on_hover_text("Close all visible sessions")
                                 .clicked()
                             {
@@ -315,7 +315,7 @@ impl App {
                     }
                     if let Some(ref fp) = active_fg {
                         if ui
-                            .button(egui::RichText::new("Duplicate").size(theme::FONT_UI_MD))
+                            .button(egui::RichText::new("Duplicate").size(theme::FONT_SM))
                             .on_hover_text(format!("Duplicate: {} (Ctrl+Shift+K)", fp.name))
                             .clicked()
                         {
@@ -386,7 +386,7 @@ impl App {
         let chevron_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
-                egui::FontId::proportional(theme::FONT_UI_XS),
+                egui::FontId::proportional(theme::FONT_XS),
                 t.fg_muted,
             )
         });
@@ -401,7 +401,7 @@ impl App {
         let text_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 selected_label,
-                egui::FontId::proportional(theme::FONT_UI_MD),
+                egui::FontId::proportional(theme::FONT_SM),
                 t.text,
             )
         });
@@ -485,7 +485,7 @@ impl App {
         let chevron_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
-                egui::FontId::proportional(theme::FONT_UI_XS),
+                egui::FontId::proportional(theme::FONT_XS),
                 t.fg_muted,
             )
         });
@@ -500,7 +500,7 @@ impl App {
         let text_galley = ui.fonts(|f| {
             f.layout_no_wrap(
                 selected_label_text,
-                egui::FontId::proportional(theme::FONT_UI_MD),
+                egui::FontId::proportional(theme::FONT_SM),
                 t.text,
             )
         });
@@ -603,7 +603,7 @@ impl App {
                         }
                         ui.label(
                             egui::RichText::new(&m.session_title)
-                                .size(theme::FONT_UI_SM)
+                                .size(theme::FONT_XS)
                                 .strong()
                                 .color(t.blue),
                         );
@@ -652,7 +652,7 @@ impl App {
                             ),
                             egui::Align2::LEFT_CENTER,
                             &display,
-                            egui::FontId::monospace(theme::FONT_UI_SM),
+                            egui::FontId::monospace(theme::FONT_XS),
                             if selected { t.text } else { t.subtext0 },
                         );
 
@@ -934,7 +934,7 @@ impl App {
                             egui::pos2(icon_x, row_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             "\u{2197}",
-                            egui::FontId::proportional(theme::FONT_UI_SM),
+                            egui::FontId::proportional(theme::FONT_XS),
                             theme::active().blue,
                         );
                     }
@@ -1058,7 +1058,7 @@ impl App {
                     let mut job = egui::text::LayoutJob::single_section(
                         label.clone(),
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(theme::FONT_UI_MD),
+                            font_id: egui::FontId::proportional(theme::FONT_SM),
                             color: text_color,
                             ..Default::default()
                         },
@@ -1114,7 +1114,7 @@ impl App {
                                     };
                                     ui.label(
                                         egui::RichText::new(header)
-                                            .size(theme::FONT_UI_XS)
+                                            .size(theme::FONT_XS)
                                             .strong()
                                             .color(theme::active().subtext0),
                                     );
@@ -1130,7 +1130,7 @@ impl App {
                                 let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
                                 let btn = ui.button(
                                     egui::RichText::new(label_text)
-                                        .size(theme::FONT_UI_MD)
+                                        .size(theme::FONT_SM)
                                         .color(color),
                                 );
                                 if btn.clicked() {
@@ -1141,7 +1141,7 @@ impl App {
                             if ui
                                 .button(
                                     egui::RichText::new("+ New label\u{2026}")
-                                        .size(theme::FONT_UI_MD)
+                                        .size(theme::FONT_SM)
                                         .color(theme::active().accent),
                                 )
                                 .clicked()

@@ -88,14 +88,14 @@ pub(super) fn render_git_diff(
                 ui.add(egui::Spinner::new().size(14.0));
                 ui.label(
                     egui::RichText::new("Refreshing\u{2026}")
-                        .size(theme::FONT_UI_SM)
+                        .size(theme::FONT_XS)
                         .color(t.subtext0),
                 );
             } else {
                 let btn = ui.add(
                     egui::Button::new(
                         egui::RichText::new("\u{21BB}")
-                            .size(theme::FONT_UI_MD)
+                            .size(theme::FONT_SM)
                             .color(t.text),
                     )
                     .frame(false),
@@ -157,7 +157,7 @@ pub(super) fn render_git_diff(
                     };
                     ui.label(
                         egui::RichText::new(format!("{icon} {label}"))
-                            .size(theme::FONT_UI_MD)
+                            .size(theme::FONT_SM)
                             .color(t.warning),
                     );
 
@@ -166,7 +166,7 @@ pub(super) fn render_git_diff(
                         let abort_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Abort")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(t.text),
                             )
                             .fill(t.error)
@@ -180,7 +180,7 @@ pub(super) fn render_git_diff(
                             !has_conflicts,
                             egui::Button::new(
                                 egui::RichText::new("Continue")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(if has_conflicts { t.overlay0 } else { t.text }),
                             )
                             .fill(if has_conflicts { t.surface1 } else { t.success })
@@ -241,7 +241,7 @@ pub(super) fn render_git_diff(
                 ui.label(
                     egui::RichText::new(format!("Conflicts ({})", conflicted.len()))
                         .strong()
-                        .size(theme::FONT_UI_MD)
+                        .size(theme::FONT_SM)
                         .color(t.warning),
                 );
             });
@@ -260,7 +260,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::GIT_FONT_SZ),
+                        egui::FontId::monospace(theme::FONT_XS),
                         badge_fg,
                     );
                     let label_max = (ui.available_width()).max(20.0);
@@ -270,7 +270,7 @@ pub(super) fn render_git_diff(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.path)
                                         .monospace()
-                                        .size(theme::FONT_UI_MD),
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click()),
@@ -302,7 +302,7 @@ pub(super) fn render_git_diff(
                 ui.label(
                     egui::RichText::new(header_text)
                         .strong()
-                        .size(theme::FONT_UI_MD)
+                        .size(theme::FONT_SM)
                         .color(t.blue),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -311,14 +311,14 @@ pub(super) fn render_git_diff(
                         ui.add(egui::Spinner::new().size(14.0));
                         ui.label(
                             egui::RichText::new("Pushing\u{2026}")
-                                .size(theme::FONT_UI_SM)
+                                .size(theme::FONT_XS)
                                 .color(t.subtext0),
                         );
                     } else if ui
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Push")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(t.accent_strong),
                             )
                             .rounding(theme::R_SM),
@@ -337,14 +337,12 @@ pub(super) fn render_git_diff(
                     ui.label(
                         egui::RichText::new(hash)
                             .monospace()
-                            .size(theme::FONT_UI_SM)
+                            .size(theme::FONT_XS)
                             .color(t.yellow),
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(msg)
-                                .size(theme::FONT_UI_SM)
-                                .color(t.text),
+                            egui::RichText::new(msg).size(theme::FONT_XS).color(t.text),
                         )
                         .truncate(),
                     );
@@ -367,7 +365,7 @@ pub(super) fn render_git_diff(
                     ui.label(
                         egui::RichText::new("Push failed")
                             .strong()
-                            .size(theme::FONT_UI_SM)
+                            .size(theme::FONT_XS)
                             .color(t.error),
                     );
                     let lines: Vec<&str> = err.lines().take(5).collect();
@@ -375,7 +373,7 @@ pub(super) fn render_git_diff(
                     ui.label(
                         egui::RichText::new(display)
                             .monospace()
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .color(t.text),
                     );
                 });
@@ -388,7 +386,7 @@ pub(super) fn render_git_diff(
                 ui.label(
                     egui::RichText::new(format!("Staged ({})", staged.len()))
                         .strong()
-                        .size(theme::FONT_UI_MD)
+                        .size(theme::FONT_SM)
                         .color(theme::active().git_added),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -413,7 +411,7 @@ pub(super) fn render_git_diff(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Commit")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(t.accent_strong),
                             )
                             .rounding(theme::R_SM),
@@ -440,7 +438,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::GIT_FONT_SZ),
+                        egui::FontId::monospace(theme::FONT_XS),
                         badge_fg,
                     );
                     let btn_reserve = theme::SP_4 + 20.0;
@@ -451,7 +449,7 @@ pub(super) fn render_git_diff(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.path)
                                         .monospace()
-                                        .size(theme::FONT_UI_MD),
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -524,7 +522,7 @@ pub(super) fn render_git_diff(
                 ui.label(
                     egui::RichText::new(format!("Changes ({})", unstaged.len()))
                         .strong()
-                        .size(theme::FONT_UI_MD),
+                        .size(theme::FONT_SM),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(theme::SP_4);
@@ -560,7 +558,7 @@ pub(super) fn render_git_diff(
                         badge_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         entry.tag,
-                        egui::FontId::monospace(theme::GIT_FONT_SZ),
+                        egui::FontId::monospace(theme::FONT_XS),
                         badge_fg,
                     );
                     let can_revert = entry.kind != FileChangeKind::Untracked;
@@ -572,7 +570,7 @@ pub(super) fn render_git_diff(
                                 egui::Label::new(
                                     egui::RichText::new(&entry.path)
                                         .monospace()
-                                        .size(theme::FONT_UI_MD),
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -671,11 +669,11 @@ pub(super) fn render_git_diff(
                 egui::RichText::new("No changes")
                     .italics()
                     .color(theme::active().overlay0)
-                    .size(theme::FONT_UI_LG),
+                    .size(theme::FONT_MD),
             );
             ui.label(
                 egui::RichText::new("Working tree is clean")
-                    .size(theme::FONT_UI_SM)
+                    .size(theme::FONT_XS)
                     .color(theme::active().overlay0),
             );
         });
@@ -806,13 +804,9 @@ pub(super) fn render_diff_toolbar(
                 (t.surface1, t.subtext0)
             };
             let btn = ui.add(
-                egui::Button::new(
-                    egui::RichText::new(*label)
-                        .size(theme::FONT_UI_SM)
-                        .color(fg),
-                )
-                .fill(bg)
-                .rounding(theme::R_SM),
+                egui::Button::new(egui::RichText::new(*label).size(theme::FONT_XS).color(fg))
+                    .fill(bg)
+                    .rounding(theme::R_SM),
             );
             if btn.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -834,7 +828,7 @@ pub(super) fn render_diff_toolbar(
                 has_prev,
                 egui::Button::new(
                     egui::RichText::new("\u{2191}")
-                        .size(theme::FONT_UI_MD)
+                        .size(theme::FONT_SM)
                         .color(if has_prev { t.text } else { t.overlay0 }),
                 )
                 .frame(false),
@@ -848,7 +842,7 @@ pub(super) fn render_diff_toolbar(
 
             ui.label(
                 egui::RichText::new(format!("{}/{}", current_hunk + 1, hunk_count))
-                    .size(theme::FONT_UI_SM)
+                    .size(theme::FONT_XS)
                     .color(t.subtext0),
             );
 
@@ -856,7 +850,7 @@ pub(super) fn render_diff_toolbar(
                 has_next,
                 egui::Button::new(
                     egui::RichText::new("\u{2193}")
-                        .size(theme::FONT_UI_MD)
+                        .size(theme::FONT_SM)
                         .color(if has_next { t.text } else { t.overlay0 }),
                 )
                 .frame(false),
@@ -969,8 +963,8 @@ pub(super) fn render_inline_diff_full(
     let t = theme::active();
     let gutter_w = 36.0_f32;
     let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
-    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let font_mono = egui::FontId::monospace(theme::FONT_XS);
+    let gutter_font = egui::FontId::monospace(theme::FONT_XS);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
     let hunk_starts = compute_hunk_start_indices(&lines, hunks);
@@ -1129,8 +1123,8 @@ pub(super) fn render_side_by_side_diff(
     let half_w = (total_w / 2.0 - 1.0).max(100.0);
     let gutter_w = 36.0_f32;
     let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
-    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let font_mono = egui::FontId::monospace(theme::FONT_XS);
+    let gutter_font = egui::FontId::monospace(theme::FONT_XS);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
     ui.horizontal(|ui| {
@@ -1140,7 +1134,7 @@ pub(super) fn render_side_by_side_diff(
             egui::pos2(left_header.min.x + theme::SP_2, left_header.center().y),
             egui::Align2::LEFT_CENTER,
             "HEAD",
-            egui::FontId::proportional(theme::FONT_UI_SM),
+            egui::FontId::proportional(theme::FONT_XS),
             t.subtext0,
         );
         let (sep_rect, _) =
@@ -1152,7 +1146,7 @@ pub(super) fn render_side_by_side_diff(
             egui::pos2(right_header.min.x + theme::SP_2, right_header.center().y),
             egui::Align2::LEFT_CENTER,
             "Working Tree",
-            egui::FontId::proportional(theme::FONT_UI_SM),
+            egui::FontId::proportional(theme::FONT_XS),
             t.subtext0,
         );
     });

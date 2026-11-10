@@ -47,7 +47,7 @@ impl App {
                 ui.label(
                     egui::RichText::new(format!("Workspaces ({})", ws_count))
                         .strong()
-                        .size(theme::FONT_UI_MD),
+                        .size(theme::FONT_SM),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let arrow = if self.workspace_panel_collapsed {
@@ -56,7 +56,7 @@ impl App {
                         "\u{25bc}"
                     };
                     let collapse_resp = ui.add(
-                        egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_UI_MD))
+                        egui::Button::new(egui::RichText::new(arrow).size(theme::FONT_SM))
                             .min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H))
                             .frame(false),
                     );
@@ -271,7 +271,7 @@ impl App {
             // Name text
             let name_str = data.name.clone();
             let name_galley = ui.fonts(|f| {
-                f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_UI_MD), fg)
+                f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_SM), fg)
             });
             let name_h = name_galley.size().y;
             let name_y = if has_git_row {
@@ -291,7 +291,7 @@ impl App {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(theme::FONT_UI_MD),
+                        egui::FontId::proportional(theme::FONT_SM),
                         fg,
                     )
                 });
@@ -330,7 +330,7 @@ impl App {
                     ),
                     egui::Align2::CENTER_CENTER,
                     "\u{2699}",
-                    egui::FontId::proportional(theme::FONT_UI_MD),
+                    egui::FontId::proportional(theme::FONT_SM),
                     gear_fg,
                 );
             }
@@ -338,7 +338,7 @@ impl App {
             // Git info row
             if has_git_row {
                 let mut git_job = egui::text::LayoutJob::default();
-                let git_font = egui::FontId::proportional(theme::GIT_FONT_SZ);
+                let git_font = egui::FontId::proportional(theme::FONT_XS);
                 let muted_fg = fg.gamma_multiply(0.6);
                 if !data.git_branch.is_empty() {
                     git_job.append(
@@ -494,7 +494,7 @@ impl App {
             let other_galley = ui.fonts(|f| {
                 f.layout_no_wrap(
                     other_name,
-                    egui::FontId::proportional(theme::FONT_UI_LG),
+                    egui::FontId::proportional(theme::FONT_MD),
                     other_fg,
                 )
             });
@@ -509,7 +509,7 @@ impl App {
                 let note_galley = ui.fonts(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
-                        egui::FontId::proportional(theme::FONT_UI_MD),
+                        egui::FontId::proportional(theme::FONT_SM),
                         other_fg,
                     )
                 });

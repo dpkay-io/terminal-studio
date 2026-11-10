@@ -16,8 +16,8 @@ fn paint_titlebar_title(
     git_branch: &Option<String>,
     bright: egui::Color32,
 ) {
-    let title_font = egui::FontId::proportional(theme::FONT_UI_MD);
-    let branch_font = egui::FontId::proportional(theme::FONT_UI_SM);
+    let title_font = egui::FontId::proportional(theme::FONT_SM);
+    let branch_font = egui::FontId::proportional(theme::FONT_XS);
     let dim = bright.linear_multiply(0.55);
     let extra_dim = bright.linear_multiply(0.35);
 
@@ -293,7 +293,7 @@ impl App {
                     }
                     // Left panel toggle (after traffic lights)
                     let mac_btn_w = 28.0_f32;
-                    let mac_icon_sz = theme::FONT_UI_LG;
+                    let mac_icon_sz = theme::FONT_MD;
                     let left_tbr = egui::Rect::from_min_size(
                         egui::pos2(r.min.x + 72.0, r.min.y),
                         egui::vec2(mac_btn_w, r.height()),
@@ -322,7 +322,7 @@ impl App {
                             .shortcut_registry
                             .label_for(AppAction::OpenQuickSwitcher)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
@@ -476,7 +476,7 @@ impl App {
                             .shortcut_registry
                             .label_for(AppAction::ToggleShortcutHelp)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_shortcut_help {
@@ -589,7 +589,7 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(theme::FONT_UI_SM),
+                                egui::FontId::proportional(theme::FONT_XS),
                                 update_btn_fg,
                             );
                             if resp.clicked() {
@@ -637,7 +637,7 @@ impl App {
                 #[cfg(not(target_os = "macos"))]
                 {
                     let btn_w = theme::TITLEBAR_BTN_W;
-                    let icon_sz = theme::FONT_UI_LG;
+                    let icon_sz = theme::FONT_MD;
                     // right-to-left: close(0), maximize(1), minimize(2)
                     let btns: &[(&str, usize, bool)] = &[
                         ("×", 0, true),  // close   — danger colour on hover
@@ -677,7 +677,7 @@ impl App {
                             .shortcut_registry
                             .label_for(AppAction::OpenQuickSwitcher)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_quick_switcher {
@@ -835,7 +835,7 @@ impl App {
                             .shortcut_registry
                             .label_for(AppAction::ToggleShortcutHelp)
                             .unwrap_or("");
-                        let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                        let hint_font = egui::FontId::proportional(theme::FONT_XS);
                         let hint_galley =
                             painter.layout_no_wrap(hint_text.to_string(), hint_font.clone(), tb_fg);
                         let hint_w = if self.show_shortcut_help {
@@ -951,7 +951,7 @@ impl App {
                                 br.center(),
                                 egui::Align2::CENTER_CENTER,
                                 &label,
-                                egui::FontId::proportional(theme::FONT_UI_SM),
+                                egui::FontId::proportional(theme::FONT_XS),
                                 update_btn_fg,
                             );
                             if resp.clicked() {
@@ -986,7 +986,7 @@ impl App {
                             self.vp_id("tb_btn").with(idx),
                             br,
                             symbol,
-                            theme::FONT_UI_MD,
+                            theme::FONT_SM,
                             tb_fg,
                             style,
                         );

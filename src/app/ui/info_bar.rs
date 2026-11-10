@@ -47,8 +47,8 @@ impl App {
         );
 
         // Text segments: session · workspace  ⎇ branch
-        let title_font = egui::FontId::proportional(theme::FONT_UI_SM);
-        let branch_font = egui::FontId::proportional(theme::FONT_UI_XS);
+        let title_font = egui::FontId::proportional(theme::FONT_XS);
+        let branch_font = egui::FontId::proportional(theme::FONT_XS);
 
         let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
 
@@ -111,7 +111,7 @@ impl App {
                 egui::pos2(text_rect.max.x - 2.0, text_rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 "…",
-                egui::FontId::proportional(theme::FONT_UI_XS),
+                egui::FontId::proportional(theme::FONT_XS),
                 dim,
             );
         }

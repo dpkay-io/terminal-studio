@@ -179,7 +179,7 @@ pub(super) fn render_dir_tree(
             egui::RichText::new("(empty directory)")
                 .italics()
                 .color(theme::active().overlay0)
-                .size(theme::FONT_UI_MD),
+                .size(theme::FONT_SM),
         );
         return;
     }
@@ -231,7 +231,7 @@ pub(super) fn render_dir_tree(
                     egui::Label::new(
                         egui::RichText::new(format!("{} {}", chevron, entry.name))
                             .color(theme::active().fg_dir_entry)
-                            .size(theme::FONT_UI_MD),
+                            .size(theme::FONT_SM),
                     )
                     .truncate()
                     .sense(egui::Sense::click()),
@@ -280,7 +280,7 @@ pub(super) fn render_dir_tree(
             };
             let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), entry.name))
                 .color(text_color)
-                .size(theme::FONT_UI_MD);
+                .size(theme::FONT_SM);
             if is_highlighted {
                 label = label.strong();
             }
@@ -352,7 +352,7 @@ pub(super) fn render_flat_file_list(
             egui::RichText::new("No matching files")
                 .italics()
                 .color(theme::active().overlay0)
-                .size(theme::FONT_UI_MD),
+                .size(theme::FONT_SM),
         );
         return;
     }
@@ -377,7 +377,7 @@ pub(super) fn render_flat_file_list(
                 egui::Label::new(
                     egui::RichText::new(format!("{} {}", file_icon(ext), display))
                         .color(color)
-                        .size(theme::FONT_UI_MD),
+                        .size(theme::FONT_SM),
                 )
                 .truncate()
                 .sense(egui::Sense::click_and_drag()),

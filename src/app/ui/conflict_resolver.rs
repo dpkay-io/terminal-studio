@@ -35,7 +35,7 @@ pub(in crate::app) fn render_conflict_resolver(
         ui.label(
             egui::RichText::new(format!("\u{26A0} {}", state.path.display()))
                 .strong()
-                .size(theme::FONT_UI_LG)
+                .size(theme::FONT_MD)
                 .color(t.warning),
         );
 
@@ -50,13 +50,9 @@ pub(in crate::app) fn render_conflict_resolver(
                 (t.surface1, t.subtext0)
             };
             let btn = ui.add(
-                egui::Button::new(
-                    egui::RichText::new(*label)
-                        .size(theme::FONT_UI_SM)
-                        .color(fg),
-                )
-                .fill(bg)
-                .rounding(theme::R_SM),
+                egui::Button::new(egui::RichText::new(*label).size(theme::FONT_XS).color(fg))
+                    .fill(bg)
+                    .rounding(theme::R_SM),
             );
             if btn.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -73,7 +69,7 @@ pub(in crate::app) fn render_conflict_resolver(
                     .add(
                         egui::Button::new(
                             egui::RichText::new("All Theirs")
-                                .size(theme::FONT_UI_SM)
+                                .size(theme::FONT_XS)
                                 .color(t.error),
                         )
                         .rounding(theme::R_SM),
@@ -87,7 +83,7 @@ pub(in crate::app) fn render_conflict_resolver(
                     .add(
                         egui::Button::new(
                             egui::RichText::new("All Ours")
-                                .size(theme::FONT_UI_SM)
+                                .size(theme::FONT_XS)
                                 .color(t.success),
                         )
                         .rounding(theme::R_SM),
@@ -103,7 +99,7 @@ pub(in crate::app) fn render_conflict_resolver(
                     "{}/{} resolved",
                     state.resolved_count, state.content.total_conflicts
                 ))
-                .size(theme::FONT_UI_SM)
+                .size(theme::FONT_XS)
                 .color(if state.resolved_count == state.content.total_conflicts {
                     t.success
                 } else {
@@ -239,7 +235,7 @@ fn render_resolved_block(
                 ui.add_space(theme::SP_2);
                 ui.label(
                     egui::RichText::new(label)
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .color(t.overlay0)
                         .italics(),
                 );
@@ -285,7 +281,7 @@ fn render_resolved_block_sbs(
                 ui.add_space(theme::SP_2);
                 ui.label(
                     egui::RichText::new(label)
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .color(t.overlay0)
                         .italics(),
                 );
@@ -394,7 +390,7 @@ fn render_conflict_block_sbs(
                         total_conflicts
                     ))
                     .strong()
-                    .size(theme::FONT_UI_XS)
+                    .size(theme::FONT_XS)
                     .color(t.text),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -402,7 +398,7 @@ fn render_conflict_block_sbs(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Both")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.accent)
@@ -420,7 +416,7 @@ fn render_conflict_block_sbs(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Theirs")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.error)
@@ -438,7 +434,7 @@ fn render_conflict_block_sbs(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Ours")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.success)
@@ -475,7 +471,7 @@ fn render_conflict_block_sbs(
                     ui.add_space(theme::SP_1);
                     ui.label(
                         egui::RichText::new(format!("\u{25C0} OURS ({})", ours_label))
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .strong()
                             .color(t.success),
                     );
@@ -523,7 +519,7 @@ fn render_conflict_block_sbs(
                     ui.add_space(theme::SP_1);
                     ui.label(
                         egui::RichText::new(format!("\u{25B6} THEIRS ({})", theirs_label))
-                            .size(theme::FONT_UI_XS)
+                            .size(theme::FONT_XS)
                             .strong()
                             .color(t.error),
                     );
@@ -588,7 +584,7 @@ fn render_conflict_block(
                         total_conflicts
                     ))
                     .strong()
-                    .size(theme::FONT_UI_XS)
+                    .size(theme::FONT_XS)
                     .color(t.text),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -596,7 +592,7 @@ fn render_conflict_block(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Both")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.accent)
@@ -614,7 +610,7 @@ fn render_conflict_block(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Theirs")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.error)
@@ -632,7 +628,7 @@ fn render_conflict_block(
                         .add(
                             egui::Button::new(
                                 egui::RichText::new("Ours")
-                                    .size(theme::FONT_UI_XS)
+                                    .size(theme::FONT_XS)
                                     .color(t.base),
                             )
                             .fill(t.success)
@@ -658,7 +654,7 @@ fn render_conflict_block(
                 ui.add_space(theme::SP_2);
                 ui.label(
                     egui::RichText::new(format!("\u{25C0} OURS ({})", ours_label))
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .strong()
                         .color(t.success),
                 );
@@ -687,7 +683,7 @@ fn render_conflict_block(
         ui.label(
             egui::RichText::new("\u{2550}".repeat(30))
                 .monospace()
-                .size(theme::FONT_UI_XS)
+                .size(theme::FONT_XS)
                 .color(t.overlay0),
         );
     });
@@ -701,7 +697,7 @@ fn render_conflict_block(
                 ui.add_space(theme::SP_2);
                 ui.label(
                     egui::RichText::new(format!("\u{25B6} THEIRS ({})", theirs_label))
-                        .size(theme::FONT_UI_XS)
+                        .size(theme::FONT_XS)
                         .strong()
                         .color(t.error),
                 );

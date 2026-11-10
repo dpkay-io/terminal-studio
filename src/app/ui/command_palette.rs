@@ -112,7 +112,7 @@ impl App {
                                 .id(search_id)
                                 .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
                                 .hint_text(placeholder)
-                                .font(egui::FontId::monospace(theme::FONT_UI_MD)),
+                                .font(egui::FontId::monospace(theme::FONT_SM)),
                         );
                         if resp.changed() {
                             self.palette_selected = 0;
@@ -152,7 +152,7 @@ impl App {
                                 ui.add_space(theme::SP_4);
                                 ui.label(
                                     egui::RichText::new("No matching commands")
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(t.overlay0),
                                 );
                             } else {
@@ -219,14 +219,14 @@ impl App {
                                         egui::RichText::new(
                                             "Type to search files, or > for commands",
                                         )
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(t.overlay0),
                                     );
                                 } else {
                                     ui.add_space(theme::SP_1);
                                     ui.label(
                                         egui::RichText::new("RECENT FILES")
-                                            .size(theme::FONT_UI_XS)
+                                            .size(theme::FONT_XS)
                                             .color(t.fg_muted),
                                     );
                                     ui.add_space(theme::SP_1);
@@ -319,7 +319,7 @@ impl App {
                                     };
                                     ui.label(
                                         egui::RichText::new(msg)
-                                            .size(theme::FONT_UI_SM)
+                                            .size(theme::FONT_XS)
                                             .color(t.overlay0),
                                     );
                                 } else {
@@ -383,7 +383,7 @@ impl App {
 
                         ui.horizontal(|ui| {
                             let hint_color = t.fg_muted;
-                            let hint_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                            let hint_font = egui::FontId::proportional(theme::FONT_XS);
 
                             let hints = if command_mode {
                                 "\u{2191}\u{2193} navigate  \u{23CE} run  Esc close"
@@ -663,7 +663,7 @@ fn render_file_row(
             } else {
                 ext.clone()
             };
-            let badge_font = egui::FontId::monospace(theme::FONT_UI_XS);
+            let badge_font = egui::FontId::monospace(theme::FONT_XS);
             let badge_galley = painter.layout_no_wrap(badge_text, badge_font, t.accent_muted);
             let badge_w = badge_galley.size().x + theme::SP_2 * 2.0;
             let badge_h = badge_galley.size().y + theme::SP_1;
@@ -689,16 +689,16 @@ fn render_file_row(
             let name_x = badge_rect.max.x + theme::SP_3;
             let name_color = if is_selected { t.text } else { t.subtext0 };
             painter.text(
-                egui::pos2(name_x, row_rect.center().y - theme::FONT_UI_SM * 0.55),
+                egui::pos2(name_x, row_rect.center().y - theme::FONT_XS * 0.55),
                 egui::Align2::LEFT_TOP,
                 &file_name,
-                egui::FontId::proportional(theme::FONT_UI_SM),
+                egui::FontId::proportional(theme::FONT_XS),
                 name_color,
             );
 
             // Parent path (right-aligned)
             if !parent.is_empty() {
-                let parent_font = egui::FontId::proportional(theme::FONT_UI_XS);
+                let parent_font = egui::FontId::proportional(theme::FONT_XS);
                 let parent_galley = painter.layout_no_wrap(parent.clone(), parent_font, t.fg_muted);
                 // Truncate if it would overlap the file name
                 let max_parent_w = (row_rect.max.x - name_x - theme::SP_6)
@@ -729,18 +729,18 @@ fn render_command_row(
 ) {
     let label_pos = egui::pos2(
         row_rect.min.x + theme::SP_3,
-        row_rect.center().y - theme::FONT_UI_SM * 0.55,
+        row_rect.center().y - theme::FONT_XS * 0.55,
     );
     painter.text(
         label_pos,
         egui::Align2::LEFT_TOP,
         &entry.label,
-        egui::FontId::proportional(theme::FONT_UI_SM),
+        egui::FontId::proportional(theme::FONT_XS),
         if is_selected { t.text } else { t.subtext0 },
     );
 
     if let Some(ref hint) = entry.shortcut_hint {
-        let badge_font = egui::FontId::monospace(theme::FONT_SYS_SM);
+        let badge_font = egui::FontId::monospace(theme::FONT_XS);
         let badge_text_color = if is_selected { t.subtext1 } else { t.fg_muted };
         let badge_galley = painter.layout_no_wrap(hint.clone(), badge_font, badge_text_color);
         let badge_w = badge_galley.size().x + theme::SP_3 * 2.0;

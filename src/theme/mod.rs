@@ -551,18 +551,21 @@ pub const STROKE_MEDIUM: f32 = 1.5;
 pub const STROKE_BOLD: f32 = 2.0;
 
 // ── Typography scale ────────────────────────────────────────────────────────
+// Chrome uses exactly four sizes (11 / 12 / 13 / 14). Nothing in chrome is
+// below 11. `FONT_HEADING_1` and `FONT_HEADING_2` are markdown preview only.
 
-pub const FONT_HEADING_1: f32 = 22.0;
-pub const FONT_HEADING_2: f32 = 18.0;
-pub const FONT_STATUS: f32 = 16.0;
+pub const FONT_XS: f32 = 11.0;
+pub const FONT_SM: f32 = 12.0;
+pub const FONT_MD: f32 = 13.0;
+pub const FONT_LG: f32 = 14.0;
 pub const FONT_TERM: f32 = 14.0;
-pub const FONT_TERM_BOLD: f32 = 14.0;
-pub const FONT_UI_LG: f32 = 13.0;
-pub const FONT_UI_MD: f32 = 12.0;
-pub const FONT_UI_SM: f32 = 11.0;
-pub const FONT_UI_XS: f32 = 10.0;
-pub const FONT_SYS_SM: f32 = 9.0;
-pub const FONT_SYS_XS: f32 = 8.0;
+// Terminal line-height multiplier. Defined for the renderer; not applied here.
+pub const TERM_LINE_HEIGHT: f32 = 1.3;
+
+// Markdown preview only.
+pub const FONT_HEADING_1: f32 = 22.0;
+// Markdown preview only.
+pub const FONT_HEADING_2: f32 = 18.0;
 
 // ── Icon metrics ────────────────────────────────────────────────────────────
 
@@ -628,7 +631,6 @@ pub const PANEL_DIV_H: f32 = 8.0;
 // ── Git row ────────────────────────────────────────────────────────────────
 
 pub const GIT_ROW_H: f32 = 14.0;
-pub const GIT_FONT_SZ: f32 = 10.0;
 
 // ── Workspace card ─────────────────────────────────────────────────────────
 
@@ -1186,5 +1188,19 @@ mod tests {
         assert_eq!(under.r(), 100);
         let over = lerp_color(a, b, 2.0);
         assert_eq!(over.r(), 200);
+    }
+
+    #[test]
+    fn type_scale_is_four_sizes() {
+        assert_eq!(FONT_XS, 11.0);
+        assert_eq!(FONT_SM, 12.0);
+        assert_eq!(FONT_MD, 13.0);
+        assert_eq!(FONT_LG, 14.0);
+        // `assert!` on a const is denied by clippy; a const assert keeps the floor.
+        const _: () = {
+            assert!(FONT_XS >= 11.0);
+        };
+        assert_eq!(FONT_TERM, 14.0);
+        assert_eq!(TERM_LINE_HEIGHT, 1.3);
     }
 }

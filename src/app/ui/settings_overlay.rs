@@ -32,7 +32,7 @@ impl App {
                         if saved_at.elapsed() < std::time::Duration::from_secs(2) {
                             ui.label(
                                 egui::RichText::new("\u{2713} Saved")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(theme::active().success),
                             );
                         }
@@ -144,7 +144,7 @@ impl App {
                             // Theme picker
                             ui.label(
                                 egui::RichText::new("THEME")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(theme::active().fg_secondary)
                                     .strong(),
                             );
@@ -156,7 +156,7 @@ impl App {
                                 .show(ui, |ui| {
                                     let swatch_outer_w = 52.0 + theme::SP_2 * 2.0;
                                     let swatch_color_h = 20.0;
-                                    let label_h = theme::FONT_UI_SM + theme::SP_1;
+                                    let label_h = theme::FONT_XS + theme::SP_1;
                                     let swatch_outer_h = swatch_color_h + label_h + theme::SP_2 * 2.0;
                                     let available_w = ui.available_width();
                                     let cols = ((available_w / swatch_outer_w).floor() as usize).max(1);
@@ -241,7 +241,7 @@ impl App {
                                                     name_pos,
                                                     egui::Align2::LEFT_TOP,
                                                     id.name(),
-                                                    egui::FontId::proportional(theme::FONT_UI_SM),
+                                                    egui::FontId::proportional(theme::FONT_XS),
                                                     name_color,
                                                 );
 
@@ -265,7 +265,7 @@ impl App {
                             ui.add_space(theme::SP_4);
                             ui.label(
                                 egui::RichText::new("TERMINAL")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(theme::active().fg_secondary)
                                     .strong(),
                             );
@@ -413,7 +413,7 @@ impl App {
                             ui.add_space(theme::SP_4);
                             ui.label(
                                 egui::RichText::new("LOGGING")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(theme::active().fg_secondary)
                                     .strong(),
                             );
@@ -458,7 +458,7 @@ impl App {
                             ui.add_space(theme::SP_4);
                             ui.label(
                                 egui::RichText::new("ABOUT")
-                                    .size(theme::FONT_UI_SM)
+                                    .size(theme::FONT_XS)
                                     .color(theme::active().fg_secondary)
                                     .strong(),
                             );
@@ -478,7 +478,7 @@ impl App {
                                                 UpdateStatus::UpToDate => {
                                                     ui.label(
                                                         egui::RichText::new("Up to date")
-                                                            .size(theme::FONT_UI_MD)
+                                                            .size(theme::FONT_SM)
                                                             .color(theme::active().green),
                                                     );
                                                     if ui.small_button("Check again").clicked() {
@@ -515,7 +515,7 @@ impl App {
                                                 UpdateStatus::Error(msg) => {
                                                     ui.label(
                                                         egui::RichText::new(msg)
-                                                            .size(theme::FONT_UI_SM)
+                                                            .size(theme::FONT_XS)
                                                             .color(theme::active().red),
                                                     );
                                                     if ui.small_button("Retry").clicked() {
@@ -605,7 +605,7 @@ impl App {
                                         col.label(
                                             egui::RichText::new(group.name)
                                                 .strong()
-                                                .size(theme::FONT_UI_MD)
+                                                .size(theme::FONT_SM)
                                                 .color(t.blue),
                                         );
                                         col.add_space(theme::SP_1);
@@ -614,7 +614,7 @@ impl App {
                                                 let desc = action.description();
                                                 ui.label(
                                                     egui::RichText::new(desc)
-                                                        .size(theme::FONT_UI_MD)
+                                                        .size(theme::FONT_SM)
                                                         .color(t.text),
                                                 );
                                                 ui.with_layout(
@@ -628,7 +628,7 @@ impl App {
                                                             t.surface1_rgb,
                                                         );
                                                         let badge = egui::RichText::new(&label)
-                                                            .size(theme::FONT_UI_SM)
+                                                            .size(theme::FONT_XS)
                                                             .color(shortcut_fg)
                                                             .background_color(t.surface1);
                                                         ui.label(badge);
@@ -653,13 +653,13 @@ impl App {
                                     theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
                                 ui.label(
                                     egui::RichText::new("Alt+Arrow")
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(split_shortcut_fg)
                                         .background_color(t.surface1),
                                 );
                                 ui.label(
                                     egui::RichText::new("Move focus between split panes")
-                                        .size(theme::FONT_UI_SM)
+                                        .size(theme::FONT_XS)
                                         .color(t.overlay0),
                                 );
                             });

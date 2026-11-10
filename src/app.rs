@@ -1611,7 +1611,7 @@ impl App {
                                                 let resp = ui.selectable_label(
                                                     is_active_tab,
                                                     egui::RichText::new("Directory")
-                                                        .size(theme::FONT_UI_MD)
+                                                        .size(theme::FONT_SM)
                                                         .color(tab_color),
                                                 );
                                                 // Update hover animation with actual hovered state
@@ -1677,7 +1677,7 @@ impl App {
                                                 let resp = ui.selectable_label(
                                                     is_active_tab,
                                                     egui::RichText::new(&tab_label)
-                                                        .size(theme::FONT_UI_MD)
+                                                        .size(theme::FONT_SM)
                                                         .color(tab_color),
                                                 );
                                                 let _ =
@@ -1736,7 +1736,7 @@ impl App {
                                                     let resp = ui.selectable_label(
                                                         is_any_md_active,
                                                         egui::RichText::new(&active_md_name)
-                                                            .size(theme::FONT_UI_MD)
+                                                            .size(theme::FONT_SM)
                                                             .color(tab_color),
                                                     );
                                                     let _ = crate::app::ui::animation::animated_hover(
@@ -1755,7 +1755,7 @@ impl App {
                                                     ui.add_space(theme::SP_1);
                                                     if ui.add(
                                                         egui::Button::new(
-                                                            egui::RichText::new("×").size(theme::FONT_UI_MD).color(t.overlay1),
+                                                            egui::RichText::new("×").size(theme::FONT_SM).color(t.overlay1),
                                                         ).frame(false).min_size(egui::vec2(theme::HEADER_H, theme::HEADER_H)),
                                                     ).on_hover_text("Close tab (Ctrl+Shift+W)").clicked() {
                                                         close_tab = Some(path.clone());
@@ -1768,7 +1768,7 @@ impl App {
                                                     let resp = ui.selectable_label(
                                                         is_any_md_active || is_popup_open,
                                                         egui::RichText::new(&label)
-                                                            .size(theme::FONT_UI_MD)
+                                                            .size(theme::FONT_SM)
                                                             .color(if is_popup_open { t.text } else { tab_color }),
                                                     );
                                                     let _ = crate::app::ui::animation::animated_hover(
@@ -1787,7 +1787,7 @@ impl App {
                                                     // Chevron
                                                     ui.label(
                                                         egui::RichText::new(if is_popup_open { "▴" } else { "▾" })
-                                                            .size(theme::FONT_UI_XS)
+                                                            .size(theme::FONT_XS)
                                                             .color(t.overlay1),
                                                     );
 
@@ -1810,7 +1810,7 @@ impl App {
                                                                         ui.horizontal(|ui| {
                                                                             let item_resp = ui.selectable_label(
                                                                                 is_active,
-                                                                                egui::RichText::new(&name).size(theme::FONT_UI_SM),
+                                                                                egui::RichText::new(&name).size(theme::FONT_XS),
                                                                             );
                                                                             if item_resp.clicked() {
                                                                                 new_tab = Some(RightTab::Markdown(path.clone()));
@@ -1818,7 +1818,7 @@ impl App {
                                                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                                                                 if ui.add(
                                                                                     egui::Button::new(
-                                                                                        egui::RichText::new("×").size(theme::FONT_UI_SM).color(t.overlay1),
+                                                                                        egui::RichText::new("×").size(theme::FONT_XS).color(t.overlay1),
                                                                                     ).frame(false),
                                                                                 ).on_hover_text("Close").clicked() {
                                                                                     close_tab = Some(path.clone());
@@ -1831,7 +1831,7 @@ impl App {
                                                                 if ui.selectable_label(
                                                                     false,
                                                                     egui::RichText::new(format!("Close All ({})", md_count))
-                                                                        .size(theme::FONT_UI_SM)
+                                                                        .size(theme::FONT_XS)
                                                                         .color(t.error),
                                                                 ).clicked() {
                                                                     close_all_md = true;
@@ -1855,7 +1855,7 @@ impl App {
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,
                                             "\u{2039}",
-                                            egui::FontId::proportional(theme::FONT_UI_SM),
+                                            egui::FontId::proportional(theme::FONT_XS),
                                             theme::active().text,
                                         );
                                     }
@@ -1869,7 +1869,7 @@ impl App {
                                             fade.center(),
                                             egui::Align2::CENTER_CENTER,
                                             "\u{203a}",
-                                            egui::FontId::proportional(theme::FONT_UI_SM),
+                                            egui::FontId::proportional(theme::FONT_XS),
                                             theme::active().text,
                                         );
                                     }
@@ -1906,7 +1906,7 @@ impl App {
                                                         egui::Label::new(
                                                             egui::RichText::new(&ws.name)
                                                                 .strong()
-                                                                .size(theme::FONT_UI_SM)
+                                                                .size(theme::FONT_XS)
                                                                 .color(theme::ensure_readable(
                                                                     c, panel_bg,
                                                                 )),
@@ -1916,7 +1916,7 @@ impl App {
                                                     .on_hover_text(&ws.name);
                                                     ui.label(
                                                         egui::RichText::new("›")
-                                                            .size(theme::FONT_UI_SM)
+                                                            .size(theme::FONT_XS)
                                                             .color(theme::active().overlay0),
                                                     );
                                                 }
@@ -1926,7 +1926,7 @@ impl App {
                                                         egui::Label::new(
                                                             egui::RichText::new(theme::short_path(cwd))
                                                                 .monospace()
-                                                                .size(theme::FONT_UI_SM)
+                                                                .size(theme::FONT_XS)
                                                                 .color(theme::active().fg_path),
                                                         )
                                                         .truncate(),
@@ -1937,7 +1937,7 @@ impl App {
                                                     let save_btn = ui.add(
                                                         egui::Button::new(
                                                             egui::RichText::new("+")
-                                                                .size(theme::FONT_UI_SM)
+                                                                .size(theme::FONT_XS)
                                                                 .color(theme::active().accent_strong),
                                                         )
                                                         .rounding(theme::R_MD),
@@ -2007,7 +2007,7 @@ impl App {
                                                         egui::RichText::new("Searching…")
                                                             .italics()
                                                             .color(theme::active().overlay0)
-                                                            .size(theme::FONT_UI_MD),
+                                                            .size(theme::FONT_SM),
                                                     );
                                                 } else {
                                                     let entries: Vec<FileEntry> = results
@@ -2058,7 +2058,7 @@ impl App {
                                                 egui::RichText::new("(no active session)")
                                                     .italics()
                                                     .color(theme::active().overlay0)
-                                                    .size(theme::FONT_UI_MD),
+                                                    .size(theme::FONT_SM),
                                             );
                                         }
                                     }
@@ -2119,7 +2119,7 @@ impl App {
                                                 .add(
                                                     egui::Button::new(
                                                         egui::RichText::new("\u{2B1C} Open in Pane")
-                                                            .size(theme::FONT_UI_SM),
+                                                            .size(theme::FONT_XS),
                                                     )
                                                     .rounding(theme::R_SM),
                                                 )
@@ -2247,14 +2247,14 @@ impl App {
                                     egui::Label::new(
                                         egui::RichText::new("Notes")
                                             .strong()
-                                            .size(theme::FONT_UI_MD),
+                                            .size(theme::FONT_SM),
                                     )
                                     .sense(egui::Sense::click()),
                                 );
                                 let auto_label = ui.add(
                                     egui::Label::new(
                                         egui::RichText::new("· autosaved")
-                                            .size(theme::FONT_UI_XS)
+                                            .size(theme::FONT_XS)
                                             .color(theme::active().fg_muted),
                                     )
                                     .sense(egui::Sense::click()),
@@ -2279,7 +2279,7 @@ impl App {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new(arrow)
-                                                        .size(theme::FONT_UI_MD),
+                                                        .size(theme::FONT_SM),
                                                 )
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
@@ -2297,7 +2297,7 @@ impl App {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new("\u{2B1C}")
-                                                        .size(theme::FONT_UI_MD),
+                                                        .size(theme::FONT_SM),
                                                 )
                                                 .min_size(egui::vec2(
                                                     theme::HEADER_H,
@@ -2855,7 +2855,7 @@ impl App {
                             input_rect,
                             egui::TextEdit::singleline(&mut self.term_search.query)
                                 .desired_width(input_rect.width())
-                                .font(egui::FontId::monospace(theme::FONT_UI_MD))
+                                .font(egui::FontId::monospace(theme::FONT_SM))
                                 .hint_text("Search\u{2026}"),
                         );
                         if resp.changed() {
@@ -2885,11 +2885,11 @@ impl App {
                         let bar_id = ui.id().with("term_search_bar");
                         let prev_clicked = crate::ui_kit::icon_button(
                             ui, bar_id.with("prev"), prev_rect, "\u{25B2}",
-                            theme::FONT_UI_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
+                            theme::FONT_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
                         ).clicked();
                         let next_clicked = crate::ui_kit::icon_button(
                             ui, bar_id.with("next"), next_rect, "\u{25BC}",
-                            theme::FONT_UI_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
+                            theme::FONT_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
                         ).clicked();
 
                         let kb_prev = ui.input(|i| {
@@ -2934,7 +2934,7 @@ impl App {
                             egui::pos2(count_center_x, bar_rect.center().y),
                             egui::Align2::CENTER_CENTER,
                             &count_text,
-                            egui::FontId::monospace(theme::FONT_UI_SM),
+                            egui::FontId::monospace(theme::FONT_XS),
                             t.subtext0,
                         );
                     }

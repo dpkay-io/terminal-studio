@@ -159,7 +159,7 @@ impl DragState {
             egui::Id::new("drag_overlay"),
         ));
 
-        let font = egui::FontId::proportional(theme::FONT_UI_SM);
+        let font = egui::FontId::proportional(theme::FONT_XS);
         let galley = painter.layout_no_wrap(self.label.clone(), font, t.text);
         let text_size = galley.size();
         let padding = egui::vec2(theme::SP_3 + theme::SP_2, theme::SP_2);

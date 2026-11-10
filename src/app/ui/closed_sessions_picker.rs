@@ -88,7 +88,7 @@ impl App {
                                 .id(search_id)
                                 .hint_text("Search closed sessions...")
                                 .desired_width(f32::INFINITY)
-                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                .font(egui::FontId::proportional(theme::FONT_SM))
                                 .text_color(t.text),
                         );
                         if !resp.has_focus() {
@@ -157,7 +157,7 @@ impl App {
                             ui.label(
                                 egui::RichText::new("No recently closed sessions")
                                     .color(t.subtext0)
-                                    .font(egui::FontId::proportional(theme::FONT_UI_MD)),
+                                    .font(egui::FontId::proportional(theme::FONT_SM)),
                             );
                         } else {
                             egui::ScrollArea::vertical()
@@ -196,7 +196,7 @@ impl App {
                                                                 egui::RichText::new(&record.title)
                                                                     .color(t.text)
                                                                     .font(egui::FontId::proportional(
-                                                                        theme::FONT_UI_MD,
+                                                                        theme::FONT_SM,
                                                                     )),
                                                             );
                                                             ui.with_layout(
@@ -213,7 +213,7 @@ impl App {
                                                                         .color(t.subtext0)
                                                                         .font(
                                                                             egui::FontId::proportional(
-                                                                                theme::FONT_UI_XS,
+                                                                                theme::FONT_XS,
                                                                             ),
                                                                         ),
                                                                     );
@@ -227,7 +227,7 @@ impl App {
                                                                             .color(t.accent)
                                                                             .font(
                                                                                 egui::FontId::proportional(
-                                                                                    theme::FONT_UI_XS,
+                                                                                    theme::FONT_XS,
                                                                                 ),
                                                                             ),
                                                                         );
@@ -253,7 +253,7 @@ impl App {
                                                                     .color(t.subtext0)
                                                                     .font(
                                                                         egui::FontId::proportional(
-                                                                            theme::FONT_UI_XS,
+                                                                            theme::FONT_XS,
                                                                         ),
                                                                     ),
                                                             );
@@ -268,7 +268,7 @@ impl App {
                                                                 .color(t.subtext0)
                                                                 .font(
                                                                     egui::FontId::proportional(
-                                                                        theme::FONT_UI_XS,
+                                                                        theme::FONT_XS,
                                                                     ),
                                                                 ),
                                                             );

@@ -149,7 +149,7 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
     let t = theme::active();
     let btn = egui::Button::new(
         egui::RichText::new(label)
-            .size(theme::FONT_UI_MD)
+            .size(theme::FONT_SM)
             .color(if selected { t.base } else { t.text }),
     )
     .fill(if selected { t.accent } else { t.surface1 })
@@ -184,7 +184,7 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, rect: egui::Rect) -> egui::Re
     let p = ui.painter();
     p.rect_filled(rect, theme::R_SM, bg);
 
-    let pill_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let pill_font = egui::FontId::monospace(theme::FONT_XS);
     let text_galley = p.layout_no_wrap(label.to_string(), pill_font, t.accent);
     p.galley(
         egui::pos2(
