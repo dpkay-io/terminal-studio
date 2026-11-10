@@ -141,6 +141,7 @@ fn parse_renderer_arg() -> Option<eframe::Renderer> {
 }
 
 fn main() -> eframe::Result<()> {
+    app::perf::mark_start();
     let log_level = logging::load_configured_level();
     let _log_guard = logging::init(log_level);
 

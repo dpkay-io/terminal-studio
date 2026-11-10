@@ -35,6 +35,7 @@ mod multi_window;
 mod note_save_worker;
 mod pane;
 mod pane_state;
+pub(crate) mod perf;
 mod persistence;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
@@ -362,6 +363,8 @@ pub struct App {
 
     // Set once when restart_app() is attempted — prevents retrying every frame
     restart_attempted: bool,
+    // Opt-in frame metrics; absent unless TS_PERF=1.
+    perf: Option<perf::PerfMonitor>,
 }
 
 impl eframe::App for App {
@@ -440,7 +443,7 @@ impl eframe::App for App {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         theme::clear_contrast_cache();
 
         // ── Enforce minimum window size (decorations(false) means the OS won't) ──
@@ -1218,6 +1221,10 @@ impl eframe::App for App {
             }
             self.workspace_store.save();
             self.save_windows();
+        }
+
+        if let Some(perf) = &mut self.perf {
+            perf.record(ctx, frame, Instant::now());
         }
     }
 }

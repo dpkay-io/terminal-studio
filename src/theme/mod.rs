@@ -101,23 +101,9 @@ pub struct Theme {
     pub danger_text: Color32,
 
     // Raw RGB values
-    pub crust_rgb: [u8; 3],
     pub mantle_rgb: [u8; 3],
     pub base_rgb: [u8; 3],
-    pub surface0_rgb: [u8; 3],
-    pub surface1_rgb: [u8; 3],
-    pub surface2_rgb: [u8; 3],
-    pub overlay0_rgb: [u8; 3],
-    pub overlay1_rgb: [u8; 3],
-    pub subtext0_rgb: [u8; 3],
-    pub subtext1_rgb: [u8; 3],
-    pub text_rgb: [u8; 3],
     pub blue_rgb: [u8; 3],
-    pub green_rgb: [u8; 3],
-    pub red_rgb: [u8; 3],
-    pub yellow_rgb: [u8; 3],
-    pub mauve_rgb: [u8; 3],
-    pub teal_rgb: [u8; 3],
 
     // Color32 palette
     pub crust: Color32,
@@ -139,18 +125,15 @@ pub struct Theme {
     pub teal: Color32,
 
     // Semantic backgrounds
-    pub bg_panel_fill: Color32,
     pub bg_workspace_fill: Color32,
     pub bg_term: Color32,
     pub bg_row_active: Color32,
     pub bg_row_hover: Color32,
 
     // Semantic foregrounds
-    pub fg_primary: Color32,
     pub fg_secondary: Color32,
     pub fg_muted: Color32,
     pub fg_path: Color32,
-    pub fg_dir_entry: Color32,
     pub fg_md_file: Color32,
     pub fg_other_file: Color32,
 
@@ -168,13 +151,7 @@ pub struct Theme {
     pub flash_error_bg: Color32,
 
     // Interactive
-    pub danger_bg: Color32,
     pub danger_fg: Color32,
-    pub split_hover_bg: Color32,
-    pub divider_idle: Color32,
-    pub divider_active: Color32,
-    pub ws_div_idle: Color32,
-    pub ws_div_active: Color32,
 
     // Git
     pub git_added: Color32,
@@ -182,8 +159,6 @@ pub struct Theme {
     pub git_modified: Color32,
     pub git_renamed: Color32,
     pub git_untracked: Color32,
-    pub git_hunk: Color32,
-    pub git_header: Color32,
     pub git_filename: Color32,
 
     // Markdown
@@ -211,17 +186,12 @@ pub struct Theme {
 
     // UI refresh: component backgrounds
     pub bg_input: Color32,
-    pub bg_tab_active: Color32,
-    pub bg_tab_inactive: Color32,
-    pub bg_toolbar: Color32,
 
     // UI refresh: borders
-    pub border_panel: Color32,
     pub border_subtle: Color32,
     pub border_focus: Color32,
 
     // UI refresh: shadows (simulated via darker strokes)
-    pub shadow_sm: Color32,
     pub shadow_md: Color32,
 }
 
@@ -242,12 +212,6 @@ impl ThemeDef {
 
         let bg_workspace_fill = blend(self.mantle, self.base, BLEND_LIGHT);
         let bg_row_hover = blend(self.base, self.surface0, BLEND_MEDIUM);
-        let split_hover_bg = blend(self.base, self.blue, BLEND_LIGHT);
-        let divider_idle = blend(self.surface0, self.surface1, BLEND_LIGHT);
-        let divider_active = blend(self.surface1, self.blue, BLEND_MEDIUM);
-        let ws_div_idle = blend(self.base, self.surface0, 0.4);
-        let ws_div_active = blend(self.surface1, self.overlay0, BLEND_MEDIUM);
-        let fg_dir_entry = blend(self.blue, self.subtext1, BLEND_LIGHT);
         let md_code_bg = blend(self.base, self.surface0, BLEND_MEDIUM);
 
         let roles = roles::derive_roles(self);
@@ -258,7 +222,6 @@ impl ThemeDef {
         let flash_success_bg = blend(self.base, self.green, BLEND_SUBTLE);
         let flash_error_bg = blend(self.base, self.red, BLEND_SUBTLE);
 
-        let danger_bg = blend(self.base, self.red, BLEND_SUBTLE);
         let danger_fg = blend(self.red, self.text, BLEND_LIGHT);
 
         let cursor_color = if self.is_light {
@@ -282,7 +245,6 @@ impl ThemeDef {
         let md_bullet = blend(self.green, self.overlay0, BLEND_LIGHT);
 
         let bg_input = blend(self.base, self.surface0, 0.6);
-        let bg_tab_inactive = blend(self.mantle, self.surface0, BLEND_LIGHT);
         let border_subtle_rgb = blend(self.surface0, self.surface1, BLEND_MEDIUM);
 
         Theme {
@@ -300,23 +262,9 @@ impl ThemeDef {
             danger: roles.danger,
             danger_text: roles.danger_text,
 
-            crust_rgb: self.crust,
             mantle_rgb: self.mantle,
             base_rgb: self.base,
-            surface0_rgb: self.surface0,
-            surface1_rgb: self.surface1,
-            surface2_rgb: self.surface2,
-            overlay0_rgb: self.overlay0,
-            overlay1_rgb: self.overlay1,
-            subtext0_rgb: self.subtext0,
-            subtext1_rgb: self.subtext1,
-            text_rgb: self.text,
             blue_rgb: self.blue,
-            green_rgb: self.green,
-            red_rgb: self.red,
-            yellow_rgb: self.yellow,
-            mauve_rgb: self.mauve,
-            teal_rgb: self.teal,
 
             crust: c(self.crust),
             mantle: c(self.mantle),
@@ -336,17 +284,14 @@ impl ThemeDef {
             mauve: c(self.mauve),
             teal: c(self.teal),
 
-            bg_panel_fill: roles.bg_panel,
             bg_workspace_fill: c(bg_workspace_fill),
             bg_term: c(self.base),
             bg_row_active: c(self.surface0),
             bg_row_hover: c(bg_row_hover),
 
-            fg_primary: roles.fg,
             fg_secondary: c(self.subtext0),
             fg_muted: roles.fg_muted,
             fg_path: c(self.blue),
-            fg_dir_entry: c(fg_dir_entry),
             fg_md_file: c(self.green),
             fg_other_file: c(self.subtext1),
 
@@ -361,21 +306,13 @@ impl ThemeDef {
             flash_success_bg: c(flash_success_bg),
             flash_error_bg: c(flash_error_bg),
 
-            danger_bg: c(danger_bg),
             danger_fg: c(danger_fg),
-            split_hover_bg: c(split_hover_bg),
-            divider_idle: c(divider_idle),
-            divider_active: c(divider_active),
-            ws_div_idle: c(ws_div_idle),
-            ws_div_active: c(ws_div_active),
 
             git_added: c(self.green),
             git_removed: c(self.red),
             git_modified: c(self.yellow),
             git_renamed: c(self.mauve),
             git_untracked: c(self.overlay0),
-            git_hunk: c(blend(self.blue, self.teal, 0.4)),
-            git_header: c(self.yellow),
             git_filename: c(blend(self.blue, self.subtext1, 0.2)),
 
             md_code: c(self.green),
@@ -405,11 +342,7 @@ impl ThemeDef {
             scrollbar_color,
 
             bg_input: c(bg_input),
-            bg_tab_active: c(self.base),
-            bg_tab_inactive: c(bg_tab_inactive),
-            bg_toolbar: c(self.mantle),
 
-            border_panel: roles.border,
             border_subtle: c(border_subtle_rgb),
             border_focus: Color32::from_rgba_unmultiplied(
                 self.blue[0],
@@ -418,12 +351,6 @@ impl ThemeDef {
                 ALPHA_BORDER_FOCUS,
             ),
 
-            shadow_sm: Color32::from_rgba_unmultiplied(
-                self.crust[0],
-                self.crust[1],
-                self.crust[2],
-                ALPHA_SHADOW_SM,
-            ),
             shadow_md: Color32::from_rgba_unmultiplied(
                 self.crust[0],
                 self.crust[1],

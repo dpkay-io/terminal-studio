@@ -235,6 +235,7 @@ impl App {
             spawn_rate_limit_strikes: 0,
             spawn_circuit_broken: false,
             restart_attempted: false,
+            perf: super::perf::PerfMonitor::from_env(),
         };
 
         let (init_cols, init_rows) = {

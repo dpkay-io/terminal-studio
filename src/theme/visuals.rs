@@ -52,4 +52,10 @@ mod tests {
         assert_eq!(vis.selection.bg_fill, t.accent_bg);
         assert_eq!(vis.widgets.hovered.weak_bg_fill, t.bg_raised);
     }
+
+    #[test]
+    fn visuals_for_preserves_light_theme_mode() {
+        let t = theme_by_id(ThemeId::GitHubLight);
+        assert!(!visuals_for(t).dark_mode);
+    }
 }

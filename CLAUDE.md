@@ -8,8 +8,9 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (333 tests)
+cargo test --locked      # all unit tests (see Test Coverage)
 RUST_LOG=debug cargo run # enable debug logging
+TS_PERF=1 cargo run      # log frame/atlas metrics every 5s
 ```
 
 ## Module Map
@@ -20,7 +21,11 @@ RUST_LOG=debug cargo run # enable debug logging
 |------|---------------|
 | `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false; calls `SingleInstanceGuard::try_acquire()` |
 | `src/app.rs` | `App` struct; implements `eframe::App`; render dispatch to UI submodules |
-| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
+| `src/theme/mod.rs` | Theme registry, design tokens, compatibility palette fields, and WCAG contrast helpers |
+| `src/theme/palettes.rs` | Definitions for all 16 dark/light palettes, including signature accents |
+| `src/theme/roles.rs` | Derives readable surface, text, accent, and danger roles from palette definitions |
+| `src/theme/visuals.rs` | Maps a `Theme` to the single application-wide egui `Visuals` configuration |
+| `src/fonts.rs` | Registers bundled Inter, JetBrains Mono, and Lucide fonts with platform symbol fallbacks |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
 | `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
 | `src/logging.rs` | `LogLevel` enum, `LogGuard`; non-blocking daily-rotated file logging via tracing-appender; 7-day retention cleanup; `load_configured_level()` partial settings parse |
@@ -53,6 +58,8 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/app/input.rs` | `key_to_pty_bytes()`: keyboard→PTY byte translation (Ctrl+A–Z, arrows, function keys, modifiers) |
 | `src/app/title.rs` | `effective_title()`: workspace+session title formatting; shell escape helpers |
 | `src/app/feedback.rs` | `FlashManager`, `FlashTarget`, `FlashKind`: subtle UI flash feedback (copy, paste, error) with auto-fade |
+| `src/app/note_save_worker.rs` | Debounced note autosave state plus background persistence worker and completion reporting |
+| `src/app/perf.rs` | Opt-in `TS_PERF=1` frame CPU/FPS, font-atlas, galley-cache, and time-to-first-frame logging |
 | `src/app/markdown.rs` | `render_markdown()`: headers, bold, code blocks, lists, blockquotes, links |
 | `src/app/persistence.rs` | `AppSession`, `SavedPane`, `SavedPaneContent`, `SavedSession`; JSON serialization; session restore |
 | `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces |
@@ -66,7 +73,7 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/app/watcher.rs` | `WatchState`, `WatchCommand`, `WatchResult`; background file system watcher (notify crate); debounced git refresh |
 | `src/app/file_browser.rs` | `FileEntry`, `DirData`, `SubdirCache`; directory tree listing; file entry sorting/caching; `.gitignore` parsing |
 | `src/app/git_diff.rs` | `GitDiffState`; git diff rendering, staged/unstaged sections, inline hunks, side-by-side toggle |
-| `src/app/git_worker.rs` | `GitWorker`: background thread for git operations (info, stage/unstage, commit, push, diff) |
+| `src/app/git_worker.rs` | `GitWorker`: background git operations plus parsed, shared `GitStatusSnapshot` data |
 | `src/app/workspace_git_worker.rs` | Workspace-scoped git worker for per-workspace git state tracking |
 | `src/app/diff_parser.rs` | `DiffHunk`, `DiffLine`, `DiffViewMode`, `SideBySideLine`; unified diff format parser |
 | `src/git/parser.rs` | `FileChangeKind` enum, `GitFileStatus` struct; `git status --porcelain` parser (C-style unquoting) |
@@ -87,7 +94,12 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/app/ui/tab_bar.rs` | `TabBarResult`, `render_tab_bar()`: horizontally scrollable tab strip, split group indicators |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
-| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about |
+| `src/app/ui/dialogs/mod.rs` | Dialog module dispatch |
+| `src/app/ui/dialogs/quick_switcher.rs` | Grouped session quick switcher and cached filter model |
+| `src/app/ui/dialogs/quit.rs` | Quit summary, open-tab chips, and confirmation UI |
+| `src/app/ui/dialogs/git.rs` | Commit, push, stage, revert, and delete dialogs |
+| `src/app/ui/dialogs/workspace.rs` | Workspace save/edit and open-folder dialogs |
+| `src/app/ui/dialogs/confirm.rs` | Shared close-all and confirmation dialogs |
 | `src/app/ui/settings_overlay.rs` | Settings panel: theme picker, cursor style, font size, scrollback, keybinding editor |
 | `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
@@ -101,8 +113,11 @@ RUST_LOG=debug cargo run # enable debug logging
 |------|---------------|
 | `src/ui_kit/buttons.rs` | `IconButton`, `ActionButton`, `IconButtonStyle`, `ActionButtonStyle`; themed button wrappers |
 | `src/ui_kit/containers.rs` | `dialog()`, `DialogConfig`, `DialogResponse`, `DialogAnchor`, `DialogWidth`; flex-box layouts |
+| `src/ui_kit/controls.rs` | Shared toggle switch and segmented controls |
+| `src/ui_kit/icons.rs` | Named Lucide glyph constants, registry, and icon text constructor |
 | `src/ui_kit/layout.rs` | Grid/flex helpers; responsive layout utilities |
 | `src/ui_kit/lists.rs` | Scrollable list rendering with selection tracking |
+| `src/ui_kit/tabs.rs` | Shared selected-tab rendering and optional count badges |
 | `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling |
 
 ### Utilities & Infrastructure
@@ -196,6 +211,9 @@ eframe = "0.28"              # wgpu, default_fonts, persistence
 egui = "0.28"
 serde + serde_json = "1"
 
+# Bundled with include_bytes!: Inter 4.1 (UI), JetBrains Mono 2.304
+# (terminal/kbd), and a Lucide 0.468.0 icon subset; see assets/fonts/README.md.
+
 # Terminal emulation
 alacritty_terminal = "0.26"  # full terminal emulator (grid, parser, modes)
 vte = "0.13"                 # tee parser for OSC 7 CWD extraction
@@ -236,7 +254,7 @@ windows-sys = "0.52"         # DWM, toolhelp, CreateMutexW, window messages
 
 ## Conventions
 
-**Colors:** Always use constants from `theme.rs`. Never hardcode RGB in `app.rs`.
+**Colors:** Always use roles/tokens from `theme/`. Never hardcode RGB in application UI.
 
 ```rust
 // correct
@@ -253,10 +271,14 @@ Color32::from_rgb(30, 30, 46)
 // ...
 ```
 
-**Design language tokens (all in `theme.rs`):**
+**Design language tokens (all in `theme/mod.rs`):**
 - Spacing: `SP_0` (0) through `SP_6` (16) — use these, never hardcode pixel values
-- Radii: `R_NONE` (0), `R_SM` (2), `R_MD` (4), `R_LG` (6)
-- Typography: `FONT_HEADING_1` (22), `FONT_HEADING_2` (18), `FONT_STATUS` (16), `FONT_TERM` (14), `FONT_UI_LG` (13), `FONT_UI_MD` (12), `FONT_UI_SM` (11), `FONT_UI_XS` (10)
+- Radii: `R_NONE` (0), `R_SM` (3), `R_MD` (6), `R_LG` (8)
+- Surface/text roles: `bg_base`, `bg_panel`, `bg_raised`, `border`, `fg`, `fg_muted`, `fg_muted_raised`, `fg_strong`
+- State roles: `accent`, `accent_bg`, `danger`, `danger_text`, `success`, `warning`, `error`
+- UI type scale: `FONT_XS` (11), `FONT_SM` (12), `FONT_MD` (13), `FONT_LG` (14)
+- Terminal: `FONT_TERM` (14) with `TERM_LINE_HEIGHT` (1.3)
+- Markdown-only headings: `FONT_HEADING_1` (22), `FONT_HEADING_2` (18)
 - Alpha: `ALPHA_CURSOR`, `ALPHA_SELECTION`, `ALPHA_OVERLAY_DIM`, `ALPHA_SCROLLBAR_*`, `ALPHA_FLASH`
 - Blend factors: `BLEND_SUBTLE` (0.15), `BLEND_LIGHT` (0.30), `BLEND_MEDIUM` (0.50), `BLEND_STRONG` (0.75)
 - Icons: `ICON_SM` (10), `ICON_MD` (14), `ICON_LG` (18), `ICON_STROKE`, `ICON_PAD`
@@ -300,43 +322,21 @@ Color32::from_rgb(30, 30, 46)
 
 ## Test Coverage
 
-| File | Tests | Coverage |
-|------|-------|---------|
-| `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
-| `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
-| `src/app/pane_state.rs` | 20 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates |
-| `src/app/title.rs` | 20 | title formatting with workspaces, effective title, shell escaping |
-| `src/pane_tree.rs` | 19 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, split_rect geometry |
-| `src/app/diff_parser.rs` | 18 | unified diff parsing, hunk extraction, line kind classification |
-| `src/git/parser.rs` | 17 | git status --porcelain parsing, C-style unquoting, file status kinds |
-| `src/workspace.rs` | 16 | store CRUD, find_for_cwd, find_for_path, note store |
-| `src/app/watcher.rs` | 16 | file system watch, git refresh debounce, directory caching |
-| `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC title, cursor, bracketed paste, mouse SGR |
-| `src/search.rs` | 11 | text search, match finding, index navigation |
-| `src/renderer/terminal_pass.rs` | 10 | terminal geometry, cell rendering, scrollbar hit-testing, selection |
-| `src/pty/reader.rs` | 10 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming |
-| `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
-| `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
-| `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
-| `src/app/persistence.rs` | 9 | session serialization, restore logic |
-| `src/app/pane.rs` | 8 | pane content enum, terminal selection |
-| `src/pty/mod.rs` | 8 | shell detection, session manager operations |
-| `src/app/workspace_git_worker.rs` | 8 | workspace-scoped git state |
-| `src/file_search_worker.rs` | 8 | file fuzzy search, result filtering |
-| `src/app/feedback.rs` | 7 | trigger/tick, flash expiry, alpha decay, duplicate replacement, color generation |
-| `src/app/markdown.rs` | 7 | markdown rendering (headers, code, lists, blockquotes) |
-| `src/md_detector.rs` | 7 | markdown path detection |
-| `src/util.rs` | 7 | atomic write, JSON loading, directory expansion |
-| `src/app/file_browser.rs` | 10 | directory listing, file entry sorting, gitignore parsing |
-| `src/shortcuts.rs` | 6 | keybinding parsing, action resolution |
-| `src/keybindings.rs` | 6 | keybinding config loading, JSON handling |
-| `src/app/settings.rs` | 6 | settings persistence, JSON config |
-| `src/search_worker.rs` | 6 | cross-session fuzzy search |
-| `src/pty/shell_integration.rs` | 5 | shell prompt integration helpers |
-| `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
-| `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
-| `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
-| **Total** | **520** | |
+`cargo test --locked` discovers **765 tests**. On the Linux cloud VM, **764
+pass**; the only allowed failure is the filesystem timestamp-sensitive
+`workspace::tests::test_note_store_external_edit_detection`.
+
+| Area | Tests | Coverage focus |
+|------|------:|----------------|
+| `src/theme/*` | 35 | 16 palettes, roles/contrast, visuals, tokens, color helpers |
+| `src/fonts.rs` | 7 | bundled font validity, family registration, fallback order |
+| `src/ui_kit/*` | 23 | icons, controls, tabs, lists, truncation, dialog footer |
+| `src/git/parser.rs` | 29 | porcelain parsing, quoting, modified path extraction |
+| `src/app/git_worker.rs` | 15 | snapshots, git operations, merge/rebase state |
+| `src/app/file_browser.rs` | 4 | row layout, icons, modified paths, visible-row culling |
+| `src/app/note_save_worker.rs` | 4 | debounce, generations, completion and shutdown |
+| `src/app/perf.rs` | 3 | opt-in parsing and percentile summaries |
+| **Whole binary** | **765** | Unit and headless egui tests across all modules |
 
 ## Release Workflow
 

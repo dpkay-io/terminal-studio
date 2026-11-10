@@ -232,4 +232,10 @@ mod tests {
         assert_eq!(ThemeId::ALL.len(), 16);
         assert_eq!(ThemeId::GitHubLight.name(), "GitHub Light");
     }
+
+    #[test]
+    fn step_toward_falls_back_to_target_when_no_candidate_passes() {
+        let target = [200, 150, 100];
+        assert_eq!(super::step_toward([0, 0, 0], target, |_| false), target);
+    }
 }

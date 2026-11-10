@@ -114,11 +114,11 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, rect: egui::Rect) -> egui::Re
     } else {
         theme::tinted(t.blue_rgb, theme::BLEND_SUBTLE)
     };
-    let bg = egui::Color32::from_rgb(tint[0], tint[1], tint[2]);
+    let bg = theme::from_rgb(tint);
     let p = ui.painter();
     p.rect_filled(rect, theme::R_SM, bg);
 
-    let pill_font = egui::FontId::monospace(theme::FONT_XS);
+    let pill_font = egui::FontId::proportional(theme::FONT_XS);
     let text_galley = p.layout_no_wrap(label.to_string(), pill_font, t.accent);
     p.galley(
         egui::pos2(
