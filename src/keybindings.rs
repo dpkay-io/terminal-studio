@@ -20,6 +20,15 @@ pub struct KeybindingsConfig {
 }
 
 impl KeybindingsConfig {
+    pub fn from_json(text: &str) -> Self {
+        match serde_json::from_str::<Vec<KeyBinding>>(text) {
+            Ok(bindings) if !bindings.is_empty() => Self { bindings },
+            _ => Self {
+                bindings: Self::default_bindings(),
+            },
+        }
+    }
+
     pub fn load() -> Self {
         let Some(path) = keybindings_data_path() else {
             return Self {
@@ -340,7 +349,7 @@ impl KeybindingsConfig {
                     ctrl: true,
                     shift: true,
                     alt: false,
-                    key: egui::Key::T,
+                    key: egui::Key::A,
                 },
                 AppAction::SearchAllSessions,
             ),
@@ -358,7 +367,7 @@ impl KeybindingsConfig {
                     ctrl: true,
                     shift: true,
                     alt: false,
-                    key: egui::Key::R,
+                    key: egui::Key::T,
                 },
                 AppAction::ReopenClosedSession,
             ),
@@ -483,4 +492,86 @@ impl KeybindingsConfig {
 
 fn keybindings_data_path() -> Option<PathBuf> {
     util::data_file("keybindings.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn chord(binding: &KeyBinding) -> (bool, bool, bool, &str) {
+        (
+            binding.ctrl,
+            binding.shift,
+            binding.alt,
+            binding.key.as_str(),
+        )
+    }
+
+    fn default_binding(action: AppAction) -> KeyBinding {
+        KeybindingsConfig::default_bindings()
+            .into_iter()
+            .find(|binding| binding.action == action.name())
+            .unwrap_or_else(|| panic!("missing default binding for {action:?}"))
+    }
+
+    #[test]
+    fn default_bindings_have_no_collisions() {
+        let bindings = KeybindingsConfig::default_bindings();
+        let unique: HashSet<_> = bindings.iter().map(chord).collect();
+        assert_eq!(unique.len(), bindings.len());
+    }
+
+    #[test]
+    fn reopen_closed_session_is_ctrl_shift_t() {
+        assert_eq!(
+            chord(&default_binding(AppAction::ReopenClosedSession)),
+            (true, true, false, "T")
+        );
+    }
+
+    #[test]
+    fn reveal_in_explorer_is_ctrl_shift_r() {
+        assert_eq!(
+            chord(&default_binding(AppAction::RevealInExplorer)),
+            (true, true, false, "R")
+        );
+    }
+
+    #[test]
+    fn search_all_sessions_is_ctrl_shift_a() {
+        assert_eq!(
+            chord(&default_binding(AppAction::SearchAllSessions)),
+            (true, true, false, "A")
+        );
+    }
+
+    #[test]
+    fn user_override_survives_default_change() {
+        let config = KeybindingsConfig::from_json(
+            r#"[{
+                "action": "reopen_closed_session",
+                "ctrl": true,
+                "shift": true,
+                "alt": false,
+                "key": "R"
+            }]"#,
+        );
+
+        let (shortcut, action) = config
+            .to_shortcut_pairs()
+            .into_iter()
+            .find(|(_, action)| *action == AppAction::ReopenClosedSession)
+            .expect("the user override should resolve");
+        assert_eq!(action, AppAction::ReopenClosedSession);
+        assert_eq!(
+            shortcut,
+            Shortcut {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                key: egui::Key::R,
+            }
+        );
+    }
 }

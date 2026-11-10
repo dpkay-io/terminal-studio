@@ -70,6 +70,33 @@ use watcher::WatchState;
 use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
 
+fn registered_shortcut_chord(
+    registry: &ShortcutRegistry,
+    action: AppAction,
+) -> Option<(egui::Modifiers, egui::Key)> {
+    registry.find_shortcut(action).map(|shortcut| {
+        (
+            egui::Modifiers {
+                alt: shortcut.alt,
+                ctrl: shortcut.ctrl,
+                shift: shortcut.shift,
+                mac_cmd: false,
+                command: false,
+            },
+            shortcut.key,
+        )
+    })
+}
+
+fn consume_registered_shortcut(
+    input: &mut egui::InputState,
+    registry: &ShortcutRegistry,
+    action: AppAction,
+) -> bool {
+    registered_shortcut_chord(registry, action)
+        .is_some_and(|(modifiers, key)| input.consume_key(modifiers, key))
+}
+
 #[derive(Clone, Copy, Default)]
 enum CloseAllTarget {
     #[default]
@@ -203,7 +230,7 @@ pub struct App {
     // Text content search for file editors, notes, diffs (Ctrl+F)
     text_search: crate::search::TextSearchState,
 
-    // Global search across all sessions (Ctrl+Shift+T)
+    // Global search across all sessions
     show_global_search: bool,
     global_search_query: String,
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
@@ -1194,6 +1221,7 @@ impl eframe::App for App {
         }
     }
 }
+
 impl App {
     fn apply_note_save_completion(&mut self, completion: note_save_worker::NoteSaveCompletion) {
         match completion.result {
@@ -3003,30 +3031,86 @@ impl App {
             // Global shortcuts that work even when a modal/dialog is open
             {
                 let consumed = ctx.input_mut(|i| {
-                    let cs = egui::Modifiers { alt: false, ctrl: true, shift: true, mac_cmd: false, command: false };
-                    if i.consume_key(cs, egui::Key::Slash) || i.consume_key(cs, egui::Key::Questionmark) {
+                    if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::ToggleShortcutHelp,
+                    ) || i.consume_key(
+                        egui::Modifiers {
+                            alt: false,
+                            ctrl: true,
+                            shift: true,
+                            mac_cmd: false,
+                            command: false,
+                        },
+                        egui::Key::Questionmark,
+                    ) {
                         Some(AppAction::ToggleShortcutHelp)
-                    } else if i.consume_key(cs, egui::Key::Comma) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::OpenSettings,
+                    ) {
                         Some(AppAction::OpenSettings)
-                    } else if i.consume_key(cs, egui::Key::F) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::FocusSessionSearch,
+                    ) {
                         Some(AppAction::FocusSessionSearch)
-                    } else if i.consume_key(cs, egui::Key::P) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::CommandPalette,
+                    ) {
                         Some(AppAction::CommandPalette)
-                    } else if i.consume_key(cs, egui::Key::D) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::RightTabDirectory,
+                    ) {
                         Some(AppAction::RightTabDirectory)
-                    } else if i.consume_key(cs, egui::Key::Space) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::OpenQuickSwitcher,
+                    ) {
                         Some(AppAction::OpenQuickSwitcher)
-                    } else if i.consume_key(cs, egui::Key::N) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::NewTerminalTab,
+                    ) {
                         Some(AppAction::NewTerminalTab)
-                    } else if i.consume_key(cs, egui::Key::Z) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::ZoomPane,
+                    ) {
                         Some(AppAction::ZoomPane)
-                    } else if i.consume_key(cs, egui::Key::T) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::SearchAllSessions,
+                    ) {
                         Some(AppAction::SearchAllSessions)
-                    } else if i.consume_key(cs, egui::Key::R) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::ReopenClosedSession,
+                    ) {
                         Some(AppAction::ReopenClosedSession)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::P) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::OpenFileFinder,
+                    ) {
                         Some(AppAction::OpenFileFinder)
-                    } else if i.consume_key(egui::Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false }, egui::Key::F) {
+                    } else if consume_registered_shortcut(
+                        i,
+                        &self.shortcut_registry,
+                        AppAction::SearchTerminal,
+                    ) {
                         Some(AppAction::SearchTerminal)
                     } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                         if self.show_global_search {
@@ -5034,5 +5118,25 @@ impl App {
         self.render_stage_all_confirm(ctx);
         self.render_revert_confirm(ctx);
         self.render_delete_confirm(ctx);
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    use crate::keybindings::KeybindingsConfig;
+
+    #[test]
+    fn global_block_reopen_uses_registry_chord() {
+        let registry = ShortcutRegistry::from_config(KeybindingsConfig {
+            bindings: KeybindingsConfig::default_bindings(),
+        });
+
+        let (modifiers, key) = registered_shortcut_chord(&registry, AppAction::ReopenClosedSession)
+            .expect("reopen should have a registered shortcut");
+        assert_eq!(key, egui::Key::T);
+        assert!(modifiers.ctrl);
+        assert!(modifiers.shift);
+        assert!(!modifiers.alt);
     }
 }

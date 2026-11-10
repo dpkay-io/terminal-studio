@@ -19,7 +19,7 @@ pub(super) struct WorkerManager {
     pub(super) note_save_worker: NoteSaveWorker,
     /// Background worker for workspace git branch/diff info (lazy, 15 s TTL).
     pub(super) workspace_git_worker: WorkspaceGitWorker,
-    /// Global search across all sessions (Ctrl+Shift+T).
+    /// Global search across all sessions.
     pub(super) search_worker: crate::search_worker::SearchWorker,
     /// Background file search worker for directory panel.
     pub(super) file_search_worker: crate::file_search_worker::FileSearchWorker,

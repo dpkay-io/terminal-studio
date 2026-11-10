@@ -10,6 +10,7 @@ mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
+mod shortcuts_dialog;
 mod tab_bar;
 pub(super) use tab_bar::GroupTabBarResult;
 mod titlebar;

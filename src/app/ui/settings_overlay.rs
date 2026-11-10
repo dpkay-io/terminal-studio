@@ -1,8 +1,16 @@
 use super::super::settings::CursorStyle;
 use super::super::App;
+use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
+
+fn closed_sessions_hint(registry: &ShortcutRegistry) -> String {
+    let shortcut = registry
+        .label_for(AppAction::ReopenClosedSession)
+        .unwrap_or("unassigned");
+    format!("Saves closed terminal sessions so they can be restored later ({shortcut}).")
+}
 
 impl App {
     pub(in crate::app) fn render_settings_overlay(&mut self, ctx: &egui::Context) {
@@ -89,9 +97,9 @@ impl App {
                                     settings_changed = true;
                                 }
                                 ui.add_space(theme::SP_2);
-                                ui.label(ui_kit::label_muted(
-                                    "Saves closed terminal sessions so they can be restored later (Ctrl+Shift+T).",
-                                ));
+                                ui.label(ui_kit::label_muted(closed_sessions_hint(
+                                    &self.shortcut_registry,
+                                )));
                             }
 
                             ui.add_space(theme::SP_4);
@@ -561,117 +569,33 @@ impl App {
             }
         }
 
-        // ── Shortcut help overlay ──────────────────────────────────────────
-        if self.show_shortcut_help {
-            let mut close_help = false;
-            let dialog_h = (ctx.screen_rect().height() * 0.72).clamp(300.0, 560.0);
+        super::shortcuts_dialog::render_shortcuts_dialog(self, ctx);
+    }
+}
 
-            let help_resp = ui_kit::dialog(
-                ctx,
-                self.vp_id("shortcut"),
-                ui_kit::DialogConfig {
-                    width: ui_kit::DialogWidth::Responsive {
-                        pct: 0.55,
-                        min: 400.0,
-                        max: 680.0,
-                    },
-                    max_height: dialog_h,
-                    anchor: ui_kit::DialogAnchor::Center,
-                    ..Default::default()
-                },
-                |ui| {
-                    if ui_kit::dialog_header_with_close(ui, "Keyboard Shortcuts") {
-                        close_help = true;
-                    }
-                    ui.add_space(theme::SP_2);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keybindings::KeybindingsConfig;
+    use crate::shortcuts::ShortcutRegistry;
 
-                    egui::ScrollArea::vertical()
-                        .id_source("shortcuts_scroll")
-                        .max_height(dialog_h - 60.0)
-                        .show(ui, |ui| {
-                            let t = theme::active();
-                            let groups = self.shortcut_registry.groups();
-                            let half = groups.len().div_ceil(2);
+    #[test]
+    fn closed_sessions_hint_uses_registry_display_string() {
+        let registry = ShortcutRegistry::from_config(KeybindingsConfig::from_json(
+            r#"[{
+                "action": "reopen_closed_session",
+                "ctrl": true,
+                "shift": true,
+                "alt": false,
+                "key": "R"
+            }]"#,
+        ));
 
-                            ui.columns(2, |cols| {
-                                for (col_idx, col) in cols.iter_mut().enumerate() {
-                                    let start = if col_idx == 0 { 0 } else { half };
-                                    let end = if col_idx == 0 { half } else { groups.len() };
-                                    for group in &groups[start..end] {
-                                        if group.entries.is_empty() {
-                                            continue;
-                                        }
-                                        col.add_space(theme::SP_3);
-                                        col.label(
-                                            egui::RichText::new(group.name)
-                                                .strong()
-                                                .size(theme::FONT_SM)
-                                                .color(t.blue),
-                                        );
-                                        col.add_space(theme::SP_1);
-                                        for (action, shortcut) in &group.entries {
-                                            col.horizontal(|ui| {
-                                                let desc = action.description();
-                                                ui.label(
-                                                    egui::RichText::new(desc)
-                                                        .size(theme::FONT_SM)
-                                                        .color(t.text),
-                                                );
-                                                ui.with_layout(
-                                                    egui::Layout::right_to_left(
-                                                        egui::Align::Center,
-                                                    ),
-                                                    |ui| {
-                                                        let label = shortcut.label();
-                                                        let shortcut_fg = theme::ensure_readable(
-                                                            t.subtext0_rgb,
-                                                            t.surface1_rgb,
-                                                        );
-                                                        let badge = egui::RichText::new(&label)
-                                                            .size(theme::FONT_XS)
-                                                            .color(shortcut_fg)
-                                                            .background_color(t.surface1);
-                                                        ui.label(badge);
-                                                    },
-                                                );
-                                            });
-                                        }
-                                    }
-                                }
-                            });
-
-                            ui.add_space(theme::SP_4);
-                            {
-                                let sep_rect =
-                                    ui.allocate_space(egui::vec2(ui.available_width(), 1.0)).1;
-                                crate::ui_kit::gradient_separator(ui.painter(), sep_rect);
-                            }
-                            ui.add_space(theme::SP_2);
-                            ui.horizontal(|ui| {
-                                let t = theme::active();
-                                let split_shortcut_fg =
-                                    theme::ensure_readable(t.subtext0_rgb, t.surface1_rgb);
-                                ui.label(
-                                    egui::RichText::new("Alt+Arrow")
-                                        .size(theme::FONT_XS)
-                                        .color(split_shortcut_fg)
-                                        .background_color(t.surface1),
-                                );
-                                ui.label(
-                                    egui::RichText::new("Move focus between split panes")
-                                        .size(theme::FONT_XS)
-                                        .color(t.overlay0),
-                                );
-                            });
-                        });
-                },
-            );
-            if help_resp.dismissed {
-                close_help = true;
-            }
-            if close_help {
-                self.show_shortcut_help = false;
-            }
-        }
+        let expected = if cfg!(target_os = "macos") {
+            "\u{2318}+\u{21e7}+R"
+        } else {
+            "Ctrl+Shift+R"
+        };
+        assert!(closed_sessions_hint(&registry).contains(expected));
     }
 }

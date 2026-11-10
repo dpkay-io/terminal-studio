@@ -482,11 +482,16 @@ pub struct ShortcutGroup {
 pub struct ShortcutRegistry {
     bindings: Vec<(Shortcut, AppAction)>,
     labels: HashMap<AppAction, String>,
+    chip_labels: HashMap<AppAction, Vec<String>>,
+    groups: Vec<ShortcutGroup>,
 }
 
 impl ShortcutRegistry {
     pub fn new() -> Self {
-        let config = KeybindingsConfig::load();
+        Self::from_config(KeybindingsConfig::load())
+    }
+
+    pub fn from_config(config: KeybindingsConfig) -> Self {
         let bindings = config.to_shortcut_pairs();
 
         // Fall back to defaults if no valid bindings were loaded
@@ -498,8 +503,18 @@ impl ShortcutRegistry {
 
         let labels: HashMap<AppAction, String> =
             bindings.iter().map(|(s, a)| (*a, s.label())).collect();
+        let chip_labels = bindings
+            .iter()
+            .map(|(shortcut, action)| (*action, shortcut_chip_labels(shortcut)))
+            .collect();
+        let groups = Self::build_groups(&bindings);
 
-        ShortcutRegistry { bindings, labels }
+        ShortcutRegistry {
+            bindings,
+            labels,
+            chip_labels,
+            groups,
+        }
     }
 
     pub fn find_shortcut(&self, action: AppAction) -> Option<&Shortcut> {
@@ -577,11 +592,11 @@ impl ShortcutRegistry {
                 AppAction::SearchTerminal,
             ),
             // Global search across all sessions
-            (Shortcut::cs(egui::Key::T), AppAction::SearchAllSessions),
+            (Shortcut::cs(egui::Key::A), AppAction::SearchAllSessions),
             // Pane zoom
             (Shortcut::cs(egui::Key::Z), AppAction::ZoomPane),
             // Reopen closed session
-            (Shortcut::cs(egui::Key::R), AppAction::ReopenClosedSession),
+            (Shortcut::cs(egui::Key::T), AppAction::ReopenClosedSession),
             // Group navigation
             (
                 Shortcut {
@@ -656,6 +671,8 @@ impl ShortcutRegistry {
                 },
                 AppAction::MoveTabToUpGroup,
             ),
+            // File explorer
+            (Shortcut::cs(egui::Key::R), AppAction::RevealInExplorer),
         ]
     }
 
@@ -670,9 +687,17 @@ impl ShortcutRegistry {
         self.labels.get(&action).map(|s| s.as_str())
     }
 
-    pub fn groups(&self) -> Vec<ShortcutGroup> {
+    pub fn chip_labels_for(&self, action: AppAction) -> Option<&[String]> {
+        self.chip_labels.get(&action).map(Vec::as_slice)
+    }
+
+    pub fn groups(&self) -> &[ShortcutGroup] {
+        &self.groups
+    }
+
+    fn build_groups(bindings: &[(Shortcut, AppAction)]) -> Vec<ShortcutGroup> {
         let lookup = |action: AppAction| -> Option<Shortcut> {
-            self.bindings
+            bindings
                 .iter()
                 .find(|(_, a)| *a == action)
                 .map(|(s, _)| s.clone())
@@ -680,7 +705,7 @@ impl ShortcutRegistry {
 
         let group_defs: &[(&str, &[AppAction])] = &[
             (
-                "Panel Navigation",
+                "PANEL NAVIGATION",
                 &[
                     AppAction::ToggleLeftSidebar,
                     AppAction::ToggleRightSidebar,
@@ -688,7 +713,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Tab Management",
+                "TAB MANAGEMENT",
                 &[
                     AppAction::NewTerminalTab,
                     AppAction::CloseCurrentPane,
@@ -699,7 +724,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Pane Splits",
+                "PANE SPLITS",
                 &[
                     AppAction::SplitHorizontal,
                     AppAction::SplitVertical,
@@ -715,7 +740,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Workspace",
+                "WORKSPACE",
                 &[
                     AppAction::OpenQuickSwitcher,
                     AppAction::OpenSettings,
@@ -724,7 +749,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Right Panel",
+                "RIGHT PANEL",
                 &[
                     AppAction::RightTabGitDiff,
                     AppAction::ToggleNotes,
@@ -732,7 +757,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Session",
+                "SESSION",
                 &[
                     AppAction::DuplicateSession,
                     AppAction::CopySelection,
@@ -740,7 +765,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Search",
+                "SEARCH",
                 &[
                     AppAction::FocusSessionSearch,
                     AppAction::RightTabDirectory,
@@ -750,7 +775,7 @@ impl ShortcutRegistry {
                 ],
             ),
             (
-                "Help",
+                "HELP",
                 &[AppAction::ToggleShortcutHelp, AppAction::CommandPalette],
             ),
         ];
@@ -768,13 +793,56 @@ impl ShortcutRegistry {
     }
 }
 
+fn shortcut_chip_labels(shortcut: &Shortcut) -> Vec<String> {
+    let mut labels = Vec::with_capacity(4);
+    if shortcut.ctrl {
+        labels.push(
+            if cfg!(target_os = "macos") {
+                "\u{2318}"
+            } else {
+                "Ctrl"
+            }
+            .to_owned(),
+        );
+    }
+    if shortcut.alt {
+        labels.push(
+            if cfg!(target_os = "macos") {
+                "\u{2325}"
+            } else {
+                "Alt"
+            }
+            .to_owned(),
+        );
+    }
+    if shortcut.shift {
+        labels.push(
+            if cfg!(target_os = "macos") {
+                "\u{21e7}"
+            } else {
+                "Shift"
+            }
+            .to_owned(),
+        );
+    }
+    labels.push(key_name(shortcut.key).to_owned());
+    labels
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    fn registry_from_defaults() -> ShortcutRegistry {
+        ShortcutRegistry::from_config(KeybindingsConfig {
+            bindings: KeybindingsConfig::default_bindings(),
+        })
+    }
 
     #[test]
     fn match_ctrl_shift_b() {
-        let reg = ShortcutRegistry::new();
+        let reg = registry_from_defaults();
         let mods = egui::Modifiers {
             alt: false,
             ctrl: true,
@@ -790,7 +858,7 @@ mod tests {
 
     #[test]
     fn no_match_without_shift() {
-        let reg = ShortcutRegistry::new();
+        let reg = registry_from_defaults();
         let mods = egui::Modifiers {
             alt: false,
             ctrl: true,
@@ -803,7 +871,7 @@ mod tests {
 
     #[test]
     fn label_generation() {
-        let reg = ShortcutRegistry::new();
+        let reg = registry_from_defaults();
         let expected_toggle = if cfg!(target_os = "macos") {
             "\u{2318}+\u{21E7}+B"
         } else {
@@ -833,7 +901,7 @@ mod tests {
 
     #[test]
     fn all_actions_have_labels() {
-        let reg = ShortcutRegistry::new();
+        let reg = registry_from_defaults();
         let actions = [
             AppAction::ToggleLeftSidebar,
             AppAction::ToggleRightSidebar,
@@ -862,12 +930,75 @@ mod tests {
 
     #[test]
     fn groups_cover_main_actions() {
-        let reg = ShortcutRegistry::new();
-        let groups = reg.groups();
+        let reg = registry_from_defaults();
+        let groups: &[ShortcutGroup] = reg.groups();
         let total_entries: usize = groups.iter().map(|g| g.entries.len()).sum();
         assert!(
             total_entries >= 15,
             "Expected at least 15 entries in help groups"
+        );
+    }
+
+    #[test]
+    fn shortcut_groups_and_chip_labels_are_cached() {
+        let reg = registry_from_defaults();
+
+        assert!(std::ptr::eq(reg.groups(), reg.groups()));
+        let first = reg
+            .chip_labels_for(AppAction::ReopenClosedSession)
+            .expect("reopen shortcut chips");
+        let second = reg
+            .chip_labels_for(AppAction::ReopenClosedSession)
+            .expect("reopen shortcut chips");
+        assert!(std::ptr::eq(first, second));
+        let expected_ctrl = if cfg!(target_os = "macos") {
+            "\u{2318}"
+        } else {
+            "Ctrl"
+        };
+        let expected_shift = if cfg!(target_os = "macos") {
+            "\u{21e7}"
+        } else {
+            "Shift"
+        };
+        assert_eq!(first, [expected_ctrl, expected_shift, "T"]);
+    }
+
+    #[test]
+    fn default_bindings_have_no_collisions() {
+        let bindings = ShortcutRegistry::default_bindings();
+        let unique: HashSet<_> = bindings.iter().map(|(shortcut, _)| shortcut).collect();
+        assert_eq!(unique.len(), bindings.len());
+    }
+
+    fn default_shortcut(action: AppAction) -> Shortcut {
+        ShortcutRegistry::default_bindings()
+            .into_iter()
+            .find_map(|(shortcut, candidate)| (candidate == action).then_some(shortcut))
+            .unwrap_or_else(|| panic!("missing default binding for {action:?}"))
+    }
+
+    #[test]
+    fn reopen_closed_session_is_ctrl_shift_t() {
+        assert_eq!(
+            default_shortcut(AppAction::ReopenClosedSession),
+            Shortcut::cs(egui::Key::T)
+        );
+    }
+
+    #[test]
+    fn reveal_in_explorer_is_ctrl_shift_r() {
+        assert_eq!(
+            default_shortcut(AppAction::RevealInExplorer),
+            Shortcut::cs(egui::Key::R)
+        );
+    }
+
+    #[test]
+    fn search_all_sessions_is_ctrl_shift_a() {
+        assert_eq!(
+            default_shortcut(AppAction::SearchAllSessions),
+            Shortcut::cs(egui::Key::A)
         );
     }
 }

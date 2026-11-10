@@ -50,39 +50,44 @@ pub fn kbd_chip(ui: &mut Ui, key: &str) -> Response {
 
 #[allow(dead_code)] // Consumed by later UI migration tasks.
 pub fn kbd_combo(ui: &mut Ui, shortcut: &crate::shortcuts::Shortcut) {
+    let ctrl = shortcut.ctrl.then_some(if cfg!(target_os = "macos") {
+        "\u{2318}"
+    } else {
+        "Ctrl"
+    });
+    let alt = shortcut.alt.then_some(if cfg!(target_os = "macos") {
+        "\u{2325}"
+    } else {
+        "Alt"
+    });
+    let shift = shortcut.shift.then_some(if cfg!(target_os = "macos") {
+        "\u{21e7}"
+    } else {
+        "Shift"
+    });
+    kbd_combo_parts(
+        ui,
+        [
+            ctrl,
+            alt,
+            shift,
+            Some(crate::shortcuts::key_name(shortcut.key)),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+}
+
+pub fn kbd_combo_labels(ui: &mut Ui, labels: &[String]) {
+    kbd_combo_parts(ui, labels.iter().map(String::as_str));
+}
+
+fn kbd_combo_parts<'a>(ui: &mut Ui, labels: impl IntoIterator<Item = &'a str>) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme::SP_1;
-        if shortcut.ctrl {
-            kbd_chip(
-                ui,
-                if cfg!(target_os = "macos") {
-                    "⌘"
-                } else {
-                    "Ctrl"
-                },
-            );
+        for label in labels {
+            kbd_chip(ui, label);
         }
-        if shortcut.alt {
-            kbd_chip(
-                ui,
-                if cfg!(target_os = "macos") {
-                    "⌥"
-                } else {
-                    "Alt"
-                },
-            );
-        }
-        if shortcut.shift {
-            kbd_chip(
-                ui,
-                if cfg!(target_os = "macos") {
-                    "⇧"
-                } else {
-                    "Shift"
-                },
-            );
-        }
-        kbd_chip(ui, crate::shortcuts::key_name(shortcut.key));
     });
 }
 

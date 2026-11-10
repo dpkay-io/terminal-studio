@@ -843,6 +843,13 @@ fn fuzzy_match(haystack: &str, query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keybindings::KeybindingsConfig;
+
+    fn registry_from_defaults() -> ShortcutRegistry {
+        ShortcutRegistry::from_config(KeybindingsConfig {
+            bindings: KeybindingsConfig::default_bindings(),
+        })
+    }
 
     #[test]
     fn fuzzy_match_basic() {
@@ -859,7 +866,7 @@ mod tests {
 
     #[test]
     fn all_palette_actions_non_empty() {
-        let registry = ShortcutRegistry::new();
+        let registry = registry_from_defaults();
         let actions = all_palette_actions(&registry);
         assert!(!actions.is_empty());
         for entry in &actions {
@@ -869,7 +876,7 @@ mod tests {
 
     #[test]
     fn palette_entry_labels_unique() {
-        let registry = ShortcutRegistry::new();
+        let registry = registry_from_defaults();
         let actions = all_palette_actions(&registry);
         let mut labels: Vec<&str> = actions.iter().map(|e| e.label.as_str()).collect();
         labels.sort();
@@ -887,7 +894,7 @@ mod tests {
 
     #[test]
     fn palette_actions_include_file_finder() {
-        let registry = ShortcutRegistry::new();
+        let registry = registry_from_defaults();
         let actions = all_palette_actions(&registry);
         assert!(
             actions
