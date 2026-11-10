@@ -1,12 +1,9 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 const MAX_SESSIONS: usize = 30;
-const SPAWN_RATE_WINDOW: Duration = Duration::from_secs(5);
-const MAX_SPAWNS_IN_WINDOW: usize = 5;
-const RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK: usize = 3;
 
 use crate::editor_group::EditorGroup;
 use crate::pane_tree::{PaneNode, RemoveResult};
@@ -329,9 +326,7 @@ impl App {
             optimistic_git_overrides: std::collections::HashMap::new(),
             context_menu_pos: None,
             last_right_panel_cwd: None,
-            spawn_timestamps: VecDeque::new(),
-            spawn_rate_limit_strikes: 0,
-            spawn_circuit_broken: false,
+            spawn_guard: super::spawn_guard::SpawnGuard::default(),
             restart_attempted: false,
         };
 
@@ -391,11 +386,6 @@ impl App {
         cwd: Option<PathBuf>,
         pre_inject: Option<&[u8]>,
     ) -> Option<u32> {
-        if self.spawn_circuit_broken {
-            log::error!("spawn circuit breaker tripped — all session spawning disabled");
-            return None;
-        }
-
         let live_count = self.session_state.sessions.len();
         if live_count >= MAX_SESSIONS {
             log::error!("session cap reached ({live_count}/{MAX_SESSIONS}), refusing to spawn");
@@ -406,29 +396,38 @@ impl App {
             return None;
         }
 
-        let now = Instant::now();
-        self.spawn_timestamps
-            .retain(|t| now.duration_since(*t) < SPAWN_RATE_WINDOW);
-        if self.spawn_timestamps.len() >= MAX_SPAWNS_IN_WINDOW {
-            self.spawn_rate_limit_strikes += 1;
-            log::error!(
-                "spawn rate limit hit ({} spawns in {:?}), strike {}/{}",
-                self.spawn_timestamps.len(),
-                SPAWN_RATE_WINDOW,
-                self.spawn_rate_limit_strikes,
-                RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK,
-            );
-            if self.spawn_rate_limit_strikes >= RATE_LIMIT_STRIKES_TO_CIRCUIT_BREAK {
-                self.spawn_circuit_broken = true;
-                log::error!("CIRCUIT BREAKER TRIPPED — disabling all session spawning");
+        use super::spawn_guard::{
+            SpawnDecision, MAX_SPAWNS_IN_WINDOW, SPAWN_RATE_WINDOW, STRIKES_TO_TRIP,
+        };
+        let refused = match self.spawn_guard.check(Instant::now()) {
+            SpawnDecision::Allow => false,
+            SpawnDecision::RateLimited {
+                strikes,
+                new_strike,
+            } => {
+                if new_strike {
+                    log::warn!(
+                        "spawn rate limit hit ({MAX_SPAWNS_IN_WINDOW} spawns in {SPAWN_RATE_WINDOW:?}), strike {strikes}/{STRIKES_TO_TRIP}"
+                    );
+                }
+                true
             }
+            SpawnDecision::Tripped { just_now } => {
+                if just_now {
+                    log::error!(
+                        "spawn circuit breaker tripped: sessions kept spawning for {STRIKES_TO_TRIP} windows; spawning disabled until restart"
+                    );
+                }
+                true
+            }
+        };
+        if refused {
             self.flash.trigger(
                 super::feedback::FlashTarget::Global,
                 super::feedback::FlashKind::Error,
             );
             return None;
         }
-        self.spawn_timestamps.push_back(now);
 
         match self.session_manager.spawn(
             cols,

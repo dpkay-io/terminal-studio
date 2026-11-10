@@ -44,6 +44,7 @@ pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
 mod session_state;
 pub(crate) mod settings;
+mod spawn_guard;
 mod state;
 mod title;
 mod ui;
@@ -328,11 +329,8 @@ pub struct App {
     // Last CWD used by the right panel — triggers immediate watcher sync on change
     last_right_panel_cwd: Option<PathBuf>,
 
-    // Spawn rate limiter — timestamps of recent session spawns
-    spawn_timestamps: std::collections::VecDeque<Instant>,
-    // Circuit breaker: if rate limit is hit this many times, stop all spawning permanently
-    spawn_rate_limit_strikes: usize,
-    spawn_circuit_broken: bool,
+    // Runaway-spawn protection (rate limit plus circuit breaker).
+    spawn_guard: spawn_guard::SpawnGuard,
 
     // Set once when restart_app() is attempted — prevents retrying every frame
     restart_attempted: bool,
