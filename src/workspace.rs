@@ -125,6 +125,49 @@ impl NoteStore {
             .unwrap_or("")
     }
 
+    pub(crate) fn update_cached(&mut self, group: Option<u64>, text: String) {
+        if let Some(cached) = self.cache.get_mut(&group) {
+            cached.text = text;
+        } else {
+            self.cache.insert(
+                group,
+                CachedNote {
+                    text,
+                    disk_mtime: None,
+                },
+            );
+        }
+    }
+
+    pub(crate) fn save_path(
+        &self,
+        group: Option<u64>,
+        workspaces: &[Workspace],
+    ) -> Option<PathBuf> {
+        self.resolve_path(group, workspaces)
+    }
+
+    pub(crate) fn mark_save_completed(
+        &mut self,
+        group: Option<u64>,
+        path: &Path,
+        saved_text: &str,
+    ) {
+        let is_current = self
+            .cache
+            .get(&group)
+            .is_some_and(|cached| cached.text == saved_text);
+        if !is_current {
+            return;
+        }
+        if saved_text.is_empty() {
+            self.cache.remove(&group);
+        } else if let Some(cached) = self.cache.get_mut(&group) {
+            cached.disk_mtime = file_mtime(path);
+        }
+    }
+
+    #[cfg(test)]
     pub fn set(&mut self, group: Option<u64>, text: String, workspaces: &[Workspace]) {
         let Some(path) = self.resolve_path(group, workspaces) else {
             return;
@@ -498,6 +541,22 @@ mod tests {
         assert_eq!(store.get(None), "general note");
         store.set(Some(42), "ws note".to_string(), &ws);
         assert_eq!(store.get(Some(42)), "ws note");
+    }
+
+    #[test]
+    fn note_store_cached_update_does_not_write_on_ui_thread() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = make_note_store(dir.path());
+        let ws = make_workspaces(&[("proj", 42)]);
+
+        store.update_cached(Some(42), "pending".to_owned());
+
+        assert_eq!(store.get(Some(42)), "pending");
+        assert!(!dir.path().join("proj.md").exists());
+        assert_eq!(
+            store.save_path(Some(42), &ws),
+            Some(dir.path().join("proj.md"))
+        );
     }
 
     #[test]

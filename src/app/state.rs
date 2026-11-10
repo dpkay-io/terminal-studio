@@ -89,6 +89,9 @@ impl App {
             workspace_panel_collapsed: false,
             workspace_search_query: String::new(),
             note_store,
+            note_autosave: super::note_save_worker::NoteAutosaveState::new(
+                super::note_save_worker::NOTE_SAVE_DELAY,
+            ),
             label_registry: LabelRegistry::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
@@ -126,6 +129,7 @@ impl App {
             workers: super::worker_manager::WorkerManager {
                 foreground_worker: ForegroundWorker::spawn(),
                 git_worker: super::git_worker::GitWorker::spawn(ctx.clone()),
+                note_save_worker: super::note_save_worker::NoteSaveWorker::spawn(ctx.clone()),
                 workspace_git_worker: super::workspace_git_worker::WorkspaceGitWorker::spawn(
                     ctx.clone(),
                 ),

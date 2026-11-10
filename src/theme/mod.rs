@@ -495,6 +495,7 @@ pub const BTN_W: f32 = 24.0;
 pub const SESSION_ROW_H: f32 = 26.0;
 pub const SEARCH_BAR_H: f32 = 22.0;
 pub const FILE_ROW_H: f32 = 22.0;
+pub const TREE_CHEVRON_W: f32 = 16.0;
 pub const WS_BORDER_W: f32 = 4.0;
 pub const RESIZE_BORDER: f32 = 5.0;
 pub const MIN_WINDOW_W: f32 = 640.0;

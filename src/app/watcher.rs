@@ -11,6 +11,8 @@ use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
 use super::file_browser::{list_dir_entries, DirData};
 
+const GIT_REFRESH_DEBOUNCE: Duration = Duration::from_millis(500);
+
 /// Results produced by the watcher worker thread, consumed by the UI thread.
 pub(super) enum WatchResult {
     /// A new directory was added to the watch set.
@@ -44,7 +46,7 @@ enum WatchCommand {
     ApplyGitResult {
         dir: PathBuf,
         diff: String,
-        status: String,
+        status: Arc<super::git_worker::GitStatusSnapshot>,
     },
     ApplyUnpushedResult {
         dir: PathBuf,
@@ -182,12 +184,14 @@ impl WatchState {
         &mut self,
         dir: &Path,
         diff: String,
-        status: String,
+        status: Arc<super::git_worker::GitStatusSnapshot>,
         merge_op: super::git_worker::MergeOperation,
     ) {
         if let Some(data) = self.dir_data.get_mut(dir) {
             data.git_diff = diff.clone();
-            data.git_status = status.clone();
+            if *data.git_status != *status {
+                data.git_status = Arc::clone(&status);
+            }
             data.merge_operation = merge_op;
         }
         let _ = self.cmd_tx.send(WatchCommand::ApplyGitResult {
@@ -276,7 +280,6 @@ fn watcher_thread(
         events,
     };
 
-    let debounce = Duration::from_millis(1000);
     // Track git_refresh_at per dir on the worker side for debouncing.
     let mut git_refresh_pending: HashMap<PathBuf, Instant> = HashMap::new();
     // Track which dirs are git repos.
@@ -329,7 +332,7 @@ fn watcher_thread(
                 &mut git_refresh_pending,
                 &mut is_git,
                 &mut known_md,
-                debounce,
+                GIT_REFRESH_DEBOUNCE,
                 &mut git_root_cache,
                 &editor_files,
             );
@@ -627,13 +630,20 @@ fn process_fs_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::git_worker::MergeOperation;
+    use crate::app::git_worker::{GitStatusSnapshot, MergeOperation};
+
+    fn status(raw: &str) -> Arc<GitStatusSnapshot> {
+        Arc::new(GitStatusSnapshot::from_status(
+            raw,
+            Path::new("/test/project"),
+        ))
+    }
 
     fn empty_dir_data() -> DirData {
         DirData {
             is_git: true,
             git_diff: String::new(),
-            git_status: String::new(),
+            git_status: status(""),
             git_unpushed: Vec::new(),
             git_refresh_at: None,
             merge_operation: MergeOperation::None,
@@ -643,18 +653,23 @@ mod tests {
     }
 
     #[test]
+    fn git_refresh_debounce_is_500ms() {
+        assert_eq!(GIT_REFRESH_DEBOUNCE, Duration::from_millis(500));
+    }
+
+    #[test]
     fn dir_added_inserts_new_entry() {
         let (mut ws, tx) = WatchState::new_for_test();
         let path = PathBuf::from("/test/project");
         let mut data = empty_dir_data();
-        data.git_status = "M file.rs".to_string();
+        data.git_status = status("M  file.rs");
         tx.send(WatchResult::DirAdded {
             path: path.clone(),
             data,
         })
         .unwrap();
         ws.drain_results();
-        assert_eq!(ws.dir_data[&path].git_status, "M file.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "file.rs");
     }
 
     #[test]
@@ -663,13 +678,13 @@ mod tests {
         let path = PathBuf::from("/test/project");
 
         let mut existing = empty_dir_data();
-        existing.git_status = "M src/main.rs".to_string();
+        existing.git_status = status("M  src/main.rs");
         existing.git_diff = "diff --git a/src/main.rs".to_string();
         existing.git_unpushed = vec![("abc123".into(), "fix bug".into())];
         ws.dir_data.insert(path.clone(), existing);
 
         let fresh = empty_dir_data();
-        assert!(fresh.git_status.is_empty());
+        assert!(fresh.git_status.entries.is_empty());
         tx.send(WatchResult::DirAdded {
             path: path.clone(),
             data: fresh,
@@ -677,7 +692,7 @@ mod tests {
         .unwrap();
         ws.drain_results();
 
-        assert_eq!(ws.dir_data[&path].git_status, "M src/main.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "src/main.rs");
         assert_eq!(ws.dir_data[&path].git_diff, "diff --git a/src/main.rs");
         assert_eq!(ws.dir_data[&path].git_unpushed.len(), 1);
     }
@@ -688,7 +703,7 @@ mod tests {
         let path = PathBuf::from("/test/project");
 
         let mut existing = empty_dir_data();
-        existing.git_status = "M old.rs".to_string();
+        existing.git_status = status("M  old.rs");
         existing.is_git = false;
         ws.dir_data.insert(path.clone(), existing);
 
@@ -702,7 +717,7 @@ mod tests {
         ws.drain_results();
 
         assert!(ws.dir_data[&path].is_git);
-        assert_eq!(ws.dir_data[&path].git_status, "M old.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "old.rs");
     }
 
     #[test]
@@ -711,7 +726,7 @@ mod tests {
         let path = PathBuf::from("/test/project");
 
         let mut existing = empty_dir_data();
-        existing.git_status = "M old.rs".to_string();
+        existing.git_status = status("M  old.rs");
         ws.dir_data.insert(path.clone(), existing);
 
         tx.send(WatchResult::DirRemoved(path.clone())).unwrap();
@@ -723,7 +738,7 @@ mod tests {
         .unwrap();
         ws.drain_results();
 
-        assert!(ws.dir_data[&path].git_status.is_empty());
+        assert!(ws.dir_data[&path].git_status.entries.is_empty());
     }
 
     #[test]
@@ -735,19 +750,43 @@ mod tests {
         ws.apply_git_result(
             &path,
             "staged diff".into(),
-            "M file.rs".into(),
+            status("M  file.rs"),
             MergeOperation::None,
         );
 
-        assert_eq!(ws.dir_data[&path].git_status, "M file.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "file.rs");
         assert_eq!(ws.dir_data[&path].git_diff, "staged diff");
+    }
+
+    #[test]
+    fn apply_identical_git_result_reuses_snapshot() {
+        let (mut ws, _tx) = WatchState::new_for_test();
+        let path = PathBuf::from("/test/project");
+        let original = status("M  file.rs");
+        let mut data = empty_dir_data();
+        data.git_status = Arc::clone(&original);
+        ws.dir_data.insert(path.clone(), data);
+
+        ws.apply_git_result(
+            &path,
+            "updated diff".into(),
+            status("M  file.rs"),
+            MergeOperation::None,
+        );
+
+        assert!(Arc::ptr_eq(&ws.dir_data[&path].git_status, &original));
     }
 
     #[test]
     fn apply_git_result_ignores_missing_dir() {
         let (mut ws, _tx) = WatchState::new_for_test();
         let path = PathBuf::from("/nonexistent");
-        ws.apply_git_result(&path, "diff".into(), "status".into(), MergeOperation::None);
+        ws.apply_git_result(
+            &path,
+            "diff".into(),
+            status("M  file.rs"),
+            MergeOperation::None,
+        );
         assert!(!ws.dir_data.contains_key(&path));
     }
 
@@ -775,10 +814,10 @@ mod tests {
         ws.apply_git_result(
             &path,
             "real diff".into(),
-            "M real.rs".into(),
+            status("M  real.rs"),
             MergeOperation::None,
         );
-        assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "real.rs");
 
         let fresh = empty_dir_data();
         tx.send(WatchResult::DirAdded {
@@ -788,7 +827,7 @@ mod tests {
         .unwrap();
         ws.drain_results();
 
-        assert_eq!(ws.dir_data[&path].git_status, "M real.rs");
+        assert_eq!(ws.dir_data[&path].git_status.entries[0].path, "real.rs");
         assert_eq!(ws.dir_data[&path].git_diff, "real diff");
     }
 

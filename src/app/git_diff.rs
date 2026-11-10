@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::diff_parser::{DiffLineKind, DiffViewMode};
-use crate::git::parser::{parse_git_status, FileChangeKind};
+use crate::git::parser::FileChangeKind;
 use crate::theme;
 
 pub(super) enum GitStageAction {
@@ -52,7 +52,7 @@ fn kind_to_color(kind: FileChangeKind) -> egui::Color32 {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_git_diff(
     ui: &mut egui::Ui,
-    status: &str,
+    status: &super::git_worker::GitStatusSnapshot,
     unpushed: &[(String, String)],
     push_in_progress: bool,
     push_error: Option<&str>,
@@ -93,11 +93,12 @@ pub(super) fn render_git_diff(
                 );
             } else {
                 let btn = ui.add(
-                    egui::Button::new(crate::ui_kit::icon(
-                        crate::ui_kit::icon::REFRESH_CW,
-                        theme::FONT_SM,
-                        t.text,
-                    ))
+                    egui::Button::new(
+                        egui::RichText::new("↻")
+                            .family(egui::FontFamily::Proportional)
+                            .size(theme::FONT_SM)
+                            .color(t.text),
+                    )
                     .frame(false),
                 );
                 if btn.clicked() {
@@ -108,18 +109,11 @@ pub(super) fn render_git_diff(
         });
     });
 
-    let has_status = !status.is_empty() || !optimistic_overrides.is_empty();
-    let mut parsed = if !status.is_empty() {
-        parse_git_status(status)
-    } else {
-        Vec::new()
-    };
-    for fs in &mut parsed {
-        if let Some(&target_staged) = optimistic_overrides.get(&fs.path) {
-            fs.staged = target_staged;
-        }
-    }
-    let has_conflicts = parsed.iter().any(|f| f.kind == FileChangeKind::Conflicted);
+    let has_status = !status.entries.is_empty() || !optimistic_overrides.is_empty();
+    let has_conflicts = status
+        .entries
+        .iter()
+        .any(|f| f.kind == FileChangeKind::Conflicted);
 
     // ── Merge/rebase/cherry-pick status banner ─────────────────────────
     if *merge_operation != super::git_worker::MergeOperation::None {
@@ -211,7 +205,7 @@ pub(super) fn render_git_diff(
         let mut unstaged: Vec<StatusEntry> = Vec::new();
         let mut conflicted: Vec<StatusEntry> = Vec::new();
 
-        for fs in &parsed {
+        for fs in &status.entries {
             if fs.kind == FileChangeKind::Conflicted {
                 conflicted.push(StatusEntry {
                     tag: kind_to_tag(fs.kind),
@@ -227,7 +221,11 @@ pub(super) fn render_git_diff(
                 color: kind_to_color(fs.kind),
                 kind: fs.kind,
             };
-            if fs.staged {
+            let is_staged = optimistic_overrides
+                .get(&fs.path)
+                .copied()
+                .unwrap_or(fs.staged);
+            if is_staged {
                 staged.push(entry);
             } else {
                 unstaged.push(entry);
@@ -268,7 +266,9 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path)
+                                        .family(egui::FontFamily::Proportional)
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click()),
@@ -444,7 +444,9 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path)
+                                        .family(egui::FontFamily::Proportional)
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -562,7 +564,9 @@ pub(super) fn render_git_diff(
                         .allocate_ui(egui::vec2(label_max, 14.0), |ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&entry.path).size(theme::FONT_SM),
+                                    egui::RichText::new(&entry.path)
+                                        .family(egui::FontFamily::Proportional)
+                                        .size(theme::FONT_SM),
                                 )
                                 .truncate()
                                 .sense(egui::Sense::click_and_drag()),
@@ -652,7 +656,8 @@ pub(super) fn render_git_diff(
         }
     }
 
-    if status.is_empty() && unpushed.is_empty() && !push_in_progress && push_error.is_none() {
+    if status.entries.is_empty() && unpushed.is_empty() && !push_in_progress && push_error.is_none()
+    {
         ui.add_space(theme::SP_4);
         ui.vertical_centered(|ui| {
             ui.label(

@@ -32,6 +32,7 @@ mod input;
 mod labels;
 mod markdown;
 mod multi_window;
+mod note_save_worker;
 mod pane;
 mod pane_state;
 mod persistence;
@@ -49,7 +50,9 @@ mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
 
-use file_browser::{render_dir_tree, render_flat_file_list, FileEntry, RevealState, SubdirCache};
+use file_browser::{
+    render_dir_tree, render_flat_file_list, FileEntry, RevealState, SubdirCache, TreeRenderState,
+};
 use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use labels::LabelRegistry;
@@ -98,6 +101,7 @@ pub struct App {
     workspace_search_query: String,
 
     note_store: NoteStore,
+    note_autosave: note_save_worker::NoteAutosaveState,
     label_registry: LabelRegistry,
     notes_panel_ratio: f32,
     notes_panel_collapsed: bool,
@@ -399,6 +403,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.flush_note_autosave();
         self.save_session();
         self.save_windows();
         for entry in &self.session_state.sessions {
@@ -1190,6 +1195,75 @@ impl eframe::App for App {
     }
 }
 impl App {
+    fn apply_note_save_completion(&mut self, completion: note_save_worker::NoteSaveCompletion) {
+        match completion.result {
+            Ok(()) => {
+                self.note_store.mark_save_completed(
+                    completion.group,
+                    &completion.path,
+                    &completion.text,
+                );
+                self.note_autosave
+                    .mark_completed(completion.group, completion.generation);
+            }
+            Err(error) => {
+                log::error!("failed to save note {}: {error}", completion.path.display());
+            }
+        }
+    }
+
+    fn enqueue_ready_note_saves(&mut self, ready_saves: Vec<note_save_worker::ReadyNoteSave>) {
+        for ready in ready_saves {
+            if let Some(path) = self
+                .note_store
+                .save_path(ready.group, &self.workspace_store.workspaces)
+            {
+                if !self
+                    .workers
+                    .note_save_worker
+                    .enqueue(note_save_worker::NoteSaveRequest {
+                        group: ready.group,
+                        path,
+                        text: ready.text,
+                        generation: ready.generation,
+                    })
+                {
+                    log::error!("note save worker is unavailable");
+                }
+            } else {
+                self.note_autosave
+                    .mark_completed(ready.group, ready.generation);
+            }
+        }
+    }
+
+    fn process_note_autosave(&mut self) {
+        for completion in self.workers.note_save_worker.take_completions() {
+            self.apply_note_save_completion(completion);
+        }
+        let ready = self.note_autosave.take_ready();
+        self.enqueue_ready_note_saves(ready);
+    }
+
+    fn flush_note_autosave(&mut self) {
+        self.process_note_autosave();
+        let pending = self.note_autosave.take_all_pending();
+        self.enqueue_ready_note_saves(pending);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while self.note_autosave.has_unsaved_changes() && Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let Some(completion) = self.workers.note_save_worker.receive_completion(remaining)
+            else {
+                break;
+            };
+            self.apply_note_save_completion(completion);
+        }
+        if self.note_autosave.has_unsaved_changes() {
+            log::error!("timed out while flushing note autosave");
+        }
+    }
+
     pub(crate) fn vp_id(&self, base: &str) -> egui::Id {
         let id = egui::Id::new(base);
         match &self.current_window_id {
@@ -1407,7 +1481,7 @@ impl App {
         // tab strip.
         struct PanelSnap {
             is_git: bool,
-            git_status: String,
+            git_status: Arc<git_worker::GitStatusSnapshot>,
             git_unpushed: Vec<(String, String)>,
             git_refreshing: bool,
             merge_operation: git_worker::MergeOperation,
@@ -1434,7 +1508,7 @@ impl App {
                     };
                     PanelSnap {
                         is_git: d.is_git,
-                        git_status: d.git_status.clone(),
+                        git_status: Arc::clone(&d.git_status),
                         git_unpushed: d.git_unpushed.clone(),
                         git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
                         merge_operation: d.merge_operation.clone(),
@@ -1457,7 +1531,7 @@ impl App {
                     };
                     PanelSnap {
                         is_git: false,
-                        git_status: String::new(),
+                        git_status: Arc::new(git_worker::GitStatusSnapshot::default()),
                         git_unpushed: Vec::new(),
                         git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
                         merge_operation: git_worker::MergeOperation::None,
@@ -1481,7 +1555,7 @@ impl App {
                 };
                 PanelSnap {
                     is_git: false,
-                    git_status: String::new(),
+                    git_status: Arc::new(git_worker::GitStatusSnapshot::default()),
                     git_unpushed: Vec::new(),
                     git_refreshing: false,
                     merge_operation: git_worker::MergeOperation::None,
@@ -1530,12 +1604,17 @@ impl App {
         let mut git_merge_continue = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
-        // Detect external note edits (throttled internally)
-        self.note_store
-            .check_external_changes(&self.workspace_store.workspaces);
+        self.process_note_autosave();
+
+        // Detect external note edits only when no local write can be overwritten.
+        if !self.note_autosave.has_unsaved_changes() {
+            self.note_store
+                .check_external_changes(&self.workspace_store.workspaces);
+        }
 
         // Snapshot current note so TextEdit can mutate it inside the closure
         let mut note_text = self.note_store.get(self.active_group).to_string();
+        let note_is_saving = self.note_autosave.is_saving(self.active_group);
         let mut pending_open_note: Option<Option<u64>> = None;
 
         // ── Right panel ──────────────────────────────────────────────────────
@@ -1586,126 +1665,31 @@ impl App {
                                             ui.set_min_height(theme::HEADER_H);
                                             ui.spacing_mut().item_spacing.x = 0.0;
 
-                                            {
-                                                let t = theme::active();
-                                                let is_active_tab =
-                                                    active_tab == RightTab::Directory;
-                                                let tab_hover_t =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        self.vp_id("right_tab_hover").with(0usize),
-                                                        false,
-                                                    );
-                                                let tab_color = if is_active_tab {
-                                                    t.text
-                                                } else {
-                                                    theme::lerp_color(
-                                                        t.fg_muted,
-                                                        t.fg_secondary,
-                                                        tab_hover_t,
-                                                    )
-                                                };
-                                                let resp = ui.selectable_label(
-                                                    is_active_tab,
-                                                    egui::RichText::new("Directory")
-                                                        .size(theme::FONT_SM)
-                                                        .color(tab_color),
-                                                );
-                                                // Update hover animation with actual hovered state
-                                                let _ =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        self.vp_id("right_tab_hover").with(0usize),
-                                                        resp.hovered(),
-                                                    );
-                                                if resp.clicked() {
-                                                    new_tab = Some(RightTab::Directory);
-                                                }
-                                                if is_active_tab {
-                                                    let underline_rect =
-                                                        egui::Rect::from_min_size(
-                                                            egui::pos2(
-                                                                resp.rect.min.x + theme::SP_2,
-                                                                resp.rect.max.y - 2.0,
-                                                            ),
-                                                            egui::vec2(
-                                                                resp.rect.width()
-                                                                    - theme::SP_2 * 2.0,
-                                                                2.0,
-                                                            ),
-                                                        );
-                                                    ui.painter().rect_filled(
-                                                        underline_rect,
-                                                        egui::Rounding::same(1.0),
-                                                        t.accent,
-                                                    );
-                                                }
-                                                resp.on_hover_text("Ctrl+Shift+D");
+                                            let directory_response = crate::ui_kit::tab_item(
+                                                ui,
+                                                "Directory",
+                                                active_tab == RightTab::Directory,
+                                                None,
+                                            );
+                                            if directory_response.clicked() {
+                                                new_tab = Some(RightTab::Directory);
                                             }
+                                            directory_response.on_hover_text("Ctrl+Shift+D");
 
                                             if is_git {
-                                                let t = theme::active();
-                                                let is_active_tab =
-                                                    active_tab == RightTab::GitDiff;
-                                                let tab_hover_t =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        self.vp_id("right_tab_hover").with(1usize),
-                                                        false,
-                                                    );
-                                                let tab_color = if is_active_tab {
-                                                    t.text
-                                                } else {
-                                                    theme::lerp_color(
-                                                        t.fg_muted,
-                                                        t.fg_secondary,
-                                                        tab_hover_t,
-                                                    )
-                                                };
-                                                let git_change_count = git_status
-                                                    .lines()
-                                                    .filter(|l| l.len() >= 3)
-                                                    .count();
-                                                let tab_label = if git_change_count > 0 {
-                                                    format!("Git Diff ({})", git_change_count)
-                                                } else {
-                                                    "Git Diff".to_string()
-                                                };
-                                                let resp = ui.selectable_label(
-                                                    is_active_tab,
-                                                    egui::RichText::new(&tab_label)
-                                                        .size(theme::FONT_SM)
-                                                        .color(tab_color),
+                                                let git_change_count = git_status.change_count;
+                                                let badge = (git_change_count > 0)
+                                                    .then(|| git_change_count.to_string());
+                                                let git_response = crate::ui_kit::tab_item(
+                                                    ui,
+                                                    "Git",
+                                                    active_tab == RightTab::GitDiff,
+                                                    badge.as_deref(),
                                                 );
-                                                let _ =
-                                                    crate::app::ui::animation::animated_hover(
-                                                        ui.ctx(),
-                                                        self.vp_id("right_tab_hover").with(1usize),
-                                                        resp.hovered(),
-                                                    );
-                                                if resp.clicked() {
+                                                if git_response.clicked() {
                                                     new_tab = Some(RightTab::GitDiff);
                                                 }
-                                                if is_active_tab {
-                                                    let underline_rect =
-                                                        egui::Rect::from_min_size(
-                                                            egui::pos2(
-                                                                resp.rect.min.x + theme::SP_2,
-                                                                resp.rect.max.y - 2.0,
-                                                            ),
-                                                            egui::vec2(
-                                                                resp.rect.width()
-                                                                    - theme::SP_2 * 2.0,
-                                                                2.0,
-                                                            ),
-                                                        );
-                                                    ui.painter().rect_filled(
-                                                        underline_rect,
-                                                        egui::Rounding::same(1.0),
-                                                        t.accent,
-                                                    );
-                                                }
-                                                resp.on_hover_text("Ctrl+Shift+G");
+                                                git_response.on_hover_text("Ctrl+Shift+G");
                                             }
 
                                             if !md_tabs.is_empty() {
@@ -2051,15 +2035,21 @@ impl App {
                                                     path: self.reveal_file_path.take(),
                                                     highlight: self.reveal_highlight.take(),
                                                 };
-                                                render_dir_tree(
-                                                    ui,
-                                                    &dir_entries,
-                                                    &mut open_editor,
-                                                    &mut open_terminal_at,
-                                                    &mut cache,
-                                                    &mut self.drag_state,
-                                                    &mut reveal,
-                                                );
+                                                {
+                                                    let mut tree_state = TreeRenderState {
+                                                        open_editor: &mut open_editor,
+                                                        open_terminal_at: &mut open_terminal_at,
+                                                        drag_state: &mut self.drag_state,
+                                                        reveal: &mut reveal,
+                                                    };
+                                                    render_dir_tree(
+                                                        ui,
+                                                        &dir_entries,
+                                                        &git_status.modified,
+                                                        &mut cache,
+                                                        &mut tree_state,
+                                                    );
+                                                }
                                                 self.reveal_file_path = reveal.path;
                                                 self.reveal_highlight = reveal.highlight;
                                             }
@@ -2273,25 +2263,17 @@ impl App {
                             |ui| {
                                 let notes_label = ui.add(
                                     egui::Label::new(
-                                        egui::RichText::new("Notes")
+                                        egui::RichText::new("NOTES")
                                             .strong()
                                             .size(theme::FONT_SM),
                                     )
                                     .sense(egui::Sense::click()),
                                 );
-                                let auto_label = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new("· autosaved")
-                                            .size(theme::FONT_XS)
-                                            .color(theme::active().fg_muted),
-                                    )
-                                    .sense(egui::Sense::click()),
-                                );
-                                if notes_label.clicked() || auto_label.clicked() {
+                                if notes_label.clicked() {
                                     self.notes_panel_collapsed =
                                         !self.notes_panel_collapsed;
                                 }
-                                if notes_label.hovered() || auto_label.hovered() {
+                                if notes_label.hovered() {
                                     ui.ctx()
                                         .set_cursor_icon(egui::CursorIcon::PointingHand);
                                 }
@@ -2340,6 +2322,16 @@ impl App {
                                         {
                                             pending_open_note = Some(self.active_group);
                                         }
+                                        ui.label(
+                                            egui::RichText::new(if note_is_saving {
+                                                "Saving…"
+                                            } else {
+                                                "Autosaved"
+                                            })
+                                            .family(egui::FontFamily::Proportional)
+                                            .size(theme::FONT_XS)
+                                            .color(theme::active().fg_muted),
+                                        );
                                     },
                                 );
                             },
@@ -2353,7 +2345,10 @@ impl App {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
                                             .id(self.vp_id("notes_textedit"))
-                                            .font(egui::FontId::proportional(theme::FONT_SM))
+                                            .font(egui::FontId::new(
+                                                theme::FONT_SM,
+                                                egui::FontFamily::Proportional,
+                                            ))
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
                                             .frame(false),
@@ -2364,12 +2359,15 @@ impl App {
                 });
         } // end if self.show_right_panel
 
-        // Persist note if it changed
+        // Queue note persistence if it changed. The worker performs disk I/O.
         {
             let group = self.active_group;
             if note_text != self.note_store.get(group) {
-                self.note_store
-                    .set(group, note_text, &self.workspace_store.workspaces);
+                let previous = self.note_store.get(group).to_owned();
+                self.note_autosave
+                    .changed(group, note_text.clone(), &previous);
+                self.note_store.update_cached(group, note_text);
+                ctx.request_repaint_after(note_save_worker::NOTE_SAVE_DELAY);
             }
         }
 
@@ -4453,11 +4451,15 @@ impl App {
                         PaneContent::NoteEditor(ref ne)
                             if *new_text != self.note_store.get(ne.workspace_id) =>
                         {
-                            self.note_store.set(
+                            let previous = self.note_store.get(ne.workspace_id).to_owned();
+                            self.note_autosave.changed(
                                 ne.workspace_id,
                                 new_text.clone(),
-                                &self.workspace_store.workspaces,
+                                &previous,
                             );
+                            self.note_store
+                                .update_cached(ne.workspace_id, new_text.clone());
+                            ctx.request_repaint_after(note_save_worker::NOTE_SAVE_DELAY);
                         }
                         _ => {}
                     }

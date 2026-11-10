@@ -76,7 +76,7 @@ impl<'a> SubdirCache<'a> {
 pub(super) struct DirData {
     pub(super) is_git: bool,
     pub(super) git_diff: String,
-    pub(super) git_status: String,
+    pub(super) git_status: Arc<super::git_worker::GitStatusSnapshot>,
     pub(super) git_unpushed: Vec<(String, String)>,
     pub(super) git_refresh_at: Option<Instant>,
     pub(super) merge_operation: super::git_worker::MergeOperation,
@@ -90,7 +90,7 @@ impl DirData {
         DirData {
             is_git,
             git_diff: String::new(),
-            git_status: String::new(),
+            git_status: Arc::new(super::git_worker::GitStatusSnapshot::default()),
             git_unpushed: Vec::new(),
             git_refresh_at: if is_git { Some(Instant::now()) } else { None },
             merge_operation: super::git_worker::MergeOperation::None,
@@ -142,36 +142,65 @@ pub(super) fn list_dir_entries(path: &Path) -> Vec<FileEntry> {
     entries
 }
 
-pub(super) fn run_git_info(dir: &Path) -> (String, String) {
-    let git =
-        |args: &[&str]| -> String { super::git_cmd::git_output(args, dir).unwrap_or_default() };
-    let staged = git(&["diff", "--cached", "--no-color"]);
-    let unstaged = git(&["diff", "--no-color"]);
-    let status = git(&["status", "--porcelain", "-u"]);
-    let diff = match (staged.is_empty(), unstaged.is_empty()) {
-        (true, true) => String::new(),
-        (false, true) => format!("=== Staged ===\n{staged}"),
-        (true, false) => format!("=== Unstaged ===\n{unstaged}"),
-        (false, false) => format!("=== Staged ===\n{staged}\n=== Unstaged ===\n{unstaged}"),
-    };
-    (diff, status)
+const REVEAL_HIGHLIGHT_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TreeRowLayout {
+    chevron_x: f32,
+    icon_x: f32,
+    name_x: f32,
 }
 
-const REVEAL_HIGHLIGHT_DURATION: std::time::Duration = std::time::Duration::from_millis(1500);
+fn tree_row_layout(depth: usize, _is_dir: bool) -> TreeRowLayout {
+    let chevron_x = depth as f32 * crate::theme::SP_6;
+    let icon_x = chevron_x + crate::theme::TREE_CHEVRON_W;
+    TreeRowLayout {
+        chevron_x,
+        icon_x,
+        name_x: icon_x + crate::theme::SP_6,
+    }
+}
+
+fn should_paint_tree_row(ui: &egui::Ui, rect: egui::Rect) -> bool {
+    ui.is_rect_visible(rect)
+}
+
+const CHEVRON_RIGHT_TEXT: &str = "\u{e073}";
+const CHEVRON_DOWN_TEXT: &str = "\u{e071}";
+const FOLDER_TEXT: &str = "\u{e0dc}";
+const FOLDER_OPEN_TEXT: &str = "\u{e246}";
+const FILE_TEXT: &str = "\u{e0c4}";
+const FILE_DOCUMENT_TEXT: &str = "\u{e0d0}";
 
 pub(super) struct RevealState {
     pub(super) path: Option<PathBuf>,
     pub(super) highlight: Option<(PathBuf, std::time::Instant)>,
 }
 
+pub(super) struct TreeRenderState<'a> {
+    pub(super) open_editor: &'a mut Option<PathBuf>,
+    pub(super) open_terminal_at: &'a mut Option<PathBuf>,
+    pub(super) drag_state: &'a mut super::drag::DragState,
+    pub(super) reveal: &'a mut RevealState,
+}
+
 pub(super) fn render_dir_tree(
     ui: &mut egui::Ui,
     entries: &[FileEntry],
-    open_editor: &mut Option<PathBuf>,
-    open_terminal_at: &mut Option<PathBuf>,
+    modified: &HashSet<PathBuf>,
     cache: &mut SubdirCache<'_>,
-    drag_state: &mut super::drag::DragState,
-    reveal: &mut RevealState,
+    state: &mut TreeRenderState<'_>,
+) {
+    render_dir_tree_at_depth(ui, entries, modified, cache, state, 0);
+}
+
+fn render_dir_tree_at_depth(
+    ui: &mut egui::Ui,
+    entries: &[FileEntry],
+    modified: &HashSet<PathBuf>,
+    cache: &mut SubdirCache<'_>,
+    state: &mut TreeRenderState<'_>,
+    depth: usize,
 ) {
     use crate::theme;
     if entries.is_empty() {
@@ -185,26 +214,29 @@ pub(super) fn render_dir_tree(
     }
 
     // Expire stale highlight
-    if let Some((_, t)) = reveal.highlight.as_ref() {
+    if let Some((_, t)) = state.reveal.highlight.as_ref() {
         if t.elapsed() >= REVEAL_HIGHLIGHT_DURATION {
-            reveal.highlight = None;
+            state.reveal.highlight = None;
         }
     }
 
-    ui.spacing_mut().item_spacing.y = theme::SP_1;
+    ui.spacing_mut().item_spacing.y = theme::SP_0;
 
     for entry in entries {
-        let is_reveal_ancestor = reveal
+        let is_reveal_ancestor = state
+            .reveal
             .path
             .as_ref()
             .map(|rp| rp.starts_with(&entry.path) && *rp != entry.path)
             .unwrap_or(false);
-        let is_reveal_target = reveal
+        let is_reveal_target = state
+            .reveal
             .path
             .as_ref()
             .map(|rp| *rp == entry.path)
             .unwrap_or(false);
-        let highlight_alpha = reveal
+        let highlight_alpha = state
+            .reveal
             .highlight
             .as_ref()
             .filter(|(p, _)| *p == entry.path)
@@ -215,136 +247,167 @@ pub(super) fn render_dir_tree(
             });
         let is_highlighted = is_reveal_target || highlight_alpha.is_some();
 
-        if entry.is_dir {
-            let id = ui.make_persistent_id(&entry.path);
-            let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
-                ui.ctx(),
-                id,
-                false,
-            );
-            if is_reveal_ancestor && !state.is_open() {
+        let id = ui.make_persistent_id(&entry.path);
+        let mut dir_state = entry.is_dir.then(|| {
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false)
+        });
+        if is_reveal_ancestor {
+            if let Some(state) = dir_state.as_mut().filter(|state| !state.is_open()) {
                 state.set_open(true);
             }
-            let (chevron, folder) = if state.is_open() {
-                (
-                    crate::ui_kit::icon::CHEVRON_DOWN,
-                    crate::ui_kit::icon::FOLDER_OPEN,
-                )
-            } else {
-                (
-                    crate::ui_kit::icon::CHEVRON_RIGHT,
-                    crate::ui_kit::icon::FOLDER,
-                )
-            };
-            let resp = ui
-                .add(
-                    egui::Label::new(
-                        egui::RichText::new(format!("{chevron} {folder} {}", entry.name))
-                            .family(egui::FontFamily::Name("icons".into()))
-                            .color(theme::active().fg_dir_entry)
-                            .size(theme::FONT_SM),
-                    )
-                    .truncate()
-                    .sense(egui::Sense::click()),
-                )
-                .on_hover_text("Double-click to open terminal here");
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if resp.double_clicked() {
-                *open_terminal_at = Some(entry.path.clone());
-            } else if resp.clicked() {
-                state.toggle(ui);
-            }
-            resp.context_menu(|ui| {
-                dir_entry_context_menu(ui, &entry.path);
-            });
-            state.show_body_indented(&resp, ui, |ui| {
-                let children = cache.get_or_read(&entry.path);
-                render_dir_tree(
-                    ui,
-                    &children,
-                    open_editor,
-                    open_terminal_at,
-                    cache,
-                    drag_state,
-                    reveal,
-                );
-            });
+        }
+
+        let is_open = dir_state.as_ref().is_some_and(|state| state.is_open());
+        let row_layout = tree_row_layout(depth, entry.is_dir);
+        let row_width = ui.available_width().max(theme::SP_0);
+        let sense = if entry.is_dir {
+            egui::Sense::click()
         } else {
-            let ext = entry
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            let is_md = ext == "md";
-            let base_color = if is_md {
-                theme::active().fg_md_file
-            } else {
-                theme::active().fg_other_file
-            };
+            egui::Sense::click_and_drag()
+        };
+        let (row_rect, response) =
+            ui.allocate_exact_size(egui::vec2(row_width, theme::FILE_ROW_H), sense);
+        let response = response.on_hover_text(if entry.is_dir {
+            "Double-click to open terminal here"
+        } else {
+            entry.name.as_str()
+        });
 
-            let text_color = if is_highlighted {
-                theme::active().accent
-            } else {
-                base_color
-            };
-            let mut label = egui::RichText::new(format!("{} {}", file_icon(ext), entry.name))
-                .family(egui::FontFamily::Name("icons".into()))
-                .color(text_color)
-                .size(theme::FONT_SM);
-            if is_highlighted {
-                label = label.strong();
-            }
-
-            let resp = ui
-                .add(
-                    egui::Label::new(label)
-                        .truncate()
-                        .sense(egui::Sense::click_and_drag()),
-                )
-                .on_hover_text(&entry.name);
-
+        let is_modified = !modified.is_empty() && modified.contains(&entry.path);
+        if should_paint_tree_row(ui, row_rect) {
+            let t = theme::active();
             if is_highlighted {
                 let alpha = highlight_alpha.unwrap_or(1.0);
-                let bg_rect = resp.rect.expand2(egui::vec2(2.0, 1.0));
                 ui.painter().rect_filled(
-                    bg_rect,
-                    crate::theme::R_SM,
-                    theme::active()
-                        .accent
-                        .linear_multiply(theme::BLEND_SUBTLE * alpha),
+                    row_rect,
+                    theme::R_SM,
+                    t.accent.linear_multiply(theme::BLEND_SUBTLE * alpha),
                 );
             }
 
-            if is_reveal_target {
-                resp.scroll_to_me(Some(egui::Align::Center));
-                reveal.highlight = Some((entry.path.clone(), std::time::Instant::now()));
-                reveal.path = None;
-                ui.ctx().request_repaint();
+            let chevron = if entry.is_dir {
+                if is_open {
+                    CHEVRON_DOWN_TEXT
+                } else {
+                    CHEVRON_RIGHT_TEXT
+                }
+            } else {
+                ""
+            };
+            let icon = if entry.is_dir {
+                if is_open {
+                    FOLDER_OPEN_TEXT
+                } else {
+                    FOLDER_TEXT
+                }
+            } else if matches!(
+                entry.path.extension().and_then(|ext| ext.to_str()),
+                Some("md" | "toml" | "yaml" | "yml" | "json" | "txt")
+            ) {
+                FILE_DOCUMENT_TEXT
+            } else {
+                FILE_TEXT
+            };
+            let icon_font =
+                egui::FontId::new(theme::FONT_SM, egui::FontFamily::Name("icons".into()));
+            let chevron_font =
+                egui::FontId::new(theme::FONT_XS, egui::FontFamily::Name("icons".into()));
+            let center_y = row_rect.center().y;
+            if !chevron.is_empty() {
+                ui.painter().text(
+                    egui::pos2(row_rect.min.x + row_layout.chevron_x, center_y),
+                    egui::Align2::LEFT_CENTER,
+                    chevron,
+                    chevron_font,
+                    t.fg_muted,
+                );
             }
+            ui.painter().text(
+                egui::pos2(row_rect.min.x + row_layout.icon_x, center_y),
+                egui::Align2::LEFT_CENTER,
+                icon,
+                icon_font,
+                t.fg_muted,
+            );
 
-            if highlight_alpha.is_some() {
-                ui.ctx().request_repaint();
-            }
+            let badge_width = if is_modified {
+                theme::TREE_CHEVRON_W
+            } else {
+                theme::SP_0
+            };
+            let name_width =
+                (row_rect.width() - row_layout.name_x - badge_width - theme::SP_2).max(0.0);
+            let name_color = if is_highlighted { t.accent } else { t.fg };
+            let name_font = egui::FontId::proportional(theme::FONT_SM);
+            let name_galley = crate::ui_kit::truncate_galley(
+                ui.painter(),
+                &entry.name,
+                name_font,
+                name_color,
+                name_width,
+            );
+            ui.painter().galley(
+                egui::pos2(
+                    row_rect.min.x + row_layout.name_x,
+                    center_y - name_galley.size().y * 0.5,
+                ),
+                name_galley,
+                name_color,
+            );
 
-            if resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            if is_modified {
+                ui.painter().text(
+                    egui::pos2(row_rect.max.x - theme::SP_2, center_y),
+                    egui::Align2::RIGHT_CENTER,
+                    "M",
+                    egui::FontId::new(theme::FONT_XS, crate::fonts::ui_bold()),
+                    t.warning,
+                );
             }
-            if resp.clicked() {
-                *open_editor = Some(entry.path.clone());
+        }
+
+        if is_reveal_target {
+            response.scroll_to_me(Some(egui::Align::Center));
+            state.reveal.highlight = Some((entry.path.clone(), std::time::Instant::now()));
+            state.reveal.path = None;
+            ui.ctx().request_repaint();
+        }
+        if highlight_alpha.is_some() {
+            ui.ctx().request_repaint();
+        }
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        response.context_menu(|ui| {
+            dir_entry_context_menu(ui, &entry.path);
+        });
+
+        if entry.is_dir {
+            if response.double_clicked() {
+                *state.open_terminal_at = Some(entry.path.clone());
+            } else if response.clicked() {
+                if let Some(state) = dir_state.as_mut() {
+                    state.toggle(ui);
+                }
             }
-            if resp.drag_started() {
-                let origin = resp.interact_pointer_pos().unwrap_or_default();
-                drag_state.set_payload(
+            if let Some(mut collapse_state) = dir_state {
+                collapse_state.show_body_unindented(ui, |ui| {
+                    let children = cache.get_or_read(&entry.path);
+                    render_dir_tree_at_depth(ui, &children, modified, cache, state, depth + 1);
+                });
+            }
+        } else {
+            if response.clicked() {
+                *state.open_editor = Some(entry.path.clone());
+            }
+            if response.drag_started() {
+                let origin = response.interact_pointer_pos().unwrap_or_default();
+                state.drag_state.set_payload(
                     super::drag::DragPayload::File(entry.path.clone()),
                     origin,
                     &entry.name,
                 );
             }
-            resp.context_menu(|ui| {
-                dir_entry_context_menu(ui, &entry.path);
-            });
         }
     }
 }
@@ -385,16 +448,21 @@ pub(super) fn render_flat_file_list(
         let rel = entry.path.strip_prefix(root).unwrap_or(&entry.path);
         let display = rel.display().to_string();
         let resp = ui
-            .add(
-                egui::Label::new(
-                    egui::RichText::new(format!("{} {}", file_icon(ext), display))
-                        .family(egui::FontFamily::Name("icons".into()))
-                        .color(color)
-                        .size(theme::FONT_SM),
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme::SP_2;
+                ui.label(crate::ui_kit::icon(file_icon(ext), theme::FONT_SM, color));
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&display)
+                            .family(egui::FontFamily::Proportional)
+                            .color(color)
+                            .size(theme::FONT_SM),
+                    )
+                    .truncate()
+                    .sense(egui::Sense::click_and_drag()),
                 )
-                .truncate()
-                .sense(egui::Sense::click_and_drag()),
-            )
+            })
+            .inner
             .on_hover_text(entry.path.display().to_string());
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -460,5 +528,67 @@ pub(super) fn file_icon(ext: &str) -> char {
     match ext {
         "md" | "toml" | "yaml" | "yml" | "json" | "txt" => crate::ui_kit::icon::FILE_TEXT,
         _ => crate::ui_kit::icon::FILE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_icon_returns_lucide_glyph() {
+        assert_eq!(file_icon("rs"), crate::ui_kit::icon::FILE);
+        assert_eq!(file_icon("md"), crate::ui_kit::icon::FILE_TEXT);
+        assert_ne!(file_icon("rs"), '·');
+    }
+
+    #[test]
+    fn tree_row_layout_aligns_names() {
+        let dir = tree_row_layout(2, true);
+        let file = tree_row_layout(2, false);
+
+        assert_eq!(dir.name_x, file.name_x);
+        assert_eq!(dir.icon_x, file.icon_x);
+        assert_eq!(dir.icon_x - dir.chevron_x, crate::theme::TREE_CHEVRON_W);
+    }
+
+    #[test]
+    fn tree_lays_out_only_visible_rows() {
+        let ctx = crate::ui_kit::test_harness::ctx_with_fonts();
+        let mut visible_count = 0;
+        let _ = crate::ui_kit::test_harness::run_ui(&ctx, egui::RawInput::default(), |ui| {
+            ui.set_clip_rect(egui::Rect::from_min_max(
+                egui::pos2(0.0, 10.0),
+                egui::pos2(100.0, 30.0),
+            ));
+            let rows = [
+                egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(100.0, 8.0)),
+                egui::Rect::from_min_size(egui::pos2(0.0, 12.0), egui::vec2(100.0, 8.0)),
+                egui::Rect::from_min_size(egui::pos2(0.0, 32.0), egui::vec2(100.0, 8.0)),
+            ];
+            visible_count = rows
+                .iter()
+                .filter(|row| should_paint_tree_row(ui, **row))
+                .count();
+        });
+        assert_eq!(visible_count, 1);
+    }
+
+    #[test]
+    fn modified_paths_match_list_dir_entries_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "terminal_studio_modified_paths_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("changed.rs"), "changed").unwrap();
+
+        let snapshot =
+            super::super::git_worker::GitStatusSnapshot::from_status(" M changed.rs\n", &root);
+        let entries = list_dir_entries(&root);
+
+        assert!(snapshot.modified.contains(&entries[0].path));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

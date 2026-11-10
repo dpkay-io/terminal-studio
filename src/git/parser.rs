@@ -1,5 +1,8 @@
 //! Pure parsing of `git status --porcelain` output, with no UI dependencies.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 /// The kind of change a file has undergone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileChangeKind {
@@ -100,14 +103,20 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
         let Some(raw_path) = line.get(3..) else {
             continue;
         };
+        let (path, rename_source) = extract_rename_paths(raw_path);
 
         // Unmerged (conflicted) entries — both columns are significant
         let is_conflict = matches!(
             (x, y),
-            (b'U', b'U') | (b'A', b'A') | (b'D', b'U') | (b'U', b'D')
+            (b'D', b'D')
+                | (b'A', b'U')
+                | (b'U', b'D')
+                | (b'U', b'A')
+                | (b'D', b'U')
+                | (b'A', b'A')
+                | (b'U', b'U')
         );
         if is_conflict {
-            let path = unquote_git_path(raw_path);
             entries.push(GitFileStatus {
                 kind: FileChangeKind::Conflicted,
                 path,
@@ -120,38 +129,34 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
         // Staged (index) changes -- first column
         match x {
             b'M' => {
-                let path = unquote_git_path(raw_path);
                 entries.push(GitFileStatus {
                     kind: FileChangeKind::Modified,
-                    path,
+                    path: path.clone(),
                     original_path: None,
                     staged: true,
                 });
             }
             b'A' => {
-                let path = unquote_git_path(raw_path);
                 entries.push(GitFileStatus {
                     kind: FileChangeKind::Added,
-                    path,
+                    path: path.clone(),
                     original_path: None,
                     staged: true,
                 });
             }
             b'D' => {
-                let path = unquote_git_path(raw_path);
                 entries.push(GitFileStatus {
                     kind: FileChangeKind::Deleted,
-                    path,
+                    path: path.clone(),
                     original_path: None,
                     staged: true,
                 });
             }
             b'R' => {
-                let (new_path, old_path) = extract_rename_paths(raw_path);
                 entries.push(GitFileStatus {
                     kind: FileChangeKind::Renamed,
-                    path: new_path,
-                    original_path: old_path,
+                    path: path.clone(),
+                    original_path: rename_source.clone(),
                     staged: true,
                 });
             }
@@ -160,7 +165,6 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
 
         // Unstaged (working-tree) changes -- second column
         if x == b'?' && y == b'?' {
-            let path = unquote_git_path(raw_path);
             entries.push(GitFileStatus {
                 kind: FileChangeKind::Untracked,
                 path,
@@ -170,20 +174,34 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
         } else {
             match y {
                 b'M' => {
-                    let path = unquote_git_path(raw_path);
                     entries.push(GitFileStatus {
                         kind: FileChangeKind::Modified,
-                        path,
+                        path: path.clone(),
+                        original_path: None,
+                        staged: false,
+                    });
+                }
+                b'A' => {
+                    entries.push(GitFileStatus {
+                        kind: FileChangeKind::Added,
+                        path: path.clone(),
                         original_path: None,
                         staged: false,
                     });
                 }
                 b'D' => {
-                    let path = unquote_git_path(raw_path);
                     entries.push(GitFileStatus {
                         kind: FileChangeKind::Deleted,
-                        path,
+                        path: path.clone(),
                         original_path: None,
+                        staged: false,
+                    });
+                }
+                b'R' => {
+                    entries.push(GitFileStatus {
+                        kind: FileChangeKind::Renamed,
+                        path,
+                        original_path: rename_source,
                         staged: false,
                     });
                 }
@@ -195,9 +213,112 @@ pub fn parse_git_status(output: &str) -> Vec<GitFileStatus> {
     entries
 }
 
+/// Return absolute paths for files represented in the directory tree.
+///
+/// Deleted paths are intentionally omitted because they no longer have a tree
+/// row to decorate. Duplicate index/worktree entries collapse into one path.
+#[allow(dead_code)] // Required parser API; production snapshots reuse already-parsed entries.
+pub fn modified_paths(status: &str, repo_root: &Path) -> HashSet<PathBuf> {
+    modified_paths_from_entries(&parse_git_status(status), repo_root)
+}
+
+pub(crate) fn modified_paths_from_entries(
+    entries: &[GitFileStatus],
+    repo_root: &Path,
+) -> HashSet<PathBuf> {
+    let absolute_root = if repo_root.is_absolute() {
+        repo_root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(repo_root))
+            .unwrap_or_else(|_| repo_root.to_path_buf())
+    };
+    entries
+        .iter()
+        .filter(|entry| entry.kind != FileChangeKind::Deleted)
+        .map(|entry| absolute_root.join(&entry.path))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    fn repo_root() -> PathBuf {
+        std::env::temp_dir().join("terminal-studio-parser-repo")
+    }
+
+    #[test]
+    fn modified_paths_includes_worktree_and_index_changes() {
+        let root = repo_root();
+        let paths = modified_paths(
+            " M src/worktree.rs\nM  src/index.rs\nA  src/added.rs\n?? src/new.rs\nUU src/conflict.rs\n D src/deleted.rs\n",
+            &root,
+        );
+
+        assert_eq!(
+            paths,
+            HashSet::from([
+                root.join("src/worktree.rs"),
+                root.join("src/index.rs"),
+                root.join("src/added.rs"),
+                root.join("src/new.rs"),
+                root.join("src/conflict.rs"),
+            ])
+        );
+    }
+
+    #[test]
+    fn modified_paths_uses_rename_target() {
+        let root = repo_root();
+        let paths = modified_paths("R  old.rs -> src/new.rs\n", &root);
+
+        assert_eq!(paths, HashSet::from([root.join("src/new.rs")]));
+    }
+
+    #[test]
+    fn modified_paths_uses_worktree_rename_target() {
+        let root = repo_root();
+        let paths = modified_paths(" R old.rs -> src/new.rs\n", &root);
+
+        assert_eq!(paths, HashSet::from([root.join("src/new.rs")]));
+    }
+
+    #[test]
+    fn modified_paths_includes_all_conflict_states() {
+        let root = repo_root();
+        let paths = modified_paths(
+            "DD dd.rs\nAU au.rs\nUD ud.rs\nUA ua.rs\nDU du.rs\nAA aa.rs\nUU uu.rs\n",
+            &root,
+        );
+
+        assert_eq!(paths.len(), 7);
+    }
+
+    #[test]
+    fn modified_paths_handles_quoted_paths() {
+        let root = repo_root();
+        let paths = modified_paths("?? \"a b.rs\"\n", &root);
+
+        assert_eq!(paths, HashSet::from([root.join("a b.rs")]));
+    }
+
+    #[test]
+    fn modified_paths_empty_status_is_empty() {
+        assert!(modified_paths("", &repo_root()).is_empty());
+    }
+
+    #[test]
+    fn modified_paths_makes_relative_root_absolute() {
+        let paths = modified_paths(" M src/main.rs\n", Path::new("repo"));
+
+        assert_eq!(
+            paths,
+            HashSet::from([std::env::current_dir().unwrap().join("repo/src/main.rs")])
+        );
+    }
 
     #[test]
     fn empty_output() {

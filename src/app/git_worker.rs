@@ -7,7 +7,46 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 
-use super::file_browser::run_git_info;
+use crate::git::parser::{modified_paths_from_entries, parse_git_status, GitFileStatus};
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct GitStatusSnapshot {
+    pub(super) entries: Vec<GitFileStatus>,
+    pub(super) modified: HashSet<PathBuf>,
+    pub(super) change_count: usize,
+}
+
+impl GitStatusSnapshot {
+    pub(super) fn from_status(status: &str, repo_root: &Path) -> Self {
+        let entries = parse_git_status(status);
+        let modified = modified_paths_from_entries(&entries, repo_root);
+        let change_count = status.lines().filter(|line| line.len() >= 3).count();
+        Self {
+            entries,
+            modified,
+            change_count,
+        }
+    }
+}
+
+fn run_git_info(dir: &Path) -> (String, Arc<GitStatusSnapshot>) {
+    let git =
+        |args: &[&str]| -> String { super::git_cmd::git_output(args, dir).unwrap_or_default() };
+    let staged = git(&["diff", "--cached", "--no-color"]);
+    let unstaged = git(&["diff", "--no-color"]);
+    let status = git(&["status", "--porcelain", "-u"]);
+    let diff = match (staged.is_empty(), unstaged.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("=== Staged ===\n{staged}"),
+        (true, false) => format!("=== Unstaged ===\n{unstaged}"),
+        (false, false) => format!("=== Staged ===\n{staged}\n=== Unstaged ===\n{unstaged}"),
+    };
+    let repo_root = crate::util::find_git_root(dir).unwrap_or_else(|| dir.to_path_buf());
+    (
+        diff,
+        Arc::new(GitStatusSnapshot::from_status(&status, &repo_root)),
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum MergeOperation {
@@ -180,7 +219,7 @@ pub(super) struct DiffResult {
 }
 
 pub(super) struct WorkerResults {
-    pub(super) git: HashMap<PathBuf, (String, String, MergeOperation)>,
+    pub(super) git: HashMap<PathBuf, (String, Arc<GitStatusSnapshot>, MergeOperation)>,
     pub(super) diff_results: Vec<DiffResult>,
     pub(super) unpushed: HashMap<PathBuf, Vec<(String, String)>>,
     pub(super) commit_results: Vec<Result<PathBuf, String>>,
@@ -659,7 +698,9 @@ impl GitWorker {
         self.manual_git_inflight.lock().contains(path)
     }
 
-    pub(super) fn take_all_git(&self) -> HashMap<PathBuf, (String, String, MergeOperation)> {
+    pub(super) fn take_all_git(
+        &self,
+    ) -> HashMap<PathBuf, (String, Arc<GitStatusSnapshot>, MergeOperation)> {
         std::mem::take(&mut self.results.lock().git)
     }
 
@@ -864,8 +905,8 @@ mod tests {
         }
         assert!(result.is_some(), "git worker should have produced a result");
         let (diff, status, merge_op) = result.unwrap();
-        // diff and status may both be empty on a clean working tree
-        let _ = (diff, status, merge_op);
+        // diff and status may both be empty on a clean working tree.
+        let _ = (diff, status.entries.len(), merge_op);
     }
 
     #[test]
