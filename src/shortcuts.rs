@@ -771,7 +771,25 @@ impl ShortcutRegistry {
         } else {
             bindings
         };
-        Self::with_bindings(bindings, os_reserved_shortcuts())
+        let registry = Self::with_bindings(bindings, os_reserved_shortcuts());
+        registry.log_os_conflicts();
+        registry
+    }
+
+    fn log_os_conflicts(&self) {
+        log::info!(
+            "{} system keyboard shortcuts are reserved by the OS",
+            self.os_reserved.len()
+        );
+        for (shortcut, action) in &self.bindings {
+            if self.os_reserved.contains(shortcut) {
+                log::warn!(
+                    "shortcut {} for {} is taken by the OS",
+                    shortcut.label(),
+                    action.name()
+                );
+            }
+        }
     }
 
     fn with_bindings(bindings: Vec<(Shortcut, AppAction)>, os_reserved: Vec<Shortcut>) -> Self {
