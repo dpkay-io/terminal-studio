@@ -34,7 +34,7 @@
 - **Integrated file editor** — edit any file in a center pane with `Ctrl+S` to save
 - **Per-workspace notes** — scratch-pad scoped to each workspace, auto-saved
 - **Session persistence** — open terminals and their CWDs are restored on next launch
-- **System monitor** — live CPU, RAM, and network stats in the status bar
+- **System monitor** — live CPU, RAM, and network stats in the status bar (off by default; turn it on in Settings)
 - **Auto-update** — checks GitHub releases once per day; one-click update from the toolbar
 - **Multi-window** — open workspaces in separate OS windows
 
