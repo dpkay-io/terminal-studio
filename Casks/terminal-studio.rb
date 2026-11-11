@@ -10,12 +10,17 @@ cask "terminal-studio" do
   homepage "https://github.com/dpkay-io/terminal-studio"
 
   depends_on arch: :arm64
+  depends_on :macos
 
   app "Terminal Studio.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-      args: ["-dr", "com.apple.quarantine", "#{appdir}/Terminal Studio.app"]
+  # The app is ad-hoc signed (not notarized), so Gatekeeper rejects it while
+  # Homebrew's quarantine attribute is set.
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-dr", "com.apple.quarantine", "{{appdir}}/Terminal Studio.app"],
+        writable_paths: ["Terminal Studio.app"],
+        writable_base:  :appdir
   end
 
   zap trash: "~/.config/terminal-studio"
