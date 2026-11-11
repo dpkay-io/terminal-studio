@@ -1,5 +1,7 @@
 //! macOS install detection and the install-specific update paths.
 
+mod bundle_version;
+pub(super) mod homebrew;
 mod process;
 
 use std::path::{Path, PathBuf};

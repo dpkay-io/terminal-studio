@@ -9,6 +9,7 @@ mod install;
 mod macos;
 mod standalone;
 
+use install::InstallKind;
 pub use standalone::{cleanup_old_binary, handle_apply_update_flag};
 
 const GITHUB_RELEASES_URL: &str =
@@ -16,6 +17,7 @@ const GITHUB_RELEASES_URL: &str =
 const CHECK_INTERVAL_SECS: u64 = 86_400; // 24 hours
 const APPLY_UPDATE_FLAG: &str = "--apply-update";
 const RESTARTING_FLAG: &str = "--restarting";
+const NO_PLATFORM_ASSET: &str = "No binary found for this platform";
 
 pub fn is_restarting() -> bool {
     std::env::args().any(|a| a == RESTARTING_FLAG)
@@ -28,10 +30,16 @@ pub enum UpdateStatus {
     UpToDate,
     UpdateAvailable {
         version: String,
-        download_url: String,
+        /// `None` when this install updates without downloading a release
+        /// asset itself (Homebrew fetches its own DMG).
+        download_url: Option<String>,
     },
     Downloading {
         progress_pct: f32,
+    },
+    /// Applying an update that has no measurable progress (e.g. running brew).
+    Installing {
+        message: &'static str,
     },
     RestartRequired,
     Error(String),
@@ -95,6 +103,8 @@ fn worker(
     cmd_rx: mpsc::Receiver<Command>,
     last_check: Option<u64>,
 ) {
+    // Off the UI thread: detection stats a few paths.
+    let install = InstallKind::detect();
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     let now = SystemTime::now()
@@ -107,16 +117,16 @@ fn worker(
     };
 
     if should_auto_check {
-        do_check(&shared, &ctx);
+        do_check(&shared, &ctx, &install);
     }
 
     loop {
         match cmd_rx.recv_timeout(std::time::Duration::from_secs(2)) {
             Ok(Command::Check) => {
-                do_check(&shared, &ctx);
+                do_check(&shared, &ctx, &install);
             }
             Ok(Command::StartUpdate) => {
-                do_update(&shared, &ctx);
+                do_update(&shared, &ctx, &install);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -124,12 +134,8 @@ fn worker(
     }
 }
 
-fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
-    {
-        let mut s = shared.lock();
-        s.status = UpdateStatus::Checking;
-    }
-    ctx.request_repaint();
+fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, install: &InstallKind) {
+    set_status(shared, ctx, UpdateStatus::Checking);
 
     let result = (|| -> anyhow::Result<serde_json::Value> {
         let client = reqwest::blocking::Client::builder()
@@ -145,12 +151,17 @@ fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
     })();
 
     match result {
-        Ok(json) => parse_release(shared, ctx, &json),
+        Ok(json) => parse_release(shared, ctx, &json, install),
         Err(e) => set_error(shared, ctx, &format!("Network error: {e}")),
     }
 }
 
-fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &serde_json::Value) {
+fn parse_release(
+    shared: &Arc<Mutex<UpdateState>>,
+    ctx: &egui::Context,
+    json: &serde_json::Value,
+    install: &InstallKind,
+) {
     let tag = json["tag_name"].as_str().unwrap_or("");
     let version_str = tag.strip_prefix('v').unwrap_or(tag);
 
@@ -176,22 +187,16 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
         .as_secs();
 
     if remote > current {
-        let asset_name = standalone::platform_asset_name();
-        let download_url = json["assets"]
-            .as_array()
-            .and_then(|assets| {
-                assets
-                    .iter()
-                    .find(|a| a["name"].as_str() == Some(asset_name))
-            })
-            .and_then(|a| a["browser_download_url"].as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if download_url.is_empty() {
-            set_error(shared, ctx, "No binary found for this platform");
-            return;
-        }
+        let download_url = match install.asset_name() {
+            None => None,
+            Some(asset_name) => match asset_url(json, asset_name) {
+                Some(url) => Some(url),
+                None => {
+                    set_error(shared, ctx, NO_PLATFORM_ASSET);
+                    return;
+                }
+            },
+        };
 
         let mut s = shared.lock();
         s.status = UpdateStatus::UpdateAvailable {
@@ -207,58 +212,73 @@ fn parse_release(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, json: &s
     ctx.request_repaint();
 }
 
-fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context) {
-    let (download_url, _version) = {
-        let s = shared.lock();
-        match &s.status {
-            UpdateStatus::UpdateAvailable {
-                download_url,
-                version,
-            } => (download_url.clone(), version.clone()),
-            _ => return,
+/// `browser_download_url` of the release asset called `name`.
+fn asset_url(json: &serde_json::Value, name: &str) -> Option<String> {
+    json["assets"]
+        .as_array()?
+        .iter()
+        .find(|a| a["name"].as_str() == Some(name))?["browser_download_url"]
+        .as_str()
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+}
+
+fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, install: &InstallKind) {
+    let (version, download_url) = match &shared.lock().status {
+        UpdateStatus::UpdateAvailable {
+            version,
+            download_url,
+        } => (version.clone(), download_url.clone()),
+        _ => return,
+    };
+    log::info!("updater: installing v{version} ({install:?})");
+
+    let result = match install {
+        InstallKind::Standalone => update_binary(shared, ctx, download_url.as_deref()),
+        #[cfg(target_os = "macos")]
+        InstallKind::AppBundle { .. } => update_binary(shared, ctx, download_url.as_deref()),
+        #[cfg(target_os = "macos")]
+        InstallKind::Homebrew { brew, bundle } => {
+            set_status(
+                shared,
+                ctx,
+                UpdateStatus::Installing {
+                    message: macos::homebrew::STATUS_MESSAGE,
+                },
+            );
+            macos::homebrew::upgrade(brew, bundle, &version)
         }
     };
 
-    {
-        let mut s = shared.lock();
-        s.status = UpdateStatus::Downloading { progress_pct: 0.0 };
+    match result {
+        Ok(()) => set_status(shared, ctx, UpdateStatus::RestartRequired),
+        Err(msg) => set_error(shared, ctx, &msg),
     }
-    ctx.request_repaint();
+}
 
-    let current_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            set_error(shared, ctx, &format!("Cannot locate binary: {e}"));
-            return;
-        }
-    };
+/// Download the platform binary and swap the running executable in place.
+fn update_binary(
+    shared: &Arc<Mutex<UpdateState>>,
+    ctx: &egui::Context,
+    download_url: Option<&str>,
+) -> Result<(), String> {
+    let download_url = download_url.ok_or_else(|| NO_PLATFORM_ASSET.to_string())?;
+    set_status(shared, ctx, UpdateStatus::Downloading { progress_pct: 0.0 });
 
+    let current_exe = std::env::current_exe().map_err(|e| format!("Cannot locate binary: {e}"))?;
     let needs_elevation = standalone::preflight_checks(&current_exe).is_err();
-
-    let download_result = download::download(shared, ctx, &download_url);
-
-    let bytes = match download_result {
-        Ok(b) => b,
-        Err(e) => {
-            set_error(shared, ctx, &format!("Download failed: {e}"));
-            return;
-        }
-    };
+    let bytes = download::download(shared, ctx, download_url)
+        .map_err(|e| format!("Download failed: {e}"))?;
 
     if needs_elevation {
-        if let Err(msg) = standalone::apply_update_elevated(&current_exe, &bytes) {
-            set_error(shared, ctx, &msg);
-            return;
-        }
-    } else if let Err(msg) = standalone::apply_update(&current_exe, &bytes) {
-        set_error(shared, ctx, &msg);
-        return;
+        standalone::apply_update_elevated(&current_exe, &bytes)
+    } else {
+        standalone::apply_update(&current_exe, &bytes)
     }
+}
 
-    {
-        let mut s = shared.lock();
-        s.status = UpdateStatus::RestartRequired;
-    }
+fn set_status(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, status: UpdateStatus) {
+    shared.lock().status = status;
     ctx.request_repaint();
 }
 
@@ -323,5 +343,81 @@ mod tests {
     #[test]
     fn cask_version_matches_cargo_version() {
         assert_eq!(cask_version(CASK_SOURCE), Some(env!("CARGO_PKG_VERSION")));
+    }
+
+    use super::install::InstallKind;
+    use super::*;
+
+    const NEWER_TAG: &str = "v999.0.0";
+    const NEWER_VERSION: &str = "999.0.0";
+    const ASSET_URL_BASE: &str = "https://example.invalid/";
+
+    fn release_json(tag: &str, assets: &[&str]) -> serde_json::Value {
+        let assets: Vec<_> = assets
+            .iter()
+            .map(|name| {
+                serde_json::json!({
+                    "name": name,
+                    "browser_download_url": format!("{ASSET_URL_BASE}{name}"),
+                })
+            })
+            .collect();
+        serde_json::json!({ "tag_name": tag, "assets": assets })
+    }
+
+    fn status_after(json: &serde_json::Value, install: &InstallKind) -> UpdateStatus {
+        let shared = Arc::new(Mutex::new(UpdateState {
+            status: UpdateStatus::Idle,
+            current_version: env!("CARGO_PKG_VERSION").to_string(),
+            last_check: None,
+        }));
+        parse_release(&shared, &egui::Context::default(), json, install);
+        let status = shared.lock().status.clone();
+        status
+    }
+
+    #[test]
+    fn parse_release_standalone_requires_asset() {
+        let status = status_after(&release_json(NEWER_TAG, &[]), &InstallKind::Standalone);
+        assert_eq!(
+            status,
+            UpdateStatus::Error("No binary found for this platform".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_release_standalone_picks_platform_asset() {
+        let asset = standalone::platform_asset_name();
+        let json = release_json(NEWER_TAG, &["unrelated.zip", asset]);
+        assert_eq!(
+            status_after(&json, &InstallKind::Standalone),
+            UpdateStatus::UpdateAvailable {
+                version: NEWER_VERSION.to_string(),
+                download_url: Some(format!("{ASSET_URL_BASE}{asset}")),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_release_up_to_date_for_current_version() {
+        let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let status = status_after(&release_json(&tag, &[]), &InstallKind::Standalone);
+        assert_eq!(status, UpdateStatus::UpToDate);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_release_homebrew_needs_no_asset() {
+        let install = InstallKind::Homebrew {
+            brew: "/opt/homebrew/bin/brew".into(),
+            bundle: "/Applications/Terminal Studio.app".into(),
+        };
+        assert_eq!(
+            status_after(&release_json(NEWER_TAG, &[]), &install),
+            UpdateStatus::UpdateAvailable {
+                version: NEWER_VERSION.to_string(),
+                download_url: None,
+            }
+        );
     }
 }

@@ -31,4 +31,39 @@ impl InstallKind {
             Self::Standalone
         }
     }
+
+    /// The release asset this install needs, or `None` when it updates
+    /// without downloading one itself (Homebrew fetches its own DMG).
+    pub(super) fn asset_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Standalone => Some(super::standalone::platform_asset_name()),
+            #[cfg(target_os = "macos")]
+            Self::Homebrew { .. } => None,
+            #[cfg(target_os = "macos")]
+            Self::AppBundle { .. } => Some(super::standalone::platform_asset_name()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standalone_needs_the_platform_binary() {
+        assert_eq!(
+            InstallKind::Standalone.asset_name(),
+            Some(super::super::standalone::platform_asset_name())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn homebrew_needs_no_asset() {
+        let kind = InstallKind::Homebrew {
+            brew: PathBuf::from("/opt/homebrew/bin/brew"),
+            bundle: PathBuf::from("/Applications/Terminal Studio.app"),
+        };
+        assert_eq!(kind.asset_name(), None);
+    }
 }
