@@ -4,6 +4,9 @@ use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod download;
+mod install;
+#[cfg(target_os = "macos")]
+mod macos;
 mod standalone;
 
 pub use standalone::{cleanup_old_binary, handle_apply_update_flag};
