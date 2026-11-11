@@ -1,5 +1,6 @@
 //! macOS install detection and the install-specific update paths.
 
+pub(super) mod app_bundle;
 mod bundle_version;
 pub(super) mod homebrew;
 mod process;
@@ -10,6 +11,8 @@ use super::install::InstallKind;
 
 /// Homebrew cask token, as in `Casks/terminal-studio.rb`.
 pub(super) const CASK_TOKEN: &str = "terminal-studio";
+/// Release asset a DMG install updates from (release.yml "Package macOS").
+pub(super) const DMG_ASSET: &str = "terminal-studio-macos-arm.dmg";
 
 /// `<Name>.app/Contents/MacOS/<executable>` layout of a macOS bundle.
 const BUNDLE_EXTENSION: &str = "app";

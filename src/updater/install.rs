@@ -40,7 +40,20 @@ impl InstallKind {
             #[cfg(target_os = "macos")]
             Self::Homebrew { .. } => None,
             #[cfg(target_os = "macos")]
-            Self::AppBundle { .. } => Some(super::standalone::platform_asset_name()),
+            Self::AppBundle { .. } => Some(super::macos::DMG_ASSET),
+        }
+    }
+
+    /// Remove what an earlier (or interrupted) bundle update left behind.
+    /// File-system work: call from the update worker thread.
+    pub(super) fn cleanup_previous_update(&self) {
+        match self {
+            // Standalone leftovers are handled by `cleanup_old_binary` at startup.
+            Self::Standalone => {}
+            #[cfg(target_os = "macos")]
+            Self::Homebrew { bundle, .. } | Self::AppBundle { bundle } => {
+                super::macos::app_bundle::cleanup_leftovers(bundle);
+            }
         }
     }
 }
@@ -65,5 +78,14 @@ mod tests {
             bundle: PathBuf::from("/Applications/Terminal Studio.app"),
         };
         assert_eq!(kind.asset_name(), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_bundle_needs_the_release_dmg() {
+        let kind = InstallKind::AppBundle {
+            bundle: PathBuf::from("/Applications/Terminal Studio.app"),
+        };
+        assert_eq!(kind.asset_name(), Some("terminal-studio-macos-arm.dmg"));
     }
 }

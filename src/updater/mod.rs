@@ -105,6 +105,7 @@ fn worker(
 ) {
     // Off the UI thread: detection stats a few paths.
     let install = InstallKind::detect();
+    install.cleanup_previous_update();
     std::thread::sleep(std::time::Duration::from_secs(5));
 
     let now = SystemTime::now()
@@ -236,7 +237,9 @@ fn do_update(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, install: &In
     let result = match install {
         InstallKind::Standalone => update_binary(shared, ctx, download_url.as_deref()),
         #[cfg(target_os = "macos")]
-        InstallKind::AppBundle { .. } => update_binary(shared, ctx, download_url.as_deref()),
+        InstallKind::AppBundle { bundle } => {
+            update_app_bundle(shared, ctx, bundle, download_url.as_deref(), &version)
+        }
         #[cfg(target_os = "macos")]
         InstallKind::Homebrew { brew, bundle } => {
             set_status(
@@ -262,19 +265,46 @@ fn update_binary(
     ctx: &egui::Context,
     download_url: Option<&str>,
 ) -> Result<(), String> {
-    let download_url = download_url.ok_or_else(|| NO_PLATFORM_ASSET.to_string())?;
-    set_status(shared, ctx, UpdateStatus::Downloading { progress_pct: 0.0 });
-
     let current_exe = std::env::current_exe().map_err(|e| format!("Cannot locate binary: {e}"))?;
     let needs_elevation = standalone::preflight_checks(&current_exe).is_err();
-    let bytes = download::download(shared, ctx, download_url)
-        .map_err(|e| format!("Download failed: {e}"))?;
+    let bytes = fetch_asset(shared, ctx, download_url)?;
 
     if needs_elevation {
         standalone::apply_update_elevated(&current_exe, &bytes)
     } else {
         standalone::apply_update(&current_exe, &bytes)
     }
+}
+
+/// Download the release DMG and replace the whole `.app` bundle with it.
+#[cfg(target_os = "macos")]
+fn update_app_bundle(
+    shared: &Arc<Mutex<UpdateState>>,
+    ctx: &egui::Context,
+    bundle: &std::path::Path,
+    download_url: Option<&str>,
+    version: &str,
+) -> Result<(), String> {
+    let dmg = fetch_asset(shared, ctx, download_url)?;
+    set_status(
+        shared,
+        ctx,
+        UpdateStatus::Installing {
+            message: macos::app_bundle::STATUS_MESSAGE,
+        },
+    );
+    macos::app_bundle::install_from_dmg(&dmg, bundle, version)
+}
+
+/// Download the release asset with progress shown as `Downloading`.
+fn fetch_asset(
+    shared: &Arc<Mutex<UpdateState>>,
+    ctx: &egui::Context,
+    download_url: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let download_url = download_url.ok_or_else(|| NO_PLATFORM_ASSET.to_string())?;
+    set_status(shared, ctx, UpdateStatus::Downloading { progress_pct: 0.0 });
+    download::download(shared, ctx, download_url).map_err(|e| format!("Download failed: {e}"))
 }
 
 fn set_status(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, status: UpdateStatus) {
