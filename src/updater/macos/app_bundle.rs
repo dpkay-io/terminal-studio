@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::bundle_version;
+use super::disk_image::{self, AttachedImage};
 use super::process::{self, CommandSpec};
 
 /// Shown while the DMG is mounted and the bundle copied.
@@ -13,9 +14,7 @@ pub(in crate::updater) const STATUS_MESSAGE: &str = "Installing\u{2026}";
 
 /// Bundle name inside the release DMG (release.yml "Package macOS").
 const DMG_APP_NAME: &str = "Terminal Studio.app";
-const HDIUTIL: &str = "/usr/bin/hdiutil";
 const DITTO: &str = "/usr/bin/ditto";
-const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(120);
 const DITTO_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Staging/backup bundles live next to the installed one (same volume, so
@@ -171,9 +170,12 @@ pub(in crate::updater) fn install_from_dmg(
     let scratch = ScratchDir::create()?;
     let dmg_path = scratch.path.join(DMG_FILE_NAME);
     std::fs::write(&dmg_path, dmg).map_err(|e| format!("Failed to save the update: {e}"))?;
-    let mount = Mount::attach(&dmg_path, &scratch.path.join(MOUNT_DIR_NAME))?;
+    let mount_point = scratch.path.join(MOUNT_DIR_NAME);
+    // Named so it lives (stays attached) until after the copy; dropped,
+    // and detached, before `scratch` is removed.
+    let _image = AttachedImage::attach(&dmg_path, &mount_point)?;
 
-    let source = mount.point.join(DMG_APP_NAME);
+    let source = mount_point.join(DMG_APP_NAME);
     if !source.is_dir() {
         return Err(format!("The update image has no {DMG_APP_NAME}"));
     }
@@ -216,47 +218,76 @@ impl ScratchDir {
 
 impl Drop for ScratchDir {
     fn drop(&mut self) {
-        remove_dir_if_present(&self.path);
+        remove_scratch(&self.path);
     }
 }
 
-/// A read-only, Finder-hidden DMG mount, detached on drop.
-struct Mount {
-    point: PathBuf,
-}
-
-impl Mount {
-    fn attach(dmg: &Path, point: &Path) -> Result<Self, String> {
-        let attach = CommandSpec::new(HDIUTIL, HDIUTIL_TIMEOUT)
-            .arg("attach")
-            .arg("-nobrowse")
-            .arg("-readonly")
-            .arg("-noautoopen")
-            .arg("-mountpoint")
-            .arg(point)
-            .arg(dmg);
-        process::run(&attach).map_err(|e| format!("Failed to open the update image: {e}"))?;
-        Ok(Self {
-            point: point.to_path_buf(),
-        })
+/// Remove a scratch directory, unless an image is still mounted in it:
+/// removing would descend into that volume. The startup sweep retries.
+fn remove_scratch(dir: &Path) {
+    let mount_point = dir.join(MOUNT_DIR_NAME);
+    if disk_image::is_mount_point(&mount_point) {
+        log::warn!(
+            "updater: {} is still mounted; leaving it for the next start",
+            mount_point.display()
+        );
+        return;
     }
+    remove_dir_if_present(dir);
 }
 
-impl Drop for Mount {
-    fn drop(&mut self) {
-        let detach = CommandSpec::new(HDIUTIL, HDIUTIL_TIMEOUT)
-            .arg("detach")
-            .arg("-force")
-            .arg(&self.point);
-        if let Err(e) = process::run(&detach) {
-            log::warn!("updater: failed to detach {}: {e}", self.point.display());
+/// Clean up scratch directories, and images still attached from them, left
+/// by an update that was cut off (the app quit mid-install, so no `Drop`
+/// ran). Called from the update worker at startup.
+pub(in crate::updater) fn sweep_stale_scratch() {
+    sweep_stale_scratch_in(&std::env::temp_dir());
+}
+
+fn sweep_stale_scratch_in(root: &Path) {
+    let stale: Vec<PathBuf> = match std::fs::read_dir(root) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter(|entry| is_stale_scratch(&entry.file_name()))
+            .map(|entry| entry.path())
+            .collect(),
+        Err(e) => {
+            log::warn!("updater: cannot list {}: {e}", root.display());
+            return;
         }
+    };
+    if stale.is_empty() {
+        return;
     }
+    // hdiutil reports canonical paths (/private/var/..., not /var/...).
+    let canonical: Vec<PathBuf> = stale
+        .iter()
+        .filter_map(|dir| std::fs::canonicalize(dir).ok())
+        .collect();
+    match disk_image::detach_matching(|image| canonical.iter().any(|dir| image.starts_with(dir))) {
+        Ok(0) => {}
+        Ok(n) => log::info!("updater: detached {n} image(s) left by an interrupted update"),
+        Err(e) => log::warn!("updater: could not detach leftover images: {e}"),
+    }
+    for dir in &stale {
+        remove_scratch(dir);
+    }
+}
+
+/// A scratch directory whose creating process is gone. Another running
+/// instance (`--no-singleton`, or the old one during a restart) may be
+/// mid-install, so live owners are left alone.
+fn is_stale_scratch(name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| super::temp_path_owner(name, SCRATCH_DIR_PREFIX))
+        .is_some_and(|pid| pid != std::process::id() && !process::is_alive(pid))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::bundle_version::{self, test_support::fake_bundle};
+    use super::super::bundle_version::{
+        self,
+        test_support::{fake_bundle, fake_dmg, hdiutil_lock},
+    };
     use super::*;
     use std::path::{Path, PathBuf};
 
@@ -275,20 +306,9 @@ mod tests {
         std::fs::read_to_string(bundle.join("Contents/MacOS/terminal-studio")).unwrap()
     }
 
-    /// A real UDZO disk image containing `Terminal Studio.app` at `version`.
+    /// The bytes of a real disk image containing `Terminal Studio.app` at `version`.
     fn build_dmg(root: &Path, version: &str) -> Vec<u8> {
-        let src = root.join(format!("dmg-src-{version}"));
-        std::fs::create_dir_all(&src).unwrap();
-        fake_bundle(&src, version);
-        let dmg = root.join(format!("{version}.dmg"));
-        let status = std::process::Command::new("/usr/bin/hdiutil")
-            .args(["create", "-quiet", "-format", "UDZO", "-srcfolder"])
-            .arg(&src)
-            .arg(&dmg)
-            .status()
-            .unwrap();
-        assert!(status.success(), "hdiutil create failed");
-        std::fs::read(&dmg).unwrap()
+        std::fs::read(fake_dmg(root, version)).unwrap()
     }
 
     /// Installs a real release DMG over a real (older) bundle:
@@ -297,6 +317,7 @@ mod tests {
     #[test]
     #[ignore = "acts on a real bundle and DMG; run manually"]
     fn e2e_app_bundle_install() {
+        let _hdiutil = hdiutil_lock();
         use super::super::e2e;
         let bundle = PathBuf::from(e2e::var(e2e::BUNDLE_VAR));
         let dmg = std::fs::read(e2e::var(e2e::DMG_VAR)).unwrap();
@@ -445,6 +466,57 @@ mod tests {
         assert_eq!(exe_version(&bundle), OLD);
     }
 
+    /// The pid of a process that has exited and been reaped.
+    fn dead_pid() -> u32 {
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        pid
+    }
+
+    fn scratch_named(root: &Path, owner: impl std::fmt::Display) -> PathBuf {
+        root.join(format!("{SCRATCH_DIR_PREFIX}{owner}-0"))
+    }
+
+    #[test]
+    fn sweep_cleans_up_after_an_update_that_was_cut_off() {
+        let _hdiutil = hdiutil_lock();
+        let root = tempfile::tempdir().unwrap();
+        let stale = scratch_named(root.path(), dead_pid());
+        let dmg = fake_dmg(&stale, NEW);
+        // The app quit mid-install: the image stays attached, no Drop runs.
+        std::mem::forget(AttachedImage::attach(&dmg, &stale.join(MOUNT_DIR_NAME)).unwrap());
+        // launchd (pid 1) is always alive; ours is mid-install by definition.
+        let live = scratch_named(root.path(), 1);
+        let own = scratch_named(root.path(), std::process::id());
+        let unrelated = root.path().join(format!("{SCRATCH_DIR_PREFIX}notapid"));
+        for dir in [&live, &own, &unrelated] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+
+        sweep_stale_scratch_in(root.path());
+
+        assert!(!stale.exists(), "stale scratch (and its mount) left behind");
+        assert!(live.exists() && own.exists() && unrelated.exists());
+    }
+
+    #[test]
+    fn remove_scratch_keeps_a_directory_with_an_image_mounted_in_it() {
+        let _hdiutil = hdiutil_lock();
+        let root = tempfile::tempdir().unwrap();
+        let scratch = root.path().join("scratch");
+        let dmg = fake_dmg(&scratch, NEW);
+        let image = AttachedImage::attach(&dmg, &scratch.join(MOUNT_DIR_NAME)).unwrap();
+
+        remove_scratch(&scratch);
+        let kept = dmg.exists();
+        drop(image);
+
+        assert!(kept, "removed files beside a mounted image");
+        remove_scratch(&scratch);
+        assert!(!scratch.exists());
+    }
+
     #[test]
     fn cleanup_leftovers_keeps_backup_when_bundle_is_missing() {
         // After a failed restore the backup IS the app; never delete it.
@@ -486,6 +558,7 @@ mod tests {
 
     #[test]
     fn install_from_dmg_installs_bundle_from_image() {
+        let _hdiutil = hdiutil_lock();
         let dir = tempfile::tempdir().unwrap();
         let bundle = installed(dir.path(), OLD);
         let dmg = build_dmg(dir.path(), NEW);
@@ -499,6 +572,7 @@ mod tests {
 
     #[test]
     fn install_from_dmg_rejects_wrong_version() {
+        let _hdiutil = hdiutil_lock();
         let dir = tempfile::tempdir().unwrap();
         let bundle = installed(dir.path(), OLD);
         let dmg = build_dmg(dir.path(), "0.15.9");
@@ -512,6 +586,7 @@ mod tests {
 
     #[test]
     fn install_from_dmg_accepts_a_newer_image() {
+        let _hdiutil = hdiutil_lock();
         let dir = tempfile::tempdir().unwrap();
         let bundle = installed(dir.path(), OLD);
         let dmg = build_dmg(dir.path(), "0.16.1");
@@ -523,6 +598,7 @@ mod tests {
 
     #[test]
     fn install_from_dmg_rejects_garbage_bytes() {
+        let _hdiutil = hdiutil_lock();
         let dir = tempfile::tempdir().unwrap();
         let bundle = installed(dir.path(), OLD);
 

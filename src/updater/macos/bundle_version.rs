@@ -38,6 +38,18 @@ pub(super) mod test_support {
     const INFO_PLIST_TEMPLATE: &str = include_str!("../../../packaging/macos/Info.plist");
     const VERSION_PLACEHOLDER: &str = "VERSION_PLACEHOLDER";
 
+    static HDIUTIL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Serializes tests that use hdiutil: in parallel, `hdiutil create` can
+    /// exit leaving its image attached, and attaches fail as busy. Take it
+    /// first in every such test (never inside `fake_dmg`, which would
+    /// deadlock).
+    pub fn hdiutil_lock() -> std::sync::MutexGuard<'static, ()> {
+        HDIUTIL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// A minimal `Terminal Studio.app` in `dir`, with the real release
     /// `Info.plist` template stamped with `version`.
     pub fn fake_bundle(dir: &Path, version: &str) -> PathBuf {
@@ -51,6 +63,49 @@ pub(super) mod test_support {
         .unwrap();
         std::fs::write(contents.join("MacOS").join("terminal-studio"), version).unwrap();
         bundle
+    }
+
+    /// `hdiutil create` takes ~4s, so each image is built once and reused.
+    const DMG_CACHE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/target/test-dmg-cache");
+
+    /// A real UDZO disk image at `<dir>/<version>.dmg` containing
+    /// `fake_bundle(version)`. Hold `hdiutil_lock` while calling it.
+    pub fn fake_dmg(dir: &Path, version: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let dmg = dir.join(format!("{version}.dmg"));
+        std::fs::copy(cached_dmg(version), &dmg).unwrap();
+        dmg
+    }
+
+    /// The cached image for `version`, keyed on the plist template too so a
+    /// template change rebuilds it.
+    fn cached_dmg(version: &str) -> PathBuf {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (INFO_PLIST_TEMPLATE, version).hash(&mut hasher);
+        let cache = Path::new(DMG_CACHE_DIR);
+        let cached = cache.join(format!("{version}-{:016x}.dmg", hasher.finish()));
+        if cached.exists() {
+            return cached;
+        }
+        let build = tempfile::tempdir().unwrap();
+        let src = build.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        fake_bundle(&src, version);
+        let built = build.path().join("image.dmg");
+        let status = std::process::Command::new("/usr/bin/hdiutil")
+            .args(["create", "-quiet", "-format", "UDZO", "-srcfolder"])
+            .arg(&src)
+            .arg(&built)
+            .status()
+            .unwrap();
+        assert!(status.success(), "hdiutil create failed");
+        std::fs::create_dir_all(cache).unwrap();
+        // Same volume as `cached`? Not guaranteed: copy, then rename atomically.
+        let partial = cached.with_extension("partial");
+        std::fs::copy(&built, &partial).unwrap();
+        std::fs::rename(&partial, &cached).unwrap();
+        cached
     }
 }
 

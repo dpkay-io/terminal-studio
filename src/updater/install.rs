@@ -53,6 +53,7 @@ impl InstallKind {
             #[cfg(target_os = "macos")]
             Self::Homebrew { bundle, .. } | Self::AppBundle { bundle } => {
                 super::macos::app_bundle::cleanup_leftovers(bundle);
+                super::macos::app_bundle::sweep_stale_scratch();
             }
         }
     }

@@ -183,6 +183,17 @@ fn kill_group(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Whether process `pid` exists. Signal 0 checks without signalling; EPERM
+/// means it exists but belongs to someone else.
+pub(super) fn is_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: kill with signal 0 only performs the existence/permission check.
+    let rc = unsafe { libc::kill(pid, 0) };
+    rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
 /// An output capture file, unlinked as soon as it is created: the child
 /// writes through a duplicate handle and we read the same inode back, so
 /// nothing is left in the temp dir even if the app quits mid-run.
@@ -344,6 +355,17 @@ mod tests {
             .stderr(std::process::Stdio::null())
             .status()
             .is_ok_and(|s| s.success())
+    }
+
+    #[test]
+    fn is_alive_tells_running_from_reaped_processes() {
+        assert!(is_alive(std::process::id()));
+        // launchd exists but is not ours to signal (EPERM): still alive.
+        assert!(is_alive(1));
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!is_alive(pid));
     }
 
     #[test]

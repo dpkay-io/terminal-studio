@@ -2,6 +2,7 @@
 
 pub(super) mod app_bundle;
 mod bundle_version;
+mod disk_image;
 pub(super) mod homebrew;
 mod process;
 
@@ -33,11 +34,24 @@ const CASKROOM_DIR: &str = "Caskroom";
 /// Distinguishes temp paths created concurrently within one process.
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Separates the pid from the sequence number in temp names.
+const TEMP_NAME_SEPARATOR: char = '-';
+
 /// A temp path no other call in any process will produce:
 /// `<tmp>/<prefix><pid>-<n>`.
 pub(super) fn unique_temp_path(prefix: &str) -> PathBuf {
     let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{prefix}{}-{sequence}", std::process::id()))
+    std::env::temp_dir().join(format!(
+        "{prefix}{}{TEMP_NAME_SEPARATOR}{sequence}",
+        std::process::id()
+    ))
+}
+
+/// The pid of the process that created `name` with `unique_temp_path(prefix)`.
+pub(super) fn temp_path_owner(name: &str, prefix: &str) -> Option<u32> {
+    let (pid, sequence) = name.strip_prefix(prefix)?.split_once(TEMP_NAME_SEPARATOR)?;
+    sequence.parse::<u64>().ok()?;
+    pid.parse().ok()
 }
 
 /// Settings for the `#[ignore]`d end-to-end tests, which act on a real
@@ -134,6 +148,18 @@ mod tests {
     fn fs(paths: &[&str]) -> impl Fn(&Path) -> bool {
         let set: HashSet<PathBuf> = paths.iter().map(PathBuf::from).collect();
         move |p: &Path| set.contains(p)
+    }
+
+    #[test]
+    fn temp_path_owner_reads_back_the_creating_pid() {
+        const PREFIX: &str = "ts-owner-test-";
+        let path = unique_temp_path(PREFIX);
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert_eq!(temp_path_owner(name, PREFIX), Some(std::process::id()));
+        assert_eq!(temp_path_owner("ts-owner-test-abc-1", PREFIX), None);
+        assert_eq!(temp_path_owner("ts-owner-test-12", PREFIX), None);
+        assert_eq!(temp_path_owner("ts-owner-test-12-x", PREFIX), None);
+        assert_eq!(temp_path_owner("other-12-1", PREFIX), None);
     }
 
     #[test]
