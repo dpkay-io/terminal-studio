@@ -125,14 +125,13 @@ mod tests {
     #[test]
     #[ignore = "mutates the real Homebrew install; run manually"]
     fn e2e_homebrew_upgrade() {
-        use super::super::{classify, e2e, BREW_CANDIDATES};
+        use super::super::{classify, e2e, RealFs, BREW_CANDIDATES};
         use crate::updater::install::InstallKind;
         let bundle = std::path::PathBuf::from(e2e::var(e2e::BUNDLE_VAR));
         let target = e2e::var(e2e::TARGET_VAR);
-        let exe = bundle.join("Contents/MacOS/terminal-studio");
-        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+        let exe = std::fs::canonicalize(bundle.join("Contents/MacOS/terminal-studio")).unwrap();
 
-        let kind = classify(&exe, &home, Path::exists);
+        let kind = classify(&exe, &RealFs);
         let InstallKind::Homebrew { brew, .. } = &kind else {
             panic!("expected a Homebrew install, detected {kind:?}");
         };
