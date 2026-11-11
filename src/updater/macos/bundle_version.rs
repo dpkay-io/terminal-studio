@@ -7,6 +7,8 @@ use super::process::{self, CommandSpec};
 
 const PLUTIL: &str = "/usr/bin/plutil";
 const SHORT_VERSION_KEY: &str = "CFBundleShortVersionString";
+/// `plutil -extract <key> raw -o - <plist>`: print one value, unquoted.
+const PLUTIL_EXTRACT_ARGS: [&str; 5] = ["-extract", SHORT_VERSION_KEY, "raw", "-o", "-"];
 const PLUTIL_TIMEOUT: Duration = Duration::from_secs(10);
 const CONTENTS_DIR: &str = "Contents";
 const INFO_PLIST: &str = "Info.plist";
@@ -15,13 +17,18 @@ const INFO_PLIST: &str = "Info.plist";
 pub(super) fn read(bundle: &Path) -> Result<String, String> {
     let plist = bundle.join(CONTENTS_DIR).join(INFO_PLIST);
     let spec = CommandSpec::new(PLUTIL, PLUTIL_TIMEOUT)
-        .arg("-extract")
-        .arg(SHORT_VERSION_KEY)
-        .arg("raw")
-        .arg("-o")
-        .arg("-")
+        .args(PLUTIL_EXTRACT_ARGS)
         .arg(plist);
     process::run(&spec).map(|out| out.trim().to_string())
+}
+
+/// Whether version `found` is `target` or newer (semver, so `0.10.0` is
+/// newer than `0.9.0` and a pre-release is older than its release).
+pub(super) fn is_at_least(found: &str, target: &str) -> Result<bool, String> {
+    let parse = |v: &str| {
+        semver::Version::parse(v).map_err(|e| format!("Invalid app version \"{v}\": {e}"))
+    };
+    Ok(parse(found)? >= parse(target)?)
 }
 
 #[cfg(test)]
@@ -57,6 +64,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bundle = fake_bundle(dir.path(), "0.15.4");
         assert_eq!(read(&bundle), Ok("0.15.4".to_string()));
+    }
+
+    #[test]
+    fn is_at_least_compares_as_semver() {
+        assert_eq!(is_at_least("0.16.0", "0.16.0"), Ok(true));
+        assert_eq!(is_at_least("0.16.1", "0.16.0"), Ok(true));
+        // A string compare would call 0.10.0 older than 0.9.0.
+        assert_eq!(is_at_least("0.10.0", "0.9.0"), Ok(true));
+        assert_eq!(is_at_least("0.15.4", "0.16.0"), Ok(false));
+        assert_eq!(is_at_least("0.16.0-rc.1", "0.16.0"), Ok(false));
+    }
+
+    #[test]
+    fn is_at_least_rejects_unparseable_versions() {
+        let err = is_at_least("garbage", "0.16.0").unwrap_err();
+        assert!(err.contains("garbage"), "{err}");
+        assert!(is_at_least("0.16.0", "").is_err());
     }
 
     #[test]

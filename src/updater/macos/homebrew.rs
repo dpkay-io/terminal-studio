@@ -20,27 +20,27 @@ const BREW_ENV: [(&str, &str); 3] = [
     ("HOMEBREW_NO_ENV_HINTS", "1"),
     ("HOMEBREW_NO_INSTALL_CLEANUP", "1"),
 ];
+const BREW_UPDATE_ARGS: [&str; 1] = ["update"];
+/// `--no-quit`: brew must never quit the app that is running it. The bare
+/// token works for a cask installed by its full tap name (brew trusts it then).
+const BREW_UPGRADE_ARGS: [&str; 4] = ["upgrade", "--cask", "--no-quit", CASK_TOKEN];
 
 /// `brew update`, then `brew upgrade --cask --no-quit terminal-studio`.
-/// `--no-quit`: brew must never quit the app that is running it.
 /// Never killed on timeout: SIGKILL mid-upgrade skips brew's rollback and
 /// can leave the app missing (and brew's helpers survive it anyway).
 fn upgrade_steps(brew: &Path) -> [CommandSpec; 2] {
-    let step = |timeout| {
+    let step = |timeout, args: &[&str]| {
         BREW_ENV
             .iter()
             .fold(CommandSpec::new(brew, timeout), |spec, (k, v)| {
                 spec.env(k, v)
             })
+            .args(args.iter().copied())
             .detach_on_timeout()
     };
     [
-        step(BREW_UPDATE_TIMEOUT).arg("update"),
-        step(BREW_UPGRADE_TIMEOUT)
-            .arg("upgrade")
-            .arg("--cask")
-            .arg("--no-quit")
-            .arg(CASK_TOKEN),
+        step(BREW_UPDATE_TIMEOUT, &BREW_UPDATE_ARGS),
+        step(BREW_UPGRADE_TIMEOUT, &BREW_UPGRADE_ARGS),
     ]
 }
 
@@ -68,7 +68,7 @@ fn failure_message(bundle: &Path, error: &str) -> String {
 /// not mean the bundle changed.
 fn verify_upgraded(bundle: &Path, target: &str) -> Result<(), String> {
     let found = bundle_version::read(bundle)?;
-    if found == target {
+    if bundle_version::is_at_least(&found, target)? {
         Ok(())
     } else {
         Err(format!(
@@ -193,6 +193,14 @@ mod tests {
     fn verify_upgraded_ok_when_versions_match() {
         let dir = tempfile::tempdir().unwrap();
         let bundle = fake_bundle(dir.path(), "0.16.0");
+        assert_eq!(verify_upgraded(&bundle, "0.16.0"), Ok(()));
+    }
+
+    #[test]
+    fn verify_upgraded_ok_when_brew_installed_a_newer_version() {
+        // The tap can be ahead of the release the app saw on GitHub.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = fake_bundle(dir.path(), "0.16.1");
         assert_eq!(verify_upgraded(&bundle, "0.16.0"), Ok(()));
     }
 

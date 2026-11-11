@@ -19,6 +19,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 const OUTPUT_FILE_PREFIX: &str = "terminal-studio-cmd-";
 /// Used to kill the child's whole process group on timeout (no libc dep).
 const KILL_PROGRAM: &str = "/bin/kill";
+/// `kill -KILL -- -<pgid>`: the `--` lets the negative group id through.
+const KILL_GROUP_ARGS: [&str; 2] = ["-KILL", "--"];
 /// Process group id 0 = put the child in a new group led by itself.
 const NEW_PROCESS_GROUP: i32 = 0;
 
@@ -56,6 +58,11 @@ impl CommandSpec {
 
     pub fn arg(mut self, arg: impl Into<OsString>) -> Self {
         self.args.push(arg.into());
+        self
+    }
+
+    pub fn args<A: Into<OsString>>(mut self, args: impl IntoIterator<Item = A>) -> Self {
+        self.args.extend(args.into_iter().map(Into::into));
         self
     }
 
@@ -164,7 +171,8 @@ fn reap_in_background(mut child: Child) {
 fn kill_group(child: &mut Child) {
     let group = format!("-{}", child.id());
     let killed = Command::new(KILL_PROGRAM)
-        .args(["-KILL", "--", &group])
+        .args(KILL_GROUP_ARGS)
+        .arg(&group)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

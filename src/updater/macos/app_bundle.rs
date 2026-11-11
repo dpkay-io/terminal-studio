@@ -120,7 +120,7 @@ fn stage_and_swap(source: &Path, staged: &Path, bundle: &Path, target: &str) -> 
         .arg(staged);
     process::run(&copy).map_err(|e| format!("Failed to copy the new app: {e}"))?;
     let found = bundle_version::read(staged)?;
-    if found != target {
+    if !bundle_version::is_at_least(&found, target)? {
         return Err(format!("The update image is v{found}, expected v{target}"));
     }
     swap(bundle, staged)
@@ -331,6 +331,17 @@ mod tests {
         assert!(err.contains(NEW), "{err}");
         assert_eq!(exe_version(&bundle), OLD);
         assert!(!staging_path(&bundle).exists());
+    }
+
+    #[test]
+    fn install_from_dmg_accepts_a_newer_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        let dmg = build_dmg(dir.path(), "0.16.1");
+
+        install_from_dmg(&dmg, &bundle, NEW).unwrap();
+
+        assert_eq!(bundle_version::read(&bundle), Ok("0.16.1".to_string()));
     }
 
     #[test]

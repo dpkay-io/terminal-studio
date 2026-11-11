@@ -88,6 +88,12 @@ windows-sys = { version = "0.52", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# macOS updater: atomic bundle swap (renamex_np), process liveness, and
+# `hdiutil info -plist` parsing. Both are already in the tree via eframe/syntect.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+plist = "1"
+
 [dev-dependencies]
 tempfile = "3"
 
