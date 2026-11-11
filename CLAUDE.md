@@ -114,7 +114,15 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/syntax.rs` | Syntax highlighting via syntect; language detection; theme building from app theme |
 | `src/url_detector.rs` | `DetectedUrl`; regex-based URL detection in terminal output; clickable links |
 | `src/md_detector.rs` | `DetectedMdPath`; markdown file detection and path tracking |
-| `src/updater.rs` | `UpdateStatus`, `UpdateChecker`; background GitHub releases API polling; self-update |
+| `src/updater/mod.rs` | `UpdateStatus`, `UpdateChecker`; background GitHub releases API polling; dispatches the update by install kind |
+| `src/updater/install.rs` | `InstallKind` (`Standalone` / macOS `Homebrew` / macOS `AppBundle`): detection, required release asset, leftover cleanup |
+| `src/updater/standalone.rs` | Raw-binary self-replace (+ elevation, `--apply-update`); Windows, Linux, bare macOS binaries |
+| `src/updater/download.rs` | Streaming release-asset download with progress |
+| `src/updater/macos/mod.rs` | Install classification from the executable path (`classify`, `bundle_root`); cask/DMG constants |
+| `src/updater/macos/homebrew.rs` | Updates cask installs via `brew update` + `brew upgrade --cask --no-quit terminal-studio`, then verifies `Info.plist` |
+| `src/updater/macos/app_bundle.rs` | DMG installs: mount release DMG, stage, verify, swap the whole `.app` with rollback |
+| `src/updater/macos/process.rs` | Helper-process runner with timeout that kills the whole process group |
+| `src/updater/macos/bundle_version.rs` | Reads `CFBundleShortVersionString` via `plutil` |
 | `src/sys_monitor.rs` | `SysMonitor`, `SystemStats`; CPU/RAM/network monitoring via sysinfo; background thread |
 
 ## Key Types & IDs
@@ -344,6 +352,7 @@ Color32::from_rgb(30, 30, 46)
 - Builds run on 3 platforms: Windows (x86_64-pc-windows-msvc), Linux (x86_64-unknown-linux-gnu), macOS (aarch64-apple-darwin)
 - **Never create a GitHub release before all builds succeed** — the `release` job depends on `build`, and a `cleanup-on-failure` job deletes any pre-existing release if any build fails
 - To release: push a tag (`git tag vX.Y.Z && git push origin vX.Y.Z`) — do NOT create the release manually; let the workflow handle it
+- Homebrew cask is `Casks/terminal-studio.rb` in this repo (users tap it by URL). Bump its `version` together with `Cargo.toml` in the release PR; `cask_version_matches_cargo_version` and `scripts/release.sh` fail on a mismatch
 
 ## Known Quirks & Gotchas
 
