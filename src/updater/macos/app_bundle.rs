@@ -19,7 +19,7 @@ const HDIUTIL_TIMEOUT: Duration = Duration::from_secs(120);
 const DITTO_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Staging/backup bundles live next to the installed one (same volume, so
-/// the swap is two atomic renames) and are hidden from Finder.
+/// the swap is one atomic exchange) and are hidden from Finder.
 const HIDDEN_PREFIX: &str = ".";
 const STAGING_SUFFIX: &str = ".update";
 const BACKUP_SUFFIX: &str = ".old";
@@ -46,8 +46,16 @@ fn sibling(bundle: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Remove staging/backup bundles left by an earlier update (or one that was
-/// interrupted). Called from the update worker at startup.
+/// interrupted). Called from the update worker at startup. When the bundle
+/// itself is missing they may be the only copy of the app, so they stay.
 pub(in crate::updater) fn cleanup_leftovers(bundle: &Path) {
+    if !bundle.exists() {
+        log::warn!(
+            "updater: {} is missing; keeping any update leftovers beside it",
+            bundle.display()
+        );
+        return;
+    }
     for leftover in [staging_path(bundle), backup_path(bundle)] {
         remove_dir_if_present(&leftover);
     }
@@ -61,23 +69,88 @@ fn remove_dir_if_present(path: &Path) {
     }
 }
 
-/// Move `bundle` aside to its backup path and `staged` into its place. If the
-/// second rename fails the original bundle is moved back.
+/// Put `staged` in place of `bundle` and keep the old app at its backup path.
+/// One atomic exchange, so `bundle` always holds a complete app, even if the
+/// app quits mid-update; it either happened or nothing moved.
 pub(super) fn swap(bundle: &Path, staged: &Path) -> Result<(), String> {
+    swap_with(bundle, staged, exchange)
+}
+
+fn swap_with(
+    bundle: &Path,
+    staged: &Path,
+    exchange: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    match exchange(staged, bundle) {
+        Ok(()) => {
+            park_old_app(staged, bundle);
+            Ok(())
+        }
+        Err(e) if e.raw_os_error() == Some(libc::ENOTSUP) => {
+            log::info!("updater: volume cannot swap atomically ({e}); using two renames");
+            swap_by_renames(bundle, staged, |from, to| std::fs::rename(from, to))
+        }
+        Err(e) => Err(format!("Failed to install the new app: {e}")),
+    }
+}
+
+/// After the exchange `staged` holds the old app; move it to the backup path.
+/// Best-effort: startup cleanup removes it from either place.
+fn park_old_app(staged: &Path, bundle: &Path) {
     let backup = backup_path(bundle);
     remove_dir_if_present(&backup);
-    std::fs::rename(bundle, &backup)
-        .map_err(|e| format!("Failed to move the current app aside: {e}"))?;
-    if let Err(e) = std::fs::rename(staged, bundle) {
-        if let Err(restore) = std::fs::rename(&backup, bundle) {
+    if let Err(e) = std::fs::rename(staged, &backup) {
+        log::warn!(
+            "updater: old app left at {} ({e}); removed at next start",
+            staged.display()
+        );
+    }
+}
+
+/// Fallback for volumes without an atomic exchange: move `bundle` aside,
+/// move `staged` in, and move the old app back if that fails.
+fn swap_by_renames(
+    bundle: &Path,
+    staged: &Path,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let backup = backup_path(bundle);
+    remove_dir_if_present(&backup);
+    rename(bundle, &backup).map_err(|e| format!("Failed to move the current app aside: {e}"))?;
+    let Err(e) = rename(staged, bundle) else {
+        return Ok(());
+    };
+    match rename(&backup, bundle) {
+        Ok(()) => Err(format!("Failed to install the new app (rolled back): {e}")),
+        Err(restore) => {
             log::error!(
                 "updater: rollback failed, app left at {}: {restore}",
                 backup.display()
             );
+            Err(format!(
+                "Failed to install the new app: {e} \u{2014} the previous app is at {}; move it back to {}",
+                backup.display(),
+                bundle.display()
+            ))
         }
-        return Err(format!("Failed to install the new app (rolled back): {e}"));
     }
-    Ok(())
+}
+
+/// Atomically exchange two paths (`renamex_np(RENAME_SWAP)`, macOS 10.12+).
+fn exchange(a: &Path, b: &Path) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = |p: &Path| {
+        std::ffi::CString::new(p.as_os_str().as_bytes())
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))
+    };
+    let (a, b) = (c_path(a)?, c_path(b)?);
+    // SAFETY: both are valid NUL-terminated strings that outlive the call.
+    let rc = unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Install the `.app` from the release DMG `dmg` over `bundle`, after
@@ -277,6 +350,110 @@ mod tests {
         swap(&bundle, &staged).unwrap();
 
         assert_eq!(exe_version(&bundle), NEW);
+        assert_eq!(exe_version(&backup_path(&bundle)), OLD);
+    }
+
+    /// `staging_path(bundle)` holding a fresh bundle at `NEW`.
+    fn staged_new(root: &Path, bundle: &Path) -> PathBuf {
+        let staged = staging_path(bundle);
+        std::fs::rename(fake_bundle(&root.join("new"), NEW), &staged).unwrap();
+        staged
+    }
+
+    /// A `.old` backup the updater cannot delete (unwritable subfolder).
+    fn locked_backup(bundle: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let locked = backup_path(bundle).join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("file"), "x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        locked
+    }
+
+    fn unlock(locked: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn swap_succeeds_when_stale_backup_cannot_be_removed() {
+        // The swap is one atomic exchange; tidying the old app away is
+        // best-effort and must never fail (or undo) the update.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        let staged = staged_new(dir.path(), &bundle);
+        let locked = locked_backup(&bundle);
+
+        let result = swap(&bundle, &staged);
+
+        unlock(&locked);
+        result.unwrap();
+        assert_eq!(exe_version(&bundle), NEW);
+        assert_eq!(exe_version(&staging_path(&bundle)), OLD);
+    }
+
+    #[test]
+    fn swap_falls_back_to_renames_when_exchange_is_unsupported() {
+        // Volumes without RENAME_SWAP support (e.g. exFAT) report ENOTSUP.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        let staged = staged_new(dir.path(), &bundle);
+        let unsupported =
+            |_: &Path, _: &Path| Err(std::io::Error::from_raw_os_error(libc::ENOTSUP));
+
+        swap_with(&bundle, &staged, unsupported).unwrap();
+
+        assert_eq!(exe_version(&bundle), NEW);
+        assert_eq!(exe_version(&backup_path(&bundle)), OLD);
+    }
+
+    #[test]
+    fn swap_by_renames_says_where_the_app_is_when_restore_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        let staged = staging_path(&bundle);
+        let calls = std::cell::Cell::new(0);
+        // Moving the app aside works; installing and restoring both fail.
+        let rename = |from: &Path, to: &Path| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                std::fs::rename(from, to)
+            } else {
+                Err(std::io::Error::other("injected"))
+            }
+        };
+
+        let err = swap_by_renames(&bundle, &staged, rename).unwrap_err();
+
+        assert!(!err.contains("rolled back"), "{err}");
+        assert!(
+            err.contains(&backup_path(&bundle).display().to_string()),
+            "{err}"
+        );
+        assert_eq!(exe_version(&backup_path(&bundle)), OLD);
+    }
+
+    #[test]
+    fn swap_by_renames_rolls_back_when_install_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        let staged = staging_path(&bundle);
+
+        let err = swap_by_renames(&bundle, &staged, |f, t| std::fs::rename(f, t)).unwrap_err();
+
+        assert!(err.contains("rolled back"), "{err}");
+        assert_eq!(exe_version(&bundle), OLD);
+    }
+
+    #[test]
+    fn cleanup_leftovers_keeps_backup_when_bundle_is_missing() {
+        // After a failed restore the backup IS the app; never delete it.
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = installed(dir.path(), OLD);
+        std::fs::rename(&bundle, backup_path(&bundle)).unwrap();
+
+        cleanup_leftovers(&bundle);
+
         assert_eq!(exe_version(&backup_path(&bundle)), OLD);
     }
 
