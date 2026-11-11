@@ -1,6 +1,8 @@
 cask "terminal-studio" do
-  version "VERSION_PLACEHOLDER"
-  sha256 "SHA256_PLACEHOLDER"
+  # Keep in sync with `version` in Cargo.toml — bump both in the release PR.
+  # Guarded by `cask_version_matches_cargo_version` and scripts/release.sh.
+  version "0.16.0"
+  sha256 :no_check
 
   url "https://github.com/dpkay-io/terminal-studio/releases/download/v#{version}/terminal-studio-macos-arm.dmg"
   name "Terminal Studio"

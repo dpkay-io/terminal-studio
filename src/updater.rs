@@ -582,3 +582,25 @@ fn run_elevated(exe: &std::path::Path, args: &[String]) -> Result<(), String> {
         Err("Elevated update failed".to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// The Homebrew cask shipped from this repo must always point at the
+    /// version being built, otherwise `brew upgrade` would install a
+    /// different release than the one tagged from this commit.
+    const CASK_SOURCE: &str = include_str!("../Casks/terminal-studio.rb");
+    const CASK_VERSION_PREFIX: &str = "version \"";
+
+    fn cask_version(source: &str) -> Option<&str> {
+        source.lines().find_map(|line| {
+            line.trim()
+                .strip_prefix(CASK_VERSION_PREFIX)
+                .and_then(|rest| rest.split('"').next())
+        })
+    }
+
+    #[test]
+    fn cask_version_matches_cargo_version() {
+        assert_eq!(cask_version(CASK_SOURCE), Some(env!("CARGO_PKG_VERSION")));
+    }
+}

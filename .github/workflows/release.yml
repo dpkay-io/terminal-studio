@@ -17,10 +17,6 @@ env:
 # │ SignPath code signing (free for OSS — apply at signpath.org):   │
 # │   Variable: SIGNPATH_ORGANIZATION_ID                            │
 # │   Secret:   SIGNPATH_API_TOKEN                                  │
-# │                                                                 │
-# │ Homebrew tap auto-update:                                       │
-# │   Variable: HOMEBREW_TAP_REPO  (e.g. dpkay-io/homebrew-tap)    │
-# │   Secret:   HOMEBREW_TAP_TOKEN (PAT with repo scope for tap)   │
 # └─────────────────────────────────────────────────────────────────┘
 
 jobs:
@@ -243,35 +239,6 @@ jobs:
             terminal-studio-linux-amd64.deb
             terminal-studio-macos-arm
             terminal-studio-macos-arm.dmg
-
-  # ── Homebrew tap auto-update (skipped if not configured) ──
-  update-homebrew:
-    name: Update Homebrew Tap
-    needs: release
-    if: vars.HOMEBREW_TAP_REPO != ''
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: terminal-studio-macos-arm.dmg
-      - name: Update cask formula
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          SHA256=$(sha256sum terminal-studio-macos-arm.dmg | awk '{print $1}')
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPO}.git" tap
-          cd tap
-          mkdir -p Casks
-          cp "$GITHUB_WORKSPACE/packaging/homebrew/terminal-studio.rb" Casks/terminal-studio.rb
-          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/" Casks/terminal-studio.rb
-          sed -i "s/SHA256_PLACEHOLDER/${SHA256}/" Casks/terminal-studio.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/terminal-studio.rb
-          git diff --cached --quiet || { git commit -m "Update terminal-studio to ${VERSION}" && git push; }
 
   cleanup-on-failure:
     needs: [build, installer, sign, release]
