@@ -78,10 +78,10 @@ Installs to `%LOCALAPPDATA%\terminal-studio\terminal-studio.exe`.
 
 ```sh
 brew tap dpkay-io/terminal-studio https://github.com/dpkay-io/terminal-studio
-brew install --cask terminal-studio
+brew install --cask dpkay-io/terminal-studio/terminal-studio
 ```
 
-The cask lives in this repo (`Casks/terminal-studio.rb`). Updating from inside the app runs Homebrew for you, so `brew list --versions terminal-studio` always shows what is installed; `brew upgrade --cask terminal-studio` works too.
+Using the full `dpkay-io/terminal-studio/terminal-studio` name makes Homebrew trust this cask (Homebrew refuses to load casks from third-party taps until they are trusted). The cask lives in this repo (`Casks/terminal-studio.rb`). Updating from inside the app runs Homebrew for you, so `brew list --versions terminal-studio` always shows what is installed; `brew upgrade --cask terminal-studio` works too.
 
 > Releasing: bump `version` in both `Cargo.toml` and `Casks/terminal-studio.rb` in the release PR. `cargo test` and `scripts/release.sh` refuse to proceed if they differ.
 
