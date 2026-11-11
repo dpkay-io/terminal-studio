@@ -83,7 +83,8 @@ RUST_LOG=debug cargo run # enable debug logging
 
 | File | Responsibility |
 |------|---------------|
-| `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update button, toolbar, focus tracking |
+| `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update pill, toolbar, focus tracking |
+| `src/app/ui/update_pill.rs` | Titlebar update pill: label and click action per `UpdateStatus` (available, downloading, installing, restart) |
 | `src/app/ui/tab_bar.rs` | `TabBarResult`, `render_tab_bar()`: horizontally scrollable tab strip, split group indicators |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
@@ -118,11 +119,12 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/updater/install.rs` | `InstallKind` (`Standalone` / macOS `Homebrew` / macOS `AppBundle`): detection, required release asset, leftover cleanup |
 | `src/updater/standalone.rs` | Raw-binary self-replace (+ elevation, `--apply-update`); Windows, Linux, bare macOS binaries |
 | `src/updater/download.rs` | Streaming release-asset download with progress |
-| `src/updater/macos/mod.rs` | Install classification from the executable path (`classify`, `bundle_root`); cask/DMG constants |
+| `src/updater/macos/mod.rs` | Install classification (`classify` over an `FsProbe`): Homebrew only when brew's `Caskroom/terminal-studio/<ver>/` symlink points at this bundle; cask/DMG constants, temp-path naming |
 | `src/updater/macos/homebrew.rs` | Updates cask installs via `brew update` + `brew upgrade --cask --no-quit terminal-studio`, then verifies `Info.plist` |
-| `src/updater/macos/app_bundle.rs` | DMG installs: mount release DMG, stage, verify, swap the whole `.app` with rollback |
+| `src/updater/macos/app_bundle.rs` | DMG installs: mount release DMG, stage, verify, atomic `renamex_np(RENAME_SWAP)` of the whole `.app` (two-rename fallback); startup sweep of scratch dirs/mounts left by an interrupted update |
+| `src/updater/macos/disk_image.rs` | `hdiutil` attach (retried while busy) / detach by device, `hdiutil info -plist` lookup of attached images, mount-point check |
 | `src/updater/macos/process.rs` | Helper-process runner: output to unlinked temp files (no pipes, so quitting the app never breaks brew), timeout that kills the process group or detaches (brew) |
-| `src/updater/macos/bundle_version.rs` | Reads `CFBundleShortVersionString` via `plutil` |
+| `src/updater/macos/bundle_version.rs` | Reads `CFBundleShortVersionString` via `plutil`; semver `is_at_least` |
 | `src/sys_monitor.rs` | `SysMonitor`, `SystemStats`; CPU/RAM/network monitoring via sysinfo; background thread |
 
 ## Key Types & IDs
@@ -346,12 +348,14 @@ Color32::from_rgb(30, 30, 46)
 | `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
 | `src/updater/mod.rs` | 5 | cask version = Cargo.toml version guard, release parsing per install kind |
 | `src/updater/install.rs` | 3 | required release asset per install kind |
-| `src/updater/macos/mod.rs` | 9 | bundle-root detection, Homebrew/AppBundle/Standalone classification matrix |
-| `src/updater/macos/process.rs` | 10 | stdout/stderr capture to files (never pipes), env, exit errors, kill vs detach on timeout, process-group kill, reaping |
-| `src/updater/macos/homebrew.rs` | 7 (+1 ignored E2E) | brew steps/args/env, never killed on timeout, post-upgrade version check, recovery hint when the app is gone |
-| `src/updater/macos/app_bundle.rs` | 10 (+1 ignored E2E) | swap + rollback, leftover cleanup, real hdiutil-built DMG install, wrong version, garbage image, unwritable folder |
-| `src/updater/macos/bundle_version.rs` | 2 | Info.plist version read via plutil |
-| **Total** | **769 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer |
+| `src/updater/macos/mod.rs` | 12 | bundle-root detection, classification matrix (custom appdir, copies the cask did not install, brew prefix choice), real symlink probe, temp-path owner |
+| `src/updater/macos/process.rs` | 11 | stdout/stderr capture to files (never pipes), env, exit errors, kill vs detach on timeout, process-group kill, reaping, process liveness |
+| `src/updater/macos/homebrew.rs` | 7 (+1 ignored E2E) | brew steps/args/env, never killed on timeout, post-upgrade version check (newer is fine), recovery hint when the app is gone |
+| `src/updater/macos/app_bundle.rs` | 17 (+1 ignored E2E) | atomic swap, undeletable stale backup, ENOTSUP fallback, honest failed-restore message, leftover cleanup (kept when the app is missing), sweep after a cut-off update, real hdiutil-built DMG install, wrong/newer version, garbage image, unwritable folder |
+| `src/updater/macos/disk_image.rs` | 7 | attach/detach, busy retry (fake hdiutil), timed-out attach leaves nothing attached, detach by path match, mount-point check |
+| `src/updater/macos/bundle_version.rs` | 4 | Info.plist version read via plutil, semver at-least |
+| `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
+| **Total** | **796 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
