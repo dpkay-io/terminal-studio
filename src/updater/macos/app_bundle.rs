@@ -226,6 +226,26 @@ mod tests {
         std::fs::read(&dmg).unwrap()
     }
 
+    /// Installs a real release DMG over a real (older) bundle:
+    /// `TS_E2E_BUNDLE=<dir>/Terminal\ Studio.app TS_E2E_DMG=<release.dmg>
+    ///  TS_E2E_TARGET=0.16.0 cargo test e2e_app_bundle_install -- --ignored`
+    #[test]
+    #[ignore = "acts on a real bundle and DMG; run manually"]
+    fn e2e_app_bundle_install() {
+        use super::super::e2e;
+        let bundle = PathBuf::from(e2e::var(e2e::BUNDLE_VAR));
+        let dmg = std::fs::read(e2e::var(e2e::DMG_VAR)).unwrap();
+        let target = e2e::var(e2e::TARGET_VAR);
+
+        install_from_dmg(&dmg, &bundle, &target).unwrap();
+        assert_eq!(bundle_version::read(&bundle), Ok(target));
+        assert!(backup_path(&bundle).exists());
+
+        cleanup_leftovers(&bundle);
+        assert!(!backup_path(&bundle).exists());
+        assert!(!staging_path(&bundle).exists());
+    }
+
     #[test]
     fn swap_replaces_bundle_and_keeps_backup() {
         let dir = tempfile::tempdir().unwrap();

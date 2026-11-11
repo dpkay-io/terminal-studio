@@ -29,6 +29,22 @@ const USER_APPLICATIONS_DIR: &str = "Applications";
 const BREW_CANDIDATES: [&str; 2] = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
 const CASKROOM_DIR: &str = "Caskroom";
 
+/// Settings for the `#[ignore]`d end-to-end tests, which act on a real
+/// install and real release artifacts. See each test for how to run it.
+#[cfg(test)]
+pub(super) mod e2e {
+    /// Path of the installed `Terminal Studio.app` to update.
+    pub const BUNDLE_VAR: &str = "TS_E2E_BUNDLE";
+    /// Version the update must leave the bundle at, e.g. `0.16.0`.
+    pub const TARGET_VAR: &str = "TS_E2E_TARGET";
+    /// Path of a release DMG (bundle path only).
+    pub const DMG_VAR: &str = "TS_E2E_DMG";
+
+    pub fn var(name: &str) -> String {
+        std::env::var(name).unwrap_or_else(|_| panic!("set {name} to run this test"))
+    }
+}
+
 /// Detect how the running app was installed.
 pub(super) fn detect() -> InstallKind {
     let exe = match std::env::current_exe() {

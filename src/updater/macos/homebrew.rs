@@ -101,6 +101,31 @@ mod tests {
         }
     }
 
+    /// Upgrades a real cask install through the real brew. Needs the app
+    /// installed by the cask at an older version and the tap's cask at the
+    /// target version:
+    /// `TS_E2E_BUNDLE="/Applications/Terminal Studio.app" TS_E2E_TARGET=0.16.0
+    ///  cargo test e2e_homebrew_upgrade -- --ignored`
+    #[test]
+    #[ignore = "mutates the real Homebrew install; run manually"]
+    fn e2e_homebrew_upgrade() {
+        use super::super::{classify, e2e, BREW_CANDIDATES};
+        use crate::updater::install::InstallKind;
+        let bundle = std::path::PathBuf::from(e2e::var(e2e::BUNDLE_VAR));
+        let target = e2e::var(e2e::TARGET_VAR);
+        let exe = bundle.join("Contents/MacOS/terminal-studio");
+        let home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+
+        let kind = classify(&exe, &home, Path::exists);
+        let InstallKind::Homebrew { brew, .. } = &kind else {
+            panic!("expected a Homebrew install, detected {kind:?}");
+        };
+        assert_eq!(brew, Path::new(BREW_CANDIDATES[0]));
+
+        upgrade(brew, &bundle, &target).unwrap();
+        assert_eq!(bundle_version::read(&bundle), Ok(target));
+    }
+
     #[test]
     fn verify_upgraded_ok_when_versions_match() {
         let dir = tempfile::tempdir().unwrap();
