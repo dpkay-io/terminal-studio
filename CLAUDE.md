@@ -121,7 +121,7 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/updater/macos/mod.rs` | Install classification from the executable path (`classify`, `bundle_root`); cask/DMG constants |
 | `src/updater/macos/homebrew.rs` | Updates cask installs via `brew update` + `brew upgrade --cask --no-quit terminal-studio`, then verifies `Info.plist` |
 | `src/updater/macos/app_bundle.rs` | DMG installs: mount release DMG, stage, verify, swap the whole `.app` with rollback |
-| `src/updater/macos/process.rs` | Helper-process runner with timeout that kills the whole process group |
+| `src/updater/macos/process.rs` | Helper-process runner: output to unlinked temp files (no pipes, so quitting the app never breaks brew), timeout that kills the process group or detaches (brew) |
 | `src/updater/macos/bundle_version.rs` | Reads `CFBundleShortVersionString` via `plutil` |
 | `src/sys_monitor.rs` | `SysMonitor`, `SystemStats`; CPU/RAM/network monitoring via sysinfo; background thread |
 
@@ -344,7 +344,14 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
 | `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
 | `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
-| **Total** | **520** | |
+| `src/updater/mod.rs` | 5 | cask version = Cargo.toml version guard, release parsing per install kind |
+| `src/updater/install.rs` | 3 | required release asset per install kind |
+| `src/updater/macos/mod.rs` | 9 | bundle-root detection, Homebrew/AppBundle/Standalone classification matrix |
+| `src/updater/macos/process.rs` | 10 | stdout/stderr capture to files (never pipes), env, exit errors, kill vs detach on timeout, process-group kill, reaping |
+| `src/updater/macos/homebrew.rs` | 7 (+1 ignored E2E) | brew steps/args/env, never killed on timeout, post-upgrade version check, recovery hint when the app is gone |
+| `src/updater/macos/app_bundle.rs` | 10 (+1 ignored E2E) | swap + rollback, leftover cleanup, real hdiutil-built DMG install, wrong version, garbage image, unwritable folder |
+| `src/updater/macos/bundle_version.rs` | 2 | Info.plist version read via plutil |
+| **Total** | **769 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer |
 
 ## Release Workflow
 

@@ -23,6 +23,8 @@ const BREW_ENV: [(&str, &str); 3] = [
 
 /// `brew update`, then `brew upgrade --cask --no-quit terminal-studio`.
 /// `--no-quit`: brew must never quit the app that is running it.
+/// Never killed on timeout: SIGKILL mid-upgrade skips brew's rollback and
+/// can leave the app missing (and brew's helpers survive it anyway).
 fn upgrade_steps(brew: &Path) -> [CommandSpec; 2] {
     let step = |timeout| {
         BREW_ENV
@@ -30,6 +32,7 @@ fn upgrade_steps(brew: &Path) -> [CommandSpec; 2] {
             .fold(CommandSpec::new(brew, timeout), |spec, (k, v)| {
                 spec.env(k, v)
             })
+            .detach_on_timeout()
     };
     [
         step(BREW_UPDATE_TIMEOUT).arg("update"),
@@ -44,9 +47,21 @@ fn upgrade_steps(brew: &Path) -> [CommandSpec; 2] {
 /// Upgrade the cask, then confirm `bundle` really is at `target`.
 pub(in crate::updater) fn upgrade(brew: &Path, bundle: &Path, target: &str) -> Result<(), String> {
     for step in upgrade_steps(brew) {
-        process::run(&step).map_err(|e| format!("Homebrew: {e}"))?;
+        process::run(&step).map_err(|e| failure_message(bundle, &e))?;
     }
     verify_upgraded(bundle, target)
+}
+
+/// A failed brew run can stop between removing the old app and installing
+/// the new one; say how to recover when that happened.
+fn failure_message(bundle: &Path, error: &str) -> String {
+    if bundle.exists() {
+        format!("Homebrew: {error}")
+    } else {
+        format!(
+            "Homebrew: {error} \u{2014} the app was removed; run `brew reinstall --cask {CASK_TOKEN}`"
+        )
+    }
 }
 
 /// brew exits 0 when the tap's cask is not newer yet, so success alone does
@@ -65,6 +80,7 @@ fn verify_upgraded(bundle: &Path, target: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::super::bundle_version::test_support::fake_bundle;
+    use super::super::process::OnTimeout;
     use super::*;
     use std::ffi::OsString;
     use std::path::Path;
@@ -124,6 +140,53 @@ mod tests {
 
         upgrade(brew, &bundle, &target).unwrap();
         assert_eq!(bundle_version::read(&bundle), Ok(target));
+    }
+
+    /// A stand-in `brew` that always fails like a real brew error.
+    fn failing_brew(dir: &Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let brew = dir.join("brew");
+        std::fs::write(
+            &brew,
+            "#!/bin/sh\necho 'Error: Download failed' >&2\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o755)).unwrap();
+        brew
+    }
+
+    #[test]
+    fn upgrade_failure_names_recovery_when_app_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = failing_brew(dir.path());
+        let missing = dir.path().join("Terminal Studio.app");
+
+        let err = upgrade(&brew, &missing, "0.16.0").unwrap_err();
+
+        assert!(err.contains("Download failed"), "{err}");
+        assert!(
+            err.contains("brew reinstall --cask terminal-studio"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn upgrade_failure_with_app_intact_has_no_recovery_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let brew = failing_brew(dir.path());
+        let bundle = fake_bundle(dir.path(), "0.15.4");
+
+        let err = upgrade(&brew, &bundle, "0.16.0").unwrap_err();
+
+        assert!(err.contains("Download failed"), "{err}");
+        assert!(!err.contains("reinstall"), "{err}");
+    }
+
+    #[test]
+    fn upgrade_steps_are_never_killed_on_timeout() {
+        for step in upgrade_steps(Path::new(BREW)) {
+            assert_eq!(step.on_timeout, OnTimeout::Detach, "{step:?}");
+        }
     }
 
     #[test]

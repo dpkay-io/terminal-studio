@@ -38,6 +38,8 @@ pub enum UpdateStatus {
         progress_pct: f32,
     },
     /// Applying an update that has no measurable progress (e.g. running brew).
+    /// Only the macOS bundle/Homebrew paths have such a phase.
+    #[cfg(target_os = "macos")]
     Installing {
         message: &'static str,
     },

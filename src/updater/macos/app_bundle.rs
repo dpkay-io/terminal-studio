@@ -3,7 +3,6 @@
 //! bundle's code signature stay consistent with the new executable.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use super::bundle_version;
@@ -132,16 +131,9 @@ struct ScratchDir {
     path: PathBuf,
 }
 
-/// Distinguishes concurrent installs within one process.
-static SCRATCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
 impl ScratchDir {
     fn create() -> Result<Self, String> {
-        let sequence = SCRATCH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "{SCRATCH_DIR_PREFIX}{}-{sequence}",
-            std::process::id()
-        ));
+        let path = super::unique_temp_path(SCRATCH_DIR_PREFIX);
         remove_dir_if_present(&path);
         std::fs::create_dir_all(&path)
             .map_err(|e| format!("Failed to create a temp directory: {e}"))?;

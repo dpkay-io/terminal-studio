@@ -507,6 +507,7 @@ impl App {
                                                         .text("Downloading\u{2026}"),
                                                     );
                                                 }
+                                                #[cfg(target_os = "macos")]
                                                 UpdateStatus::Installing { message } => {
                                                     ui.spinner();
                                                     ui.label(*message);

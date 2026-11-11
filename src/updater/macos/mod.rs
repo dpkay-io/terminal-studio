@@ -6,6 +6,7 @@ pub(super) mod homebrew;
 mod process;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::install::InstallKind;
 
@@ -28,6 +29,16 @@ const USER_APPLICATIONS_DIR: &str = "Applications";
 /// GUI apps do not inherit the shell `PATH`, so these are absolute.
 const BREW_CANDIDATES: [&str; 2] = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"];
 const CASKROOM_DIR: &str = "Caskroom";
+
+/// Distinguishes temp paths created concurrently within one process.
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// A temp path no other call in any process will produce:
+/// `<tmp>/<prefix><pid>-<n>`.
+pub(super) fn unique_temp_path(prefix: &str) -> PathBuf {
+    let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}{}-{sequence}", std::process::id()))
+}
 
 /// Settings for the `#[ignore]`d end-to-end tests, which act on a real
 /// install and real release artifacts. See each test for how to run it.
