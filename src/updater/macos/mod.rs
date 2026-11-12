@@ -4,6 +4,7 @@ pub(super) mod app_bundle;
 mod bundle_version;
 mod disk_image;
 pub(super) mod homebrew;
+mod os_version;
 mod process;
 
 use std::path::{Path, PathBuf};
