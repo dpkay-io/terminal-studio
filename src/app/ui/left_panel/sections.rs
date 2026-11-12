@@ -61,9 +61,12 @@ pub(in crate::app) fn row_state(
 /// Caches the recency sort order of the session list so that activating a row
 /// does not reshuffle the list under the user's pointer mid-interaction.
 ///
-/// The order is recomputed when the pointer is outside the list, or whenever
-/// the set of pane ids changes — a closed session must never linger as a ghost
-/// row just because the pointer happens to be hovering.
+/// The order is recomputed from recency whenever the pointer is outside the
+/// list. While it is inside, the order is held: a closed session drops out
+/// (it must never linger as a ghost row) and a new one is appended at the end,
+/// but the rows that remain keep their relative order. Re-sorting instead
+/// would move the row under the pointer, so the next click would land on a
+/// different session than the one the user aimed at.
 #[derive(Default)]
 pub(in crate::app) struct SortCache {
     order: Vec<u32>,
@@ -76,19 +79,33 @@ impl SortCache {
         let members: HashSet<u32> = panes.iter().map(|(id, _)| *id).collect();
         let membership_changed = members != self.members;
 
-        if pointer_inside && !membership_changed && !self.order.is_empty() {
+        if pointer_inside && !self.order.is_empty() {
+            if membership_changed {
+                self.order.retain(|id| members.contains(id));
+                let held: HashSet<u32> = self.order.iter().copied().collect();
+                let added: Vec<(u32, u64)> = panes
+                    .iter()
+                    .copied()
+                    .filter(|(id, _)| !held.contains(id))
+                    .collect();
+                self.order.extend(by_recency(added));
+                self.members = members;
+            }
             return self.order.clone();
         }
 
-        let mut sorted: Vec<(u32, u64)> = panes.to_vec();
-        // Tiebreak on id so panes sharing a timestamp keep a deterministic
-        // order — without it the list flickers between frames.
-        sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-
-        self.order = sorted.into_iter().map(|(id, _)| id).collect();
+        self.order = by_recency(panes.to_vec());
         self.members = members;
         self.order.clone()
     }
+}
+
+/// Pane ids, most recently active first. Ties break on id so panes sharing a
+/// timestamp keep a deterministic order — without it the list flickers
+/// between frames.
+fn by_recency(mut panes: Vec<(u32, u64)>) -> Vec<u32> {
+    panes.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    panes.into_iter().map(|(id, _)| id).collect()
 }
 
 #[cfg(test)]
@@ -203,6 +220,60 @@ mod tests {
         assert_eq!(c.order(&[(1, 100), (2, 200)], true), vec![2, 1]);
         // Pane 2 closed while hovering — it must not linger as a ghost row.
         assert_eq!(c.order(&[(1, 100), (3, 50)], true), vec![1, 3]);
+    }
+
+    #[test]
+    fn sort_cache_close_while_hovered_keeps_remaining_rows_in_place() {
+        let mut c = SortCache::default();
+        assert_eq!(
+            c.order(&[(1, 100), (2, 200), (3, 300)], true),
+            vec![3, 2, 1]
+        );
+        // Pane 1 was clicked (now most recent) and pane 2 then closed, both
+        // while hovering. Re-sorting would put 1 on top, under the pointer
+        // that was aimed at 3.
+        assert_eq!(c.order(&[(1, 400), (3, 300)], true), vec![3, 1]);
+    }
+
+    #[test]
+    fn sort_cache_new_rows_append_while_hovered() {
+        let mut c = SortCache::default();
+        assert_eq!(c.order(&[(1, 100), (2, 200)], true), vec![2, 1]);
+        // Two sessions spawned while hovering: appended, newest first, and the
+        // existing rows do not move.
+        assert_eq!(
+            c.order(&[(1, 100), (2, 200), (5, 500), (4, 400)], true),
+            vec![2, 1, 5, 4]
+        );
+        // Membership is up to date again, so a later frame holds this order.
+        assert_eq!(
+            c.order(&[(1, 900), (2, 200), (5, 500), (4, 400)], true),
+            vec![2, 1, 5, 4]
+        );
+    }
+
+    #[test]
+    fn sort_cache_resorts_once_pointer_leaves_after_changes() {
+        let mut c = SortCache::default();
+        c.order(&[(1, 100), (2, 200)], true);
+        c.order(&[(1, 100), (2, 200), (3, 50)], true);
+        assert_eq!(
+            c.order(&[(1, 100), (2, 200), (3, 50)], false),
+            vec![2, 1, 3]
+        );
+        assert_eq!(
+            c.order(&[(1, 900), (2, 200), (3, 50)], false),
+            vec![1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn sort_cache_ties_break_on_id() {
+        let mut c = SortCache::default();
+        assert_eq!(
+            c.order(&[(9, 100), (3, 100), (5, 100)], false),
+            vec![3, 5, 9]
+        );
     }
 
     #[test]
