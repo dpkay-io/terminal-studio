@@ -18,7 +18,8 @@ RUST_LOG=debug cargo run # enable debug logging
 
 | File | Responsibility |
 |------|---------------|
-| `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, wgpu renderer, decorations=false; calls `SingleInstanceGuard::try_acquire()` |
+| `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, decorations=false; calls `SingleInstanceGuard::try_acquire()`; tries renderers in order (wgpu, then glow) |
+| `src/renderer_choice.rs` | Renderer order, `--renderer=` override, and `another_renderer_may_help()`: no glow retry when the window system or app creation failed (that would mask the real error with winit's "EventLoop can't be recreated") |
 | `src/app.rs` | `App` struct; implements `eframe::App`; render dispatch to UI submodules |
 | `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
@@ -45,7 +46,8 @@ RUST_LOG=debug cargo run # enable debug logging
 
 | File | Responsibility |
 |------|---------------|
-| `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON |
+| `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()`: a pane's workspace by its folder first (single source for tab grouping, sidebar, titlebar, info bar) |
+| `src/app/fonts.rs` | Font definitions: egui's fonts first, then memory-mapped system fallbacks per OS (symbols, dingbats ✓✕✗, CJK, Hangul) so those don't render as boxes |
 | `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management |
 | `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct |
 | `src/app/session_state.rs` | `SessionState`: session list management, find/add/remove operations |
@@ -359,7 +361,10 @@ Color32::from_rgb(30, 30, 46)
 | `src/updater/macos/os_version.rs` | 3 | major-version parsing, unreadable versions, this Mac's version |
 | `src/updater/macos/bundle_version.rs` | 4 | Info.plist version read via plutil, semver at-least |
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
-| **Total** | **805 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
+| `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
+| `src/app/state.rs` (pane workspace) | 3 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
+| **Total** | **822 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
