@@ -28,6 +28,7 @@ mod diff_parser;
 mod drag;
 mod feedback;
 mod file_browser;
+mod fonts;
 mod git_cmd;
 mod git_diff;
 mod git_worker;
