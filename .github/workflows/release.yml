@@ -31,7 +31,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary: terminal-studio.exe
             asset: terminal-studio-windows.exe
-          - os: ubuntu-latest
+          # Pinned, not ubuntu-latest: the binary needs the glibc of the
+          # image it is built on (2.39 on 24.04), so a newer image would
+          # silently drop older distributions. Raise deliberately.
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             binary: terminal-studio
             asset: terminal-studio-linux
@@ -42,13 +45,13 @@ jobs:
     outputs:
       windows-bare-artifact-id: ${{ steps.windows-artifact-id.outputs.id }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux system deps
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev
@@ -57,7 +60,7 @@ jobs:
 
       # ── macOS: .app bundle + .dmg ──
       - name: Package macOS
-        if: matrix.os == 'macos-latest'
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -76,7 +79,7 @@ jobs:
 
       # ── Linux: .deb package ──
       - name: Package Linux .deb
-        if: matrix.os == 'ubuntu-latest'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -111,24 +114,24 @@ jobs:
         run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.asset }}
       - name: Upload bare binary
         id: upload-bare
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}
       - name: Capture Windows artifact ID
-        if: matrix.os == 'windows-latest'
+        if: runner.os == 'Windows'
         id: windows-artifact-id
         shell: bash
         run: echo "id=${{ steps.upload-bare.outputs.artifact-id }}" >> "$GITHUB_OUTPUT"
 
       # ── Upload platform packages ──
-      - uses: actions/upload-artifact@v4
-        if: matrix.os == 'macos-latest'
+      - uses: actions/upload-artifact@v6
+        if: runner.os == 'macOS'
         with:
           name: terminal-studio-macos-arm.dmg
           path: terminal-studio-macos-arm.dmg
-      - uses: actions/upload-artifact@v4
-        if: matrix.os == 'ubuntu-latest'
+      - uses: actions/upload-artifact@v6
+        if: runner.os == 'Linux'
         with:
           name: terminal-studio-linux-amd64.deb
           path: terminal-studio-linux-amd64.deb
@@ -141,8 +144,8 @@ jobs:
     outputs:
       installer-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           name: terminal-studio-windows.exe
           path: target/x86_64-pc-windows-msvc/release/
@@ -162,7 +165,7 @@ jobs:
           & $iscc /DAppVersion="$version" installer\terminal-studio.iss
       - name: Upload installer
         id: upload-installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminal-studio-setup.exe
           path: installer/Output/terminal-studio-setup.exe
@@ -178,7 +181,7 @@ jobs:
       actions: read
     steps:
       - name: Sign bare exe
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -188,7 +191,7 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-bare
       - name: Sign installer
-        uses: signpath/github-action-submit-signing-request@v1
+        uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -198,13 +201,13 @@ jobs:
           wait-for-completion: true
           output-artifact-directory: signed-installer
       - name: Upload signed bare exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminal-studio-windows.exe
           path: signed-bare/terminal-studio-windows.exe
           overwrite: true
       - name: Upload signed installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: terminal-studio-setup.exe
           path: signed-installer/terminal-studio-setup.exe
@@ -225,11 +228,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           merge-multiple: true
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
