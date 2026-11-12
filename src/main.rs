@@ -14,6 +14,7 @@ mod md_detector;
 mod pane_tree;
 mod pty;
 mod renderer;
+mod renderer_choice;
 mod search;
 mod search_worker;
 mod shortcuts;
@@ -130,19 +131,6 @@ fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
     (y as i32, m, d)
 }
 
-fn parse_renderer_arg() -> Option<eframe::Renderer> {
-    for arg in std::env::args() {
-        if let Some(val) = arg.strip_prefix("--renderer=") {
-            return match val.to_ascii_lowercase().as_str() {
-                "glow" | "gl" | "opengl" => Some(eframe::Renderer::Glow),
-                "wgpu" => Some(eframe::Renderer::Wgpu),
-                _ => None,
-            };
-        }
-    }
-    None
-}
-
 fn main() -> eframe::Result<()> {
     let log_level = logging::load_configured_level();
     let _log_guard = logging::init(log_level);
@@ -182,7 +170,10 @@ fn main() -> eframe::Result<()> {
         }
     };
 
-    let forced_renderer = parse_renderer_arg();
+    let forced_renderer = renderer_choice::forced_renderer(std::env::args());
+    if let Some(renderer) = forced_renderer {
+        write_crash_log(&format!("renderer forced via CLI: {renderer:?}"));
+    }
 
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1280.0, 800.0])
@@ -191,20 +182,10 @@ fn main() -> eframe::Result<()> {
         .with_decorations(false)
         .with_icon(std::sync::Arc::new(make_icon()));
 
-    let forced_array;
-    let renderers_to_try: &[eframe::Renderer] = match forced_renderer {
-        Some(r) => {
-            write_crash_log(&format!("renderer forced via CLI: {r:?}"));
-            forced_array = [r];
-            &forced_array
-        }
-        None => &[eframe::Renderer::Wgpu, eframe::Renderer::Glow],
-    };
-
     let mut last_err: Option<eframe::Result<()>> = None;
     let mut all_panicked = true;
 
-    for &renderer in renderers_to_try {
+    for renderer in renderer_choice::renderers_to_try(forced_renderer) {
         write_crash_log(&format!(
             "starting v{} with {renderer:?} renderer",
             env!("CARGO_PKG_VERSION")
@@ -231,6 +212,12 @@ fn main() -> eframe::Result<()> {
                 let msg = format!("{renderer:?} renderer failed: {e}");
                 log::error!("{msg}");
                 write_crash_log(&msg);
+                if !renderer_choice::another_renderer_may_help(&e) {
+                    write_crash_log(
+                        "not trying another renderer: this failure is not the renderer's",
+                    );
+                    return Err(e);
+                }
                 last_err = Some(Err(e));
             }
             Err(panic_payload) => {
