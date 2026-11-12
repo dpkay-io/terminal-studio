@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use super::pane::PaneContent;
 use crate::editor_group::GroupId;
 use crate::pane_tree::SplitDir;
 
@@ -331,13 +332,50 @@ pub(super) fn resolve_drag(
     }
 }
 
+/// The pane already attached to session `session_id`. A session has one PTY,
+/// so it is shown in at most one pane.
+fn existing_session_pane(
+    session_id: u32,
+    pane_state: &super::pane_state::PaneState,
+) -> Option<u32> {
+    pane_state
+        .panes
+        .iter()
+        .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id))
+        .map(|p| p.id)
+}
+
+/// The editor pane already holding `path`. A second editor on the same file
+/// would hold a second buffer, and whichever saved last would win.
+fn existing_file_pane(
+    path: &std::path::Path,
+    pane_state: &super::pane_state::PaneState,
+) -> Option<u32> {
+    pane_state
+        .panes
+        .iter()
+        .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path))
+        .map(|p| p.id)
+}
+
+/// The pane already showing `payload`, for the payloads that are unique per
+/// pane (sessions and files). `None` for every other payload.
+fn existing_pane_for(
+    payload: &DragPayload,
+    pane_state: &super::pane_state::PaneState,
+) -> Option<u32> {
+    match payload {
+        DragPayload::Session(session_id) => existing_session_pane(*session_id, pane_state),
+        DragPayload::File(path) => existing_file_pane(path, pane_state),
+        _ => None,
+    }
+}
+
 pub(super) fn resolve_group(
     payload: DragPayload,
     target: DropTarget,
     pane_state: &super::pane_state::PaneState,
 ) -> DragAction {
-    use super::pane::PaneContent;
-
     match (payload, target) {
         // Tab → GroupArea: move tab to that group (append)
         (DragPayload::Tab(pane_id), DropTarget::GroupArea(group_id)) => {
@@ -358,12 +396,8 @@ pub(super) fn resolve_group(
 
         // Session → GroupArea
         (DragPayload::Session(session_id), DropTarget::GroupArea(group_id)) => {
-            let existing = pane_state
-                .panes
-                .iter()
-                .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id));
-            if let Some(pane) = existing {
-                return DragAction::FocusExistingTab { pane_id: pane.id };
+            if let Some(pane_id) = existing_session_pane(session_id, pane_state) {
+                return DragAction::FocusExistingTab { pane_id };
             }
             DragAction::InsertTerminalInGroup {
                 session_id,
@@ -374,12 +408,8 @@ pub(super) fn resolve_group(
 
         // File → GroupArea
         (DragPayload::File(path), DropTarget::GroupArea(group_id)) => {
-            let existing = pane_state
-                .panes
-                .iter()
-                .find(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.path == path));
-            if let Some(pane) = existing {
-                return DragAction::FocusExistingTab { pane_id: pane.id };
+            if let Some(pane_id) = existing_file_pane(&path, pane_state) {
+                return DragAction::FocusExistingTab { pane_id };
             }
             DragAction::InsertFileEditorInGroup {
                 path,
@@ -443,54 +473,34 @@ pub(super) fn resolve_group(
             }
         }
 
-        // One pane per session: a session that is already open moves its pane
-        // into the new split instead of opening a second pane on the same PTY.
+        // One pane per session and per file: a payload that is already open
+        // moves its pane into the new split instead of opening a second one
+        // (a second pane on the same PTY, or a second buffer on the same file).
+        // Diff and Note payloads always open a new pane.
         (
-            DragPayload::Session(session_id),
+            payload,
             DropTarget::SplitEdge {
                 group_id,
                 dir,
                 before,
             },
-        ) => {
-            let existing = pane_state
-                .panes
-                .iter()
-                .find(|p| matches!(p.content, PaneContent::Terminal(sid) if sid == session_id))
-                .map(|p| p.id);
-            match existing {
-                // Delegating to the Tab arm reuses its sole-occupant guard.
-                Some(pane_id) => resolve_group(
-                    DragPayload::Tab(pane_id),
-                    DropTarget::SplitEdge {
-                        group_id,
-                        dir,
-                        before,
-                    },
-                    pane_state,
-                ),
-                None => DragAction::SplitWithPayload {
-                    payload: DragPayload::Session(session_id),
+        ) => match existing_pane_for(&payload, pane_state) {
+            // Delegating to the Tab arm reuses its sole-occupant guard.
+            Some(pane_id) => resolve_group(
+                DragPayload::Tab(pane_id),
+                DropTarget::SplitEdge {
                     group_id,
                     dir,
                     before,
                 },
-            }
-        }
-
-        // File / Diff / Note onto an edge: always a new split.
-        (
-            payload,
-            DropTarget::SplitEdge {
+                pane_state,
+            ),
+            None => DragAction::SplitWithPayload {
+                payload,
                 group_id,
                 dir,
                 before,
             },
-        ) => DragAction::SplitWithPayload {
-            payload,
-            group_id,
-            dir,
-            before,
         },
 
         // Fallback (should not be reached due to routing in resolve_drag)
@@ -504,8 +514,6 @@ fn resolve(
     pane_state: &super::pane_state::PaneState,
     active_group: Option<u64>,
 ) -> DragAction {
-    use super::pane::PaneContent;
-
     match (payload, target) {
         (DragPayload::Tab(pane_id), DropTarget::TabBar(to_index)) => {
             if pane_state.find(pane_id).is_none() {
@@ -1546,6 +1554,107 @@ mod tests {
                 ..
             } if group_id == g1
         ));
+    }
+
+    fn editor(path: &str) -> PaneContent {
+        PaneContent::FileEditor(FileEditorState {
+            path: PathBuf::from(path),
+            content: String::new(),
+            dirty: false,
+            save_error: false,
+            workspace_id: None,
+            show_preview: false,
+            stale: false,
+            loading: false,
+            untitled: false,
+        })
+    }
+
+    #[test]
+    fn file_already_open_to_split_edge_moves_existing_pane() {
+        // /tmp/a.rs is open as pane 2. A second editor would be a second
+        // buffer on the same file, so the split must take pane 2 instead.
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, editor("/tmp/a.rs")),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::File(PathBuf::from("/tmp/a.rs")),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Horizontal,
+                before: false,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::SplitWithPayload {
+                payload: DragPayload::Tab(2),
+                group_id,
+                ..
+            } if group_id == g1
+        ));
+    }
+
+    #[test]
+    fn file_open_as_sole_occupant_of_target_group_is_noop() {
+        let ps = make_grouped_pane_state(vec![(1, editor("/tmp/a.rs"))]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::File(PathBuf::from("/tmp/a.rs")),
+            DropTarget::SplitEdge {
+                group_id: g1,
+                dir: SplitDir::Vertical,
+                before: true,
+            },
+            &ps,
+        );
+        assert!(matches!(action, DragAction::Noop));
+    }
+
+    #[test]
+    fn file_already_open_to_group_area_focuses_it() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, editor("/tmp/a.rs")),
+        ]);
+        let g1 = ps.focused_group_id;
+        let action = resolve_group(
+            DragPayload::File(PathBuf::from("/tmp/a.rs")),
+            DropTarget::GroupArea(g1),
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::FocusExistingTab { pane_id: 2 }
+        ));
+    }
+
+    #[test]
+    fn existing_pane_lookup_only_matches_unique_payloads() {
+        let ps = make_grouped_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, editor("/tmp/a.rs")),
+        ]);
+        assert_eq!(existing_pane_for(&DragPayload::Session(10), &ps), Some(1));
+        assert_eq!(existing_pane_for(&DragPayload::Session(11), &ps), None);
+        assert_eq!(
+            existing_pane_for(&DragPayload::File(PathBuf::from("/tmp/a.rs")), &ps),
+            Some(2)
+        );
+        assert_eq!(
+            existing_pane_for(&DragPayload::File(PathBuf::from("/tmp/b.rs")), &ps),
+            None
+        );
+        assert_eq!(existing_pane_for(&DragPayload::Tab(1), &ps), None);
+        assert_eq!(
+            existing_pane_for(&DragPayload::Diff("a.rs".into()), &ps),
+            None
+        );
+        assert_eq!(existing_pane_for(&DragPayload::Note(1), &ps), None);
+        assert_eq!(existing_pane_for(&DragPayload::Workspace(1), &ps), None);
     }
 
     // ── edge_zone geometry tests ────────────────────────────────────
