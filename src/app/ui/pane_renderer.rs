@@ -72,7 +72,6 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
     pub diff_hunk_navigations: &'a mut Vec<(u32, usize)>,
     pub diff_clear_scroll_to_first: &'a mut Vec<u32>,
-    pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
     /// (pane_id, new side_by_side value) toggled this frame by the conflict resolver toolbar.
@@ -876,30 +875,6 @@ fn render_leaf_content(
         rect,
         crate::app::feedback::FlashTarget::Pane(pane_id),
     );
-
-    // Drop target highlight for drag-and-drop
-    if rctx.drag_state.is_active() {
-        let accepts = matches!(
-            &rctx.drag_state.payload,
-            Some(crate::app::drag::DragPayload::Tab(_))
-                | Some(crate::app::drag::DragPayload::Session(_))
-                | Some(crate::app::drag::DragPayload::File(_))
-                | Some(crate::app::drag::DragPayload::Diff(_))
-                | Some(crate::app::drag::DragPayload::Note(_))
-        );
-        if accepts {
-            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                if rect.contains(pos) {
-                    ui.painter().rect_stroke(
-                        rect.shrink(2.0),
-                        crate::theme::R_SM,
-                        egui::Stroke::new(2.0_f32, crate::theme::active().blue.gamma_multiply(0.6)),
-                    );
-                    rctx.drag_state.drop_target = Some(crate::app::drag::DropTarget::PaneArea);
-                }
-            }
-        }
-    }
 }
 
 fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
@@ -926,32 +901,99 @@ fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
     }
 }
 
-/// Translucent preview of the half a split-edge drop will fill.
-fn paint_split_preview(ui: &egui::Ui, rect: egui::Rect, dir: SplitDir, before: bool) {
-    let half = match (dir, before) {
-        (SplitDir::Horizontal, true) => {
+/// The area a drop will land in: half of `rect` for a split-edge drop, all of
+/// it for a plain join.
+fn drop_preview_rect(rect: egui::Rect, edge: Option<(SplitDir, bool)>) -> egui::Rect {
+    match edge {
+        None => rect,
+        Some((SplitDir::Horizontal, true)) => {
             egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() / 2.0, rect.height()))
         }
-        (SplitDir::Horizontal, false) => egui::Rect::from_min_size(
+        Some((SplitDir::Horizontal, false)) => egui::Rect::from_min_size(
             egui::pos2(rect.center().x, rect.min.y),
             egui::vec2(rect.width() / 2.0, rect.height()),
         ),
-        (SplitDir::Vertical, true) => {
+        Some((SplitDir::Vertical, true)) => {
             egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), rect.height() / 2.0))
         }
-        (SplitDir::Vertical, false) => egui::Rect::from_min_size(
+        Some((SplitDir::Vertical, false)) => egui::Rect::from_min_size(
             egui::pos2(rect.min.x, rect.center().y),
             egui::vec2(rect.width(), rect.height() / 2.0),
         ),
-    };
+    }
+}
+
+/// Translucent highlight over the area a drop will land in.
+fn paint_drop_preview(ui: &egui::Ui, rect: egui::Rect, edge: Option<(SplitDir, bool)>) {
+    let area = drop_preview_rect(rect, edge);
     let t = theme::active();
     ui.painter()
-        .rect_filled(half, theme::R_MD, t.accent.gamma_multiply(0.25));
+        .rect_filled(area, theme::R_MD, t.accent.gamma_multiply(0.25));
     ui.painter().rect_stroke(
-        half,
+        area,
         theme::R_MD,
         egui::Stroke::new(theme::STROKE_THIN, t.accent),
     );
+}
+
+/// Hit-test the active drag against one leaf and paint what a drop would do.
+///
+/// `hit_rect` is the leaf's whole area — info bar included, so the hint never
+/// blinks out over a pane header — while `split_rect` is the content area the
+/// edge zones are measured against. A pointer on the header therefore joins
+/// the split, matching the left-nav section headers.
+///
+/// Called on every leaf path, degenerate ones included: gating this on a
+/// separate hit test elsewhere is what made the hint intermittent.
+fn hit_test_drop(
+    app: &mut App,
+    ui: &egui::Ui,
+    hit_rect: egui::Rect,
+    split_rect: egui::Rect,
+    group_id: GroupId,
+) {
+    use crate::app::drag::{DragAction, DragPayload, DropTarget};
+
+    // A workspace drag only ever opens a window, so it must not preview a drop.
+    if !app.drag_state.is_active()
+        || matches!(app.drag_state.payload, Some(DragPayload::Workspace(_)))
+    {
+        return;
+    }
+    let Some(pos) = ui.ctx().input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !hit_rect.contains(pos) {
+        return;
+    }
+    // Cloned only once the pointer is known to be here — this runs for every
+    // leaf on every frame of a drag.
+    let Some(payload) = app.drag_state.payload.clone() else {
+        return;
+    };
+
+    let edge = crate::app::drag::edge_zone(split_rect, pos);
+    let target = match edge {
+        Some((dir, before)) => DropTarget::SplitEdge {
+            group_id,
+            dir,
+            before,
+        },
+        None => DropTarget::GroupArea(group_id),
+    };
+
+    // Ask the resolver what this drop would actually do, so a highlight is
+    // never shown for one that does nothing — dragging a pane onto its own
+    // split, or splitting off a group's only pane.
+    if matches!(
+        crate::app::drag::resolve_group(payload, target.clone(), &app.pane_state),
+        DragAction::Noop
+    ) {
+        return;
+    }
+
+    paint_drop_preview(ui, if edge.is_some() { split_rect } else { hit_rect }, edge);
+    app.drag_state.drop_target = Some(target);
 }
 
 /// Apply a deferred action produced by a split's info bar header.
@@ -1034,6 +1076,9 @@ fn render_group_node(
                         );
                     });
                 });
+                // No drop target: this leaf names a group that is not in the
+                // map, so a move would detach the pane and have nowhere to put
+                // it. `sync_groups_with_panes` prunes the leaf shortly after.
                 return;
             };
 
@@ -1046,6 +1091,7 @@ fn render_group_node(
                 leaf_ui
                     .painter()
                     .rect_filled(rect, 0.0, theme::active().bg_term);
+                hit_test_drop(app, &leaf_ui, rect, rect, group_id);
                 return;
             }
 
@@ -1118,6 +1164,7 @@ fn render_group_node(
                         );
                     });
                 });
+                hit_test_drop(app, &leaf_ui, rect, content_rect, group_id);
                 return;
             }
 
@@ -1161,7 +1208,6 @@ fn render_group_node(
                         diff_mode_changes: &mut diff_mode_changes,
                         diff_hunk_navigations: &mut diff_hunk_navigations,
                         diff_clear_scroll_to_first: &mut diff_clear_scroll_to_first,
-                        drag_state: &mut app.drag_state,
                         scrollbar_clear_restore: &mut scrollbar_clear_restore,
                         scrollbar_dragging: &mut scrollbar_dragging,
                         conflict_view_toggles: &mut conflict_view_toggles,
@@ -1219,34 +1265,9 @@ fn render_group_node(
             let ctx = leaf_ui.ctx().clone();
             apply_info_bar_action(app, info_bar_action, &ctx);
 
-            // Route this leaf's drop target: near an edge the drop splits the
-            // group, anywhere else it joins the group.
-            //
-            // The gate is the PaneArea the content renderer set, not a fresh
-            // hit test — it already established that the pointer is over this
-            // pane and that the payload is one a pane accepts (a Workspace
-            // drag never gets this far, so it can never draw a split preview).
-            if matches!(
-                app.drag_state.drop_target,
-                Some(crate::app::drag::DropTarget::PaneArea)
-            ) {
-                let edge = leaf_ui
-                    .ctx()
-                    .input(|i| i.pointer.hover_pos())
-                    .and_then(|pos| crate::app::drag::edge_zone(content_rect, pos));
-                let target = match edge {
-                    Some((dir, before)) => {
-                        paint_split_preview(&leaf_ui, content_rect, dir, before);
-                        crate::app::drag::DropTarget::SplitEdge {
-                            group_id,
-                            dir,
-                            before,
-                        }
-                    }
-                    None => crate::app::drag::DropTarget::GroupArea(group_id),
-                };
-                app.drag_state.drop_target = Some(target);
-            }
+            // Route this leaf's drop target: near a content edge the drop
+            // splits the group, anywhere else in the leaf it joins the group.
+            hit_test_drop(app, &leaf_ui, rect, content_rect, group_id);
 
             // Click-to-focus: if clicked in this group's area, set focus
             let any_drag = leaf_ui
@@ -1515,6 +1536,64 @@ impl App {
                 egui::FontId::proportional(theme::FONT_STATUS),
                 t.text,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))
+    }
+
+    #[test]
+    fn join_preview_covers_whole_rect() {
+        assert_eq!(drop_preview_rect(r(), None), r());
+    }
+
+    #[test]
+    fn edge_previews_cover_the_matching_half() {
+        let rect = r();
+        for (edge, expect_min, expect_max) in [
+            (
+                (SplitDir::Horizontal, true),
+                egui::pos2(10.0, 20.0),
+                egui::pos2(110.0, 120.0),
+            ),
+            (
+                (SplitDir::Horizontal, false),
+                egui::pos2(110.0, 20.0),
+                egui::pos2(210.0, 120.0),
+            ),
+            (
+                (SplitDir::Vertical, true),
+                egui::pos2(10.0, 20.0),
+                egui::pos2(210.0, 70.0),
+            ),
+            (
+                (SplitDir::Vertical, false),
+                egui::pos2(10.0, 70.0),
+                egui::pos2(210.0, 120.0),
+            ),
+        ] {
+            let got = drop_preview_rect(rect, Some(edge));
+            assert_eq!(got.min, expect_min, "min for {edge:?}");
+            assert_eq!(got.max, expect_max, "max for {edge:?}");
+        }
+    }
+
+    #[test]
+    fn every_edge_preview_is_half_the_area() {
+        let rect = r();
+        let full = rect.width() * rect.height();
+        for dir in [SplitDir::Horizontal, SplitDir::Vertical] {
+            for before in [true, false] {
+                let half = drop_preview_rect(rect, Some((dir, before)));
+                assert!((half.width() * half.height() - full / 2.0).abs() < 0.01);
+                assert!(rect.contains_rect(half));
+            }
         }
     }
 }
