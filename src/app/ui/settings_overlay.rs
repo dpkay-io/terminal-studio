@@ -507,6 +507,11 @@ impl App {
                                                         .text("Downloading\u{2026}"),
                                                     );
                                                 }
+                                                #[cfg(target_os = "macos")]
+                                                UpdateStatus::Installing { message } => {
+                                                    ui.spinner();
+                                                    ui.label(*message);
+                                                }
                                                 UpdateStatus::RestartRequired => {
                                                     if ui
                                                         .button("Restart to finish update")
@@ -517,14 +522,20 @@ impl App {
                                                     }
                                                 }
                                                 UpdateStatus::Error(msg) => {
-                                                    ui.label(
-                                                        egui::RichText::new(msg)
-                                                            .size(theme::FONT_UI_SM)
-                                                            .color(theme::active().red),
-                                                    );
+                                                    // Right-to-left: the button goes first so a long
+                                                    // message (e.g. from brew) truncates into the
+                                                    // remaining width; egui shows it whole on hover.
                                                     if ui.small_button("Retry").clicked() {
                                                         uc.trigger_check();
                                                     }
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(msg)
+                                                                .size(theme::FONT_UI_SM)
+                                                                .color(theme::active().red),
+                                                        )
+                                                        .truncate(),
+                                                    );
                                                 }
                                                 _ => {
                                                     if ui.button("Check for updates").clicked() {

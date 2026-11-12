@@ -2,10 +2,10 @@ use super::super::pane::{PaneContent, RightTab};
 use super::super::title::effective_title;
 use super::super::window_state;
 use super::super::App;
+use super::update_pill::{self, PillAction};
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
-use crate::updater::UpdateStatus;
 use std::time::Duration;
 
 /// Shown wherever a binding is listed that the OS takes first.
@@ -562,57 +562,8 @@ impl App {
                         self.paint_sys_monitor(&painter, sr, tb_fg);
                     }
 
-                    // Update button (macOS) — left of sys monitor when visible
-                    if let Some(ref uc) = self.workers.update_checker {
-                        let update_state = uc.state();
-                        let show_update_btn = matches!(
-                            update_state.status,
-                            UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired
-                        );
-                        if show_update_btn {
-                            let label = match &update_state.status {
-                                UpdateStatus::UpdateAvailable { version, .. } => {
-                                    format!("\u{2B06} Update v{version}")
-                                }
-                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
-                                _ => String::new(),
-                            };
-                            let update_x =
-                                sysmon_mac_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
-                            let br = egui::Rect::from_min_size(
-                                egui::pos2(update_x, r.min.y + theme::SP_2),
-                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_4),
-                            );
-                            let resp =
-                                ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
-                            if resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            let t = theme::active();
-                            let bg = if resp.hovered() { t.green } else { t.surface2 };
-                            let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
-                            painter.rect_filled(br, theme::R_MD, bg);
-                            painter.text(
-                                br.center(),
-                                egui::Align2::CENTER_CENTER,
-                                &label,
-                                egui::FontId::proportional(theme::FONT_UI_SM),
-                                update_btn_fg,
-                            );
-                            if resp.clicked() {
-                                match &update_state.status {
-                                    UpdateStatus::UpdateAvailable { .. } => {
-                                        self.show_settings = true;
-                                    }
-                                    UpdateStatus::RestartRequired => {
-                                        self.save_session();
-                                        crate::updater::restart_app();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
+                    // Update pill (macOS) — left of sys monitor when visible
+                    self.paint_update_pill(ui, &painter, r, sysmon_mac_x);
 
                     // Title centered — clipped to avoid overlapping traffic lights and right buttons
                     let mac_clip_min_x =
@@ -923,59 +874,10 @@ impl App {
                         self.paint_sys_monitor(&painter, sr, tb_fg);
                     }
 
-                    // Update button — visible only when update is available or restart required
-                    let mut update_btn_end_x = sysmon_x;
-                    if let Some(ref uc) = self.workers.update_checker {
-                        let update_state = uc.state();
-                        let show_update_btn = matches!(
-                            update_state.status,
-                            UpdateStatus::UpdateAvailable { .. } | UpdateStatus::RestartRequired
-                        );
-                        if show_update_btn {
-                            let label = match &update_state.status {
-                                UpdateStatus::UpdateAvailable { version, .. } => {
-                                    format!("\u{2B06} Update v{version}")
-                                }
-                                UpdateStatus::RestartRequired => "Restart to update".to_string(),
-                                _ => String::new(),
-                            };
-                            let update_x =
-                                sysmon_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
-                            let br = egui::Rect::from_min_size(
-                                egui::pos2(update_x, r.min.y + theme::SP_2),
-                                egui::vec2(theme::UPDATE_BTN_W, r.height() - theme::SP_4),
-                            );
-                            let resp =
-                                ui.interact(br, self.vp_id("tb_update_btn"), egui::Sense::click());
-                            if resp.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            let t = theme::active();
-                            let bg = if resp.hovered() { t.green } else { t.surface2 };
-                            let update_btn_fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
-                            painter.rect_filled(br, theme::R_MD, bg);
-                            painter.text(
-                                br.center(),
-                                egui::Align2::CENTER_CENTER,
-                                &label,
-                                egui::FontId::proportional(theme::FONT_UI_SM),
-                                update_btn_fg,
-                            );
-                            if resp.clicked() {
-                                match &update_state.status {
-                                    UpdateStatus::UpdateAvailable { .. } => {
-                                        self.show_settings = true;
-                                    }
-                                    UpdateStatus::RestartRequired => {
-                                        self.save_session();
-                                        crate::updater::restart_app();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                            update_btn_end_x = update_x;
-                        }
-                    }
+                    // Update pill — while an update is available, in progress, or installed
+                    let update_btn_end_x = self
+                        .paint_update_pill(ui, &painter, r, sysmon_x)
+                        .unwrap_or(sysmon_x);
 
                     for &(symbol, idx, is_danger) in btns {
                         let x = r.max.x - btn_w * (idx as f32 + 1.0);
@@ -1040,5 +942,68 @@ impl App {
                     );
                 }
             });
+    }
+}
+
+impl App {
+    /// Paint the update pill (see `update_pill`) ending just left of
+    /// `right_x` in titlebar row `row`. Returns its left edge when shown.
+    fn paint_update_pill(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        row: egui::Rect,
+        right_x: f32,
+    ) -> Option<f32> {
+        let status = self.workers.update_checker.as_ref()?.state().status;
+        let pill = update_pill::pill_for(&status)?;
+        let x = right_x - theme::UPDATE_BTN_W - theme::TITLEBAR_ICON_GAP;
+        let rect = egui::Rect::from_min_size(
+            egui::pos2(x, row.min.y + theme::SP_2),
+            egui::vec2(theme::UPDATE_BTN_W, row.height() - theme::SP_4),
+        );
+        let resp = ui.interact(rect, self.vp_id("tb_update_btn"), egui::Sense::click());
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        let t = theme::active();
+        let bg = if resp.hovered() { t.green } else { t.surface2 };
+        let fg = theme::text_on([bg.r(), bg.g(), bg.b()]);
+        painter.rect_filled(rect, theme::R_MD, bg);
+
+        // Long labels (brew's step) end in an ellipsis; hover shows them whole.
+        let mut job = egui::text::LayoutJob::single_section(
+            pill.label.clone(),
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(theme::FONT_UI_SM),
+                color: fg,
+                ..Default::default()
+            },
+        );
+        job.wrap = egui::text::TextWrapping {
+            max_width: (rect.width() - 2.0 * theme::SP_2).max(0.0),
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('\u{2026}'),
+        };
+        let galley = ui.fonts(|f| f.layout_job(job));
+        let elided = galley.elided;
+        painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
+        let resp = if elided {
+            resp.on_hover_text(&pill.label)
+        } else {
+            resp
+        };
+
+        if resp.clicked() {
+            match pill.action {
+                PillAction::OpenSettings => self.show_settings = true,
+                PillAction::Restart => {
+                    self.save_session();
+                    crate::updater::restart_app();
+                }
+            }
+        }
+        Some(x)
     }
 }

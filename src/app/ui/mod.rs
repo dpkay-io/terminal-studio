@@ -13,3 +13,4 @@ mod settings_overlay;
 mod tab_bar;
 pub(super) use tab_bar::GroupTabBarResult;
 mod titlebar;
+mod update_pill;

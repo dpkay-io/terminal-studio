@@ -27,8 +27,21 @@ if [ -z "$version" ]; then
 fi
 tag="v$version"
 
+# The Homebrew cask is served straight from this repo, so it must name the
+# version being tagged or `brew upgrade` would fetch a different release.
+cask_file="Casks/terminal-studio.rb"
+cask_version="$(grep -E '^[[:space:]]*version[[:space:]]+"' "$cask_file" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+
 echo "Cargo.toml version: $version"
+echo "Cask version:       ${cask_version:-<missing>}"
 echo "Tag to create:      $tag"
+
+if [ "$cask_version" != "$version" ]; then
+    echo
+    echo "$cask_file has version \"${cask_version:-<missing>}\" but Cargo.toml has \"$version\"." >&2
+    echo "Bump both in the release PR before tagging." >&2
+    exit 1
+fi
 
 if [ -n "$(git status --porcelain)" ] && [ "$FORCE" -ne 1 ]; then
     echo
