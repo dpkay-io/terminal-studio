@@ -3,13 +3,12 @@ use crate::sys_monitor::SysMonitor;
 use crate::updater::UpdateChecker;
 
 use super::git_worker::GitWorker;
-use super::scrollback_compactor::ScrollbackCompactor;
 use super::workspace_git_worker::WorkspaceGitWorker;
 
 /// Holds background-worker and thread state extracted from `App`.
 ///
 /// Contains the foreground-process detector, git worker, search workers,
-/// system monitor, update checker, and scrollback compactor.
+/// system monitor, and update checker.
 pub(super) struct WorkerManager {
     /// Background thread for foreground-process detection; UI reads from cache only.
     pub(super) foreground_worker: ForegroundWorker,
@@ -25,6 +24,4 @@ pub(super) struct WorkerManager {
     pub(super) sys_monitor: Option<SysMonitor>,
     /// Self-update: background checker for new releases.
     pub(super) update_checker: Option<UpdateChecker>,
-    /// Background scrollback compression — harvests old scrollback rows and compresses with zstd.
-    pub(super) scrollback_compactor: ScrollbackCompactor,
 }

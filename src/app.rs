@@ -42,7 +42,6 @@ mod pane;
 mod pane_state;
 mod persistence;
 pub(crate) mod scrollback_capture;
-mod scrollback_compactor;
 pub(crate) mod scrollback_inject;
 mod session_state;
 pub(crate) mod settings;
@@ -1054,20 +1053,6 @@ impl eframe::App for App {
             }
         }
 
-        // ── Scrollback compactor: harvest + compress old scrollback rows ──
-        {
-            let session_arcs: Vec<(
-                u32,
-                std::sync::Arc<parking_lot::RwLock<crate::terminal::Session>>,
-            )> = self
-                .session_state
-                .sessions
-                .iter()
-                .map(|e| (e.id, e.session.clone()))
-                .collect();
-            self.workers.scrollback_compactor.tick(&session_arcs);
-        }
-
         // ── Global search debounce: fire after 200ms of stable input ─────
         if self.global_search_debouncer.ready() {
             let query = self.global_search_query.clone();
@@ -1262,7 +1247,6 @@ impl App {
             self.capture_closed_session(sid);
         }
         self.session_state.remove(sid);
-        self.workers.scrollback_compactor.remove_session(sid);
         self.command_start_times.remove(&sid);
         self.completed_badges.remove(&sid);
         self.resize_debounce.remove(&sid);

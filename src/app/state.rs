@@ -174,9 +174,6 @@ impl App {
                     None
                 },
                 update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
-                scrollback_compactor: super::scrollback_compactor::ScrollbackCompactor::spawn(
-                    ctx.clone(),
-                ),
             },
             was_focused: true,
             first_frame: true,
