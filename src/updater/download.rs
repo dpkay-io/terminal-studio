@@ -4,17 +4,14 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::{UpdateState, UpdateStatus};
+use super::{http, UpdateState, UpdateStatus};
 
 pub(super) fn download(
     shared: &Arc<Mutex<UpdateState>>,
     ctx: &egui::Context,
     download_url: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("terminal-studio-updater")
-        .timeout(std::time::Duration::from_secs(300))
-        .build()?;
+    let client = http::client(http::DOWNLOAD_TIMEOUT)?;
 
     let mut resp = client.get(download_url).send()?;
     if !resp.status().is_success() {

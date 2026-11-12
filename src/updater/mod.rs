@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod download;
+mod http;
 mod install;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -141,11 +142,7 @@ fn do_check(shared: &Arc<Mutex<UpdateState>>, ctx: &egui::Context, install: &Ins
     set_status(shared, ctx, UpdateStatus::Checking);
 
     let result = (|| -> anyhow::Result<serde_json::Value> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("terminal-studio-updater")
-            .timeout(std::time::Duration::from_secs(30))
-            .build()?;
-
+        let client = http::client(http::CHECK_TIMEOUT)?;
         let resp = client.get(GITHUB_RELEASES_URL).send()?;
         if !resp.status().is_success() {
             return Err(anyhow::anyhow!("GitHub API returned {}", resp.status()));

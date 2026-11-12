@@ -119,6 +119,7 @@ RUST_LOG=debug cargo run # enable debug logging
 | `src/updater/install.rs` | `InstallKind` (`Standalone` / macOS `Homebrew` / macOS `AppBundle`): detection, required release asset, leftover cleanup |
 | `src/updater/standalone.rs` | Raw-binary self-replace (+ elevation, `--apply-update`); Windows, Linux, bare macOS binaries |
 | `src/updater/download.rs` | Streaming release-asset download with progress |
+| `src/updater/http.rs` | The updater's one HTTP client setup: user agent, per-request total timeout, connect timeout split across a host's addresses (an unresponsive server is skipped in seconds) |
 | `src/updater/macos/mod.rs` | Install classification (`classify` over an `FsProbe`): Homebrew only when brew's `Caskroom/terminal-studio/<ver>/` symlink points at this bundle; cask/DMG constants, temp-path naming |
 | `src/updater/macos/homebrew.rs` | Updates cask installs via `brew update` + `brew upgrade --cask --no-quit terminal-studio`, then verifies `Info.plist` |
 | `src/updater/macos/app_bundle.rs` | DMG installs: mount release DMG, stage, verify, atomic `renamex_np(RENAME_SWAP)` of the whole `.app` (two-rename fallback); startup sweep of scratch dirs/mounts left by an interrupted update |
@@ -349,6 +350,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
 | `src/updater/mod.rs` | 5 | cask version = Cargo.toml version guard, release parsing per install kind |
 | `src/updater/install.rs` | 3 | required release asset per install kind |
+| `src/updater/http.rs` | 1 | an unresponsive address (TEST-NET-1) is skipped for the next one within the connect timeout |
 | `src/updater/macos/mod.rs` | 12 | bundle-root detection, classification matrix (custom appdir, copies the cask did not install, brew prefix choice), real symlink probe, temp-path owner |
 | `src/updater/macos/process.rs` | 11 | stdout/stderr capture to files (never pipes), env, exit errors, kill vs detach on timeout, process-group kill, reaping, process liveness |
 | `src/updater/macos/homebrew.rs` | 7 (+1 ignored E2E) | brew steps/args/env, never killed on timeout, post-upgrade version check (newer is fine), recovery hint when the app is gone |
@@ -357,7 +359,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/updater/macos/os_version.rs` | 3 | major-version parsing, unreadable versions, this Mac's version |
 | `src/updater/macos/bundle_version.rs` | 4 | Info.plist version read via plutil, semver at-least |
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
-| **Total** | **804 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **805 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
