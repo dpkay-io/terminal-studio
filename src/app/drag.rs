@@ -258,8 +258,13 @@ impl DragState {
 
 /// Fraction of each dimension, measured from the edge inward, that arms a
 /// split rather than a plain "add to this group" drop.
-#[allow(dead_code)] // wired up by the drag resolver in a later task
-const EDGE_ZONE_FRACTION: f32 = 0.25;
+///
+/// A third splits the pane into a 3×3 grid: the centre cell joins, the eight
+/// cells around it split towards their edge. Since the join region is
+/// `(1 - 2f)²` of the area, this is the last value that still leaves a
+/// comfortable centre target — 11% of the pane, against 4% at 0.4 and nothing
+/// at all at 0.5.
+const EDGE_ZONE_FRACTION: f32 = 1.0 / 3.0;
 
 /// Resolve a pointer position inside `rect` to a split edge zone.
 ///
@@ -269,7 +274,6 @@ const EDGE_ZONE_FRACTION: f32 = 0.25;
 /// Distances are compared as a *fraction* of each dimension so that corners of
 /// non-square rects resolve to the edge the pointer is proportionally nearest,
 /// and every point in the rect maps to exactly one zone.
-#[allow(dead_code)] // wired up by the drag resolver in a later task
 pub(super) fn edge_zone(rect: egui::Rect, pos: egui::Pos2) -> Option<(SplitDir, bool)> {
     if rect.width() <= 0.0 || rect.height() <= 0.0 || !rect.contains(pos) {
         return None;
@@ -327,7 +331,7 @@ pub(super) fn resolve_drag(
     }
 }
 
-fn resolve_group(
+pub(super) fn resolve_group(
     payload: DragPayload,
     target: DropTarget,
     pane_state: &super::pane_state::PaneState,
@@ -1635,6 +1639,25 @@ mod tests {
             edge_zone(rect, egui::pos2(200.0, 10.0) + offset),
             Some((SplitDir::Vertical, true))
         );
+    }
+
+    #[test]
+    fn edge_zone_boundary_sits_at_the_outer_third() {
+        // 400x200: the join region is the middle third of each dimension, so
+        // the vertical boundary is at x = 400/3 ≈ 133.3. Pins the constant —
+        // the other cases here all sit far enough in to pass at any fraction.
+        let r = zone_rect();
+        assert_eq!(
+            edge_zone(r, egui::pos2(130.0, 100.0)),
+            Some((SplitDir::Horizontal, true))
+        );
+        assert_eq!(edge_zone(r, egui::pos2(140.0, 100.0)), None);
+        // Same on the vertical axis: boundary at y = 200/3 ≈ 66.7.
+        assert_eq!(
+            edge_zone(r, egui::pos2(200.0, 64.0)),
+            Some((SplitDir::Vertical, true))
+        );
+        assert_eq!(edge_zone(r, egui::pos2(200.0, 70.0)), None);
     }
 
     #[test]

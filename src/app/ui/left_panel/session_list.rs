@@ -835,16 +835,29 @@ impl App {
         // Dropping on a header moves the payload into that split. Resolves
         // through the existing GroupArea target, so no new drag action is
         // needed. "Other" has no group, so it cannot accept a drop.
+        //
+        // `contains_pointer`, not `hovered`: egui reports nothing as hovered
+        // while a widget is being dragged, which is exactly when a drop zone
+        // needs to light up.
         if let Some(gid) = group_id {
-            if self.drag_state.is_active() && resp.hovered() {
-                let accepts = !matches!(
-                    &self.drag_state.payload,
-                    Some(crate::app::drag::DragPayload::Workspace(_))
-                );
+            if self.drag_state.is_active() && resp.contains_pointer() {
+                let target = crate::app::drag::DropTarget::GroupArea(gid);
+                // Same no-op check the pane areas use: only light up a header
+                // the payload would actually move into.
+                let accepts = self
+                    .drag_state
+                    .payload
+                    .clone()
+                    .filter(|p| !matches!(p, crate::app::drag::DragPayload::Workspace(_)))
+                    .is_some_and(|p| {
+                        !matches!(
+                            crate::app::drag::resolve_group(p, target.clone(), &self.pane_state),
+                            crate::app::drag::DragAction::Noop
+                        )
+                    });
                 if accepts {
                     painter.rect_filled(rect, theme::R_SM, t.accent.gamma_multiply(0.25));
-                    self.drag_state.drop_target =
-                        Some(crate::app::drag::DropTarget::GroupArea(gid));
+                    self.drag_state.drop_target = Some(target);
                 }
             }
         }
@@ -1285,8 +1298,7 @@ impl App {
         let clip_max = labels_right - labels_total_w;
         let is_being_dragged = matches!(
             &self.drag_state.payload,
-            Some(crate::app::drag::DragPayload::Session(sid))
-                if matches!(&pane.content, PaneContent::Terminal(psid) if *psid == *sid)
+            Some(crate::app::drag::DragPayload::Tab(pid)) if *pid == pane.id
         );
         let text_color = if dimmed {
             theme::active().overlay0
@@ -1481,16 +1493,14 @@ impl App {
             }
         });
 
-        // Drag source: start dragging this session row
+        // Drag source: every row in this list is an already-open pane, so it
+        // drags as a Tab. A Session payload only covered terminal rows, and
+        // even those resolved to FocusExistingTab — the pane it looks for is
+        // the row itself — so the drop moved nothing.
         if !renaming && resp.drag_started() {
-            if let PaneContent::Terminal(sid) = &pane.content {
-                let origin = resp.interact_pointer_pos().unwrap_or_default();
-                self.drag_state.set_payload(
-                    crate::app::drag::DragPayload::Session(*sid),
-                    origin,
-                    label,
-                );
-            }
+            let origin = resp.interact_pointer_pos().unwrap_or_default();
+            self.drag_state
+                .set_payload(crate::app::drag::DragPayload::Tab(pane.id), origin, label);
         }
     }
 }
