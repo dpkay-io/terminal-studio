@@ -1,7 +1,7 @@
 cask "terminal-studio" do
   # Keep in sync with `version` in Cargo.toml — bump both in the release PR.
   # Guarded by `cask_version_matches_cargo_version` and scripts/release.sh.
-  version "0.17.0"
+  version "0.17.1"
   sha256 :no_check
 
   url "https://github.com/dpkay-io/terminal-studio/releases/download/v#{version}/terminal-studio-macos-arm.dmg"
