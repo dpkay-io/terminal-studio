@@ -3,6 +3,7 @@ use super::super::settings::InfoBarPosition;
 use super::super::App;
 use crate::editor_group::GroupId;
 use crate::pane_tree::SplitDir;
+use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit::{icon_button, IconButtonStyle};
 
@@ -196,7 +197,7 @@ impl App {
             fg,
             IconButtonStyle::Default,
         )
-        .on_hover_text("Split horizontal (Ctrl+Shift+\\)")
+        .on_hover_text(self.shortcut_tooltip("Split horizontal", AppAction::SplitHorizontal))
         .clicked()
         {
             action = InfoBarAction::Split(group_id, SplitDir::Horizontal);
@@ -211,7 +212,7 @@ impl App {
             fg,
             IconButtonStyle::Default,
         )
-        .on_hover_text("Split vertical (Ctrl+Shift+-)")
+        .on_hover_text(self.shortcut_tooltip("Split vertical", AppAction::SplitVertical))
         .clicked()
         {
             action = InfoBarAction::Split(group_id, SplitDir::Vertical);
