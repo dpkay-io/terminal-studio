@@ -17,6 +17,9 @@ eframe = { version = "0.28", default-features = false, features = ["wgpu", "glow
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
 egui = "0.28"
+# Maps system fallback fonts (Arial Unicode, CJK fonts: tens of MB) instead of
+# reading them into memory. Already in the tree via the font stack.
+memmap2 = "0.9"
 
 # VT/ANSI byte-stream parser (same as Alacritty)
 vte = "0.13"
@@ -96,6 +99,10 @@ plist = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# Builds the event-loop errors eframe reports, for the renderer-fallback
+# tests. Same version eframe uses; no features, so test builds enable none
+# eframe does not already.
+winit = { version = "0.29", default-features = false }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
