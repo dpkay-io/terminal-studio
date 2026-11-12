@@ -1698,8 +1698,7 @@ mod tests {
         for &id in ThemeId::ALL {
             set_theme(id);
             let t = active();
-            for i in 0..16 {
-                let fg = t.ansi[i];
+            for (i, &fg) in t.ansi.iter().enumerate() {
                 let result = ensure_term_contrast(fg, fg);
                 let r = contrast_ratio(
                     [result.r(), result.g(), result.b()],

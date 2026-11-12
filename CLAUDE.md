@@ -12,6 +12,8 @@ cargo test               # all unit tests (333 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
+The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and release builds all use it. Rust 1.100.0 can't compile `objc2 0.4.1` (macOS, via eframe 0.28 → winit 0.29). Move the pin in its own PR once build + clippy pass on the new version.
+
 ## Module Map
 
 ### Core

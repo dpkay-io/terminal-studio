@@ -1,0 +1,10 @@
+# The one Rust version every build uses: local, CI and release.
+#
+# Pinned rather than "stable" so a new Rust release can't break CI or a
+# release build on its own: Rust 1.100.0 fails to compile objc2 0.4.1, which
+# eframe 0.28 pulls in on macOS (through winit 0.29 and glutin). Move this
+# forward in its own PR, once the build and clippy pass on the new version.
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
