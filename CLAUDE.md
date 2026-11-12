@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (926 tests)
+cargo test               # all unit tests (937 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -62,6 +62,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces |
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
+| `src/app/macos_fullscreen.rs` | macOS only: wraps winit's `window:willUseFullScreenPresentationOptions:` so native full screen hides (not auto-hides) the menu bar and Dock — otherwise pointing at the top edge slides the menu bar over the app's own title bar |
 
 ### File System & Git (`src/app/`)
 
@@ -90,7 +91,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update pill, toolbar, focus tracking |
 | `src/app/ui/update_pill.rs` | Titlebar update pill: label and click action per `UpdateStatus` (available, downloading, installing, restart) |
 | `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()`, `pane_cwd()`: display text, tooltip, colour and path derivation for a pane. No rendering |
-| `src/app/ui/info_bar.rs` | The pane header for each split: identity text, position toggle, hide, split ⊞ ⊟, close-all ✖ |
+| `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, close-all ✖; `info_bar_layout()` places the buttons and gives the text the rest. A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
 | `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about |
@@ -98,7 +99,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
 | `src/app/ui/left_panel/session_list.rs` | The single session navigator: split sections, three-state row highlighting, row chrome and interactions, "+New" menu, fuzzy filter, workspace filter dropdown |
-| `src/app/ui/left_panel/sections.rs` | `section_labels()`, `SortCache`, `RowState`: split-section grouping and naming, frozen recency ordering, row prominence. Pure — no `egui::Ui`, so it is unit-testable |
+| `src/app/ui/left_panel/sections.rs` | `section_labels()`, `SortCache`, `RowState`: split-section grouping and naming, frozen recency ordering (rows hold their place while hovered; closed ones drop out, new ones append), row prominence. Pure — no `egui::Ui`, so it is unit-testable |
 | `src/app/ui/left_panel/workspace_section.rs` | Workspace cards; collapse toggle; color swatch; git branch/diff badges |
 | `src/app/ui/left_panel/context_menu.rs` | Right-click context menu: rename, edit color, delete, duplicate, open in new window |
 
@@ -325,9 +326,10 @@ Color32::from_rgb(30, 30, 46)
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
 | `src/app/pane_state.rs` | 72 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group |
-| `src/app/drag.rs` | 66 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session delegation, per-frame cross-window drop harvesting |
+| `src/app/drag.rs` | 70 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
-| `src/app/ui/left_panel/sections.rs` | 13 | split-section labels, frozen sort order, three-state row prominence |
+| `src/app/ui/left_panel/sections.rs` | 17 | split-section labels, frozen sort order (close/open while hovered keeps rows in place), three-state row prominence |
+| `src/app/ui/info_bar.rs` | 8 | position serde, button layout order/overlap, text never under a button, narrow split, reveal hot zone |
 | `src/app/title.rs` | 20 | title formatting with workspaces, effective title, shell escaping |
 | `src/pane_tree.rs` | 19 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, split_rect geometry |
 | `src/app/diff_parser.rs` | 18 | unified diff parsing, hunk extraction, line kind classification |
@@ -356,7 +358,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/settings.rs` | 6 | settings persistence, JSON config |
 | `src/search_worker.rs` | 6 | cross-session fuzzy search |
 | `src/pty/shell_integration.rs` | 5 | shell prompt integration helpers |
-| `src/app/ui/command_palette.rs` | 4 | command filtering, action dispatch |
+| `src/app/ui/command_palette.rs` | 7 | command filtering, action dispatch, unique labels, file finder and New file listed |
 | `src/single_instance.rs` | 3 | singleton guard (Windows/Unix) |
 | `src/logging.rs` | 10 | log level enum, serde roundtrip, cleanup edge cases, configured level loading |
 | `src/updater/mod.rs` | 5 | cask version = Cargo.toml version guard, release parsing per install kind |
@@ -375,7 +377,8 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/state.rs` (pane workspace) | 3 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
 | `src/app/ui/pane_renderer.rs` | 3 | drop-preview geometry: join covers the leaf, each edge covers the matching half |
 | `src/app/ui/pane_labels.rs` | 27 | per-content-kind display text, tooltips, pane directory, workspace colour |
-| **Total** | **926 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| `src/app/macos_fullscreen.rs` | 5 | full-screen options hide menu bar + Dock, always an AppKit-valid combination, other bits kept, unhooked fallback |
+| **Total** | **937 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
