@@ -4,6 +4,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libxkbcommon0, libwayland-client0, libx11-6, libxcb1, libvulkan1 | libegl1
+Recommends: fonts-noto-core, fonts-dejavu-core, fonts-noto-cjk
 Maintainer: Deepak Jha <deepakjha.dpk@gmail.com>
 Homepage: https://github.com/dpkay-io/terminal-studio
 Description: GPU-accelerated terminal multiplexer
