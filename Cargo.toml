@@ -107,3 +107,13 @@ codegen-units = 1
 
 [profile.dev]
 opt-level = 1
+
+# Debug builds crashed at launch on macOS 27: winit 0.29 iterates
+# `NSScreen.screens`, now a Swift array whose fast enumeration returns `Q`
+# (NSUInteger) where objc2 0.4's debug-only signature check expects `q`. Both
+# are the same 64-bit return, so the check is a false alarm (objc2#566; fixed
+# upstream from objc2 0.5.2 as `relax-sign-encoding`, which 0.4 lacks). Release
+# builds never run the check. Remove this once eframe/winit no longer pull in
+# objc2 0.4 — cargo then warns that the spec matches nothing.
+[profile.dev.package."objc2@0.4.1"]
+debug-assertions = false
