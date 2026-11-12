@@ -35,6 +35,8 @@ mod git_worker;
 mod input;
 mod labels;
 #[cfg(target_os = "macos")]
+mod macos_fullscreen;
+#[cfg(target_os = "macos")]
 mod macos_quit;
 mod markdown;
 mod multi_window;

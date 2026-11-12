@@ -28,6 +28,12 @@ extern "C" {
         implementation: *const c_void,
         types: *const c_char,
     ) -> bool;
+    fn class_replaceMethod(
+        class: Object,
+        name: Selector,
+        implementation: *const c_void,
+        types: *const c_char,
+    ) -> *const c_void;
 }
 
 /// Pointer to a NUL-terminated name. Every caller passes a `b"...\0"` literal.
@@ -99,6 +105,30 @@ pub unsafe fn add_method(
     )
 }
 
+/// Replaces (or adds, if absent) the instance method `name` on the class
+/// called `class_name`, returning the class's previous implementation.
+///
+/// `Err(())` when no class has that name. `Ok(None)` when the class had no
+/// such method, so the new one was added rather than swapped in.
+///
+/// # Safety
+/// `implementation` must be an `extern "C"` function whose signature matches
+/// the Objective-C type encoding `types`, and the previous implementation,
+/// if any, must have that same signature for a caller that chains to it.
+pub unsafe fn replace_method(
+    class_name: &'static [u8],
+    name: &'static [u8],
+    implementation: *const c_void,
+    types: &'static [u8],
+) -> Result<Option<*const c_void>, ()> {
+    let class = objc_getClass(c_name(class_name));
+    if class.is_null() {
+        return Err(());
+    }
+    let previous = class_replaceMethod(class, selector(name), implementation, c_name(types));
+    Ok((!previous.is_null()).then_some(previous))
+}
+
 /// Toggles AppKit's own zoom on the key window. AppKit tracks whether the
 /// window is zoomed, so this stays right even after another app (such as a
 /// window manager) resizes the window.
@@ -138,5 +168,19 @@ mod tests {
                 b"v@:@\0"
             ));
         }
+    }
+
+    #[test]
+    fn replacing_a_method_on_a_missing_class_is_an_error() {
+        // SAFETY: no class has this name, so nothing is replaced.
+        let result = unsafe {
+            replace_method(
+                b"TerminalStudioNoSuchClass\0",
+                ZOOM,
+                std::ptr::null(),
+                b"v@:@\0",
+            )
+        };
+        assert!(result.is_err());
     }
 }
