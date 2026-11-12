@@ -9,6 +9,81 @@ use crate::ui_kit::{icon_button, IconButtonStyle};
 
 const BTN_SIZE: f32 = 16.0;
 const TOGGLE_ICON_SIZE: f32 = 14.0;
+/// Width of the "…" patch painted over overflowing header text.
+const ELLIPSIS_W: f32 = 16.0;
+/// Hot zone, in reveal-button widths and heights, at the top-right of a pane
+/// whose info bar is hidden. The reveal button only appears while the pointer
+/// is inside it, so the button never sits on top of terminal text otherwise.
+const REVEAL_ZONE_W_BUTTONS: f32 = 3.0;
+const REVEAL_ZONE_H_BUTTONS: f32 = 2.0;
+const HIDE_TOOLTIP: &str = "Hide info bar (point at a pane's top-right corner to show it again)";
+
+/// Where everything in one info bar goes. The buttons are right-aligned in
+/// this order from the right edge: hide, move, close-all, split vertical,
+/// split horizontal. The text gets whatever is left of them, so it can never
+/// run under a button however many there are.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct InfoBarLayout {
+    text: egui::Rect,
+    hide: egui::Rect,
+    toggle: egui::Rect,
+    close_all: egui::Rect,
+    split_v: egui::Rect,
+    split_h: egui::Rect,
+}
+
+fn info_bar_layout(rect: egui::Rect) -> InfoBarLayout {
+    let pad_x = theme::SP_4;
+    let btn_y = rect.center().y - BTN_SIZE / 2.0;
+    let step = BTN_SIZE + theme::SP_1;
+    let button = |slot: usize| {
+        egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - pad_x - BTN_SIZE - step * slot as f32, btn_y),
+            egui::vec2(BTN_SIZE, BTN_SIZE),
+        )
+    };
+    let split_h = button(4);
+    let text_min_x = rect.min.x + pad_x;
+    // A narrow split can push the buttons past the left edge; clamping keeps
+    // the text rect from inverting, which egui would not draw correctly.
+    let text_max_x = (split_h.min.x - theme::SP_2).max(text_min_x);
+    InfoBarLayout {
+        text: egui::Rect::from_min_max(
+            egui::pos2(text_min_x, rect.min.y),
+            egui::pos2(text_max_x, rect.max.y),
+        ),
+        hide: button(0),
+        toggle: button(1),
+        close_all: button(2),
+        split_v: button(3),
+        split_h,
+    }
+}
+
+/// The hot zone that reveals the "show info bar" button on a pane whose bar
+/// is hidden, and the button inside it.
+fn reveal_zone(content_rect: egui::Rect) -> (egui::Rect, egui::Rect) {
+    let size = TOGGLE_ICON_SIZE;
+    let margin = theme::SP_2;
+    let zone = egui::Rect::from_min_max(
+        egui::pos2(
+            (content_rect.max.x - size * REVEAL_ZONE_W_BUTTONS - margin).max(content_rect.min.x),
+            content_rect.min.y,
+        ),
+        egui::pos2(
+            content_rect.max.x,
+            (content_rect.min.y + size * REVEAL_ZONE_H_BUTTONS + margin).min(content_rect.max.y),
+        ),
+    );
+    let button = egui::Rect::from_min_size(
+        egui::pos2(
+            content_rect.max.x - size - margin,
+            content_rect.min.y + margin,
+        ),
+        egui::vec2(size, size),
+    );
+    (zone, button)
+}
 
 pub(in crate::app) enum InfoBarAction {
     None,
@@ -71,58 +146,37 @@ impl App {
             );
         }
 
-        let pad_x = theme::SP_4;
-        let text_rect = egui::Rect::from_min_max(
-            egui::pos2(rect.min.x + pad_x, rect.min.y),
-            egui::pos2(
-                rect.max.x - pad_x - BTN_SIZE * 5.0 - theme::SP_2 * 5.0,
-                rect.max.y,
-            ),
-        );
-        // A narrow split can invert the rect; egui will not draw that correctly.
-        let text_rect = egui::Rect::from_min_max(
-            text_rect.min,
-            egui::pos2(text_rect.max.x.max(text_rect.min.x), text_rect.max.y),
-        );
+        let layout = info_bar_layout(rect);
+        let text_rect = layout.text;
 
         // Text segments: session · workspace  ⎇ branch
         let title_font = egui::FontId::proportional(theme::FONT_UI_SM);
         let branch_font = egui::FontId::proportional(theme::FONT_UI_XS);
 
-        let mut segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = Vec::new();
-
+        // One list drives both what is painted and the hover text, so the
+        // tooltip always says exactly what the bar would show uncut.
+        let mut parts: Vec<(String, &egui::FontId, egui::Color32)> = Vec::new();
         if let Some(ref title) = session_title {
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(title.clone(), title_font.clone(), fg)),
-                fg,
-            ));
+            parts.push((title.clone(), &title_font, fg));
         }
         if let Some(ref ws) = ws_name {
-            if !segments.is_empty() {
-                segments.push((
-                    ui.fonts(|f| f.layout_no_wrap(" · ".into(), title_font.clone(), dim)),
-                    dim,
-                ));
+            if !parts.is_empty() {
+                parts.push((" · ".into(), &title_font, dim));
             }
-            segments.push((
-                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), dim)),
-                dim,
-            ));
+            parts.push((ws.clone(), &title_font, dim));
         }
-        if let Some(ref branch) = git_branch {
-            if !branch.is_empty() {
-                segments.push((
-                    ui.fonts(|f| {
-                        f.layout_no_wrap(
-                            format!("  \u{2387} {branch}"),
-                            branch_font.clone(),
-                            extra_dim,
-                        )
-                    }),
-                    extra_dim,
-                ));
-            }
+        if let Some(branch) = git_branch.as_deref().filter(|b| !b.is_empty()) {
+            parts.push((format!("  \u{2387} {branch}"), &branch_font, extra_dim));
         }
+        let segments: Vec<(std::sync::Arc<egui::Galley>, egui::Color32)> = parts
+            .iter()
+            .map(|(text, font, color)| {
+                (
+                    ui.fonts(|f| f.layout_no_wrap(text.clone(), (*font).clone(), *color)),
+                    *color,
+                )
+            })
+            .collect();
 
         // Paint segments left-aligned, vertically centered
         let total_w: f32 = segments.iter().map(|(g, _)| g.size().x).sum();
@@ -139,15 +193,22 @@ impl App {
         }
         drop(clipped);
 
-        // Ellipsis if text overflows
+        // Ellipsis if text overflows, with the whole text on hover.
         if total_w > avail_w {
+            let full_text: String = parts.iter().map(|(text, _, _)| text.as_str()).collect();
+            ui.interact(
+                text_rect,
+                ui.id().with(("info_bar_text", group_id)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(full_text);
             let ellipsis_rect = egui::Rect::from_min_size(
-                egui::pos2(text_rect.max.x - 16.0, text_rect.min.y),
-                egui::vec2(16.0, text_rect.height()),
+                egui::pos2(text_rect.max.x - ELLIPSIS_W, text_rect.min.y),
+                egui::vec2(ELLIPSIS_W, text_rect.height()),
             );
             ui.painter().rect_filled(ellipsis_rect, 0.0, bg);
             ui.painter().text(
-                egui::pos2(text_rect.max.x - 2.0, text_rect.center().y),
+                egui::pos2(text_rect.max.x - theme::SP_1, text_rect.center().y),
                 egui::Align2::RIGHT_CENTER,
                 "…",
                 egui::FontId::proportional(theme::FONT_UI_XS),
@@ -164,34 +225,11 @@ impl App {
             "Move to top"
         };
 
-        let btn_y = rect.center().y - BTN_SIZE / 2.0;
-        let hide_rect = egui::Rect::from_min_size(
-            egui::pos2(rect.max.x - pad_x - BTN_SIZE, btn_y),
-            egui::vec2(BTN_SIZE, BTN_SIZE),
-        );
-        let toggle_rect = egui::Rect::from_min_size(
-            egui::pos2(hide_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
-            egui::vec2(BTN_SIZE, BTN_SIZE),
-        );
-
-        let close_all_rect = egui::Rect::from_min_size(
-            egui::pos2(toggle_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
-            egui::vec2(BTN_SIZE, BTN_SIZE),
-        );
-        let split_v_rect = egui::Rect::from_min_size(
-            egui::pos2(close_all_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
-            egui::vec2(BTN_SIZE, BTN_SIZE),
-        );
-        let split_h_rect = egui::Rect::from_min_size(
-            egui::pos2(split_v_rect.min.x - BTN_SIZE - theme::SP_1, btn_y),
-            egui::vec2(BTN_SIZE, BTN_SIZE),
-        );
-
         // Widget ids carry `group_id`: sibling splits render two info bars per frame.
         if icon_button(
             ui,
             ui.id().with(("info_bar_split_h", group_id)),
-            split_h_rect,
+            layout.split_h,
             "⊞",
             theme::ICON_SM,
             fg,
@@ -206,7 +244,7 @@ impl App {
         if icon_button(
             ui,
             ui.id().with(("info_bar_split_v", group_id)),
-            split_v_rect,
+            layout.split_v,
             "⊟",
             theme::ICON_SM,
             fg,
@@ -221,7 +259,7 @@ impl App {
         if icon_button(
             ui,
             ui.id().with(("info_bar_close_all", group_id)),
-            close_all_rect,
+            layout.close_all,
             "✖",
             theme::ICON_SM,
             fg,
@@ -236,7 +274,7 @@ impl App {
         let toggle_resp = icon_button(
             ui,
             ui.id().with("info_bar_toggle"),
-            toggle_rect,
+            layout.toggle,
             toggle_icon,
             theme::ICON_SM,
             fg,
@@ -255,13 +293,13 @@ impl App {
         let hide_resp = icon_button(
             ui,
             ui.id().with("info_bar_hide"),
-            hide_rect,
-            "×",
+            layout.hide,
+            "−",
             theme::ICON_SM,
             fg,
             IconButtonStyle::Default,
         )
-        .on_hover_text("Hide info bar");
+        .on_hover_text(HIDE_TOOLTIP);
         if hide_resp.clicked() {
             action = InfoBarAction::SetPosition(InfoBarPosition::Hidden);
         }
@@ -269,30 +307,29 @@ impl App {
         action
     }
 
-    /// Small floating button to re-show the info bar when hidden.
+    /// Button that re-shows a hidden info bar. It only appears while the
+    /// pointer is in the pane's top-right corner: drawn all the time, it sat
+    /// on top of the last characters of the terminal's first rows.
     pub(in crate::app) fn render_info_bar_show_toggle(
         &self,
         ui: &mut egui::Ui,
         content_rect: egui::Rect,
     ) -> bool {
+        let (zone, btn_rect) = reveal_zone(content_rect);
+        if !ui.rect_contains_pointer(zone) {
+            return false;
+        }
         let t = theme::active();
-        let size = TOGGLE_ICON_SIZE;
-        let margin = theme::SP_2;
-        let btn_rect = egui::Rect::from_min_size(
-            egui::pos2(
-                content_rect.max.x - size - margin,
-                content_rect.min.y + margin,
-            ),
-            egui::vec2(size, size),
-        );
-
+        // Opaque backing so the icon reads over whatever text is under it.
+        ui.painter()
+            .rect_filled(btn_rect.expand(theme::ICON_PAD), theme::R_MD, t.surface0);
         icon_button(
             ui,
             ui.id().with("info_bar_show"),
             btn_rect,
             "ℹ",
             theme::ICON_SM,
-            t.overlay0,
+            t.text,
             IconButtonStyle::Default,
         )
         .on_hover_text("Show info bar")
@@ -397,5 +434,82 @@ mod tests {
             let restored: InfoBarPosition = serde_json::from_str(&json).unwrap();
             assert_eq!(restored, pos);
         }
+    }
+
+    fn bar(width: f32) -> egui::Rect {
+        egui::Rect::from_min_size(
+            egui::pos2(100.0, 50.0),
+            egui::vec2(width, theme::INFO_BAR_H),
+        )
+    }
+
+    fn buttons(l: &InfoBarLayout) -> [egui::Rect; 5] {
+        [l.hide, l.toggle, l.close_all, l.split_v, l.split_h]
+    }
+
+    #[test]
+    fn layout_buttons_are_right_aligned_in_order_without_overlap() {
+        let rect = bar(600.0);
+        let l = info_bar_layout(rect);
+        let b = buttons(&l);
+        assert_eq!(l.hide.max.x, rect.max.x - theme::SP_4);
+        for pair in b.windows(2) {
+            // Each button sits left of the previous one, with a gap.
+            assert!(pair[1].max.x < pair[0].min.x, "{pair:?}");
+        }
+        for r in b {
+            assert_eq!(r.size(), egui::vec2(BTN_SIZE, BTN_SIZE));
+            assert!((r.center().y - rect.center().y).abs() < f32::EPSILON);
+            assert!(rect.contains_rect(r));
+        }
+    }
+
+    #[test]
+    fn layout_text_never_runs_under_a_button() {
+        for width in [600.0, 200.0, 140.0] {
+            let l = info_bar_layout(bar(width));
+            for r in buttons(&l) {
+                assert!(
+                    l.text.max.x <= r.min.x,
+                    "width {width}: text {:?} vs {r:?}",
+                    l.text
+                );
+            }
+            assert_eq!(l.text.min.x, bar(width).min.x + theme::SP_4);
+        }
+    }
+
+    #[test]
+    fn layout_text_rect_never_inverts_on_a_narrow_split() {
+        let l = info_bar_layout(bar(40.0));
+        assert!(l.text.width() >= 0.0);
+        assert_eq!(l.text.width(), 0.0);
+    }
+
+    #[test]
+    fn layout_text_spans_the_full_bar_height() {
+        let rect = bar(600.0);
+        let l = info_bar_layout(rect);
+        assert_eq!(l.text.min.y, rect.min.y);
+        assert_eq!(l.text.max.y, rect.max.y);
+    }
+
+    #[test]
+    fn reveal_zone_holds_its_button_in_the_top_right_corner() {
+        let content = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(800.0, 400.0));
+        let (zone, button) = reveal_zone(content);
+        assert!(zone.contains_rect(button));
+        assert!(content.contains_rect(zone));
+        assert_eq!(zone.max.x, content.max.x);
+        assert_eq!(zone.min.y, content.min.y);
+        // Small enough that it only covers the corner, not the first row.
+        assert!(zone.width() < content.width() / 4.0);
+    }
+
+    #[test]
+    fn reveal_zone_stays_inside_a_tiny_pane() {
+        let content = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(20.0, 10.0));
+        let (zone, _) = reveal_zone(content);
+        assert!(content.contains_rect(zone));
     }
 }

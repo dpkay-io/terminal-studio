@@ -776,6 +776,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         ToggleRightSidebar,
         FocusTerminal,
         NewTerminalTab,
+        NewFile,
         CloseCurrentPane,
         SplitHorizontal,
         SplitVertical,
@@ -891,6 +892,16 @@ mod tests {
                 .iter()
                 .any(|e| e.action == AppAction::OpenFileFinder),
             "OpenFileFinder should be in palette actions"
+        );
+    }
+
+    #[test]
+    fn palette_actions_include_new_file() {
+        let registry = ShortcutRegistry::new();
+        let actions = all_palette_actions(&registry);
+        assert!(
+            actions.iter().any(|e| e.action == AppAction::NewFile),
+            "NewFile is dispatched by the palette, so it must be listed in it"
         );
     }
 }
