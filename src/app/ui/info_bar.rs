@@ -217,15 +217,15 @@ impl App {
             return (None, None, None, None);
         };
 
-        let ws = pane
-            .workspace_id
-            .and_then(|wid| self.workspace_store.workspaces.iter().find(|w| w.id == wid));
+        // The same workspace the tab is grouped under, the sidebar and the
+        // titlebar show: by the pane's folder, not the workspace that was
+        // active when it was opened.
+        let ws = Self::pane_workspace(&self.session_state.sessions, &self.workspace_store, pane);
         let ws_name = ws.map(|w| w.name.clone());
         let ws_color = ws.map(|w| w.color);
 
-        let git_branch = pane
-            .workspace_id
-            .and_then(|wid| self.workers.workspace_git_worker.get(wid))
+        let git_branch = ws
+            .and_then(|w| self.workers.workspace_git_worker.get(w.id))
             .map(|info| info.branch);
 
         let session_title = match &pane.content {

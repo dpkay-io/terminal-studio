@@ -550,6 +550,17 @@ impl App {
         cwd_match.or(pane.workspace_id)
     }
 
+    /// The workspace a pane belongs to now (by `pane_group`: its folder
+    /// first, then the workspace it was opened in), if that still exists.
+    pub(super) fn pane_workspace<'a>(
+        sessions: &[SessionEntry],
+        ws_store: &'a WorkspaceStore,
+        pane: &PaneEntry,
+    ) -> Option<&'a Workspace> {
+        let id = Self::pane_group(sessions, ws_store, pane)?;
+        ws_store.workspaces.iter().find(|w| w.id == id)
+    }
+
     pub(super) fn pane_matches_tab_filter(
         pane: &PaneEntry,
         sessions: &[SessionEntry],
@@ -2477,7 +2488,65 @@ impl App {
 mod tests {
     use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
     use super::App;
-    use crate::workspace::WorkspaceStore;
+    use crate::workspace::{Workspace, WorkspaceStore};
+
+    const STALE_WS: u64 = 1;
+    const CWD_WS: u64 = 2;
+
+    fn workspace(id: u64, path: &str) -> Workspace {
+        Workspace {
+            id,
+            name: format!("ws-{id}"),
+            path: std::path::PathBuf::from(path),
+            color: [id as u8, 0, 0],
+            host_window_id: None,
+            last_activated: 0,
+        }
+    }
+
+    fn two_workspaces() -> WorkspaceStore {
+        WorkspaceStore {
+            workspaces: vec![
+                workspace(STALE_WS, "/projects/alpha"),
+                workspace(CWD_WS, "/projects/beta"),
+            ],
+        }
+    }
+
+    /// A terminal pane opened while `STALE_WS` was active, now in `cwd`.
+    fn pane_in(cwd: Option<&str>) -> PaneEntry {
+        let mut pane = make_pane(1, Some(STALE_WS), vec![]);
+        pane.content = PaneContent::DeferredTerminal {
+            cwd: cwd.map(std::path::PathBuf::from),
+            pending_command: None,
+            saved_title: None,
+            scrollback_file: None,
+        };
+        pane
+    }
+
+    #[test]
+    fn pane_workspace_follows_the_folder_not_the_workspace_it_was_opened_in() {
+        let store = two_workspaces();
+        let pane = pane_in(Some("/projects/beta/src"));
+        let ws = App::pane_workspace(&[], &store, &pane).map(|w| w.id);
+        assert_eq!(ws, Some(CWD_WS));
+    }
+
+    #[test]
+    fn pane_workspace_falls_back_to_the_opening_workspace_outside_any_project() {
+        let store = two_workspaces();
+        let pane = pane_in(Some("/tmp"));
+        let ws = App::pane_workspace(&[], &store, &pane).map(|w| w.id);
+        assert_eq!(ws, Some(STALE_WS));
+    }
+
+    #[test]
+    fn pane_workspace_is_none_for_a_deleted_workspace() {
+        let store = WorkspaceStore::default();
+        let pane = pane_in(None);
+        assert!(App::pane_workspace(&[], &store, &pane).is_none());
+    }
 
     fn make_pane(id: u32, workspace_id: Option<u64>, labels: Vec<u32>) -> PaneEntry {
         PaneEntry {
