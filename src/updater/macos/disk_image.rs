@@ -296,12 +296,14 @@ mod tests {
         }
     }
 
-    /// The tools this Mac can run: hdiutil everywhere, `diskutil image`
-    /// from macOS 13 on. Real-image tests run once per tool.
+    /// The tools to exercise on this Mac: hdiutil (still present everywhere,
+    /// and the fallback) plus diskutil where the app would choose it. Not
+    /// every macOS that has `diskutil image` takes our flags: macOS 26 (the
+    /// CI runner) rejects them with a usage error. Real-image tests run once
+    /// per tool.
     fn tools_on_this_mac() -> Vec<ImageTool> {
-        const DISKUTIL_IMAGE_SINCE: u32 = 13;
         let mut tools = vec![ImageTool::Hdiutil];
-        if os_version::major().is_some_and(|m| m >= DISKUTIL_IMAGE_SINCE) {
+        if ImageTool::current() == ImageTool::Diskutil {
             tools.push(ImageTool::Diskutil);
         }
         tools

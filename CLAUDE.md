@@ -355,7 +355,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/updater/macos/process.rs` | 11 | stdout/stderr capture to files (never pipes), env, exit errors, kill vs detach on timeout, process-group kill, reaping, process liveness |
 | `src/updater/macos/homebrew.rs` | 7 (+1 ignored E2E) | brew steps/args/env, never killed on timeout, post-upgrade version check (newer is fine), recovery hint when the app is gone |
 | `src/updater/macos/app_bundle.rs` | 17 (+1 ignored E2E) | atomic swap, undeletable stale backup, ENOTSUP fallback, honest failed-restore message, leftover cleanup (kept when the app is missing), sweep after a cut-off update, real hdiutil-built DMG install, wrong/newer version, garbage image, unwritable folder |
-| `src/updater/macos/disk_image.rs` | 12 | tool choice per macOS version (unknown keeps hdiutil), attach/detach arguments for both tools, real attach/detach, timed-out attach and detach-by-path-match with each tool this Mac has, busy retry (fake tool), mount-point check |
+| `src/updater/macos/disk_image.rs` | 12 | tool choice per macOS version (unknown keeps hdiutil), attach/detach arguments for both tools, real attach/detach, timed-out attach and detach-by-path-match with hdiutil and, where the app picks it, diskutil, busy retry (fake tool), mount-point check |
 | `src/updater/macos/os_version.rs` | 3 | major-version parsing, unreadable versions, this Mac's version |
 | `src/updater/macos/bundle_version.rs` | 4 | Info.plist version read via plutil, semver at-least |
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
