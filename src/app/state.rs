@@ -48,10 +48,7 @@ impl App {
         let ctx = cc.egui_ctx.clone();
 
         #[cfg(target_os = "macos")]
-        {
-            super::macos_quit::install(&ctx);
-            super::macos_fullscreen::install();
-        }
+        super::macos_quit::install(&ctx);
 
         // Reset egui's persisted widget data if the app version changed.
         // This prevents corrupted state from old crashed sessions.
