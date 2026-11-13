@@ -1035,6 +1035,7 @@ impl App {
     pub(in crate::app) fn request_close_all(&mut self, target: CloseAllTarget) {
         let pane_ids = self.close_all_pane_ids(target);
         if pane_ids.len() > MAX_CLOSED_WITHOUT_ASKING {
+            log::debug!("close: asking before closing {} tabs", pane_ids.len());
             self.close_all_target = target;
             self.show_close_all_confirm = true;
             self.close_all_frames_open = 0;
@@ -1060,6 +1061,7 @@ impl App {
     /// Closes these panes, their sessions once no pane shows them, and
     /// empty splits; keeps one terminal open when nothing is left.
     fn close_panes(&mut self, pane_ids: &[u32]) {
+        log::debug!("close: {} tabs together {pane_ids:?}", pane_ids.len());
         let session_ids: Vec<u32> = self
             .pane_state
             .panes

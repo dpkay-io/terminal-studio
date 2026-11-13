@@ -236,6 +236,7 @@ impl App {
     /// Handle closing a pane from the sidebar quit button.
     fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
         let Some(qpid) = quit_pane_id else { return };
+        log::debug!("close: sidebar tab (pane {qpid})");
         if !self.pane_state.panes.iter().any(|p| p.id == qpid) {
             return;
         }

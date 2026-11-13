@@ -16,6 +16,8 @@ const ELLIPSIS_W: f32 = 16.0;
 /// is inside it, so the button never sits on top of terminal text otherwise.
 const REVEAL_ZONE_W_BUTTONS: f32 = 3.0;
 const REVEAL_ZONE_H_BUTTONS: f32 = 2.0;
+const CLOSE_ALL_LABEL: &str = "Close All Tabs in This Split";
+const CLOSE_ALL_HINT: &str = "Right-click to close all tabs in this split";
 const HIDE_TOOLTIP: &str = "Hide info bar (point at a pane's top-right corner to show it again)";
 
 /// Where everything in one info bar goes. The buttons are right-aligned in
@@ -27,7 +29,7 @@ struct InfoBarLayout {
     text: egui::Rect,
     hide: egui::Rect,
     toggle: egui::Rect,
-    close_all: egui::Rect,
+    close: egui::Rect,
     split_v: egui::Rect,
     split_h: egui::Rect,
 }
@@ -54,7 +56,7 @@ fn info_bar_layout(rect: egui::Rect) -> InfoBarLayout {
         ),
         hide: button(0),
         toggle: button(1),
-        close_all: button(2),
+        close: button(2),
         split_v: button(3),
         split_h,
     }
@@ -89,6 +91,8 @@ pub(in crate::app) enum InfoBarAction {
     None,
     /// Move or hide one split's info bar; the others keep theirs.
     SetPosition(GroupId, InfoBarPosition),
+    /// Close the tab the split is showing, and only that one.
+    CloseTab(u32),
     Split(GroupId, SplitDir),
     CloseAllInGroup(GroupId),
 }
@@ -291,20 +295,30 @@ impl App {
             action = InfoBarAction::Split(group_id, SplitDir::Vertical);
         }
 
-        if icon_button(
+        let close_resp = icon_button(
             ui,
-            ui.id().with(("info_bar_close_all", group_id)),
-            layout.close_all,
+            ui.id().with(("info_bar_close", group_id)),
+            layout.close,
             "✖",
             theme::ICON_SM,
             fg,
             IconButtonStyle::Danger,
         )
-        .on_hover_text("Close all tabs in this split")
-        .clicked()
-        {
-            action = InfoBarAction::CloseAllInGroup(group_id);
+        .on_hover_text(format!(
+            "{}\n{CLOSE_ALL_HINT}",
+            self.shortcut_tooltip("Close tab", AppAction::CloseCurrentPane)
+        ));
+        if close_resp.clicked() {
+            if let Some(pane_id) = active_pane_id {
+                action = InfoBarAction::CloseTab(pane_id);
+            }
         }
+        close_resp.context_menu(|ui| {
+            if ui.button(CLOSE_ALL_LABEL).clicked() {
+                action = InfoBarAction::CloseAllInGroup(group_id);
+                ui.close_menu();
+            }
+        });
 
         let toggle_resp = icon_button(
             ui,
@@ -479,7 +493,7 @@ mod tests {
     }
 
     fn buttons(l: &InfoBarLayout) -> [egui::Rect; 5] {
-        [l.hide, l.toggle, l.close_all, l.split_v, l.split_h]
+        [l.hide, l.toggle, l.close, l.split_v, l.split_h]
     }
 
     #[test]

@@ -1031,6 +1031,7 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
             // blink or a stray mouse move to schedule it.
             ctx.request_repaint();
         }
+        InfoBarAction::CloseTab(pane_id) => app.close_pane_full(pane_id),
         InfoBarAction::CloseAllInGroup(gid) => {
             app.request_close_all(CloseAllTarget::EditorGroup(gid));
         }

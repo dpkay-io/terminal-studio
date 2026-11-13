@@ -1263,6 +1263,7 @@ impl App {
     /// Consolidates the repeated close logic used by Ctrl+Shift+W, tab-strip
     /// close button, and context menu close.
     fn close_pane_full(&mut self, pid: u32) {
+        log::debug!("close: one tab (pane {pid})");
         if let Some(pane) = self.pane_state.find(pid) {
             if let PaneContent::Terminal(sid) = pane.content {
                 self.remove_session_and_cleanup(sid);
