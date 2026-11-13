@@ -433,9 +433,10 @@ impl App {
     }
 
     fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
+        if self.toggle_view(action) {
+            return;
+        }
         match action {
-            AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
-            AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
             AppAction::FocusTerminal => {
                 ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
             }
@@ -447,13 +448,6 @@ impl App {
             }
             AppAction::CloseCurrentPane => {
                 self.deferred_close_pane = true;
-            }
-            AppAction::OpenSettings => {
-                self.show_settings = !self.show_settings;
-            }
-            AppAction::ToggleShortcutHelp => self.show_shortcut_help = !self.show_shortcut_help,
-            AppAction::OpenQuickSwitcher => {
-                self.show_quick_switcher = !self.show_quick_switcher;
             }
             AppAction::SplitHorizontal => {
                 self.deferred_split = Some(crate::pane_tree::SplitDir::Horizontal);

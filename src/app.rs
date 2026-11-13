@@ -35,6 +35,8 @@ mod git_worker;
 mod input;
 mod labels;
 #[cfg(target_os = "macos")]
+mod macos_menu;
+#[cfg(target_os = "macos")]
 mod macos_quit;
 mod markdown;
 mod multi_window;
@@ -49,6 +51,7 @@ mod spawn_guard;
 mod state;
 mod title;
 mod ui;
+mod view_toggles;
 mod watcher;
 mod window_state;
 mod worker_manager;
@@ -71,6 +74,7 @@ use pane_state::PaneState;
 use session_state::SessionState;
 use settings::AppSettings;
 
+use view_toggles::VIEW_TOGGLES;
 use watcher::WatchState;
 use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
@@ -1437,6 +1441,9 @@ impl App {
         }
 
         Self::handle_frameless_resize(ctx);
+
+        #[cfg(target_os = "macos")]
+        self.sync_macos_menu(ctx);
 
         // Consume Ctrl+Shift+N before any panels render, so it works even
         // when no terminal panes exist and the CentralPanel shows a placeholder.
@@ -2998,18 +3005,8 @@ impl App {
                     }
                 });
                 match consumed {
-                    Some(AppAction::ToggleShortcutHelp) => self.show_shortcut_help = !self.show_shortcut_help,
-                    Some(AppAction::OpenQuickSwitcher) => {
-                        self.show_quick_switcher = !self.show_quick_switcher;
-                        if !self.show_quick_switcher {
-                            self.quick_switcher_query.clear();
-                            self.quick_switcher_selected_ws = None;
-                            self.quick_switcher_search_active = false;
-                        }
-                    }
-                    Some(AppAction::OpenSettings) => {
-                        self.show_shortcut_help = false;
-                        self.show_settings = !self.show_settings;
+                    Some(action) if VIEW_TOGGLES.contains(&action) => {
+                        self.toggle_view(action);
                     }
                     Some(AppAction::CommandPalette) => {
                         self.palette_open = !self.palette_open;
@@ -3086,13 +3083,6 @@ impl App {
                     }
                     Some(AppAction::NewFile) => {
                         self.deferred_new_file = true;
-                    }
-                    Some(AppAction::ReopenClosedSession) => {
-                        self.show_closed_sessions = !self.show_closed_sessions;
-                        if !self.show_closed_sessions {
-                            self.closed_sessions_query.clear();
-                            self.closed_sessions_selected = 0;
-                        }
                     }
                     _ => {}
                 }
@@ -3178,8 +3168,9 @@ impl App {
                                     AppAction::SplitHorizontal => split_request = Some(SplitDir::Horizontal),
                                     AppAction::SplitVertical => split_request = Some(SplitDir::Vertical),
                                     AppAction::CloseCurrentPane => close_split_pane = true,
-                                    AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
-                                    AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
+                                    AppAction::ToggleLeftSidebar | AppAction::ToggleRightSidebar => {
+                                        self.toggle_view(action);
+                                    }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
                                     }

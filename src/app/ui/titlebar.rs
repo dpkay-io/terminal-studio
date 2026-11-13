@@ -317,7 +317,7 @@ impl App {
                         },
                     );
                     if left_resp.clicked() {
-                        self.show_left_panel = !self.show_left_panel;
+                        self.toggle_view(AppAction::ToggleLeftSidebar);
                     }
                     left_resp.on_hover_text(
                         self.shortcut_tooltip("Toggle sidebar", AppAction::ToggleLeftSidebar),
@@ -384,12 +384,7 @@ impl App {
                             );
                         }
                         if sw_resp.clicked() {
-                            self.show_quick_switcher = !self.show_quick_switcher;
-                            if !self.show_quick_switcher {
-                                self.quick_switcher_query.clear();
-                                self.quick_switcher_selected_ws = None;
-                                self.quick_switcher_search_active = false;
-                            }
+                            self.toggle_view(AppAction::OpenQuickSwitcher);
                         }
                         sw_resp.on_hover_text(
                             self.shortcut_tooltip("Switcher", AppAction::OpenQuickSwitcher),
@@ -415,12 +410,7 @@ impl App {
                             },
                         );
                         if rc_resp.clicked() {
-                            self.show_closed_sessions = !self.show_closed_sessions;
-                            if !self.show_closed_sessions {
-                                self.closed_sessions_query.clear();
-                                self.closed_sessions_selected = 0;
-                                self.closed_sessions_cache = None;
-                            }
+                            self.toggle_view(AppAction::ReopenClosedSession);
                         }
                         rc_resp.on_hover_text(self.shortcut_tooltip(
                             "Recently closed sessions",
@@ -445,7 +435,7 @@ impl App {
                         },
                     );
                     if gear_mac_resp.clicked() {
-                        self.show_settings = !self.show_settings;
+                        self.toggle_view(AppAction::OpenSettings);
                     }
                     gear_mac_resp
                         .on_hover_text(self.shortcut_tooltip("Settings", AppAction::OpenSettings));
@@ -469,7 +459,7 @@ impl App {
                             },
                         );
                         if right_resp.clicked() {
-                            self.show_right_panel = !self.show_right_panel;
+                            self.toggle_view(AppAction::ToggleRightSidebar);
                         }
                         right_resp.on_hover_text(
                             self.shortcut_tooltip("Toggle explorer", AppAction::ToggleRightSidebar),
@@ -537,7 +527,7 @@ impl App {
                             );
                         }
                         if kb_resp.clicked() {
-                            self.show_shortcut_help = !self.show_shortcut_help;
+                            self.toggle_view(AppAction::ToggleShortcutHelp);
                         }
                         kb_resp.on_hover_text(
                             self.shortcut_tooltip(
@@ -621,7 +611,7 @@ impl App {
                             },
                         );
                         if resp.clicked() {
-                            self.show_left_panel = !self.show_left_panel;
+                            self.toggle_view(AppAction::ToggleLeftSidebar);
                         }
                         resp.on_hover_text(
                             self.shortcut_tooltip("Toggle sidebar", AppAction::ToggleLeftSidebar),
@@ -690,12 +680,7 @@ impl App {
                             );
                         }
                         if resp.clicked() {
-                            self.show_quick_switcher = !self.show_quick_switcher;
-                            if !self.show_quick_switcher {
-                                self.quick_switcher_query.clear();
-                                self.quick_switcher_selected_ws = None;
-                                self.quick_switcher_search_active = false;
-                            }
+                            self.toggle_view(AppAction::OpenQuickSwitcher);
                         }
                         resp.on_hover_text(
                             self.shortcut_tooltip("Switcher", AppAction::OpenQuickSwitcher),
@@ -721,12 +706,7 @@ impl App {
                             },
                         );
                         if rc_resp.clicked() {
-                            self.show_closed_sessions = !self.show_closed_sessions;
-                            if !self.show_closed_sessions {
-                                self.closed_sessions_query.clear();
-                                self.closed_sessions_selected = 0;
-                                self.closed_sessions_cache = None;
-                            }
+                            self.toggle_view(AppAction::ReopenClosedSession);
                         }
                         rc_resp.on_hover_text(self.shortcut_tooltip(
                             "Recently closed sessions",
@@ -753,7 +733,7 @@ impl App {
                             },
                         );
                         if resp.clicked() {
-                            self.show_settings = !self.show_settings;
+                            self.toggle_view(AppAction::OpenSettings);
                         }
                         resp.on_hover_text(
                             self.shortcut_tooltip("Settings", AppAction::OpenSettings),
@@ -779,7 +759,7 @@ impl App {
                             },
                         );
                         if resp.clicked() {
-                            self.show_right_panel = !self.show_right_panel;
+                            self.toggle_view(AppAction::ToggleRightSidebar);
                         }
                         resp.on_hover_text(
                             self.shortcut_tooltip("Toggle explorer", AppAction::ToggleRightSidebar),
@@ -849,7 +829,7 @@ impl App {
                             );
                         }
                         if resp.clicked() {
-                            self.show_shortcut_help = !self.show_shortcut_help;
+                            self.toggle_view(AppAction::ToggleShortcutHelp);
                         }
                         resp.on_hover_text(
                             self.shortcut_tooltip(
