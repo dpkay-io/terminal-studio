@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (958 tests)
+cargo test               # all unit tests (965 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -35,7 +35,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | File | Responsibility |
 |------|---------------|
 | `src/terminal/mod.rs` | `Session` struct wrapping `Term<EventProxy>`; `EventProxy` (`EventListener` impl); `TermSize` (`Dimensions` impl) |
-| `src/terminal/tests.rs` | 11 terminal emulator tests using `alacritty_terminal` APIs |
+| `src/terminal/tests.rs` | 12 terminal emulator tests using `alacritty_terminal` APIs |
 | `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; `ShellKind` enum; each session gets dedicated reader/writer threads |
 | `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks |
 | `src/pty/shell_integration.rs` | Shell prompt integration helpers; OSC 7 injection for bash/zsh/fish |
@@ -51,7 +51,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()`: a pane's workspace by its folder first (single source for tab grouping, sidebar, titlebar, info bar) |
 | `src/app/fonts.rs` | Font definitions: egui's fonts first, then memory-mapped system fallbacks per OS (symbols, dingbats ✓✕✗, CJK, Hangul) so those don't render as boxes |
 | `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management |
-| `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct |
+| `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct; `FileEditorState::write_to_disk()` (the one save path) and `has_unsaved_changes()` |
+| `src/app/close_guard.rs` | `request_close_tab()` / `TabClose`: every single-tab close (header ✖, ⇧⌘W, pane menu, session list ✕/middle click/menu) asks "Save changes?" first when the tab has unsaved edits; `has_unsaved_changes()` / `unsaved_count()` |
 | `src/app/session_state.rs` | `SessionState`: session list management, find/add/remove operations |
 | `src/app/settings.rs` | `AppSettings`, `CursorStyle` enum; user settings (theme, fonts, cursor, scrollback); JSON persistence |
 | `src/app/input.rs` | `key_to_pty_bytes()`: keyboard→PTY byte translation (Ctrl+A–Z, arrows, function keys, modifiers) |
@@ -96,11 +97,11 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, ✖ closes the tab the split shows (right-click: close all tabs in the split, confirmed when more than one); `info_bar_layout()` places the buttons and gives the text the rest. Position/hidden is per split (`EditorGroup.info_bar`, saved with the group layout; unset follows `settings.info_bar_position`, which is the place the user last moved a bar to — hiding one doesn't change it, and a revealed bar goes there). A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
-| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about. `request_close_all()` asks only when a close covers more than one tab; one tab closes at once |
+| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, "Save changes?" for one unsaved tab, git commit/push, about. `request_close_all()` asks when a close covers more than one tab or any unsaved one; one saved tab closes at once. Close-all and quit say how many files have unsaved changes |
 | `src/app/ui/settings_overlay.rs` | Settings panel: theme picker, cursor style, font size, scrollback, keybinding editor |
 | `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
-| `src/app/ui/left_panel/session_list.rs` | The single session navigator: split sections, three-state row highlighting, row chrome and interactions, "+New" menu, fuzzy filter, workspace filter dropdown |
+| `src/app/ui/left_panel/session_list.rs` | The single session navigator: split sections, three-state row highlighting, row chrome and interactions, "+New" menu, fuzzy filter, workspace filter dropdown. Row menu: Rename (pins the name on the session — `Session::pin_title` — so prompt hooks and programs can't replace it; an empty name goes back to the automatic one; saved with the session and closed-session records), Copy path, Show in Finder/File Explorer (`util::REVEAL_IN_FILE_MANAGER_LABEL`) |
 | `src/app/ui/left_panel/sections.rs` | `section_labels()`, `SortCache`, `RowState`: split-section grouping and naming, frozen recency ordering (rows hold their place while hovered; closed ones drop out, new ones append), row prominence. Pure — no `egui::Ui`, so it is unit-testable |
 | `src/app/ui/left_panel/workspace_section.rs` | Workspace cards; collapse toggle; color swatch; git branch/diff badges |
 | `src/app/ui/left_panel/context_menu.rs` | Right-click context menu: rename, edit color, delete, duplicate, open in new window |
@@ -222,7 +223,7 @@ serde + serde_json = "1"
 # Terminal emulation
 alacritty_terminal = "0.26"  # full terminal emulator (grid, parser, modes)
 vte = "0.13"                 # tee parser for OSC 7 CWD extraction
-portable-pty = "0.8"         # ConPTY (Windows) / openpty (Unix)
+portable-pty = "0.9"         # ConPTY (Windows) / openpty (Unix)
 
 # Concurrency & error handling
 parking_lot = "0.12"         # RwLock for session state
@@ -339,15 +340,15 @@ Color32::from_rgb(30, 30, 46)
 | `src/workspace.rs` | 17 | store CRUD, find_for_cwd, find_for_path, unique name, note store |
 | `src/app/workspace_ui.rs` | 5 | open-folder dialog: Save as Workspace on outside workspaces / off inside one / existing kept, default name and colour always free, generated colours distinct |
 | `src/app/watcher.rs` | 16 | file system watch, git refresh debounce, directory caching |
-| `src/terminal/tests.rs` | 11 | session dims, resize, content preservation, OSC title, cursor, bracketed paste, mouse SGR |
+| `src/terminal/tests.rs` | 12 | session dims, resize, content preservation, OSC title, a user-given (pinned) title outlasting the shell's, cursor, bracketed paste, mouse SGR |
 | `src/search.rs` | 11 | text search, match finding, index navigation |
 | `src/renderer/terminal_pass.rs` | 10 | terminal geometry, cell rendering, scrollbar hit-testing, selection |
 | `src/pty/reader.rs` | 10 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming |
 | `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
-| `src/app/persistence.rs` | 10 | session serialization, restore logic, per-split info bar position (old files load) |
-| `src/app/pane.rs` | 8 | pane content enum, terminal selection |
+| `src/app/persistence.rs` | 27 | session serialization, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load) |
+| `src/app/pane.rs` | 11 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits) |
 | `src/pty/mod.rs` | 8 | shell detection, session manager operations |
 | `src/app/workspace_git_worker.rs` | 8 | workspace-scoped git state |
 | `src/file_search_worker.rs` | 8 | file fuzzy search, result filtering |
@@ -379,12 +380,13 @@ Color32::from_rgb(30, 30, 46)
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
 | `src/app/state.rs` (pane workspace) | 3 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
 | `src/app/ui/pane_renderer.rs` | 3 | drop-preview geometry: join covers the leaf, each edge covers the matching half |
-| `src/app/ui/pane_labels.rs` | 27 | per-content-kind display text, tooltips, pane directory, workspace colour |
+| `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
+| `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
 | `src/app/macos_menu.rs` | 10 | every titlebar toggle in the menu once, Mac placement and wording (Show/Hide titles, checkmarks, Settings… stays open), shortcut → key equivalent, exact-chord match (Shift not applied), menu state |
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **958 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **965 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
