@@ -51,6 +51,7 @@ impl App {
         {
             super::macos_quit::install(&ctx);
             super::macos_menu::install(&ctx);
+            super::macos_fullscreen::install();
         }
 
         // Reset egui's persisted widget data if the app version changed.
