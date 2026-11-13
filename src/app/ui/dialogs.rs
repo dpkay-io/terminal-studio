@@ -1215,11 +1215,15 @@ impl App {
         };
 
         let count = self.close_all_pane_ids(self.close_all_target).len();
+        let plural = if count == 1 { "" } else { "s" };
+        // A split holds tabs; everywhere else the list is of sessions.
+        let noun = match self.close_all_target {
+            CloseAllTarget::EditorGroup(_) => "tab",
+            _ => "session",
+        };
         let title = match self.close_all_target {
             CloseAllTarget::All => "Close All Sessions".to_string(),
-            CloseAllTarget::EditorGroup(_) => {
-                format!("Close {} Tab{}", count, if count == 1 { "" } else { "s" })
-            }
+            CloseAllTarget::EditorGroup(_) => format!("Close {count} Tab{plural}"),
             CloseAllTarget::Group(group) => self.close_all_group_title(group),
             CloseAllTarget::ActiveGroup => self.close_all_group_title(self.active_group),
         };
@@ -1229,9 +1233,7 @@ impl App {
             ui_kit::dialog_header(ui, &title);
 
             ui.label(format!(
-                "This will close {} session{}. Are you sure?",
-                count,
-                if count == 1 { "" } else { "s" }
+                "This will close {count} {noun}{plural}. Are you sure?"
             ));
 
             ui_kit::dialog_footer(ui, |ui| {
