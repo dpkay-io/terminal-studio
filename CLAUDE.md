@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (956 tests)
+cargo test               # all unit tests (958 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -93,10 +93,10 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update pill, toolbar, focus tracking |
 | `src/app/ui/update_pill.rs` | Titlebar update pill: label and click action per `UpdateStatus` (available, downloading, installing, restart) |
 | `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()`, `pane_cwd()`: display text, tooltip, colour and path derivation for a pane. No rendering |
-| `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, close-all ✖; `info_bar_layout()` places the buttons and gives the text the rest. Position/hidden is per split (`EditorGroup.info_bar`, saved with the group layout; unset follows `settings.info_bar_position`). A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
+| `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, close-all ✖; `info_bar_layout()` places the buttons and gives the text the rest. Position/hidden is per split (`EditorGroup.info_bar`, saved with the group layout; unset follows `settings.info_bar_position`, which is the place the user last moved a bar to — hiding one doesn't change it, and a revealed bar goes there). A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
-| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about |
+| `src/app/ui/dialogs.rs` | Modal dialogs: new session, new workspace, close confirmation, git commit/push, about. `request_close_all()` asks only when a close covers more than one tab; one tab closes at once |
 | `src/app/ui/settings_overlay.rs` | Settings panel: theme picker, cursor style, font size, scrollback, keybinding editor |
 | `src/app/ui/search_bar.rs` | Reusable search input widget; persistent focus tracking |
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
@@ -327,7 +327,7 @@ Color32::from_rgb(30, 30, 46)
 |------|-------|---------|
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
-| `src/app/pane_state.rs` | 75 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position |
+| `src/app/pane_state.rs` | 77 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs) |
 | `src/app/drag.rs` | 70 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
 | `src/app/ui/left_panel/sections.rs` | 17 | split-section labels, frozen sort order (close/open while hovered keeps rows in place), three-state row prominence |
@@ -384,7 +384,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **956 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **958 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
