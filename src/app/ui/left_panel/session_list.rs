@@ -1342,8 +1342,15 @@ impl App {
                 })
                 .inner;
             self.rename_text = buf;
-            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // Consumed, not just read: the box closes this frame, and the
+            // terminal reads keys after the sidebar, so an unconsumed Enter
+            // would also run whatever is typed at the active prompt.
+            let (esc, enter) = ui.input_mut(|i| {
+                (
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                )
+            });
             let lost = r.lost_focus() && !esc;
             // Read `lost_focus` before requesting: `request_focus` writes the
             // focus id live, so calling it first would mask the very loss that
