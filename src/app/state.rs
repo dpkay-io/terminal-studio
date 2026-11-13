@@ -1284,7 +1284,11 @@ impl App {
                 }
             });
             if let Some(entry) = self.session_state.find_mut(sid) {
-                entry.restore_title = Some(record.title.clone());
+                if record.title_pinned {
+                    entry.session.read().pin_title(Some(record.title.clone()));
+                } else {
+                    entry.restore_title = Some(record.title.clone());
+                }
                 if let Some(ref claude_id) = record.claude_session_id {
                     entry.pending_command = continue_fallback;
                     entry.claude_session_id = Some(claude_id.clone());
@@ -1412,6 +1416,7 @@ impl App {
                 let s = e.session.read();
                 let cwd = s.cwd.clone();
                 let title_raw = s.title();
+                let title_pinned = s.is_title_pinned();
                 drop(s);
                 let command = self.workers.foreground_worker.get(e.id).map(|fp| {
                     let parts: Vec<String> =
@@ -1460,6 +1465,7 @@ impl App {
                     cwd,
                     command,
                     title,
+                    title_pinned,
                     scrollback_file,
                     claude_session_id,
                 }
@@ -1480,11 +1486,13 @@ impl App {
                         cwd,
                         pending_command,
                         saved_title,
+                        title_pinned,
                         ..
                     } => SavedPaneContent::DeferredTerminal {
                         cwd: cwd.clone().unwrap_or_default(),
                         command: pending_command.clone(),
                         title: saved_title.clone(),
+                        title_pinned: *title_pinned,
                     },
                     // Untitled buffers have no real path yet — nothing to reload.
                     PaneContent::FileEditor(ed) if ed.untitled => return None,
@@ -1664,7 +1672,12 @@ impl App {
                                 entry.pending_command = Some(cmd);
                             }
                         }
-                        entry.restore_title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
+                        let title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
+                        if s.title_pinned {
+                            entry.session.read().pin_title(title);
+                        } else {
+                            entry.restore_title = title;
+                        }
                         if let Some(ref claude_id) = s.claude_session_id {
                             entry.pending_command =
                                 super::claude_session::claude_resume_command(claude_id, &s.cwd)
@@ -1706,6 +1719,7 @@ impl App {
                             }
                         });
                         let saved_title = saved.and_then(|s| s.title.clone());
+                        let title_pinned = saved.is_some_and(|s| s.title_pinned);
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
                         let claude_session_id = saved.and_then(|s| s.claude_session_id.clone());
                         let pending_command = if let Some(ref cid) = claude_session_id {
@@ -1728,6 +1742,7 @@ impl App {
                             cwd,
                             pending_command,
                             saved_title,
+                            title_pinned,
                             scrollback_file,
                         }
                     }
@@ -1736,6 +1751,7 @@ impl App {
                     cwd,
                     command,
                     title,
+                    title_pinned,
                 } => PaneContent::DeferredTerminal {
                     cwd: if cwd.as_os_str().is_empty() {
                         None
@@ -1744,6 +1760,7 @@ impl App {
                     },
                     pending_command: command.clone(),
                     saved_title: title.clone(),
+                    title_pinned: *title_pinned,
                     scrollback_file: None,
                 },
                 SavedPaneContent::FileEditor {
@@ -2699,6 +2716,7 @@ mod tests {
             cwd: cwd.map(std::path::PathBuf::from),
             pending_command: None,
             saved_title: None,
+            title_pinned: false,
             scrollback_file: None,
         };
         pane
@@ -2734,6 +2752,7 @@ mod tests {
                 cwd: None,
                 pending_command: None,
                 saved_title: None,
+                title_pinned: false,
                 scrollback_file: None,
             },
             manual_width: None,

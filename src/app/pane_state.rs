@@ -490,7 +490,11 @@ impl PaneState {
         if cycle.len() < 2 {
             return None;
         }
-        let pos = cycle.iter().position(|&p| p == current).unwrap_or(0);
+        // From a pane outside this split, start at its first pane going
+        // forward and its last going back, so the key never skips one.
+        let Some(pos) = cycle.iter().position(|&p| p == current) else {
+            return if forward { cycle.first() } else { cycle.last() }.copied();
+        };
         let next = if forward {
             (pos + 1) % cycle.len()
         } else {
@@ -1285,9 +1289,11 @@ mod tests {
     #[test]
     fn cycle_from_pane_outside_the_group_starts_at_the_first() {
         let ps = make_cycle_state();
-        // `current` belongs to the other group — fall back to the head of the
-        // cycle rather than returning None, so the key never feels dead.
-        assert_eq!(ps.next_pane_in_focused_group(9, &[1, 2, 3]), Some(2));
+        // `current` belongs to the other group — start at the head of the
+        // cycle (the tail going back) rather than returning None, so the key
+        // never feels dead and never skips the first pane.
+        assert_eq!(ps.next_pane_in_focused_group(9, &[1, 2, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(9, &[1, 2, 3]), Some(3));
     }
 
     #[test]

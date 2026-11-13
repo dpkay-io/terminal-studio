@@ -318,6 +318,7 @@ mod tests {
             cwd: cwd.map(PathBuf::from),
             pending_command: None,
             saved_title: saved_title.map(str::to_string),
+            title_pinned: false,
             scrollback_file: None,
         }
     }

@@ -128,6 +128,14 @@ pub fn find_git_root(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Menu label for [`reveal_in_file_manager`], in each platform's own words.
+#[cfg(target_os = "macos")]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in Finder";
+#[cfg(target_os = "windows")]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in File Explorer";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in File Manager";
+
 /// Open the system file manager showing the parent folder of `path`, with the
 /// file/folder selected if the platform supports it.
 pub fn reveal_in_file_manager(path: &Path) {

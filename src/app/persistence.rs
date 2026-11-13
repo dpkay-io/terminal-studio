@@ -25,6 +25,9 @@ pub(super) struct SavedSession {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) title: Option<String>,
+    /// `title` is a name the user gave the session; absent in older files.
+    #[serde(default)]
+    pub(super) title_pinned: bool,
     #[serde(default)]
     pub(super) scrollback_file: Option<String>,
     #[serde(default)]
@@ -42,6 +45,8 @@ pub(super) enum SavedPaneContent {
         command: Option<String>,
         #[serde(default)]
         title: Option<String>,
+        #[serde(default)]
+        title_pinned: bool,
     },
     FileEditor {
         path: PathBuf,
@@ -191,6 +196,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/mydir"),
             command: Some("ls -la".into()),
             title: Some("my session".into()),
+            title_pinned: true,
             scrollback_file: None,
             claude_session_id: None,
         };
@@ -199,6 +205,7 @@ mod tests {
         assert_eq!(restored.cwd, original.cwd);
         assert_eq!(restored.command, original.command);
         assert_eq!(restored.title, original.title);
+        assert!(restored.title_pinned);
         assert_eq!(restored.claude_session_id, None);
     }
 
@@ -209,6 +216,7 @@ mod tests {
         assert_eq!(s.cwd, PathBuf::from("/home/user"));
         assert_eq!(s.command, None);
         assert_eq!(s.title, None);
+        assert!(!s.title_pinned, "older files have no user-given names");
         assert_eq!(s.claude_session_id, None);
     }
 
@@ -218,6 +226,7 @@ mod tests {
             cwd: PathBuf::from("/home/user/project"),
             command: Some("claude".into()),
             title: Some("Claude session".into()),
+            title_pinned: false,
             scrollback_file: None,
             claude_session_id: Some("abc-def-123-456".into()),
         };
@@ -253,6 +262,7 @@ mod tests {
             cwd: PathBuf::from("/usr/local"),
             command: Some("bash".into()),
             title: Some("my terminal".into()),
+            title_pinned: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
@@ -261,10 +271,12 @@ mod tests {
                 cwd,
                 command,
                 title,
+                title_pinned,
             } => {
                 assert_eq!(cwd, PathBuf::from("/usr/local"));
                 assert_eq!(command, Some("bash".into()));
                 assert_eq!(title, Some("my terminal".into()));
+                assert!(title_pinned);
             }
             _ => panic!("expected DeferredTerminal variant"),
         }
@@ -334,6 +346,7 @@ mod tests {
                     cwd: PathBuf::from("/home/user"),
                     command: None,
                     title: None,
+                    title_pinned: false,
                     scrollback_file: None,
                     claude_session_id: None,
                 },
@@ -341,6 +354,7 @@ mod tests {
                     cwd: PathBuf::from("/tmp"),
                     command: Some("vim".into()),
                     title: Some("vim session".into()),
+                    title_pinned: false,
                     scrollback_file: None,
                     claude_session_id: None,
                 },
@@ -536,6 +550,7 @@ mod tests {
                 cwd: PathBuf::from("/home/user"),
                 command: None,
                 title: None,
+                title_pinned: false,
                 scrollback_file: None,
                 claude_session_id: None,
             }],

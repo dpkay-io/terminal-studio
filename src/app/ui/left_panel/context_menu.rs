@@ -60,7 +60,7 @@ impl App {
         if let Some(pid) = sess_actions.open_in_explorer_pane_id {
             if let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
                 if let Some(cwd) = self.pane_cwd(idx) {
-                    let _ = open::that(cwd);
+                    crate::util::reveal_in_file_manager(&cwd);
                 }
             }
         }
@@ -85,23 +85,26 @@ impl App {
             self.rename_pane_id = Some(pid);
             self.rename_text = idx.map(|i| self.tab_display_text(i)).unwrap_or_default();
         }
-        if let Some((pid, title)) = sess_actions.commit_rename.take() {
-            if !title.is_empty() {
-                if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pid) {
-                    if let PaneContent::Terminal(sid) = &pane.content {
-                        if let Some(e) = self.session_state.find(*sid) {
-                            // `set_title` takes &self and locks internally.
-                            let s = e.session.read();
-                            s.set_title(title);
-                            // Hold the name against the shell. EventProxy drops
-                            // incoming OSC titles only while this is set, and
-                            // most prompts re-emit one every command — without
-                            // the lock a rename would not survive the next
-                            // prompt. Sending input to the session unlocks it
-                            // again, matching the restored-title path.
-                            s.lock_title();
-                        }
-                    }
+        if let Some((pid, name)) = sess_actions.commit_rename.take() {
+            let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) else {
+                return;
+            };
+            // Confirming the name the row already showed changes nothing:
+            // pinning it would freeze an automatic title for no reason.
+            let shown = self.tab_display_text(idx);
+            let PaneContent::Terminal(sid) = self.pane_state.panes[idx].content else {
+                return;
+            };
+            if let Some(e) = self.session_state.find(sid) {
+                let session = e.session.read();
+                // The name stays until the user renames the session again; an
+                // empty name hands it back to the shell's own title. Prompt
+                // hooks set a title on every command, so anything weaker than
+                // a pin is gone after the next one.
+                if name.is_empty() {
+                    session.pin_title(None);
+                } else if session.is_title_pinned() || name != shown {
+                    session.pin_title(Some(name));
                 }
             }
         }

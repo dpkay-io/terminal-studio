@@ -92,6 +92,8 @@ pub(super) enum PaneContent {
         cwd: Option<PathBuf>,
         pending_command: Option<String>,
         saved_title: Option<String>,
+        /// `saved_title` is a name the user gave the session.
+        title_pinned: bool,
         scrollback_file: Option<String>,
     },
     FileEditor(FileEditorState),
@@ -225,6 +227,7 @@ mod tests {
             cwd: Some(PathBuf::from("/home")),
             pending_command: Some("ls".to_string()),
             saved_title: None,
+            title_pinned: false,
             scrollback_file: None,
         };
         let editor = PaneContent::FileEditor(FileEditorState {

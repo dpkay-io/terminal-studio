@@ -1316,6 +1316,7 @@ impl App {
         let ansi_bytes = scrollback_capture::extract_grid_as_ansi(&session.term, None);
         let cwd = session.cwd.clone();
         let title = session.title();
+        let title_pinned = session.is_title_pinned();
         let shell = entry.shell.name().to_string();
         let cols = session.term.columns() as u16;
         let rows = session.term.screen_lines() as u16;
@@ -1360,6 +1361,7 @@ impl App {
                     ansi_bytes,
                     cwd,
                     title,
+                    title_pinned,
                     shell,
                     workspace_id,
                     workspace_name,
@@ -4180,11 +4182,12 @@ impl App {
                     &self.pane_state.panes[pane_idx].content,
                     PaneContent::DeferredTerminal { .. }
                 ) {
-                    let (cwd, pending_command, saved_title, scrollback_file) =
+                    let (cwd, pending_command, saved_title, title_pinned, scrollback_file) =
                         if let PaneContent::DeferredTerminal {
                             cwd,
                             pending_command,
                             saved_title,
+                            title_pinned,
                             scrollback_file,
                         } = &self.pane_state.panes[pane_idx].content
                         {
@@ -4192,6 +4195,7 @@ impl App {
                                 cwd.clone(),
                                 pending_command.clone(),
                                 saved_title.clone(),
+                                *title_pinned,
                                 scrollback_file.clone(),
                             )
                         } else {
@@ -4216,7 +4220,12 @@ impl App {
                                     entry.pending_command = Some(cmd);
                                 }
                                 if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
-                                    entry.session.read().set_title(t);
+                                    let session = entry.session.read();
+                                    if title_pinned {
+                                        session.pin_title(Some(t));
+                                    } else {
+                                        session.set_title(t);
+                                    }
                                 }
                             }
                             self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
@@ -4909,6 +4918,7 @@ impl App {
                     cwd: Some(dir_path),
                     pending_command: None,
                     saved_title: None,
+                    title_pinned: false,
                     scrollback_file: None,
                 },
                 manual_width: None,

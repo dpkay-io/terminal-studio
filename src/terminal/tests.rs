@@ -54,6 +54,23 @@ mod terminal_tests {
     }
 
     #[test]
+    fn a_pinned_title_outlasts_the_shell_until_cleared() {
+        let mut s = make_session(80, 24);
+        let mut proc: Processor<StdSyncHandler> = Processor::new();
+        s.pin_title(Some("server".into()));
+        // A prompt hook re-setting the title after typing unlocks the
+        // restored-title lock must not replace the user's name.
+        s.unlock_title();
+        proc.advance(&mut s.term, b"\x1b]0;\xe2\x97\x8f dpk\x07");
+        assert_eq!(s.title(), "server");
+        assert!(s.is_title_pinned());
+        // Clearing the name shows what the shell set meanwhile.
+        s.pin_title(None);
+        assert_eq!(s.title(), "\u{25cf} dpk");
+        assert!(!s.is_title_pinned());
+    }
+
+    #[test]
     fn test_print_advances_cursor() {
         let mut s = make_session(80, 24);
         let mut proc: Processor<StdSyncHandler> = Processor::new();

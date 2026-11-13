@@ -100,6 +100,9 @@ pub struct Session {
     pub prompt_ready: bool,
     title: Arc<Mutex<String>>,
     title_locked: Arc<AtomicBool>,
+    /// A name the user gave the session. It wins over every title the shell
+    /// or a program sets, until the user clears it.
+    pinned_title: Mutex<Option<String>>,
     pub bell: Arc<AtomicBool>,
     pub pending_clipboard: Option<String>,
 }
@@ -134,6 +137,7 @@ impl Session {
             prompt_ready: false,
             title,
             title_locked,
+            pinned_title: Mutex::new(None),
             bell,
             pending_clipboard: None,
         }
@@ -165,6 +169,7 @@ impl Session {
             prompt_ready: false,
             title,
             title_locked,
+            pinned_title: Mutex::new(None),
             bell,
             pending_clipboard: None,
         }
@@ -182,7 +187,22 @@ impl Session {
         self.title_locked.store(false, Ordering::Relaxed);
     }
 
+    /// Gives the session a name of the user's, or with `None` goes back to
+    /// the title the shell or program sets.
+    pub fn pin_title(&self, title: Option<String>) {
+        *self.pinned_title.lock() = title;
+    }
+
+    pub fn is_title_pinned(&self) -> bool {
+        self.pinned_title.lock().is_some()
+    }
+
+    /// The user's name for the session when it has one, else the latest
+    /// title the shell or program set.
     pub fn title(&self) -> String {
+        if let Some(pinned) = self.pinned_title.lock().as_ref() {
+            return pinned.clone();
+        }
         self.title.lock().clone()
     }
 

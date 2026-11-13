@@ -12,6 +12,10 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
 
+/// Shown in an emptied rename box: leaving it empty brings back the name the
+/// shell or program sets. Short, so it fits the narrowest sidebar.
+const RENAME_HINT: &str = "Automatic name";
+
 /// Radius of the completed-process dot. Bounded by the gutter between the
 /// left-edge markers and the title text — see the placement comment in
 /// `render_session_row`.
@@ -1332,6 +1336,7 @@ impl App {
                             .desired_width(edit_rect.width())
                             .font(egui::FontId::proportional(theme::FONT_UI_MD))
                             .frame(true)
+                            .hint_text(RENAME_HINT)
                             .text_color(text_color),
                     )
                 })
@@ -1421,7 +1426,10 @@ impl App {
                     actions.copy_path_pane_id = Some(pane_id);
                     ui.close_menu();
                 }
-                if ui.button("Open in file explorer").clicked() {
+                if ui
+                    .button(crate::util::REVEAL_IN_FILE_MANAGER_LABEL)
+                    .clicked()
+                {
                     actions.open_in_explorer_pane_id = Some(pane_id);
                     ui.close_menu();
                 }
