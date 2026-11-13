@@ -101,6 +101,33 @@ impl App {
             .info_bar_position(group_id, self.settings.info_bar_position)
     }
 
+    /// Where a revealed info bar goes: where new splits open theirs, or the
+    /// top when an older settings file made hidden the default.
+    pub(in crate::app) fn revealed_info_bar_position(&self) -> InfoBarPosition {
+        match self.settings.info_bar_position {
+            InfoBarPosition::Hidden => InfoBarPosition::Top,
+            shown => shown,
+        }
+    }
+
+    /// The user moved or hid one split's info bar. Moving it also makes that
+    /// the default for new splits, saved so it holds after a restart.
+    pub(in crate::app) fn choose_info_bar_position(
+        &mut self,
+        group_id: GroupId,
+        position: InfoBarPosition,
+    ) {
+        let default = self.settings.info_bar_position;
+        if let Some(new_default) = self
+            .pane_state
+            .choose_info_bar_position(group_id, position, default)
+        {
+            self.settings.info_bar_position = new_default;
+            self.settings.save();
+            log::debug!("info bar default: {new_default:?}");
+        }
+    }
+
     pub(in crate::app) fn render_info_bar(
         &self,
         ui: &mut egui::Ui,

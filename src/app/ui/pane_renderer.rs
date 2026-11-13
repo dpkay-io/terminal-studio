@@ -1005,8 +1005,9 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
         InfoBarAction::SetPosition(gid, pos) => {
             // No save_session() here: with scrollback saving on it writes
             // every terminal's history. The next natural save (pane changes,
-            // quit) records the split's position.
-            app.pane_state.set_info_bar_position(gid, pos);
+            // quit) records the split's position; the default for new splits
+            // is in settings and saved at once.
+            app.choose_info_bar_position(gid, pos);
         }
         InfoBarAction::Split(gid, dir) => {
             // The split is performed against the focused group, so hand focus
@@ -1031,9 +1032,7 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
             ctx.request_repaint();
         }
         InfoBarAction::CloseAllInGroup(gid) => {
-            app.close_all_target = CloseAllTarget::EditorGroup(gid);
-            app.show_close_all_confirm = true;
-            app.close_all_frames_open = 0;
+            app.request_close_all(CloseAllTarget::EditorGroup(gid));
         }
     }
 }
@@ -1263,7 +1262,8 @@ fn render_group_node(
             if info_bar_pos == InfoBarPosition::Hidden
                 && app.render_info_bar_show_toggle(&mut leaf_ui, content_rect)
             {
-                info_bar_action = InfoBarAction::SetPosition(group_id, InfoBarPosition::Top);
+                info_bar_action =
+                    InfoBarAction::SetPosition(group_id, app.revealed_info_bar_position());
             }
 
             let ctx = leaf_ui.ctx().clone();

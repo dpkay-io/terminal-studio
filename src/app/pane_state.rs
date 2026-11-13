@@ -234,6 +234,28 @@ impl PaneState {
         true
     }
 
+    /// The user moved or hid one split's info bar. Moving it (top or bottom)
+    /// also makes that the place new splits open with; hiding stays with that
+    /// split. Splits still following the old `default` keep where they are.
+    /// Returns the new default when it changes.
+    pub(super) fn choose_info_bar_position(
+        &mut self,
+        group_id: GroupId,
+        position: InfoBarPosition,
+        default: InfoBarPosition,
+    ) -> Option<InfoBarPosition> {
+        if !self.set_info_bar_position(group_id, position)
+            || position == InfoBarPosition::Hidden
+            || position == default
+        {
+            return None;
+        }
+        for group in self.groups.values_mut() {
+            group.info_bar.get_or_insert(default);
+        }
+        Some(position)
+    }
+
     /// Create a new group with an initial pane and register it. Returns the new
     /// group ID. Does NOT modify `group_layout` — caller must do that.
     pub(super) fn create_group(&mut self, initial_pane_id: u32) -> GroupId {
@@ -1090,6 +1112,42 @@ mod tests {
             state.info_bar_position(g3, InfoBarPosition::Top),
             InfoBarPosition::Top
         );
+    }
+
+    #[test]
+    fn moving_an_info_bar_makes_it_the_default_for_new_splits() {
+        let mut state = make_grouped_state();
+        let old = InfoBarPosition::Bottom;
+        assert_eq!(
+            state.choose_info_bar_position(1, InfoBarPosition::Top, old),
+            Some(InfoBarPosition::Top)
+        );
+        let new = InfoBarPosition::Top;
+        assert_eq!(state.info_bar_position(1, new), InfoBarPosition::Top);
+        // The split that was following the old default stays where it was.
+        assert_eq!(state.info_bar_position(2, new), old);
+        // A split made afterwards opens with the new default.
+        state.panes.push(make_pane(4));
+        let g3 = state.create_group(4);
+        assert_eq!(state.info_bar_position(g3, new), new);
+    }
+
+    #[test]
+    fn hiding_or_keeping_an_info_bar_leaves_the_default() {
+        let mut state = make_grouped_state();
+        let default = InfoBarPosition::Top;
+        assert_eq!(
+            state.choose_info_bar_position(1, InfoBarPosition::Hidden, default),
+            None
+        );
+        assert_eq!(state.info_bar_position(1, default), InfoBarPosition::Hidden);
+        assert_eq!(state.choose_info_bar_position(2, default, default), None);
+        // A split that is gone changes nothing.
+        assert_eq!(
+            state.choose_info_bar_position(99, InfoBarPosition::Bottom, default),
+            None
+        );
+        assert_eq!(state.groups[&2].info_bar, Some(default));
     }
 
     fn make_grouped_state() -> PaneState {
