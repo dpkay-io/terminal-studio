@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::settings::InfoBarPosition;
 use crate::editor_group::GroupNode;
 use crate::util;
 
@@ -73,6 +74,9 @@ pub(super) struct SavedEditorGroup {
     pub(super) id: u32,
     pub(super) pane_indices: Vec<usize>,
     pub(super) active_pane_index: Option<usize>,
+    /// The split's own info bar position; absent in older session files.
+    #[serde(default)]
+    pub(super) info_bar: Option<InfoBarPosition>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -457,12 +461,31 @@ mod tests {
             id: 1,
             pane_indices: vec![0, 2, 3],
             active_pane_index: Some(2),
+            info_bar: None,
         };
         let json = serde_json::to_string(&g).unwrap();
         let restored: SavedEditorGroup = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, 1);
         assert_eq!(restored.pane_indices, vec![0, 2, 3]);
         assert_eq!(restored.active_pane_index, Some(2));
+    }
+
+    #[test]
+    fn saved_editor_group_keeps_its_info_bar_position() {
+        let g = SavedEditorGroup {
+            id: 1,
+            pane_indices: vec![0],
+            active_pane_index: Some(0),
+            info_bar: Some(InfoBarPosition::Hidden),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let restored: SavedEditorGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.info_bar, Some(InfoBarPosition::Hidden));
+
+        // Session files from before per-split positions still load.
+        let old = r#"{"id":1,"pane_indices":[0],"active_pane_index":0}"#;
+        let restored: SavedEditorGroup = serde_json::from_str(old).unwrap();
+        assert_eq!(restored.info_bar, None);
     }
 
     #[test]
@@ -475,11 +498,13 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0, 1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 2,
                     pane_indices: vec![2],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
             ],
             layout: GroupNode::Split {
@@ -547,6 +572,7 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0, 1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 }],
                 layout: GroupNode::Leaf { group_id: 1 },
                 focused_group_id: 1,
@@ -590,6 +616,7 @@ mod tests {
                 id: 5,
                 pane_indices: vec![0],
                 active_pane_index: Some(0),
+                info_bar: None,
             }],
             layout: GroupNode::Leaf { group_id: 5 },
             focused_group_id: 5,
@@ -667,16 +694,19 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 2,
                     pane_indices: vec![1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 3,
                     pane_indices: vec![2],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
             ],
             layout: GroupNode::Split {

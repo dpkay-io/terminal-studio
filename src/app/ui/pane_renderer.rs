@@ -1002,9 +1002,11 @@ fn hit_test_drop(
 fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Context) {
     match action {
         InfoBarAction::None => {}
-        InfoBarAction::SetPosition(pos) => {
-            app.settings.info_bar_position = pos;
-            app.settings.save();
+        InfoBarAction::SetPosition(gid, pos) => {
+            // No save_session() here: with scrollback saving on it writes
+            // every terminal's history. The next natural save (pane changes,
+            // quit) records the split's position.
+            app.pane_state.set_info_bar_position(gid, pos);
         }
         InfoBarAction::Split(gid, dir) => {
             // The split is performed against the focused group, so hand focus
@@ -1098,7 +1100,7 @@ fn render_group_node(
             }
 
             // Split rect into optional info bar and content (rest)
-            let info_bar_pos = app.settings.info_bar_position;
+            let info_bar_pos = app.info_bar_position(group_id);
             let info_h = if info_bar_pos != InfoBarPosition::Hidden {
                 theme::INFO_BAR_H
             } else {
@@ -1261,7 +1263,7 @@ fn render_group_node(
             if info_bar_pos == InfoBarPosition::Hidden
                 && app.render_info_bar_show_toggle(&mut leaf_ui, content_rect)
             {
-                info_bar_action = InfoBarAction::SetPosition(InfoBarPosition::Top);
+                info_bar_action = InfoBarAction::SetPosition(group_id, InfoBarPosition::Top);
             }
 
             let ctx = leaf_ui.ctx().clone();

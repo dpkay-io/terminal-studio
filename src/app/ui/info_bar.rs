@@ -87,12 +87,20 @@ fn reveal_zone(content_rect: egui::Rect) -> (egui::Rect, egui::Rect) {
 
 pub(in crate::app) enum InfoBarAction {
     None,
-    SetPosition(InfoBarPosition),
+    /// Move or hide one split's info bar; the others keep theirs.
+    SetPosition(GroupId, InfoBarPosition),
     Split(GroupId, SplitDir),
     CloseAllInGroup(GroupId),
 }
 
 impl App {
+    /// Where a split's info bar sits: the split's own choice, else the
+    /// app-wide default. The single source for layout and painting.
+    pub(in crate::app) fn info_bar_position(&self, group_id: GroupId) -> InfoBarPosition {
+        self.pane_state
+            .info_bar_position(group_id, self.settings.info_bar_position)
+    }
+
     pub(in crate::app) fn render_info_bar(
         &self,
         ui: &mut egui::Ui,
@@ -131,7 +139,7 @@ impl App {
             let line_h = 2.0;
             // Sit the marker on whichever edge faces the pane content, so it
             // reads as belonging to that split rather than to its neighbour.
-            let line_y = if self.settings.info_bar_position == InfoBarPosition::Bottom {
+            let line_y = if self.info_bar_position(group_id) == InfoBarPosition::Bottom {
                 rect.min.y
             } else {
                 rect.max.y - line_h
@@ -217,7 +225,7 @@ impl App {
         }
 
         // Action buttons on the right
-        let is_top = self.settings.info_bar_position == InfoBarPosition::Top;
+        let is_top = self.info_bar_position(group_id) == InfoBarPosition::Top;
         let toggle_icon = if is_top { "▼" } else { "▲" };
         let toggle_tooltip = if is_top {
             "Move to bottom"
@@ -287,7 +295,7 @@ impl App {
             } else {
                 InfoBarPosition::Top
             };
-            action = InfoBarAction::SetPosition(new_pos);
+            action = InfoBarAction::SetPosition(group_id, new_pos);
         }
 
         let hide_resp = icon_button(
@@ -301,7 +309,7 @@ impl App {
         )
         .on_hover_text(HIDE_TOOLTIP);
         if hide_resp.clicked() {
-            action = InfoBarAction::SetPosition(InfoBarPosition::Hidden);
+            action = InfoBarAction::SetPosition(group_id, InfoBarPosition::Hidden);
         }
 
         action

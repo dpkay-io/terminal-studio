@@ -4,6 +4,7 @@ use crate::editor_group::{EditorGroup, GroupId, GroupNode, GroupRemoveResult};
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 
 use super::pane::PaneEntry;
+use super::settings::InfoBarPosition;
 
 /// Returned by [`PaneState::close_leaf`] so the caller can perform session cleanup.
 #[allow(dead_code)]
@@ -205,6 +206,32 @@ impl PaneState {
     #[allow(dead_code)]
     pub(super) fn focused_group_mut(&mut self) -> Option<&mut EditorGroup> {
         self.groups.get_mut(&self.focused_group_id)
+    }
+
+    /// Where a split's info bar sits: the split's own choice, else `default`.
+    pub(super) fn info_bar_position(
+        &self,
+        group_id: GroupId,
+        default: InfoBarPosition,
+    ) -> InfoBarPosition {
+        self.groups
+            .get(&group_id)
+            .and_then(|group| group.info_bar)
+            .unwrap_or(default)
+    }
+
+    /// Moves or hides one split's info bar, leaving every other split's as it
+    /// is. Returns false when the split no longer exists.
+    pub(super) fn set_info_bar_position(
+        &mut self,
+        group_id: GroupId,
+        position: InfoBarPosition,
+    ) -> bool {
+        let Some(group) = self.groups.get_mut(&group_id) else {
+            return false;
+        };
+        group.info_bar = Some(position);
+        true
     }
 
     /// Create a new group with an initial pane and register it. Returns the new
@@ -1006,6 +1033,64 @@ mod tests {
     // ── Editor-group tests ──────────────────────────────────────
 
     use crate::editor_group::GroupNode;
+
+    #[test]
+    fn info_bar_position_is_per_split() {
+        let mut state = make_grouped_state();
+        let (g1, g2) = (1, 2);
+        assert!(state.groups.contains_key(&g1) && state.groups.contains_key(&g2));
+        let default = InfoBarPosition::Top;
+        assert_eq!(state.info_bar_position(g1, default), default);
+
+        assert!(state.set_info_bar_position(g1, InfoBarPosition::Hidden));
+        assert_eq!(
+            state.info_bar_position(g1, default),
+            InfoBarPosition::Hidden
+        );
+        assert_eq!(
+            state.info_bar_position(g2, default),
+            default,
+            "other split unchanged"
+        );
+
+        assert!(state.set_info_bar_position(g2, InfoBarPosition::Bottom));
+        assert_eq!(
+            state.info_bar_position(g1, default),
+            InfoBarPosition::Hidden
+        );
+        assert_eq!(
+            state.info_bar_position(g2, default),
+            InfoBarPosition::Bottom
+        );
+    }
+
+    #[test]
+    fn info_bar_position_falls_back_to_the_default() {
+        let mut state = make_grouped_state();
+        // A split that never chose follows whatever the default is.
+        assert_eq!(
+            state.info_bar_position(1, InfoBarPosition::Bottom),
+            InfoBarPosition::Bottom
+        );
+        // A split that is gone can't be set, and reads as the default.
+        assert!(!state.set_info_bar_position(99, InfoBarPosition::Hidden));
+        assert_eq!(
+            state.info_bar_position(99, InfoBarPosition::Top),
+            InfoBarPosition::Top
+        );
+    }
+
+    #[test]
+    fn a_new_split_starts_with_the_default_info_bar() {
+        let mut state = make_grouped_state();
+        state.set_info_bar_position(1, InfoBarPosition::Hidden);
+        state.panes.push(make_pane(4));
+        let g3 = state.create_group(4);
+        assert_eq!(
+            state.info_bar_position(g3, InfoBarPosition::Top),
+            InfoBarPosition::Top
+        );
+    }
 
     fn make_grouped_state() -> PaneState {
         let mut state = PaneState::new();

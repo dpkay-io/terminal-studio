@@ -1544,6 +1544,7 @@ impl App {
                     active_pane_index: g
                         .active_pane_id
                         .and_then(|pid| pane_id_to_index.get(&pid).copied()),
+                    info_bar: g.info_bar,
                 })
                 .collect();
             Some(SavedGroupLayout {
@@ -1869,6 +1870,7 @@ impl App {
                 if let Some(apid) = active_pid {
                     group.activate(apid);
                 }
+                group.info_bar = sg.info_bar;
                 self.pane_state.groups.insert(sg.id, group);
             }
 

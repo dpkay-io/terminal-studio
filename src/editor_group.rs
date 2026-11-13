@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::app::settings::InfoBarPosition;
 use crate::pane_tree::SplitDir;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,10 @@ pub struct EditorGroup {
     pub id: GroupId,
     pub pane_ids: Vec<u32>,
     pub active_pane_id: Option<u32>,
+    /// Where this split's info bar sits, once the user has moved or hidden
+    /// it. `None` follows the app-wide default.
+    #[serde(default)]
+    pub info_bar: Option<InfoBarPosition>,
 }
 
 impl EditorGroup {
@@ -25,6 +30,7 @@ impl EditorGroup {
             id,
             pane_ids: vec![initial_pane_id],
             active_pane_id: Some(initial_pane_id),
+            info_bar: None,
         }
     }
 
