@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (954 tests)
+cargo test               # all unit tests (956 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -63,6 +63,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
 | `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the titlebar's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet) — the single path for titlebar buttons, shortcuts, command palette and the macOS menu bar |
+| `src/app/macos_fullscreen.rs` | macOS only: in native full screen AppKit puts the title bar winit adds for the switch (title + traffic lights) in a child strip window (`NSToolbarFullScreenWindow`) that slides down under the menu bar on hover, over the app's title bar. On every entry (and at launch for a restored window) that strip is emptied and made click-through; window style and the menu bar are left alone |
 | `src/app/macos_menu.rs` | macOS only: adds Settings… to the app menu, a View menu (Hide/Show Sidebar, Hide/Show Explorer, Switcher, Recently Closed Sessions) and Help → Keyboard Shortcuts, each showing its current shortcut. The menu never claims those keys (an item disables itself while AppKit matches a key press against its own chord), so the app's own key handling stays the only one. Clicks are queued and run by the focused window's frame |
 
 ### File System & Git (`src/app/`)
@@ -381,8 +382,9 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/pane_labels.rs` | 27 | per-content-kind display text, tooltips, pane directory, workspace colour |
 | `src/app/macos_menu.rs` | 10 | every titlebar toggle in the menu once, Mac placement and wording (Show/Hide titles, checkmarks, Settings… stays open), shortcut → key equivalent, exact-chord match (Shift not applied), menu state |
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
+| `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **954 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **956 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
