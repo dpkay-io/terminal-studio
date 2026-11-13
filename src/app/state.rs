@@ -224,7 +224,6 @@ impl App {
             drag_state: drag::DragState::new(),
             deferred_spawn: None,
             deferred_new_file: false,
-            untitled_seq: 0,
             deferred_duplicate: false,
             deferred_split: None,
             deferred_close_pane: false,
@@ -235,6 +234,7 @@ impl App {
             reveal_highlight: None,
             deferred_open_workspace: None,
             show_close_all_confirm: false,
+            pending_tab_close: None,
             close_all_frames_open: 0,
             close_all_target: CloseAllTarget::default(),
             show_quit_confirm: false,
@@ -939,6 +939,8 @@ impl App {
                     self.session_state.active_id = Some(sid);
                     self.update_is_active_flags();
                 }
+                // Nothing to reveal for an untitled buffer: it has no file yet.
+                PaneContent::FileEditor(ed) if ed.untitled => {}
                 PaneContent::FileEditor(ed) => {
                     self.reveal_file_path = Some(ed.path.clone());
                 }
@@ -1494,13 +1496,14 @@ impl App {
                         title: saved_title.clone(),
                         title_pinned: *title_pinned,
                     },
-                    // Untitled buffers have no real path yet — nothing to reload.
-                    PaneContent::FileEditor(ed) if ed.untitled => return None,
+                    // Untitled buffers are kept with their text, the same as an
+                    // edited file, so quitting never throws away typing.
                     PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
                         path: ed.path.clone(),
                         content: ed.content.clone(),
                         dirty: ed.dirty,
                         workspace_id: ed.workspace_id,
+                        untitled: ed.untitled,
                     },
                     PaneContent::FileDiff(d) => SavedPaneContent::FileDiff {
                         path: d.path.clone(),
@@ -1768,6 +1771,7 @@ impl App {
                     content,
                     dirty,
                     workspace_id,
+                    untitled,
                 } => {
                     let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
                     PaneContent::FileEditor(FileEditorState {
@@ -1779,7 +1783,7 @@ impl App {
                         show_preview: is_md,
                         stale: false,
                         loading: false,
-                        untitled: false,
+                        untitled: *untitled,
                     })
                 }
                 SavedPaneContent::FileDiff { path } => {

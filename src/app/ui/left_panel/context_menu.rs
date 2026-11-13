@@ -18,7 +18,9 @@ impl App {
         active_fg: Option<ForegroundProcess>,
     ) {
         self.process_workspace_actions(ctx, &ws_actions);
-        self.process_quit_pane(sess_actions.quit_pane_id);
+        if let Some(pid) = sess_actions.quit_pane_id {
+            self.request_close_tab(pid, crate::app::close_guard::TabClose::Sidebar);
+        }
         self.process_label_toggle(sess_actions.toggle_label);
         if let Some(pane_id) = sess_actions.show_new_label_for_pane {
             self.show_new_label_dialog = Some(pane_id);
@@ -116,8 +118,7 @@ impl App {
         use super::super::super::pane::FileEditorState;
         let pane_id = self.pane_state.next_pane_id;
         self.pane_state.next_pane_id += 1;
-        self.untitled_seq += 1;
-        let name = format!("Untitled-{}", self.untitled_seq);
+        let name = self.next_untitled_name();
         self.pane_state.panes.push(PaneEntry {
             id: pane_id,
             content: PaneContent::FileEditor(FileEditorState {
@@ -237,7 +238,7 @@ impl App {
     }
 
     /// Handle closing a pane from the sidebar quit button.
-    fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
+    pub(in crate::app) fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
         let Some(qpid) = quit_pane_id else { return };
         log::debug!("close: sidebar tab (pane {qpid})");
         if !self.pane_state.panes.iter().any(|p| p.id == qpid) {

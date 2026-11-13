@@ -118,6 +118,25 @@ fn content_ws_color(
     }
 }
 
+/// What a new, never-saved buffer is called before its number.
+const UNTITLED_PREFIX: &str = "Untitled-";
+
+/// The name for a new untitled buffer: one past the highest number an open
+/// untitled buffer uses, so names never repeat while any are open, including
+/// ones restored from the last session.
+fn next_untitled_name<'a>(open_names: impl Iterator<Item = &'a Path>) -> String {
+    let highest = open_names
+        .filter_map(|name| {
+            name.to_str()?
+                .strip_prefix(UNTITLED_PREFIX)?
+                .parse::<u32>()
+                .ok()
+        })
+        .max()
+        .unwrap_or(0);
+    format!("{UNTITLED_PREFIX}{}", highest.saturating_add(1))
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -149,6 +168,19 @@ impl App {
         content_tooltip_text(&self.pane_state.panes[pane_index].content, |sid| {
             self.terminal_tooltip_text(sid)
         })
+    }
+
+    /// Name for a new untitled buffer, after the ones already open.
+    pub(in crate::app) fn next_untitled_name(&self) -> String {
+        next_untitled_name(
+            self.pane_state
+                .panes
+                .iter()
+                .filter_map(|p| match &p.content {
+                    PaneContent::FileEditor(ed) if ed.untitled => Some(ed.path.as_path()),
+                    _ => None,
+                }),
+        )
     }
 
     /// Directory path for a pane: CWD for terminals, parent dir for file-based panes.
@@ -245,6 +277,21 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn untitled_names_continue_after_the_highest_open_one() {
+        use std::path::Path;
+        assert_eq!(super::next_untitled_name(std::iter::empty()), "Untitled-1");
+        let open = [
+            Path::new("Untitled-1"),
+            Path::new("Untitled-4"),
+            Path::new("notes.md"),
+        ];
+        assert_eq!(super::next_untitled_name(open.into_iter()), "Untitled-5");
+        // A buffer whose name only looks similar does not count.
+        let odd = [Path::new("Untitled-x"), Path::new("Untitled-")];
+        assert_eq!(super::next_untitled_name(odd.into_iter()), "Untitled-1");
+    }
+
     use super::*;
     use crate::app::conflict_parser::ConflictFile;
     use crate::app::pane::{

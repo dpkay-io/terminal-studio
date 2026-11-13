@@ -54,6 +54,34 @@ pub(super) struct FileEditorState {
     pub(super) untitled: bool,
 }
 
+impl FileEditorState {
+    /// Edits that are not in any file yet: an edited file, or an untitled
+    /// buffer someone typed into.
+    pub(super) fn has_unsaved_changes(&self) -> bool {
+        self.dirty
+    }
+
+    /// Write the buffer to its file. An untitled buffer has none and needs a
+    /// Save As instead, so it is left alone and reported as not saved.
+    pub(super) fn write_to_disk(&mut self) -> bool {
+        if self.untitled {
+            return false;
+        }
+        match std::fs::write(&self.path, &self.content) {
+            Ok(()) => {
+                self.dirty = false;
+                self.save_error = false;
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to save {}: {e}", self.path.display());
+                self.save_error = true;
+                false
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct FileDiffState {
     pub(super) path: PathBuf,
@@ -144,6 +172,48 @@ impl Drop for SessionEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn editor(path: PathBuf, untitled: bool) -> FileEditorState {
+        FileEditorState {
+            path,
+            content: "edited".into(),
+            dirty: true,
+            save_error: false,
+            workspace_id: None,
+            show_preview: false,
+            stale: false,
+            loading: false,
+            untitled,
+        }
+    }
+
+    #[test]
+    fn saving_a_file_writes_it_and_clears_unsaved() {
+        let dir = std::env::temp_dir().join(format!("ts_pane_save_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        let mut ed = editor(path.clone(), false);
+        assert!(ed.has_unsaved_changes());
+        assert!(ed.write_to_disk());
+        assert!(!ed.has_unsaved_changes() && !ed.save_error);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_untitled_buffer_is_never_written_to_its_name() {
+        let mut ed = editor(PathBuf::from("Untitled-1"), true);
+        assert!(!ed.write_to_disk(), "needs Save As, not a write");
+        assert!(ed.has_unsaved_changes(), "the edits are still unsaved");
+        assert!(!PathBuf::from("Untitled-1").exists());
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_edits_and_flags_the_error() {
+        let mut ed = editor(PathBuf::from("/nonexistent-dir-ts/a.txt"), false);
+        assert!(!ed.write_to_disk());
+        assert!(ed.has_unsaved_changes() && ed.save_error);
+    }
 
     #[test]
     fn test_term_selection_ordered_normal() {

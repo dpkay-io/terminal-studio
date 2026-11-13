@@ -9,8 +9,27 @@ use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 
-/// A close that covers this many tabs or fewer happens without asking.
+/// A close that covers this many tabs or fewer happens without asking,
+/// unless one of them holds unsaved edits.
 const MAX_CLOSED_WITHOUT_ASKING: usize = 1;
+/// What happens to unsaved edits, ending the note under a close or quit.
+const UNSAVED_LOST: &str = "will be lost";
+const UNSAVED_KEPT: &str = "will reopen next time";
+const UNSAVED_FILE_BODY: &str = "Your changes will be lost if you don't save them.";
+/// The editor's save chord: the platform's primary modifier plus S.
+const SAVE_SHORTCUT: Shortcut = Shortcut::primary(egui::Key::S);
+const UNSAVED_DIALOG_W: f32 = 380.0;
+const UNSAVED_DIALOG_MAX_H: f32 = 160.0;
+
+/// "1 file has unsaved changes that will be lost." — or None when there are
+/// no unsaved edits to warn about.
+fn unsaved_note(count: usize, fate: &str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(format!("1 file has unsaved changes that {fate}.")),
+        n => Some(format!("{n} files have unsaved changes that {fate}.")),
+    }
+}
 
 impl App {
     fn switcher_collect_entries(&self, pane: &PaneEntry) -> Option<(String, String)> {
@@ -1029,12 +1048,12 @@ impl App {
             .collect()
     }
 
-    /// Closes the panes `target` covers. Several are confirmed first; a single
-    /// tab closes at once, the same as closing it on its own. Only quitting
-    /// the app or closing a whole window asks about one.
+    /// Closes the panes `target` covers. Several are confirmed first, and so
+    /// is any that holds unsaved edits; a single saved tab closes at once,
+    /// the same as closing it on its own.
     pub(in crate::app) fn request_close_all(&mut self, target: CloseAllTarget) {
         let pane_ids = self.close_all_pane_ids(target);
-        if pane_ids.len() > MAX_CLOSED_WITHOUT_ASKING {
+        if pane_ids.len() > MAX_CLOSED_WITHOUT_ASKING || self.unsaved_count(&pane_ids) > 0 {
             log::debug!("close: asking before closing {} tabs", pane_ids.len());
             self.close_all_target = target;
             self.show_close_all_confirm = true;
@@ -1214,7 +1233,9 @@ impl App {
             ..Default::default()
         };
 
-        let count = self.close_all_pane_ids(self.close_all_target).len();
+        let closing = self.close_all_pane_ids(self.close_all_target);
+        let count = closing.len();
+        let unsaved = self.unsaved_count(&closing);
         let plural = if count == 1 { "" } else { "s" };
         // A split holds tabs; everywhere else the list is of sessions.
         let noun = match self.close_all_target {
@@ -1235,6 +1256,9 @@ impl App {
             ui.label(format!(
                 "This will close {count} {noun}{plural}. Are you sure?"
             ));
+            if let Some(note) = unsaved_note(unsaved, UNSAVED_LOST) {
+                ui.label(egui::RichText::new(note).color(theme::active().warning));
+            }
 
             ui_kit::dialog_footer(ui, |ui| {
                 if ui_kit::action_button(ui, "Close All", true, ui_kit::ActionButtonStyle::Danger)
@@ -1274,6 +1298,86 @@ impl App {
         }
     }
 
+    /// "Save changes?" for one tab with unsaved edits that is being closed.
+    /// A file can be saved and closed, closed without saving, or kept open.
+    /// An untitled buffer has no file to save to, so it offers Don't Save and
+    /// Cancel; the user cancels and saves it with ⌘S to choose where.
+    pub(in crate::app) fn render_unsaved_close_confirm(&mut self, ctx: &egui::Context) {
+        let Some((pane_id, via)) = self.pending_tab_close else {
+            return;
+        };
+        let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) else {
+            // Closed some other way meanwhile: nothing left to ask about.
+            self.pending_tab_close = None;
+            return;
+        };
+        let name = self.tab_display_text(idx);
+        let untitled = matches!(
+            &self.pane_state.panes[idx].content,
+            PaneContent::FileEditor(ed) if ed.untitled
+        );
+
+        let config = ui_kit::DialogConfig {
+            width: ui_kit::DialogWidth::Fixed(UNSAVED_DIALOG_W),
+            max_height: UNSAVED_DIALOG_MAX_H,
+            ..Default::default()
+        };
+        let (mut save, mut discard, mut cancel) = (false, false, false);
+        let resp = ui_kit::dialog(ctx, self.vp_id("unsaved_close"), config, |ui| {
+            ui_kit::dialog_header(ui, &format!("Save changes to \u{201c}{name}\u{201d}?"));
+            if untitled {
+                ui.label(format!(
+                    "This has never been saved. Cancel and press {} to keep it, \
+                     or close it without saving.",
+                    SAVE_SHORTCUT.label()
+                ));
+            } else {
+                ui.label(UNSAVED_FILE_BODY);
+            }
+            ui_kit::dialog_footer(ui, |ui| {
+                if !untitled
+                    && ui_kit::action_button(ui, "Save", true, ui_kit::ActionButtonStyle::Primary)
+                        .clicked()
+                {
+                    save = true;
+                }
+                if ui_kit::action_button(ui, "Don't Save", true, ui_kit::ActionButtonStyle::Danger)
+                    .clicked()
+                {
+                    discard = true;
+                }
+                if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
+                    .clicked()
+                {
+                    cancel = true;
+                }
+            });
+        });
+        // Enter saves a file, the safe default; for an untitled buffer it does
+        // nothing, so a stray Enter can never throw the text away.
+        if !untitled && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            save = true;
+        }
+
+        if save {
+            let saved = match &mut self.pane_state.panes[idx].content {
+                PaneContent::FileEditor(ed) => ed.write_to_disk(),
+                _ => false,
+            };
+            self.pending_tab_close = None;
+            // A failed save keeps the tab open with its edits; the editor
+            // shows the save error.
+            if saved {
+                self.close_tab_now(pane_id, via);
+            }
+        } else if discard {
+            self.pending_tab_close = None;
+            self.close_tab_now(pane_id, via);
+        } else if cancel || resp.dismissed {
+            self.pending_tab_close = None;
+        }
+    }
+
     pub(in crate::app) fn render_quit_confirm(&mut self, ctx: &egui::Context) {
         if !self.show_quit_confirm {
             return;
@@ -1297,6 +1401,8 @@ impl App {
             }
         }
         let total_count = self.pane_state.panes.len();
+        let all_panes: Vec<u32> = self.pane_state.panes.iter().map(|p| p.id).collect();
+        let quit_unsaved = self.unsaved_count(&all_panes);
         let config = ui_kit::DialogConfig {
             width: ui_kit::DialogWidth::Fixed(380.0),
             max_height: 200.0,
@@ -1357,6 +1463,16 @@ impl App {
                 ));
             } else {
                 ui.label("Are you sure you want to quit?");
+            }
+            // Edits are kept with the session, so they come back next time
+            // unless the app is set not to reopen the last session.
+            let fate = if self.settings.restore_last_session {
+                UNSAVED_KEPT
+            } else {
+                UNSAVED_LOST
+            };
+            if let Some(note) = unsaved_note(quit_unsaved, fate) {
+                ui.label(egui::RichText::new(note).color(theme::active().warning));
             }
 
             ui_kit::dialog_footer(ui, |ui| {
@@ -2050,5 +2166,23 @@ impl App {
         } else if resp.dismissed || cancel_clicked {
             self.open_folder_dialog = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsaved_note_counts_files_and_says_what_happens() {
+        assert_eq!(unsaved_note(0, UNSAVED_LOST), None);
+        assert_eq!(
+            unsaved_note(1, UNSAVED_LOST).as_deref(),
+            Some("1 file has unsaved changes that will be lost.")
+        );
+        assert_eq!(
+            unsaved_note(3, UNSAVED_KEPT).as_deref(),
+            Some("3 files have unsaved changes that will reopen next time.")
+        );
     }
 }

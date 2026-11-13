@@ -21,6 +21,7 @@ use alacritty_terminal::{
 // ── Submodules ───────────────────────────────────────────────────────────────
 
 pub(crate) mod claude_session;
+mod close_guard;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
 mod cursor_blink;
@@ -240,8 +241,6 @@ pub struct App {
     // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
     deferred_spawn: Option<ShellKind>,
     deferred_new_file: bool,
-    /// Monotonic counter for naming untitled buffers (Untitled-1, Untitled-2, …).
-    untitled_seq: u32,
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
@@ -263,6 +262,9 @@ pub struct App {
 
     show_close_all_confirm: bool,
     close_all_frames_open: u32,
+    /// A single tab with unsaved edits waiting on "Save changes?", and the
+    /// close to run once the user answers.
+    pending_tab_close: Option<(u32, close_guard::TabClose)>,
     /// Which group of sessions to close when the close-all dialog is confirmed.
     close_all_target: CloseAllTarget,
     show_quit_confirm: bool,
@@ -790,7 +792,9 @@ impl eframe::App for App {
                 .panes
                 .iter()
                 .filter_map(|p| match &p.content {
-                    PaneContent::FileEditor(ed) => Some(ed.path.clone()),
+                    // An untitled buffer's path is only its name; there is
+                    // no file on disk to watch yet.
+                    PaneContent::FileEditor(ed) if !ed.untitled => Some(ed.path.clone()),
                     _ => None,
                 })
                 .collect();
@@ -1386,6 +1390,7 @@ impl App {
             || self.show_closed_sessions
             || self.palette_open
             || self.show_close_all_confirm
+            || self.pending_tab_close.is_some()
             || self.show_commit_dialog
             || self.show_push_dialog
             || self.show_stage_all_confirm
@@ -3978,7 +3983,7 @@ impl App {
         // Phase D-2: Handle Ctrl+Shift+W — close the focused pane
         if close_split_pane {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                self.close_pane_full(active_pid);
+                self.request_close_tab(active_pid, close_guard::TabClose::Pane);
             }
         }
 
@@ -3988,7 +3993,7 @@ impl App {
             match action {
                 PaneContextAction::MoveToTab(_pid) => {}
                 PaneContextAction::Close(pid) => {
-                    self.close_pane_full(pid);
+                    self.request_close_tab(pid, close_guard::TabClose::Pane);
                 }
                 PaneContextAction::SplitHorizontal(pid) | PaneContextAction::SplitVertical(pid) => {
                     let dir = if matches!(action, PaneContextAction::SplitHorizontal(_)) {
@@ -4370,16 +4375,7 @@ impl App {
                     .ok();
             } else if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
-                    match std::fs::write(&ed.path, &ed.content) {
-                        Ok(()) => {
-                            ed.dirty = false;
-                            ed.save_error = false;
-                        }
-                        Err(e) => {
-                            log::error!("Failed to save {}: {e}", ed.path.display());
-                            ed.save_error = true;
-                        }
-                    }
+                    ed.write_to_disk();
                 }
             }
         }
@@ -4958,6 +4954,7 @@ impl App {
         self.render_open_folder_dialog(ctx);
 
         self.render_close_all_confirm(ctx);
+        self.render_unsaved_close_confirm(ctx);
         self.render_quit_confirm(ctx);
         self.render_commit_dialog(ctx);
         self.render_push_dialog(ctx);

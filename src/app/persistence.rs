@@ -53,6 +53,9 @@ pub(super) enum SavedPaneContent {
         content: String,
         dirty: bool,
         workspace_id: Option<u64>,
+        /// A new buffer never saved to a file; `path` is only its name.
+        #[serde(default)]
+        untitled: bool,
     },
     FileDiff {
         path: PathBuf,
@@ -289,6 +292,7 @@ mod tests {
             content: "fn main() {}".into(),
             dirty: true,
             workspace_id: Some(99),
+            untitled: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
@@ -298,12 +302,23 @@ mod tests {
                 content,
                 dirty,
                 workspace_id,
+                untitled,
             } => {
                 assert_eq!(path, PathBuf::from("/tmp/test.rs"));
                 assert_eq!(content, "fn main() {}");
                 assert!(dirty);
                 assert_eq!(workspace_id, Some(99));
+                assert!(untitled, "an untitled buffer comes back untitled");
             }
+            _ => panic!("expected FileEditor variant"),
+        }
+    }
+
+    #[test]
+    fn older_file_editor_entries_load_as_files() {
+        let json = r#"{"FileEditor":{"path":"/tmp/a.rs","content":"x","dirty":false,"workspace_id":null}}"#;
+        match serde_json::from_str::<SavedPaneContent>(json).unwrap() {
+            SavedPaneContent::FileEditor { untitled, .. } => assert!(!untitled),
             _ => panic!("expected FileEditor variant"),
         }
     }
@@ -373,6 +388,7 @@ mod tests {
                         content: "hello".into(),
                         dirty: false,
                         workspace_id: Some(1),
+                        untitled: false,
                     },
                     manual_width: Some(400.0),
                     labels: vec![],
