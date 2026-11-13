@@ -337,9 +337,7 @@ impl App {
                                 .on_hover_text("Close all visible sessions")
                                 .clicked()
                             {
-                                self.close_all_target = target;
-                                self.show_close_all_confirm = true;
-                                self.close_all_frames_open = 0;
+                                self.request_close_all(target);
                             }
                         }
                     }

@@ -9,6 +9,9 @@ use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 
+/// A close that covers this many tabs or fewer happens without asking.
+const MAX_CLOSED_WITHOUT_ASKING: usize = 1;
+
 impl App {
     fn switcher_collect_entries(&self, pane: &PaneEntry) -> Option<(String, String)> {
         match &pane.content {
@@ -1000,6 +1003,203 @@ impl App {
         }
     }
 
+    /// The panes a close-all request covers: the single source for the
+    /// dialog's count and for the close itself.
+    pub(in crate::app) fn close_all_pane_ids(&self, target: CloseAllTarget) -> Vec<u32> {
+        let group = match target {
+            CloseAllTarget::All => return self.pane_state.panes.iter().map(|p| p.id).collect(),
+            CloseAllTarget::EditorGroup(gid) => {
+                return self
+                    .pane_state
+                    .groups
+                    .get(&gid)
+                    .map(|g| g.pane_ids.clone())
+                    .unwrap_or_default()
+            }
+            CloseAllTarget::Group(group) => group,
+            CloseAllTarget::ActiveGroup => self.active_group,
+        };
+        self.pane_state
+            .panes
+            .iter()
+            .filter(|p| {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == group
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Closes the panes `target` covers. Several are confirmed first; a single
+    /// tab closes at once, the same as closing it on its own. Only quitting
+    /// the app or closing a whole window asks about one.
+    pub(in crate::app) fn request_close_all(&mut self, target: CloseAllTarget) {
+        let pane_ids = self.close_all_pane_ids(target);
+        if pane_ids.len() > MAX_CLOSED_WITHOUT_ASKING {
+            self.close_all_target = target;
+            self.show_close_all_confirm = true;
+            self.close_all_frames_open = 0;
+        } else if !pane_ids.is_empty() {
+            self.close_panes(&pane_ids);
+        }
+    }
+
+    fn close_all_group_title(&self, group: Option<u64>) -> String {
+        let group_name = match group {
+            None => "Other".to_string(),
+            Some(id) => self
+                .workspace_store
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string()),
+        };
+        format!("Close \"{}\" Sessions", group_name)
+    }
+
+    /// Closes these panes, their sessions once no pane shows them, and
+    /// empty splits; keeps one terminal open when nothing is left.
+    fn close_panes(&mut self, pane_ids: &[u32]) {
+        let session_ids: Vec<u32> = self
+            .pane_state
+            .panes
+            .iter()
+            .filter(|p| pane_ids.contains(&p.id))
+            .filter_map(|p| match &p.content {
+                PaneContent::Terminal(sid) => Some(*sid),
+                _ => None,
+            })
+            .collect();
+
+        self.pane_state.panes.retain(|p| !pane_ids.contains(&p.id));
+        // Sync editor groups with surviving panes (collapse empty groups).
+        self.pane_state.sync_groups_with_panes();
+        // Prune closed panes from split trees, preserving surviving siblings.
+        let affected_roots: Vec<u32> = self
+            .pane_state
+            .pane_trees
+            .iter()
+            .filter(|(_, tree)| tree.leaf_ids().iter().any(|lid| pane_ids.contains(lid)))
+            .map(|(&rpid, _)| rpid)
+            .collect();
+        for rpid in affected_roots {
+            let all_leaves_closing = self
+                .pane_state
+                .pane_trees
+                .get(&rpid)
+                .map(|t| t.leaf_ids().iter().all(|lid| pane_ids.contains(lid)))
+                .unwrap_or(true);
+            if all_leaves_closing {
+                self.pane_state.pane_trees.remove(&rpid);
+            } else {
+                // Remove only the closing panes, keeping survivors
+                let closing_in_tree: Vec<u32> = self
+                    .pane_state
+                    .pane_trees
+                    .get(&rpid)
+                    .map(|t| {
+                        t.leaf_ids()
+                            .into_iter()
+                            .filter(|lid| pane_ids.contains(lid))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut needs_rekey = false;
+                for pid in closing_in_tree {
+                    if let Some(tree) = self.pane_state.pane_trees.get_mut(&rpid) {
+                        use crate::pane_tree::RemoveResult;
+                        match tree.remove_pane(pid) {
+                            RemoveResult::CollapseToSibling(replacement) => {
+                                self.pane_state.pane_trees.insert(rpid, replacement);
+                                if pid == rpid {
+                                    needs_rekey = true;
+                                    break;
+                                }
+                            }
+                            RemoveResult::IsTarget => {
+                                self.pane_state.pane_trees.remove(&rpid);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if needs_rekey {
+                    if let Some(tree) = self.pane_state.pane_trees.remove(&rpid) {
+                        let new_key = tree.first_leaf_id();
+                        self.pane_state.pane_trees.insert(new_key, tree);
+                    }
+                }
+            }
+        }
+        if self
+            .pane_state
+            .active_pane_id
+            .is_some_and(|id| pane_ids.contains(&id))
+        {
+            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+        }
+
+        for sid in &session_ids {
+            if self.pane_state.panes_referencing_session(*sid) == 0 {
+                self.remove_session_and_cleanup(*sid);
+            }
+        }
+
+        self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
+            self.pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == apid)
+                .and_then(|p| match &p.content {
+                    PaneContent::Terminal(sid) => Some(*sid),
+                    _ => None,
+                })
+                .or_else(|| self.session_state.sessions.first().map(|e| e.id))
+        } else {
+            self.session_state.sessions.first().map(|e| e.id)
+        };
+        self.update_is_active_flags();
+
+        if self.pane_state.panes.is_empty() {
+            if let Some(sid) = self.session_state.active_id {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::Terminal(sid),
+                    manual_width: None,
+                    last_size: (0, 0),
+                    labels: vec![],
+                    last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
+                });
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                if self.pane_state.groups.is_empty() {
+                    let gid = self.pane_state.create_group(pane_id);
+                    self.pane_state.group_layout =
+                        crate::editor_group::GroupNode::Leaf { group_id: gid };
+                    self.pane_state.focused_group_id = gid;
+                } else {
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
+                }
+                self.pane_state.active_pane_id = Some(pane_id);
+            }
+        }
+
+        self.save_session();
+    }
+
     pub(in crate::app) fn render_close_all_confirm(&mut self, ctx: &egui::Context) {
         if !self.show_close_all_confirm {
             return;
@@ -1012,49 +1212,14 @@ impl App {
             ..Default::default()
         };
 
-        let (title, count) = match self.close_all_target {
-            CloseAllTarget::All => (
-                "Close All Sessions".to_string(),
-                self.pane_state.panes.len(),
-            ),
-            CloseAllTarget::EditorGroup(gid) => {
-                let cnt = self
-                    .pane_state
-                    .groups
-                    .get(&gid)
-                    .map(|g| g.pane_ids.len())
-                    .unwrap_or(0);
-                (
-                    format!("Close {} Tab{}", cnt, if cnt == 1 { "" } else { "s" }),
-                    cnt,
-                )
+        let count = self.close_all_pane_ids(self.close_all_target).len();
+        let title = match self.close_all_target {
+            CloseAllTarget::All => "Close All Sessions".to_string(),
+            CloseAllTarget::EditorGroup(_) => {
+                format!("Close {} Tab{}", count, if count == 1 { "" } else { "s" })
             }
-            _ => {
-                let group = match self.close_all_target {
-                    CloseAllTarget::Group(g) => g,
-                    _ => self.active_group,
-                };
-                let group_name = match group {
-                    None => "Other".to_string(),
-                    Some(id) => self
-                        .workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.name.clone())
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                };
-                let cnt = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .filter(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                            == group
-                    })
-                    .count();
-                (format!("Close \"{}\" Sessions", group_name), cnt)
-            }
+            CloseAllTarget::Group(group) => self.close_all_group_title(group),
+            CloseAllTarget::ActiveGroup => self.close_all_group_title(self.active_group),
         };
 
         let mut cancel_clicked = false;
@@ -1096,179 +1261,8 @@ impl App {
 
             let target = std::mem::take(&mut self.close_all_target);
 
-            let pane_ids_to_close: Vec<u32> = match target {
-                CloseAllTarget::All => self.pane_state.panes.iter().map(|p| p.id).collect(),
-                CloseAllTarget::EditorGroup(gid) => self
-                    .pane_state
-                    .groups
-                    .get(&gid)
-                    .map(|g| g.pane_ids.clone())
-                    .unwrap_or_default(),
-                _ => {
-                    let group = match target {
-                        CloseAllTarget::Group(g) => g,
-                        _ => self.active_group,
-                    };
-                    self.pane_state
-                        .panes
-                        .iter()
-                        .filter(|p| {
-                            Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                == group
-                        })
-                        .map(|p| p.id)
-                        .collect()
-                }
-            };
-
-            let session_ids: Vec<u32> = self
-                .pane_state
-                .panes
-                .iter()
-                .filter(|p| pane_ids_to_close.contains(&p.id))
-                .filter_map(|p| match &p.content {
-                    PaneContent::Terminal(sid) => Some(*sid),
-                    _ => None,
-                })
-                .collect();
-
-            self.pane_state
-                .panes
-                .retain(|p| !pane_ids_to_close.contains(&p.id));
-            // Sync editor groups with surviving panes (collapse empty groups).
-            self.pane_state.sync_groups_with_panes();
-            // Prune closed panes from split trees, preserving surviving siblings.
-            let affected_roots: Vec<u32> = self
-                .pane_state
-                .pane_trees
-                .iter()
-                .filter(|(_, tree)| {
-                    tree.leaf_ids()
-                        .iter()
-                        .any(|lid| pane_ids_to_close.contains(lid))
-                })
-                .map(|(&rpid, _)| rpid)
-                .collect();
-            for rpid in affected_roots {
-                let all_leaves_closing = self
-                    .pane_state
-                    .pane_trees
-                    .get(&rpid)
-                    .map(|t| {
-                        t.leaf_ids()
-                            .iter()
-                            .all(|lid| pane_ids_to_close.contains(lid))
-                    })
-                    .unwrap_or(true);
-                if all_leaves_closing {
-                    self.pane_state.pane_trees.remove(&rpid);
-                } else {
-                    // Remove only the closing panes, keeping survivors
-                    let closing_in_tree: Vec<u32> = self
-                        .pane_state
-                        .pane_trees
-                        .get(&rpid)
-                        .map(|t| {
-                            t.leaf_ids()
-                                .into_iter()
-                                .filter(|lid| pane_ids_to_close.contains(lid))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let mut needs_rekey = false;
-                    for pid in closing_in_tree {
-                        if let Some(tree) = self.pane_state.pane_trees.get_mut(&rpid) {
-                            use crate::pane_tree::RemoveResult;
-                            match tree.remove_pane(pid) {
-                                RemoveResult::CollapseToSibling(replacement) => {
-                                    self.pane_state.pane_trees.insert(rpid, replacement);
-                                    if pid == rpid {
-                                        needs_rekey = true;
-                                        break;
-                                    }
-                                }
-                                RemoveResult::IsTarget => {
-                                    self.pane_state.pane_trees.remove(&rpid);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    if needs_rekey {
-                        if let Some(tree) = self.pane_state.pane_trees.remove(&rpid) {
-                            let new_key = tree.first_leaf_id();
-                            self.pane_state.pane_trees.insert(new_key, tree);
-                        }
-                    }
-                }
-            }
-            if self
-                .pane_state
-                .active_pane_id
-                .is_some_and(|id| pane_ids_to_close.contains(&id))
-            {
-                self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
-            }
-
-            for sid in &session_ids {
-                if self.pane_state.panes_referencing_session(*sid) == 0 {
-                    self.remove_session_and_cleanup(*sid);
-                }
-            }
-
-            self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
-                self.pane_state
-                    .panes
-                    .iter()
-                    .find(|p| p.id == apid)
-                    .and_then(|p| match &p.content {
-                        PaneContent::Terminal(sid) => Some(*sid),
-                        _ => None,
-                    })
-                    .or_else(|| self.session_state.sessions.first().map(|e| e.id))
-            } else {
-                self.session_state.sessions.first().map(|e| e.id)
-            };
-            self.update_is_active_flags();
-
-            if self.pane_state.panes.is_empty() {
-                if let Some(sid) = self.session_state.active_id {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    self.pane_state.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::Terminal(sid),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    });
-                    self.pane_state.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (0, 0),
-                        },
-                    );
-                    if self.pane_state.groups.is_empty() {
-                        let gid = self.pane_state.create_group(pane_id);
-                        self.pane_state.group_layout =
-                            crate::editor_group::GroupNode::Leaf { group_id: gid };
-                        self.pane_state.focused_group_id = gid;
-                    } else {
-                        self.pane_state.add_pane_to_group(
-                            self.pane_state.focused_group_id,
-                            pane_id,
-                            None,
-                        );
-                    }
-                    self.pane_state.active_pane_id = Some(pane_id);
-                }
-            }
-
-            self.save_session();
+            let pane_ids = self.close_all_pane_ids(target);
+            self.close_panes(&pane_ids);
         } else if resp.dismissed || cancel_clicked {
             self.show_close_all_confirm = false;
             self.close_all_frames_open = 0;
