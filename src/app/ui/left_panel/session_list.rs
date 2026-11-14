@@ -965,6 +965,17 @@ impl App {
 
     /// Compute a row's display data and apply the three list filters.
     /// `None` means the row is filtered out and must not be drawn.
+    /// Whether the session list shows this pane's row right now (its text,
+    /// workspace and label filters) — the one test ⌘1–9 share with the list.
+    pub(in crate::app) fn pane_shown_in_list(
+        &self,
+        pane_idx: usize,
+        matcher: &SkimMatcherV2,
+    ) -> bool {
+        self.row_label(pane_idx, &self.session_search_query, matcher)
+            .is_some()
+    }
+
     fn row_label(
         &self,
         pane_idx: usize,

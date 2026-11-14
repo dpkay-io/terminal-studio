@@ -25,8 +25,8 @@ use super::pane::{
 };
 use super::pane_state::PaneState;
 use super::persistence::{
-    session_data_path, AppSession, SavedEditorGroup, SavedGroupLayout, SavedPane, SavedPaneContent,
-    SavedRightTab, SavedSession,
+    session_data_path, AppSession, RestoredPaneIds, SavedEditorGroup, SavedGroupLayout, SavedPane,
+    SavedPaneContent, SavedRightTab, SavedSession,
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
@@ -1764,7 +1764,7 @@ impl App {
         self.pane_state.active_pane_id = None;
         self.pane_state.next_pane_id = 0;
 
-        let mut pane_ids: Vec<u32> = Vec::new();
+        let mut pane_ids = RestoredPaneIds::default();
         for saved in &state.panes {
             let content = match &saved.content {
                 SavedPaneContent::Terminal { session_index } => {
@@ -1853,6 +1853,7 @@ impl App {
                 }
                 SavedPaneContent::FileDiff { path } => {
                     if !path.exists() {
+                        pane_ids.skip();
                         continue;
                     }
                     PaneContent::FileDiff(FileDiffState {
@@ -1918,12 +1919,12 @@ impl App {
         }
 
         if let Some(idx) = state.active_pane_index {
-            if let Some(&pid) = pane_ids.get(idx) {
+            if let Some(pid) = pane_ids.get(idx) {
                 self.activate_pane(pid);
             }
         }
         if self.pane_state.active_pane_id.is_none() {
-            if let Some(&pid) = pane_ids.first() {
+            if let Some(pid) = pane_ids.first() {
                 self.activate_pane(pid);
             }
         }
@@ -1943,14 +1944,14 @@ impl App {
                 let restored_pane_ids: Vec<u32> = sg
                     .pane_indices
                     .iter()
-                    .filter_map(|&idx| pane_ids.get(idx).copied())
+                    .filter_map(|&idx| pane_ids.get(idx))
                     .collect();
                 if restored_pane_ids.is_empty() {
                     continue;
                 }
                 let active_pid = sg
                     .active_pane_index
-                    .and_then(|idx| pane_ids.get(idx).copied())
+                    .and_then(|idx| pane_ids.get(idx))
                     .or_else(|| restored_pane_ids.first().copied());
 
                 let mut group = EditorGroup::new(sg.id, restored_pane_ids[0]);
@@ -1982,7 +1983,7 @@ impl App {
         let saved_nav_order: Vec<u32> = state
             .nav_order
             .iter()
-            .filter_map(|&idx| pane_ids.get(idx).copied())
+            .filter_map(|&idx| pane_ids.get(idx))
             .collect();
         let mut nav_panes = Vec::with_capacity(self.pane_state.panes.len());
         self.nav_panes_into(&mut nav_panes);
@@ -1990,7 +1991,7 @@ impl App {
 
         self.active_group = state.active_group;
         for (group, pane_index) in &state.last_pane_per_group {
-            if let Some(&pid) = pane_ids.get(*pane_index) {
+            if let Some(pid) = pane_ids.get(*pane_index) {
                 self.last_pane_per_group.insert(*group, pid);
             }
         }

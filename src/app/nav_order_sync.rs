@@ -6,6 +6,7 @@ use super::ui::left_panel::nav_order::{NavPane, SectionKey};
 use super::ui::left_panel::sections;
 use super::App;
 use crate::editor_group::GroupId;
+use fuzzy_matcher::skim::SkimMatcherV2;
 
 /// The section ⌘1–9 count through: the whole list while there is one split
 /// (the list is drawn flat then), else the focused split's section.
@@ -40,17 +41,18 @@ impl App {
         self.nav_panes_buf = panes;
     }
 
-    /// Pane ids ⌘1–9 open, in left nav order: the focused split's rows that
-    /// the workspace/label filter shows.
+    /// Pane ids ⌘1–9 open, in left nav order: the focused split's rows the
+    /// session list shows (its text, workspace and label filters).
     pub(super) fn numbered_tab_targets(&self) -> Vec<u32> {
         let has_splits = !sections::section_labels(&self.pane_state.group_layout).is_empty();
         let section = numbered_section(has_splits, self.pane_state.focused_group_id);
+        let matcher = SkimMatcherV2::default();
         self.nav_order.numbered(section, |id| {
             self.pane_state
                 .panes
                 .iter()
-                .find(|p| p.id == id)
-                .is_some_and(|p| self.pane_passes_tab_filter(p))
+                .position(|p| p.id == id)
+                .is_some_and(|idx| self.pane_shown_in_list(idx, &matcher))
         })
     }
 }

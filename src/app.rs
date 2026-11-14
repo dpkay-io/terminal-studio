@@ -388,17 +388,7 @@ impl eframe::App for App {
     /// gets everything.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.raw_intercepted_keys.clear();
-        let active_is_editor = self
-            .pane_state
-            .active_pane_id
-            .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-            .map(|p| {
-                matches!(
-                    p.content,
-                    PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)
-                )
-            })
-            .unwrap_or(false);
+        let active_is_editor = self.active_pane_is_text_editor();
         let any_overlay = self.any_modal_open()
             || self.term_search.active
             || self.text_search.active
@@ -412,14 +402,7 @@ impl eframe::App for App {
             // widget; it is kept for the layout shortcuts instead
             // (`run_held_layout_keys`), so "Switch to last session" works
             // from a text box too.
-            let held = &mut self.raw_intercepted_keys;
-            raw_input.events.retain(|event| {
-                if input::is_ctrl_tab(event) {
-                    held.push(event.clone());
-                    return false;
-                }
-                true
-            });
+            input::hold_ctrl_tab(&mut raw_input.events, &mut self.raw_intercepted_keys);
         }
         if active_is_editor || any_overlay || notes_has_focus || floating_layer_open(_ctx) {
             return;
@@ -1553,6 +1536,7 @@ impl App {
         // Before anything reads the left nav order this frame (shortcuts,
         // the session list).
         self.refresh_nav_order();
+        self.hold_extra_window_keys(ctx);
 
         #[cfg(target_os = "macos")]
         self.sync_macos_menu(ctx);
@@ -2497,7 +2481,7 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
-                                            .id(self.vp_id("notes_textedit"))
+                                            .id(self.notes_text_id())
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
@@ -2707,8 +2691,6 @@ impl App {
 
         // ── Visible pane indices (all panes, no workspace filtering) ──────
         let visible_indices: Vec<usize> = self.pane_state.visible_leaf_indices();
-        // What ⌘1–9 open: the focused split's rows, in left nav order.
-        let numbered_tabs = self.numbered_tab_targets();
         // If the active pane was removed, fall back to the first available pane.
         if let Some(pid) = self.pane_state.active_pane_id {
             let pane_exists = self.pane_state.panes.iter().any(|p| p.id == pid);
@@ -3205,16 +3187,20 @@ impl App {
 
             // Tab and split chords from an editor, which otherwise keeps every
             // key for typing; the terminal loop below runs the same ones.
-            if active_is_editor && !modal_open {
+            // Not while a rename field, a filter box or a menu has the
+            // keyboard: the keys are theirs then.
+            let text_box_keys_apply = !modal_open && self.text_box_layout_keys_apply(ctx);
+            if active_is_editor && text_box_keys_apply {
                 while let Some(action) = ctx.input_mut(|i| {
                     self.shortcut_registry.consume_where(i, AppAction::arranges_layout)
                 }) {
-                    self.apply_layout_shortcut(action, &numbered_tabs, &mut layout_requests);
+                    self.apply_layout_shortcut(action, &mut layout_requests);
                 }
             }
-            // Ctrl+Tab the raw input hook kept away from a text box.
-            if (active_is_editor || self.notes_has_focus(ctx)) && !modal_open {
-                self.run_held_layout_keys(&numbered_tabs, &mut layout_requests);
+            // Ctrl+Tab held back from a text box (`raw_input_hook`, or
+            // `hold_extra_window_keys` in an extra window).
+            if (active_is_editor || self.notes_has_focus(ctx)) && text_box_keys_apply {
+                self.run_held_layout_keys(&mut layout_requests);
             }
 
             if !active_is_editor
@@ -3299,7 +3285,7 @@ impl App {
                             if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
                                 match action {
                                     a if a.arranges_layout() => {
-                                        self.apply_layout_shortcut(a, &numbered_tabs, &mut layout_requests);
+                                        self.apply_layout_shortcut(a, &mut layout_requests);
                                     }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));

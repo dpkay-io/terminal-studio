@@ -151,6 +151,31 @@ pub(super) struct AppSession {
     pub(super) nav_order: Vec<usize>,
 }
 
+/// The pane id each saved pane got on restore, by its index in
+/// `AppSession::panes`. A saved pane that can't be restored keeps its slot
+/// (empty), so every later saved index still names its own pane.
+#[derive(Default)]
+pub(super) struct RestoredPaneIds(Vec<Option<u32>>);
+
+impl RestoredPaneIds {
+    pub(super) fn push(&mut self, pane_id: u32) {
+        self.0.push(Some(pane_id));
+    }
+
+    /// The saved pane at the next index was not restored.
+    pub(super) fn skip(&mut self) {
+        self.0.push(None);
+    }
+
+    pub(super) fn get(&self, saved_index: usize) -> Option<u32> {
+        self.0.get(saved_index).copied().flatten()
+    }
+
+    pub(super) fn first(&self) -> Option<u32> {
+        self.0.iter().copied().flatten().next()
+    }
+}
+
 pub(super) fn session_data_path() -> Option<PathBuf> {
     util::data_file("session.json")
 }
@@ -568,6 +593,19 @@ mod tests {
         assert_eq!(restored.focused_group_id, 1);
         assert_eq!(restored.next_group_id, 3);
         assert_eq!(restored.next_split_id, 2);
+    }
+
+    #[test]
+    fn restored_ids_keep_saved_indices_after_a_skip() {
+        let mut ids = RestoredPaneIds::default();
+        ids.skip();
+        ids.push(20);
+        ids.push(30);
+        assert_eq!(ids.get(0), None, "the skipped pane");
+        assert_eq!(ids.get(1), Some(20));
+        assert_eq!(ids.get(2), Some(30));
+        assert_eq!(ids.get(3), None);
+        assert_eq!(ids.first(), Some(20));
     }
 
     #[test]
