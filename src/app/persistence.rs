@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::settings::InfoBarPosition;
 use crate::editor_group::GroupNode;
 use crate::util;
+use crate::workspace::WindowId;
 
 fn default_panel_ratio() -> f32 {
     0.35
@@ -149,6 +151,28 @@ pub(super) struct AppSession {
     /// in older files: the list then starts in most-recent-first order.
     #[serde(default)]
     pub(super) nav_order: Vec<usize>,
+    /// Each extra window's left nav order, like `nav_order`. Kept here, not
+    /// in windows.json, because the indices name this file's `panes`.
+    #[serde(default)]
+    pub(super) window_nav_orders: Vec<SavedWindowNavOrder>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct SavedWindowNavOrder {
+    pub(super) window: WindowId,
+    pub(super) order: Vec<usize>,
+}
+
+/// A left nav order as indices into the saved panes; panes not saved
+/// (`pane_id_to_index` has no entry) are left out.
+pub(super) fn saved_nav_indices(
+    order: &[u32],
+    pane_id_to_index: &HashMap<u32, usize>,
+) -> Vec<usize> {
+    order
+        .iter()
+        .filter_map(|id| pane_id_to_index.get(id).copied())
+        .collect()
 }
 
 /// The pane id each saved pane got on restore, by its index in
@@ -173,6 +197,15 @@ impl RestoredPaneIds {
 
     pub(super) fn first(&self) -> Option<u32> {
         self.0.iter().copied().flatten().next()
+    }
+
+    /// The restored pane ids at `saved_indices`, in that order; indices with
+    /// no restored pane are left out.
+    pub(super) fn ids_at(&self, saved_indices: &[usize]) -> Vec<u32> {
+        saved_indices
+            .iter()
+            .filter_map(|&idx| self.get(idx))
+            .collect()
     }
 }
 
@@ -456,6 +489,7 @@ mod tests {
             ],
             group_layout: None,
             nav_order: Vec::new(),
+            window_nav_orders: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();
@@ -609,6 +643,38 @@ mod tests {
     }
 
     #[test]
+    fn restored_ids_at_saved_indices_skip_unrestored_panes() {
+        let mut ids = RestoredPaneIds::default();
+        ids.push(10);
+        ids.skip();
+        ids.push(30);
+        assert_eq!(ids.ids_at(&[2, 1, 0, 7]), vec![30, 10]);
+    }
+
+    #[test]
+    fn nav_indices_name_saved_panes_only() {
+        let saved: HashMap<u32, usize> = [(10, 0), (30, 1)].into_iter().collect();
+        assert_eq!(saved_nav_indices(&[30, 20, 10], &saved), vec![1, 0]);
+    }
+
+    #[test]
+    fn window_nav_orders_roundtrip() {
+        let json = r#"{"window_nav_orders":[{"window":3,"order":[1,0]}]}"#;
+        let original: AppSession = serde_json::from_str(json).unwrap();
+        let text = serde_json::to_string(&original).unwrap();
+        let restored: AppSession = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.window_nav_orders.len(), 1);
+        assert_eq!(restored.window_nav_orders[0].window, WindowId(3));
+        assert_eq!(restored.window_nav_orders[0].order, vec![1, 0]);
+    }
+
+    #[test]
+    fn old_session_file_has_no_window_nav_orders() {
+        let restored: AppSession = serde_json::from_str(r#"{"nav_order":[0]}"#).unwrap();
+        assert!(restored.window_nav_orders.is_empty());
+    }
+
+    #[test]
     fn app_session_nav_order_roundtrip() {
         let original: AppSession = serde_json::from_str(r#"{"nav_order":[2,0,1]}"#).unwrap();
         let json = serde_json::to_string(&original).unwrap();
@@ -675,6 +741,7 @@ mod tests {
                 next_split_id: 1,
             }),
             nav_order: Vec::new(),
+            window_nav_orders: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();

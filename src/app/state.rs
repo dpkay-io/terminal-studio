@@ -25,8 +25,9 @@ use super::pane::{
 };
 use super::pane_state::PaneState;
 use super::persistence::{
-    session_data_path, AppSession, RestoredPaneIds, SavedEditorGroup, SavedGroupLayout, SavedPane,
-    SavedPaneContent, SavedRightTab, SavedSession,
+    saved_nav_indices, session_data_path, AppSession, RestoredPaneIds, SavedEditorGroup,
+    SavedGroupLayout, SavedPane, SavedPaneContent, SavedRightTab, SavedSession,
+    SavedWindowNavOrder,
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
@@ -1648,11 +1649,23 @@ impl App {
                 .cloned()
                 .collect(),
             group_layout,
-            nav_order: self
-                .nav_order
-                .order()
+            nav_order: saved_nav_indices(self.nav_order.order(), &pane_id_to_index),
+            window_nav_orders: self
+                .extra_windows
                 .iter()
-                .filter_map(|pid| pane_id_to_index.get(pid).copied())
+                .map(|w| {
+                    // A save from inside this window's frame: its view is
+                    // swapped into `self` and `w.view` is a placeholder.
+                    let order = if self.current_window_id.as_ref() == Some(&w.id) {
+                        &self.nav_order
+                    } else {
+                        &w.view.nav_order
+                    };
+                    SavedWindowNavOrder {
+                        window: w.id.clone(),
+                        order: saved_nav_indices(order.order(), &pane_id_to_index),
+                    }
+                })
                 .collect(),
         };
 
@@ -1980,14 +1993,15 @@ impl App {
         }
 
         // After the group layout: a pane's section is its group.
-        let saved_nav_order: Vec<u32> = state
-            .nav_order
-            .iter()
-            .filter_map(|&idx| pane_ids.get(idx))
-            .collect();
         let mut nav_panes = Vec::with_capacity(self.pane_state.panes.len());
         self.nav_panes_into(&mut nav_panes);
-        self.nav_order = NavOrder::restore(&saved_nav_order, &nav_panes);
+        self.nav_order = NavOrder::restore(&pane_ids.ids_at(&state.nav_order), &nav_panes);
+        // Extra windows are loaded (`load_windows`) before the session.
+        for saved in &state.window_nav_orders {
+            if let Some(w) = self.extra_windows.iter_mut().find(|w| w.id == saved.window) {
+                w.view.nav_order = NavOrder::restore(&pane_ids.ids_at(&saved.order), &nav_panes);
+            }
+        }
 
         self.active_group = state.active_group;
         for (group, pane_index) in &state.last_pane_per_group {

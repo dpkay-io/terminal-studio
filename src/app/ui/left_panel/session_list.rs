@@ -838,6 +838,9 @@ impl App {
                 // Refreshed at the start of the frame; held on the next one
                 // while the pointer is over the list.
                 self.nav_list_hovered = pointer_inside;
+                if !pointer_inside && self.nav_order.held() {
+                    ui.ctx().request_repaint();
+                }
                 let ordered_ids = self.nav_order.order();
                 // Panes currently on screen — one per split. Computed once per
                 // frame, not once per row: this list redraws every frame.
