@@ -5,8 +5,8 @@
 //! closures, so it is exercisable without an `App`. The `impl App` methods
 //! below are the wiring.
 
-use super::super::pane::PaneContent;
-use super::super::title::effective_title;
+use super::super::pane::{PaneContent, SessionEntry};
+use super::super::title::{effective_title, session_title};
 use super::super::App;
 use std::path::{Path, PathBuf};
 
@@ -72,6 +72,10 @@ fn content_tooltip_text(content: &PaneContent, terminal_tip: impl FnOnce(u32) ->
             }
             tip
         }
+        // The path is where Save As will start; it is no file yet.
+        PaneContent::FileEditor(ed) if ed.untitled => {
+            format!("{}\n{UNTITLED_TIP}", file_name(&ed.path))
+        }
         PaneContent::FileEditor(ed) => ed.path.to_string_lossy().into_owned(),
         PaneContent::FileDiff(d) => format!("Diff: {}", d.path.to_string_lossy()),
         PaneContent::NoteEditor(_) => "Notes".to_string(),
@@ -91,9 +95,9 @@ fn content_dir(
         PaneContent::DeferredTerminal { cwd, .. } => {
             cwd.clone().filter(|p| !p.as_os_str().is_empty())
         }
-        PaneContent::FileEditor(ed) => ed.path.parent().map(Path::to_path_buf),
-        PaneContent::FileDiff(d) => d.path.parent().map(Path::to_path_buf),
-        PaneContent::ConflictResolver(cr) => cr.path.parent().map(Path::to_path_buf),
+        PaneContent::FileEditor(ed) => crate::util::parent_dir(&ed.path),
+        PaneContent::FileDiff(d) => crate::util::parent_dir(&d.path),
+        PaneContent::ConflictResolver(cr) => crate::util::parent_dir(&cr.path),
         PaneContent::NoteEditor(_) => None,
     }
 }
@@ -120,14 +124,18 @@ fn content_ws_color(
 
 /// What a new, never-saved buffer is called before its number.
 const UNTITLED_PREFIX: &str = "Untitled-";
+/// Second line of an untitled buffer's tooltip.
+const UNTITLED_TIP: &str = "Not saved yet";
 
 /// The name for a new untitled buffer: one past the highest number an open
 /// untitled buffer uses, so names never repeat while any are open, including
-/// ones restored from the last session.
-fn next_untitled_name<'a>(open_names: impl Iterator<Item = &'a Path>) -> String {
-    let highest = open_names
-        .filter_map(|name| {
-            name.to_str()?
+/// ones restored from the last session. Only the name counts, not the folder
+/// the buffer was made in.
+fn next_untitled_name<'a>(open_paths: impl Iterator<Item = &'a Path>) -> String {
+    let highest = open_paths
+        .filter_map(|path| {
+            path.file_name()?
+                .to_str()?
                 .strip_prefix(UNTITLED_PREFIX)?
                 .parse::<u32>()
                 .ok()
@@ -137,7 +145,8 @@ fn next_untitled_name<'a>(open_names: impl Iterator<Item = &'a Path>) -> String 
     format!("{UNTITLED_PREFIX}{}", highest.saturating_add(1))
 }
 
-fn file_name(path: &Path) -> String {
+/// A file's name as the user sees it in tabs and dialogs.
+pub(in crate::app) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
@@ -221,28 +230,32 @@ impl App {
             .map(|w| w.name.clone())
     }
 
+    /// A terminal's name, the same in its row, its split's header, the
+    /// window title and the saved session (see [`session_title`]).
+    pub(in crate::app) fn session_label(&self, e: &SessionEntry) -> String {
+        let s = e.session.read();
+        let (title, pinned, cwd) = (s.title(), s.is_title_pinned(), s.cwd.clone());
+        drop(s);
+        let fg = self.workers.foreground_worker.get(e.id);
+        let ws_name = if cwd.as_os_str().is_empty() {
+            None
+        } else {
+            self.ws_name_for_cwd(&cwd)
+        };
+        session_title(
+            &title,
+            pinned,
+            &cwd,
+            fg.as_ref(),
+            Some(&e.shell),
+            ws_name.as_deref(),
+        )
+    }
+
     fn terminal_display_text(&self, sid: u32) -> String {
         self.session_state
             .find(sid)
-            .map(|e| {
-                let s = e.session.read();
-                let title = s.title();
-                let cwd = s.cwd.clone();
-                drop(s);
-                let fg = self.workers.foreground_worker.get(e.id);
-                let ws_name = if cwd.as_os_str().is_empty() {
-                    None
-                } else {
-                    self.ws_name_for_cwd(&cwd)
-                };
-                effective_title(
-                    &title,
-                    &cwd,
-                    fg.as_ref(),
-                    Some(&e.shell),
-                    ws_name.as_deref(),
-                )
-            })
+            .map(|e| self.session_label(e))
             .unwrap_or_else(|| format!("Terminal {sid}"))
     }
 
@@ -250,26 +263,13 @@ impl App {
         let Some(e) = self.session_state.find(sid) else {
             return format!("Terminal {sid}");
         };
-        let s = e.session.read();
-        let title = s.title();
-        let cwd = s.cwd.clone();
-        drop(s);
-        let ws_name = if cwd.as_os_str().is_empty() {
-            None
-        } else {
-            self.ws_name_for_cwd(&cwd)
-        };
-        let fg = self.workers.foreground_worker.get(e.id);
-        let mut tip = effective_title(
-            &title,
-            &cwd,
-            fg.as_ref(),
-            Some(&e.shell),
-            ws_name.as_deref(),
-        );
+        let mut tip = self.session_label(e);
+        let cwd = e.session.read().cwd.clone();
         append_line(&mut tip, &cwd.to_string_lossy());
-        if let Some(name) = &ws_name {
-            append_line(&mut tip, name);
+        if !cwd.as_os_str().is_empty() {
+            if let Some(name) = self.ws_name_for_cwd(&cwd) {
+                append_line(&mut tip, &name);
+            }
         }
         tip
     }
@@ -290,6 +290,9 @@ mod tests {
         // A buffer whose name only looks similar does not count.
         let odd = [Path::new("Untitled-x"), Path::new("Untitled-")];
         assert_eq!(super::next_untitled_name(odd.into_iter()), "Untitled-1");
+        // Buffers remember the folder they were made in; only the name counts.
+        let in_dirs = [Path::new("/a/Untitled-2"), Path::new("/b/Untitled-7")];
+        assert_eq!(super::next_untitled_name(in_dirs.into_iter()), "Untitled-8");
     }
 
     use super::*;

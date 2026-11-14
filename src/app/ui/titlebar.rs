@@ -1,5 +1,4 @@
 use super::super::pane::{PaneContent, RightTab};
-use super::super::title::effective_title;
 use super::super::window_state;
 use super::super::App;
 use super::update_pill::{self, PillAction};
@@ -156,27 +155,7 @@ impl App {
                         .sessions
                         .iter()
                         .find(|e| e.id == sid)
-                        .map(|e| {
-                            let s = e.session.read();
-                            let title = s.title();
-                            let cwd = s.cwd.clone();
-                            drop(s);
-                            let fg = self.workers.foreground_worker.get(e.id);
-                            let ws_name = if cwd.as_os_str().is_empty() {
-                                None
-                            } else {
-                                self.workspace_store
-                                    .find_for_cwd(&cwd)
-                                    .map(|w| w.name.clone())
-                            };
-                            effective_title(
-                                &title,
-                                &cwd,
-                                fg.as_ref(),
-                                Some(&e.shell),
-                                ws_name.as_deref(),
-                            )
-                        })
+                        .map(|e| self.session_label(e))
                 }
                 PaneContent::FileEditor(ed) => ed
                     .path

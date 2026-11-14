@@ -1,4 +1,3 @@
-use super::super::pane::PaneContent;
 use super::super::settings::InfoBarPosition;
 use super::super::App;
 use crate::editor_group::GroupId;
@@ -412,52 +411,15 @@ impl App {
             .and_then(|w| self.workers.workspace_git_worker.get(w.id))
             .map(|info| info.branch);
 
-        let session_title = match &pane.content {
-            PaneContent::Terminal(sid) => {
-                let sid = *sid;
-                self.session_state
-                    .sessions
-                    .iter()
-                    .find(|e| e.id == sid)
-                    .map(|e| {
-                        let s = e.session.read();
-                        let title = s.title();
-                        let cwd = s.cwd.clone();
-                        drop(s);
-                        let fg_proc = self.workers.foreground_worker.get(e.id);
-                        let ws_label = if cwd.as_os_str().is_empty() {
-                            None
-                        } else {
-                            self.workspace_store
-                                .find_for_cwd(&cwd)
-                                .map(|w| w.name.clone())
-                        };
-                        super::super::title::effective_title(
-                            &title,
-                            &cwd,
-                            fg_proc.as_ref(),
-                            Some(&e.shell),
-                            ws_label.as_deref(),
-                        )
-                    })
-            }
-            PaneContent::FileEditor(ed) => Some(
-                ed.path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Editor".into()),
-            ),
-            PaneContent::FileDiff(d) => Some(format!(
-                "Diff: {}",
-                d.path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            )),
-            PaneContent::NoteEditor(_) => Some("Notes".into()),
-            PaneContent::ConflictResolver(_) => Some("Conflict Resolver".into()),
-            PaneContent::DeferredTerminal { .. } => None,
-        };
+        // The tab's own text, the same the session list shows, so an
+        // unsaved file reads `* name` here too.
+        let session_title = self
+            .pane_state
+            .panes
+            .iter()
+            .position(|p| p.id == pid)
+            .map(|idx| self.tab_display_text(idx))
+            .filter(|t| !t.is_empty());
 
         (session_title, ws_name, ws_color, git_branch)
     }

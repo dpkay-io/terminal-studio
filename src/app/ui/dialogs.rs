@@ -1311,11 +1311,14 @@ impl App {
             self.pending_tab_close = None;
             return;
         };
-        let name = self.tab_display_text(idx);
-        let untitled = matches!(
-            &self.pane_state.panes[idx].content,
-            PaneContent::FileEditor(ed) if ed.untitled
-        );
+        // Only an editor can hold unsaved edits. Its plain name: the tab text
+        // adds an unsaved mark that reads oddly inside the question.
+        let PaneContent::FileEditor(ed) = &self.pane_state.panes[idx].content else {
+            self.pending_tab_close = None;
+            return;
+        };
+        let name = super::pane_labels::file_name(&ed.path);
+        let untitled = ed.untitled;
 
         let config = ui_kit::DialogConfig {
             width: ui_kit::DialogWidth::Fixed(UNSAVED_DIALOG_W),

@@ -35,6 +35,7 @@ mod git_diff;
 mod git_worker;
 mod input;
 mod labels;
+mod layout_shortcuts;
 #[cfg(target_os = "macos")]
 mod macos_fullscreen;
 #[cfg(target_os = "macos")]
@@ -2636,6 +2637,8 @@ impl App {
         // Phase D: split / close-split requests collected from key handler
         let mut split_request: Option<SplitDir> = self.deferred_split.take();
         let mut close_split_pane: bool = std::mem::take(&mut self.deferred_close_pane);
+        // Tab and split shortcuts pressed this frame (`layout_shortcuts`).
+        let mut layout_requests = layout_shortcuts::LayoutRequests::default();
         // Phase D: split divider ratio changes (split_id, new_ratio)
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
         // Phase D: pane context menu actions (3-dot menu on split panes)
@@ -2660,7 +2663,6 @@ impl App {
             resize_cell_h  = ch;
             panel_w_snap   = panel_rect.width();
 
-            let nv = visible_indices.len();
 
             let active_is_editor = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
@@ -3098,6 +3100,16 @@ impl App {
                 }
             }
 
+            // Tab and split chords from an editor, which otherwise keeps every
+            // key for typing; the terminal loop below runs the same ones.
+            if active_is_editor && !modal_open {
+                while let Some(action) = ctx.input_mut(|i| {
+                    self.shortcut_registry.consume_where(i, AppAction::arranges_layout)
+                }) {
+                    self.apply_layout_shortcut(action, &visible_indices, &mut layout_requests);
+                }
+            }
+
             if !active_is_editor && !any_other_widget_focused && !modal_open {
 
                 // Focus-in / focus-out events (?1004h)
@@ -3175,11 +3187,8 @@ impl App {
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
                             if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
                                 match action {
-                                    AppAction::SplitHorizontal => split_request = Some(SplitDir::Horizontal),
-                                    AppAction::SplitVertical => split_request = Some(SplitDir::Vertical),
-                                    AppAction::CloseCurrentPane => close_split_pane = true,
-                                    AppAction::ToggleLeftSidebar | AppAction::ToggleRightSidebar => {
-                                        self.toggle_view(action);
+                                    a if a.arranges_layout() => {
+                                        self.apply_layout_shortcut(a, &visible_indices, &mut layout_requests);
                                     }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
@@ -3205,26 +3214,6 @@ impl App {
                                     AppAction::DuplicateSession => self.deferred_duplicate = true,
                                     AppAction::FocusSessionSearch => { /* handled in global shortcuts block above */ }
                                     AppAction::FocusFileSearch => { /* handled in global shortcuts block above */ }
-                                    // Both cycle inside the focused split only. Cycling
-                                    // across every visible pane used to yank focus into
-                                    // another split, which has no way back on the keyboard
-                                    // now that each split owns its own pane order.
-                                    AppAction::PreviousTab => {
-                                        if let Some(cur) = self.pane_state.active_pane_id {
-                                            let allowed = self.tab_cycle_candidates();
-                                            if let Some(prev) = self.pane_state.prev_pane_in_focused_group(cur, &allowed) {
-                                                clicked_pane_id = Some(prev);
-                                            }
-                                        }
-                                    }
-                                    AppAction::NextTab => {
-                                        if let Some(cur) = self.pane_state.active_pane_id {
-                                            let allowed = self.tab_cycle_candidates();
-                                            if let Some(next) = self.pane_state.next_pane_in_focused_group(cur, &allowed) {
-                                                clicked_pane_id = Some(next);
-                                            }
-                                        }
-                                    }
                                     AppAction::NextWorkspace => {
                                         if self.current_window_id.is_none() {
                                             let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter()
@@ -3319,13 +3308,7 @@ impl App {
                                             }
                                         }
                                     }
-                                    _ => {
-                                        if let Some(tab_idx) = action.tab_index() {
-                                            if tab_idx < nv {
-                                                clicked_pane_id = Some(self.pane_state.panes[visible_indices[tab_idx]].id);
-                                            }
-                                        }
-                                    }
+                                    _ => {}
                                 }
                             }
                             // Alt+Arrow → move focus between editor groups
@@ -3910,6 +3893,11 @@ impl App {
         }
 
         // Phase D-1: Handle split request (Ctrl+Shift+\ or Ctrl+Shift+-)
+        split_request = layout_requests.split.or(split_request);
+        close_split_pane |= layout_requests.close_pane;
+        if layout_requests.activate_pane.is_some() {
+            clicked_pane_id = layout_requests.activate_pane;
+        }
         if let Some(dir) = split_request {
             if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Get current size for the new pane

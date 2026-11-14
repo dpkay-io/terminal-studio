@@ -69,8 +69,9 @@ impl App {
     }
 
     /// Open the inline rename editor on a row, and apply a committed one.
-    /// Only terminals have a settable title; the menu entry is hidden for
-    /// everything else, so a commit that reaches here for one is a no-op.
+    /// Only terminals (running or not yet started) have a settable title; the
+    /// menu entry is hidden for everything else, so a commit that reaches here
+    /// for one is a no-op.
     fn process_row_rename(&mut self, sess_actions: &mut SessionListActions) {
         // Drop a rename whose pane has since been closed, so its buffer cannot
         // outlive the row. Checked here rather than in each close path —
@@ -94,35 +95,60 @@ impl App {
             // Confirming the name the row already showed changes nothing:
             // pinning it would freeze an automatic title for no reason.
             let shown = self.tab_display_text(idx);
-            let PaneContent::Terminal(sid) = self.pane_state.panes[idx].content else {
-                return;
-            };
-            if let Some(e) = self.session_state.find(sid) {
-                let session = e.session.read();
-                // The name stays until the user renames the session again; an
-                // empty name hands it back to the shell's own title. Prompt
-                // hooks set a title on every command, so anything weaker than
-                // a pin is gone after the next one.
-                if name.is_empty() {
-                    session.pin_title(None);
-                } else if session.is_title_pinned() || name != shown {
-                    session.pin_title(Some(name));
+            // The name stays until the user renames the session again; an
+            // empty name hands it back to the shell's own title. Prompt hooks
+            // set a title on every command, so anything weaker than a pin is
+            // gone after the next one.
+            match &mut self.pane_state.panes[idx].content {
+                PaneContent::Terminal(sid) => {
+                    let Some(e) = self.session_state.find(*sid) else {
+                        return;
+                    };
+                    let session = e.session.read();
+                    if name.is_empty() {
+                        session.pin_title(None);
+                    } else if session.is_title_pinned() || name != shown {
+                        session.pin_title(Some(name));
+                    }
                 }
+                // A restored session whose shell hasn't started yet: the pin
+                // rides along and is applied when the session starts.
+                PaneContent::DeferredTerminal {
+                    saved_title,
+                    title_pinned,
+                    ..
+                } => {
+                    if name.is_empty() {
+                        *saved_title = None;
+                        *title_pinned = false;
+                    } else if *title_pinned || name != shown {
+                        *saved_title = Some(name);
+                        *title_pinned = true;
+                    }
+                }
+                _ => {}
             }
         }
     }
 
-    /// Create a fresh, unsaved ("untitled") editor buffer in the active group.
-    /// The first Ctrl+S prompts for a filename via a native Save dialog.
+    /// Create a fresh, unsaved ("untitled") editor buffer in the active group,
+    /// ready for typing. The first Ctrl+S prompts for a filename via a native
+    /// Save dialog.
     fn create_new_file_pane(&mut self) {
         use super::super::super::pane::FileEditorState;
         let pane_id = self.pane_state.next_pane_id;
         self.pane_state.next_pane_id += 1;
         let name = self.next_untitled_name();
+        // Made in the folder the user is working in, so the file panel stays
+        // there and Save As starts there.
+        let path = match self.active_pane_cwd() {
+            Some(dir) => dir.join(name),
+            None => std::path::PathBuf::from(name),
+        };
         self.pane_state.panes.push(PaneEntry {
             id: pane_id,
             content: PaneContent::FileEditor(FileEditorState {
-                path: std::path::PathBuf::from(name),
+                path,
                 content: String::new(),
                 dirty: false,
                 save_error: false,

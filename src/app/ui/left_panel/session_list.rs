@@ -1,5 +1,4 @@
 use super::super::super::pane::PaneContent;
-use super::super::super::title::effective_title;
 use super::super::super::{App, CloseAllTarget};
 use super::{sections, SessionListActions};
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
@@ -15,6 +14,8 @@ use std::collections::HashMap;
 /// Shown in an emptied rename box: leaving it empty brings back the name the
 /// shell or program sets. Short, so it fits the narrowest sidebar.
 const RENAME_HINT: &str = "Automatic name";
+/// Row text for a restored session with neither a name nor a folder.
+const RESTORED_ROW_LABEL: &str = "(restored)";
 
 /// Radius of the completed-process dot. Bounded by the gutter between the
 /// left-edge markers and the title text — see the placement comment in
@@ -889,95 +890,19 @@ impl App {
         matcher: &SkimMatcherV2,
     ) -> Option<RowLabel> {
         let pane = &self.pane_state.panes[pane_idx];
-        let (label, ws_color, dimmed): (String, Option<[u8; 3]>, bool) = match &pane.content {
-            PaneContent::Terminal(sid) => {
-                if let Some(e) = self.session_state.find(*sid) {
-                    let (title, cwd) = {
-                        let s = e.session.read();
-                        (s.title(), s.cwd.clone())
-                    };
-                    let ws = if cwd.as_os_str().is_empty() {
-                        None
-                    } else {
-                        self.workspace_store.find_for_cwd(&cwd)
-                    };
-                    let color = ws.map(|w| w.color);
-                    let ws_name = ws.map(|w| w.name.as_str());
-                    let fg = self.workers.foreground_worker.get(e.id);
-                    (
-                        effective_title(&title, &cwd, fg.as_ref(), Some(&e.shell), ws_name),
-                        color,
-                        false,
-                    )
-                } else {
-                    ("(missing)".to_string(), None, true)
-                }
-            }
-            PaneContent::DeferredTerminal {
-                cwd, saved_title, ..
-            } => {
-                let cwd_path = cwd.clone().unwrap_or_default();
-                let ws = if cwd_path.as_os_str().is_empty() {
-                    None
-                } else {
-                    self.workspace_store.find_for_cwd(&cwd_path)
-                };
-                let color = ws.map(|w| w.color);
-                let ws_name = ws.map(|w| w.name.as_str());
-                let mut text = if let Some(t) = saved_title.as_deref().filter(|s| !s.is_empty()) {
-                    t.to_string()
-                } else {
-                    effective_title("", &cwd_path, None, None, ws_name)
-                };
-                if text.is_empty() {
-                    text = "(restored)".to_string();
-                }
-                (text, color, true)
-            }
-            PaneContent::FileEditor(ed) => {
-                let text = ed
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| ed.path.display().to_string());
-                let color = ed.workspace_id.and_then(|id| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.color)
-                });
-                (text, color, false)
-            }
-            PaneContent::FileDiff(d) => {
-                let name = d
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| format!("\u{21c4} {}", s))
-                    .unwrap_or_else(|| format!("\u{21c4} {}", d.path.display()));
-                (name, None, false)
-            }
-            PaneContent::NoteEditor(ne) => {
-                let color = ne.workspace_id.and_then(|id| {
-                    self.workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.color)
-                });
-                ("Notes".to_string(), color, false)
-            }
-            PaneContent::ConflictResolver(cr) => {
-                let name = cr
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| format!("\u{26a0} {}", s))
-                    .unwrap_or_else(|| "Conflicts".to_string());
-                (name, None, false)
-            }
+        // The same text every other place shows for this tab, including the
+        // unsaved (`*`) and failed-save (`!`) marks on files.
+        let mut label = self.tab_display_text(pane_idx);
+        if label.is_empty() {
+            label = RESTORED_ROW_LABEL.to_string();
+        }
+        let ws_color = self.ws_color_for_pane(pane_idx);
+        // Not running: a restored session not started yet, or a terminal
+        // whose session is gone.
+        let dimmed = match &pane.content {
+            PaneContent::Terminal(sid) => self.session_state.find(*sid).is_none(),
+            PaneContent::DeferredTerminal { .. } => true,
+            _ => false,
         };
 
         if !session_filter.is_empty() {
@@ -1415,7 +1340,10 @@ impl App {
         let pane_labels_snapshot = pane.labels.clone();
         // Only a terminal carries a settable title, so the entry is hidden
         // rather than offered as a rename that silently does nothing.
-        let can_rename = matches!(&pane.content, PaneContent::Terminal(_));
+        let can_rename = matches!(
+            &pane.content,
+            PaneContent::Terminal(_) | PaneContent::DeferredTerminal { .. }
+        );
         resp.context_menu(|ui| {
             if can_rename && ui.button("Rename").clicked() {
                 actions.start_rename_pane_id = Some(pane_id);

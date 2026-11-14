@@ -47,6 +47,10 @@ pub(super) enum SavedPaneContent {
         title: Option<String>,
         #[serde(default)]
         title_pinned: bool,
+        /// Scrollback saved by an earlier run, kept for a restored session
+        /// whose shell hasn't started yet; absent in older files.
+        #[serde(default)]
+        scrollback_file: Option<String>,
     },
     FileEditor {
         path: PathBuf,
@@ -266,6 +270,7 @@ mod tests {
             command: Some("bash".into()),
             title: Some("my terminal".into()),
             title_pinned: true,
+            scrollback_file: Some("1.zst".into()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
@@ -275,11 +280,13 @@ mod tests {
                 command,
                 title,
                 title_pinned,
+                scrollback_file,
             } => {
                 assert_eq!(cwd, PathBuf::from("/usr/local"));
                 assert_eq!(command, Some("bash".into()));
                 assert_eq!(title, Some("my terminal".into()));
                 assert!(title_pinned);
+                assert_eq!(scrollback_file.as_deref(), Some("1.zst"));
             }
             _ => panic!("expected DeferredTerminal variant"),
         }

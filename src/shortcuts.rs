@@ -274,6 +274,22 @@ impl AppAction {
         }
     }
 
+    /// Actions that only arrange tabs, splits and side panels. A text editor
+    /// has no use for their chords, so they also work while one has the
+    /// keyboard (see `app/layout_shortcuts.rs`).
+    pub fn arranges_layout(self) -> bool {
+        matches!(
+            self,
+            Self::SplitHorizontal
+                | Self::SplitVertical
+                | Self::CloseCurrentPane
+                | Self::ToggleLeftSidebar
+                | Self::ToggleRightSidebar
+                | Self::PreviousTab
+                | Self::NextTab
+        ) || self.tab_index().is_some()
+    }
+
     /// Actions that stay available while a modal or dialog is open, and
     /// regardless of which widget has keyboard focus.
     pub fn is_global(self) -> bool {
@@ -1370,6 +1386,25 @@ mod tests {
     fn action_names_round_trip() {
         for action in ALL_ACTIONS {
             assert_eq!(AppAction::from_name(action.name()), Some(*action));
+        }
+    }
+
+    #[test]
+    fn layout_chords_never_take_a_text_editing_key() {
+        // Editors keep these for typing; a layout shortcut on one of them
+        // would break copy, paste, undo or cursor movement in a file.
+        use egui::Key::*;
+        let editing = [A, C, V, X, Y, Z, ArrowLeft, ArrowRight, ArrowUp, ArrowDown];
+        for bindings in [standard_default_bindings(), mac_default_bindings()] {
+            for (shortcut, action) in bindings {
+                if action.arranges_layout() {
+                    assert!(
+                        !editing.contains(&shortcut.key),
+                        "{action:?} uses a text editing key"
+                    );
+                    assert!(shortcut.ctrl, "{action:?} has no Command/Ctrl");
+                }
+            }
         }
     }
 

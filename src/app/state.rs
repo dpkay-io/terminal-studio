@@ -30,7 +30,7 @@ use super::persistence::{
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
-use super::title::{effective_title, shell_escape_arg};
+use super::title::shell_escape_arg;
 use super::watcher::WatchState;
 use super::{App, CloseAllTarget};
 
@@ -40,6 +40,29 @@ fn safe_ratio(v: f32, default: f32) -> f32 {
         v.clamp(0.05, 0.95)
     } else {
         default
+    }
+}
+
+/// Name of a running session's scrollback file, written under one save's
+/// `stamp`. Names from earlier saves (and the bare `<index>.zst` of older
+/// versions) never repeat, so a restored session's file is never overwritten.
+fn scrollback_file_name(stamp: u64, session_index: usize) -> String {
+    format!("{stamp}-{session_index}.zst")
+}
+
+/// Remove every file in the scrollback folder except those in `keep`.
+fn prune_scrollback_dir(dir: &Path, keep: &HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let kept = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| keep.contains(name));
+        if !kept {
+            std::fs::remove_file(entry.path()).ok();
+        }
     }
 }
 
@@ -499,7 +522,7 @@ impl App {
             PaneContent::DeferredTerminal { cwd, .. } => cwd.clone(),
             PaneContent::FileEditor(ed) => self
                 .workspace_path(ed.workspace_id)
-                .or_else(|| ed.path.parent().map(|p| p.to_path_buf())),
+                .or_else(|| crate::util::parent_dir(&ed.path)),
             PaneContent::FileDiff(d) => {
                 let ws = self.workspace_store.find_for_cwd(&d.path);
                 ws.map(|w| w.path.clone())
@@ -1340,17 +1363,32 @@ impl App {
         }
     }
 
+    /// Scrollback files restored sessions still point to: their shells
+    /// haven't started, so there is nothing to capture again and the file
+    /// from the earlier run is the only copy.
+    fn deferred_scrollback_files(&self) -> HashSet<String> {
+        self.pane_state
+            .panes
+            .iter()
+            .filter_map(|p| match &p.content {
+                PaneContent::DeferredTerminal {
+                    scrollback_file, ..
+                } => scrollback_file.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn save_active_scrollbacks(&self) -> HashMap<u32, String> {
         let mut result = HashMap::new();
         let Some(dir) = crate::util::data_dir().map(|d| d.join("active_scrollback")) else {
             return result;
         };
         std::fs::create_dir_all(&dir).ok();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                std::fs::remove_file(entry.path()).ok();
-            }
-        }
+        prune_scrollback_dir(&dir, &self.deferred_scrollback_files());
+        // Every save writes under a new stamp, so a running session's file
+        // can never take the name of one a restored session still needs.
+        let stamp = crate::util::now_millis();
         for (idx, entry) in self.session_state.sessions.iter().enumerate() {
             let session = entry.session.read();
             let ansi_bytes = super::scrollback_capture::extract_grid_as_ansi(&session.term, None);
@@ -1358,7 +1396,7 @@ impl App {
             if ansi_bytes.is_empty() {
                 continue;
             }
-            let filename = format!("{}.zst", idx);
+            let filename = scrollback_file_name(stamp, idx);
             let filepath = dir.join(&filename);
             match zstd::encode_all(ansi_bytes.as_slice(), 3) {
                 Ok(compressed) => {
@@ -1417,7 +1455,6 @@ impl App {
             .map(|e| {
                 let s = e.session.read();
                 let cwd = s.cwd.clone();
-                let title_raw = s.title();
                 let title_pinned = s.is_title_pinned();
                 drop(s);
                 let command = self.workers.foreground_worker.get(e.id).map(|fp| {
@@ -1433,21 +1470,8 @@ impl App {
                         joined
                     }
                 });
-                let fg = self.workers.foreground_worker.get(e.id);
-                let ws_name = if cwd.as_os_str().is_empty() {
-                    None
-                } else {
-                    self.workspace_store
-                        .find_for_cwd(&cwd)
-                        .map(|w| w.name.clone())
-                };
-                let title = Some(effective_title(
-                    &title_raw,
-                    &cwd,
-                    fg.as_ref(),
-                    Some(&e.shell),
-                    ws_name.as_deref(),
-                ));
+                // Saved as the row shows it; a user-given name word for word.
+                let title = Some(self.session_label(e));
                 let scrollback_file = scrollback_files.get(&e.id).cloned();
                 let claude_session_id = self
                     .workers
@@ -1489,12 +1513,17 @@ impl App {
                         pending_command,
                         saved_title,
                         title_pinned,
-                        ..
+                        scrollback_file,
                     } => SavedPaneContent::DeferredTerminal {
                         cwd: cwd.clone().unwrap_or_default(),
                         command: pending_command.clone(),
                         title: saved_title.clone(),
                         title_pinned: *title_pinned,
+                        // Kept on disk by `save_active_scrollbacks`, which
+                        // only runs with scrollback saving on.
+                        scrollback_file: scrollback_file
+                            .clone()
+                            .filter(|_| self.settings.save_scrollback_on_exit),
                     },
                     // Untitled buffers are kept with their text, the same as an
                     // edited file, so quitting never throws away typing.
@@ -1755,6 +1784,7 @@ impl App {
                     command,
                     title,
                     title_pinned,
+                    scrollback_file,
                 } => PaneContent::DeferredTerminal {
                     cwd: if cwd.as_os_str().is_empty() {
                         None
@@ -1764,7 +1794,7 @@ impl App {
                     pending_command: command.clone(),
                     saved_title: title.clone(),
                     title_pinned: *title_pinned,
-                    scrollback_file: None,
+                    scrollback_file: scrollback_file.clone(),
                 },
                 SavedPaneContent::FileEditor {
                     path,
@@ -2687,8 +2717,42 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
-    use super::App;
+    use super::{prune_scrollback_dir, scrollback_file_name, App};
     use crate::workspace::{Workspace, WorkspaceStore};
+    use std::collections::HashSet;
+
+    #[test]
+    fn saving_scrollback_keeps_the_files_restored_sessions_still_need() {
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ts_scrollback_prune_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["1.zst", "2.zst", "100-0.zst"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let keep: HashSet<String> = ["1.zst".to_string()].into();
+        prune_scrollback_dir(&dir, &keep);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["1.zst"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_scrollback_names_never_reuse_an_earlier_saves_names() {
+        // Older versions wrote `<index>.zst`; every save now writes under its
+        // own stamp, so neither an old name nor an earlier save's is reused.
+        assert_ne!(scrollback_file_name(5, 1), "1.zst");
+        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(6, 1));
+        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(5, 2));
+    }
 
     const STALE_WS: u64 = 1;
     const CWD_WS: u64 = 2;

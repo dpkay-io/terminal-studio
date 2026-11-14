@@ -61,9 +61,9 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub pane_context_actions: &'a mut Vec<PaneContextAction>,
     pub term_selection: &'a Option<TermSelection>,
     pub term_selection_sid: Option<u32>,
-    pub workspace_dialog_open: bool,
-    pub workspace_edit_dialog_open: bool,
-    pub show_settings: bool,
+    /// A dialog or overlay owns the keyboard (`App::any_modal_open`): no
+    /// pane takes focus or keys meanwhile.
+    pub modal_open: bool,
     pub font_size: f32,
     pub cursor_style: CursorStyle,
     pub has_splits: bool,
@@ -79,6 +79,12 @@ pub(in crate::app) struct RenderCtx<'a> {
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
+
+/// Keys each file's text box by its pane. Without it every editor drawn in the
+/// same spot shares one cursor and one undo history, so opening another file
+/// put the caret where the last one left it and undo could bring back that
+/// file's text.
+const FILE_EDITOR_TEXT_ID: &str = "file_editor_text";
 
 fn render_terminal_leaf(
     ui: &mut egui::Ui,
@@ -141,9 +147,7 @@ fn render_terminal_leaf(
     if is_focused {
         let this_id = ui.id();
         *rctx.active_term_ui_id = Some(this_id);
-        let dialog_open =
-            rctx.workspace_dialog_open || rctx.workspace_edit_dialog_open || rctx.show_settings;
-        if !dialog_open {
+        if !rctx.modal_open {
             let clicked = ui.input(|i| i.pointer.any_pressed())
                 && ui.input(|i| {
                     i.pointer
@@ -408,6 +412,9 @@ fn render_file_editor_leaf(
         }
 
         let is_focused = rctx.focused_pane_id == Some(pane_id);
+        // While a dialog is up its keys are its own: an Enter that confirms
+        // "Save changes?" must not also add a line to the file it saves.
+        let modal_open = rctx.modal_open;
         let search_active = is_focused && rctx.text_search.active;
         let scroll_target = if is_focused {
             rctx.text_search.current_match().map(|m| m.line)
@@ -529,19 +536,29 @@ fn render_file_editor_leaf(
                                 };
                                 ui.add(
                                     egui::TextEdit::multiline(text)
+                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
                                         .frame(false)
+                                        .interactive(!modal_open)
                                         .layouter(&mut layouter),
                                 )
                             } else {
                                 ui.add(
                                     egui::TextEdit::multiline(text)
+                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
-                                        .frame(false),
+                                        .frame(false)
+                                        .interactive(!modal_open),
                                 )
                             };
+                            // Like a terminal, the active editor takes the
+                            // keyboard whenever nothing else holds it, so a
+                            // new or just-opened file is ready for typing.
+                            if is_focused && !modal_open && ui.memory(|m| m.focused().is_none()) {
+                                te_resp.request_focus();
+                            }
 
                             if !search_highlights.is_empty() {
                                 let mono_id =
@@ -586,8 +603,13 @@ fn render_file_editor_leaf(
         }
 
         // Match on the key event's own modifiers: a quick Cmd+S can be released
-        // before the frame samples the live modifier state.
-        if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+        // before the frame samples the live modifier state. Only the active
+        // editor saves: with files side by side in splits, whichever drew
+        // first would otherwise take the key.
+        if is_focused
+            && !modal_open
+            && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+        {
             rctx.editor_saves.push(pane_id);
         }
     }
@@ -653,7 +675,8 @@ fn render_note_editor_leaf(
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
                             .hint_text("Notes for this workspace\u{2026}")
-                            .frame(false),
+                            .frame(false)
+                            .interactive(!rctx.modal_open),
                     );
                     if !search_highlights.is_empty() {
                         let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
@@ -1185,6 +1208,7 @@ fn render_group_node(
                 let mut scrollbar_dragging = false;
                 let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
                 let focused_pane_id = if is_focused { Some(pid) } else { None };
+                let modal_open = app.any_modal_open();
 
                 {
                     let mut rctx = RenderCtx {
@@ -1203,9 +1227,7 @@ fn render_group_node(
                         pane_context_actions,
                         term_selection: &app.term_selection,
                         term_selection_sid: app.term_selection_sid,
-                        workspace_dialog_open: app.workspace_dialog.is_some(),
-                        workspace_edit_dialog_open: app.workspace_edit_dialog.is_some(),
-                        show_settings: app.show_settings,
+                        modal_open,
                         font_size: app.settings.font_size,
                         cursor_style: app.settings.cursor_style,
                         has_splits,
