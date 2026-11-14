@@ -22,6 +22,12 @@ pub(super) enum DropTarget {
     PaneArea,
     NewWindow,
     GroupArea(GroupId),
+    /// Drop on a split's tab bar: the tab goes in at `position`, the gap
+    /// before that tab in the split's order (`pane_ids.len()` = at the end).
+    GroupTabBar {
+        group_id: GroupId,
+        position: usize,
+    },
     /// Drop near a group's edge: create a new split in `dir`, with the new
     /// group placed before (left/top) or after (right/bottom) the target.
     SplitEdge {
@@ -67,6 +73,12 @@ pub(super) enum DragAction {
     Noop,
 
     // ── New group-aware variants ───────────────────────────────
+    /// Move a tab to another place in its own split's tab bar.
+    ReorderTabInGroup {
+        pane_id: u32,
+        group_id: GroupId,
+        to_index: usize,
+    },
     MoveTabToGroup {
         pane_id: u32,
         target_group_id: GroupId,
@@ -325,9 +337,9 @@ pub(super) fn resolve_drag(
 
     // Route group targets to new resolver, old targets to old resolver
     match &target {
-        DropTarget::GroupArea(_) | DropTarget::SplitEdge { .. } => {
-            resolve_group(payload, target, pane_state)
-        }
+        DropTarget::GroupArea(_)
+        | DropTarget::GroupTabBar { .. }
+        | DropTarget::SplitEdge { .. } => resolve_group(payload, target, pane_state),
         _ => resolve(payload, target, pane_state, active_group),
     }
 }
@@ -371,12 +383,94 @@ fn existing_pane_for(
     }
 }
 
+/// Where a tab dropped in the gap `position` of its own split ends up, as
+/// the index `EditorGroup::reorder` takes (counted once the tab is out).
+pub(super) fn reorder_index(from: usize, position: usize) -> usize {
+    if from < position {
+        position - 1
+    } else {
+        position
+    }
+}
+
 pub(super) fn resolve_group(
     payload: DragPayload,
     target: DropTarget,
     pane_state: &super::pane_state::PaneState,
 ) -> DragAction {
     match (payload, target) {
+        // Tab → a gap in a tab bar: reorder within its split, or move it to
+        // that place in another split.
+        (DragPayload::Tab(pane_id), DropTarget::GroupTabBar { group_id, position }) => {
+            if pane_state.find(pane_id).is_none() {
+                return DragAction::Noop;
+            }
+            if pane_state.group_of(pane_id) != Some(group_id) {
+                return DragAction::MoveTabToGroup {
+                    pane_id,
+                    target_group_id: group_id,
+                    at_index: Some(position),
+                };
+            }
+            let Some(from) = pane_state
+                .groups
+                .get(&group_id)
+                .and_then(|g| g.pane_ids.iter().position(|&id| id == pane_id))
+            else {
+                return DragAction::Noop;
+            };
+            let to_index = reorder_index(from, position);
+            if to_index == from {
+                // Dropped back into its own gap: nothing would move.
+                DragAction::Noop
+            } else {
+                DragAction::ReorderTabInGroup {
+                    pane_id,
+                    group_id,
+                    to_index,
+                }
+            }
+        }
+
+        // A session or file already open moves its tab there, as on a split
+        // edge, rather than opening a second one.
+        (
+            payload @ (DragPayload::Session(_) | DragPayload::File(_)),
+            DropTarget::GroupTabBar { group_id, position },
+        ) => match (existing_pane_for(&payload, pane_state), payload) {
+            (Some(pane_id), _) => resolve_group(
+                DragPayload::Tab(pane_id),
+                DropTarget::GroupTabBar { group_id, position },
+                pane_state,
+            ),
+            (None, DragPayload::Session(session_id)) => DragAction::InsertTerminalInGroup {
+                session_id,
+                target_group_id: group_id,
+                at_index: Some(position),
+            },
+            (None, DragPayload::File(path)) => DragAction::InsertFileEditorInGroup {
+                path,
+                target_group_id: group_id,
+                at_index: Some(position),
+            },
+            (None, _) => DragAction::Noop,
+        },
+        (DragPayload::Diff(rel_path), DropTarget::GroupTabBar { group_id, position }) => {
+            DragAction::InsertDiffInGroup {
+                rel_path,
+                target_group_id: group_id,
+                at_index: Some(position),
+            }
+        }
+        (DragPayload::Note(ws_id), DropTarget::GroupTabBar { group_id, position }) => {
+            DragAction::InsertNoteInGroup {
+                workspace_id: ws_id,
+                target_group_id: group_id,
+                at_index: Some(position),
+            }
+        }
+        (DragPayload::Workspace(_), DropTarget::GroupTabBar { .. }) => DragAction::Noop,
+
         // Tab → GroupArea: move tab to that group (append)
         (DragPayload::Tab(pane_id), DropTarget::GroupArea(group_id)) => {
             if pane_state.find(pane_id).is_none() {
@@ -877,6 +971,7 @@ mod tests {
                 stale: false,
                 loading: false,
                 untitled: false,
+                saved_text_hash: None,
             }),
         )]);
         let mut state = DragState::new();
@@ -1064,6 +1159,137 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_dropped_in_a_gap_lands_there() {
+        // Gaps before tab 0, 1, 2 and after the last: from tab 0 of three.
+        assert_eq!(reorder_index(0, 0), 0);
+        assert_eq!(reorder_index(0, 2), 1);
+        assert_eq!(reorder_index(0, 3), 2);
+        // From tab 2 moving left.
+        assert_eq!(reorder_index(2, 0), 0);
+        assert_eq!(reorder_index(2, 3), 2);
+    }
+
+    #[test]
+    fn dropping_a_tab_later_in_its_own_tab_bar_reorders_it() {
+        let (ps, g1, _g2) = make_two_group_state();
+        // g1 holds [1, 2]; the gap after pane 2 is position 2.
+        let action = resolve_group(
+            DragPayload::Tab(1),
+            DropTarget::GroupTabBar {
+                group_id: g1,
+                position: 2,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::ReorderTabInGroup { pane_id: 1, group_id, to_index: 1 } if group_id == g1
+        ));
+    }
+
+    #[test]
+    fn dropping_a_tab_next_to_itself_does_nothing() {
+        let (ps, g1, _g2) = make_two_group_state();
+        for position in [0, 1] {
+            let action = resolve_group(
+                DragPayload::Tab(1),
+                DropTarget::GroupTabBar {
+                    group_id: g1,
+                    position,
+                },
+                &ps,
+            );
+            assert!(matches!(action, DragAction::Noop), "gap {position}");
+        }
+    }
+
+    #[test]
+    fn dropping_a_tab_on_another_splits_tab_bar_moves_it_to_that_place() {
+        let (ps, _g1, g2) = make_two_group_state();
+        let action = resolve_group(
+            DragPayload::Tab(1),
+            DropTarget::GroupTabBar {
+                group_id: g2,
+                position: 0,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::MoveTabToGroup { pane_id: 1, target_group_id, at_index: Some(0) } if target_group_id == g2
+        ));
+    }
+
+    #[test]
+    fn an_open_session_dropped_on_a_tab_bar_moves_its_tab() {
+        let (ps, _g1, g2) = make_two_group_state();
+        // Session 10 is shown by pane 1, in g1.
+        let action = resolve_group(
+            DragPayload::Session(10),
+            DropTarget::GroupTabBar {
+                group_id: g2,
+                position: 1,
+            },
+            &ps,
+        );
+        assert!(matches!(
+            action,
+            DragAction::MoveTabToGroup {
+                pane_id: 1,
+                at_index: Some(1),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn new_things_dropped_on_a_tab_bar_open_at_that_place() {
+        let (ps, g1, _g2) = make_two_group_state();
+        let at = |payload| {
+            resolve_group(
+                payload,
+                DropTarget::GroupTabBar {
+                    group_id: g1,
+                    position: 1,
+                },
+                &ps,
+            )
+        };
+        assert!(matches!(
+            at(DragPayload::Session(50)),
+            DragAction::InsertTerminalInGroup {
+                session_id: 50,
+                at_index: Some(1),
+                ..
+            }
+        ));
+        assert!(matches!(
+            at(DragPayload::File(PathBuf::from("/tmp/new.rs"))),
+            DragAction::InsertFileEditorInGroup {
+                at_index: Some(1),
+                ..
+            }
+        ));
+        assert!(matches!(
+            at(DragPayload::Diff("src/a.rs".into())),
+            DragAction::InsertDiffInGroup {
+                at_index: Some(1),
+                ..
+            }
+        ));
+        assert!(matches!(
+            at(DragPayload::Note(7)),
+            DragAction::InsertNoteInGroup {
+                workspace_id: 7,
+                at_index: Some(1),
+                ..
+            }
+        ));
+        assert!(matches!(at(DragPayload::Workspace(1)), DragAction::Noop));
+        assert!(matches!(at(DragPayload::Tab(999)), DragAction::Noop));
+    }
+
+    #[test]
     fn group_tab_to_area_moves() {
         let (ps, _g1, g2) = make_two_group_state();
         let action = resolve_group(DragPayload::Tab(1), DropTarget::GroupArea(g2), &ps);
@@ -1148,6 +1374,7 @@ mod tests {
                 stale: false,
                 loading: false,
                 untitled: false,
+                saved_text_hash: None,
             }),
         )]);
         let g1 = ps.focused_group_id;
@@ -1567,6 +1794,7 @@ mod tests {
             stale: false,
             loading: false,
             untitled: false,
+            saved_text_hash: None,
         })
     }
 

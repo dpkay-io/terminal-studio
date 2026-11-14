@@ -768,6 +768,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
     let actions = [
         ToggleLeftSidebar,
         ToggleRightSidebar,
+        ToggleTabBar,
         FocusTerminal,
         NewTerminalTab,
         NewFile,

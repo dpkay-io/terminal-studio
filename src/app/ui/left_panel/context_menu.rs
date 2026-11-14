@@ -18,16 +18,10 @@ impl App {
         active_fg: Option<ForegroundProcess>,
     ) {
         self.process_workspace_actions(ctx, &ws_actions);
-        if let Some(pid) = sess_actions.quit_pane_id {
-            self.request_close_tab(pid, crate::app::close_guard::TabClose::Sidebar);
-        }
-        self.process_label_toggle(sess_actions.toggle_label);
-        if let Some(pane_id) = sess_actions.show_new_label_for_pane {
-            self.show_new_label_dialog = Some(pane_id);
-        }
-        self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
-        self.process_row_path_actions(&sess_actions);
-        self.process_row_rename(&mut sess_actions);
+        self.process_tab_actions(
+            &mut sess_actions,
+            crate::app::close_guard::TabClose::Sidebar,
+        );
         // Consume async folder picker result if available
         let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
             d.remove_temp::<std::path::PathBuf>(egui::Id::new("pending_folder_pick"))
@@ -39,6 +33,26 @@ impl App {
         if sess_actions.new_file | std::mem::replace(&mut self.deferred_new_file, false) {
             self.create_new_file_pane();
         }
+    }
+
+    /// What was done to one tab in the session list or a tab bar: close,
+    /// labels, click, copy or reveal its path, rename. `close_via` is how a
+    /// close from there closes it.
+    pub(in crate::app) fn process_tab_actions(
+        &mut self,
+        actions: &mut SessionListActions,
+        close_via: crate::app::close_guard::TabClose,
+    ) {
+        if let Some(pid) = actions.quit_pane_id {
+            self.request_close_tab(pid, close_via);
+        }
+        self.process_label_toggle(actions.toggle_label);
+        if let Some(pane_id) = actions.show_new_label_for_pane {
+            self.show_new_label_dialog = Some(pane_id);
+        }
+        self.process_sidebar_click(actions.clicked_sidebar_pane_id);
+        self.process_row_path_actions(actions);
+        self.process_row_rename(actions);
     }
 
     /// Copy a row's directory to the clipboard, or reveal it in the OS file
@@ -86,6 +100,7 @@ impl App {
         if let Some(pid) = sess_actions.start_rename_pane_id {
             let idx = self.pane_state.panes.iter().position(|p| p.id == pid);
             self.rename_pane_id = Some(pid);
+            self.rename_in_tab_bar = sess_actions.rename_in_tab_bar;
             self.rename_text = idx.map(|i| self.tab_display_text(i)).unwrap_or_default();
         }
         if let Some((pid, name)) = sess_actions.commit_rename.take() {
@@ -157,6 +172,7 @@ impl App {
                 stale: false,
                 loading: false,
                 untitled: true,
+                saved_text_hash: Some(super::super::super::pane::text_hash("")),
             }),
             manual_width: None,
             last_size: (0, 0),
@@ -308,6 +324,9 @@ impl App {
             }
         }
 
+        for &pid in &panes_to_close {
+            self.capture_closed_unstarted_session(pid);
+        }
         // Collect session IDs to kill, then remove pane entries.
         let killed_sids: Vec<u32> = self
             .pane_state

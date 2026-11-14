@@ -1081,6 +1081,9 @@ impl App {
     /// empty splits; keeps one terminal open when nothing is left.
     fn close_panes(&mut self, pane_ids: &[u32]) {
         log::debug!("close: {} tabs together {pane_ids:?}", pane_ids.len());
+        for &pid in pane_ids {
+            self.capture_closed_unstarted_session(pid);
+        }
         let session_ids: Vec<u32> = self
             .pane_state
             .panes

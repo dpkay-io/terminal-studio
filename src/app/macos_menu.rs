@@ -4,8 +4,8 @@
 //! apps put them:
 //!
 //! - Terminal Studio → Settings…
-//! - View → Hide/Show Sidebar, Hide/Show Explorer, Switcher, Recently Closed
-//!   Sessions
+//! - View → Hide/Show Sidebar, Hide/Show Explorer, Hide/Show Tab Bar,
+//!   Switcher, Recently Closed Sessions
 //! - Help → Keyboard Shortcuts
 //!
 //! Each item shows its current shortcut and runs the same
@@ -90,6 +90,15 @@ const ENTRIES: [Entry; VIEW_TOGGLES.len()] = [
         kind: Kind::ShowHide {
             shown: "Hide Explorer",
             hidden: "Show Explorer",
+        },
+        separator_before: false,
+    },
+    Entry {
+        action: AppAction::ToggleTabBar,
+        menu: Menu::View,
+        kind: Kind::ShowHide {
+            shown: "Hide Tab Bar",
+            hidden: "Show Tab Bar",
         },
         separator_before: false,
     },

@@ -139,6 +139,13 @@ pub fn save_closed_session(
     };
     std::fs::create_dir_all(&dir).ok();
 
+    // Closing several tabs at once saves each on its own thread. Each one
+    // reads the manifest, adds its record and writes it back, so without
+    // this one would overwrite another's record (or take the same id).
+    static MANIFEST_UPDATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _update = MANIFEST_UPDATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut manifest = ClosedSessionManifest::load();
     let id = manifest.allocate_id();
 

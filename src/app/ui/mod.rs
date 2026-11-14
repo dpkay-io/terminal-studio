@@ -11,5 +11,6 @@ mod pane_renderer;
 pub(super) use pane_renderer::PaneContextAction;
 pub(crate) mod search_bar;
 mod settings_overlay;
+mod tab_bar;
 mod titlebar;
 mod update_pill;

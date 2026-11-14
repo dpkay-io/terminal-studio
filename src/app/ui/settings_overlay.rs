@@ -115,6 +115,23 @@ impl App {
 
                             ui.add_space(theme::SP_4);
 
+                            // Tabs above each split. The same toggle as the
+                            // View menu and the command palette; it saves
+                            // the setting itself.
+                            {
+                                let mut show = self.settings.show_tab_bar;
+                                if ui
+                                    .checkbox(&mut show, "Show tabs above each split")
+                                    .on_hover_text(self.shortcut_tooltip(
+                                        "The session list shows every tab either way",
+                                        AppAction::ToggleTabBar,
+                                    ))
+                                    .changed()
+                                {
+                                    self.toggle_view(AppAction::ToggleTabBar);
+                                }
+                            }
+
                             // Show system monitor
                             {
                                 let mut show = self.settings.show_sys_monitor;

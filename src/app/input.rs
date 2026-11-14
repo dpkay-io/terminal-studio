@@ -21,6 +21,14 @@ pub(super) fn follows_translated_alt_key(events: &[egui::Event], index: usize) -
     )
 }
 
+/// Ctrl+Tab or Ctrl+Shift+Tab, pressed or released.
+pub(super) fn is_ctrl_tab(event: &egui::Event) -> bool {
+    matches!(
+        event,
+        egui::Event::Key { key: egui::Key::Tab, modifiers, .. } if modifiers.ctrl || modifiers.command
+    )
+}
+
 pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key::*;
     // Cmd combinations belong to the app and the OS, never to the shell.
@@ -252,6 +260,21 @@ pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_ctrl_tab_counts_as_ctrl_tab() {
+        let tab = |m| key_press(egui::Key::Tab, m);
+        assert!(is_ctrl_tab(&tab(egui::Modifiers::CTRL)));
+        assert!(is_ctrl_tab(&tab(
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+        )));
+        assert!(!is_ctrl_tab(&tab(egui::Modifiers::NONE)), "Tab indents");
+        assert!(
+            !is_ctrl_tab(&tab(egui::Modifiers::SHIFT)),
+            "Shift+Tab outdents"
+        );
+        assert!(!is_ctrl_tab(&egui::Event::Text("\t".into())));
+    }
 
     fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
         egui::Event::Key {

@@ -188,6 +188,16 @@ impl PaneState {
 
     // ── Editor-group methods ────────────────────────────────────
 
+    /// The tab each split on screen shows, in layout order. A group that is
+    /// in no split (left over while the layout catches up) shows nothing.
+    pub(super) fn shown_pane_ids(&self) -> Vec<u32> {
+        self.group_layout
+            .group_ids()
+            .into_iter()
+            .filter_map(|gid| self.groups.get(&gid)?.active_pane_id)
+            .collect()
+    }
+
     /// Find which group contains a pane.
     pub(super) fn group_of(&self, pane_id: u32) -> Option<GroupId> {
         self.groups
@@ -938,6 +948,7 @@ mod tests {
                 stale: false,
                 loading: false,
                 untitled: false,
+                saved_text_hash: None,
             }),
             manual_width: None,
             last_size: (0, 0),
@@ -1183,6 +1194,16 @@ mod tests {
         assert_eq!(state.group_of(1), Some(1));
         assert_eq!(state.group_of(2), Some(1));
         assert_eq!(state.group_of(3), Some(2));
+    }
+
+    #[test]
+    fn each_split_shows_its_active_tab() {
+        let mut state = make_grouped_state();
+        assert_eq!(state.shown_pane_ids(), vec![1, 3]);
+        // A group outside the layout is not on screen.
+        state.panes.push(make_pane(4));
+        state.create_group(4);
+        assert_eq!(state.shown_pane_ids(), vec![1, 3]);
     }
 
     #[test]

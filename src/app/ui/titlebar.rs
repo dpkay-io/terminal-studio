@@ -931,21 +931,13 @@ impl App {
         painter.rect_filled(rect, theme::R_MD, bg);
 
         // Long labels (brew's step) end in an ellipsis; hover shows them whole.
-        let mut job = egui::text::LayoutJob::single_section(
-            pill.label.clone(),
-            egui::TextFormat {
-                font_id: egui::FontId::proportional(theme::FONT_UI_SM),
-                color: fg,
-                ..Default::default()
-            },
+        let galley = crate::ui_kit::one_line_elided(
+            ui,
+            &pill.label,
+            egui::FontId::proportional(theme::FONT_UI_SM),
+            fg,
+            rect.width() - 2.0 * theme::SP_2,
         );
-        job.wrap = egui::text::TextWrapping {
-            max_width: (rect.width() - 2.0 * theme::SP_2).max(0.0),
-            max_rows: 1,
-            break_anywhere: true,
-            overflow_character: Some('\u{2026}'),
-        };
-        let galley = ui.fonts(|f| f.layout_job(job));
         let elided = galley.elided;
         painter.galley(rect.center() - galley.size() / 2.0, galley, fg);
         let resp = if elided {

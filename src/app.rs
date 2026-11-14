@@ -25,6 +25,7 @@ mod close_guard;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
 mod cursor_blink;
+mod deferred_terminals;
 mod diff_parser;
 mod drag;
 mod feedback;
@@ -245,9 +246,13 @@ pub struct App {
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
-    /// Session-list row currently being renamed inline, and its edit buffer.
+    /// Tab currently being renamed inline, and its edit buffer.
     rename_pane_id: Option<u32>,
     rename_text: String,
+    /// The rename box is in the tab's tab bar, not its session-list row.
+    rename_in_tab_bar: bool,
+    /// What was done in the tab bars this frame, run once they are drawn.
+    tab_bar_actions: ui::left_panel::SessionListActions,
     /// Pane ID to scroll into view in the session navigator. Consumed by the
     /// left-nav row when it draws, and dropped at the end of the same frame's
     /// left-panel render either way — a target that is filtered out or in a
@@ -356,6 +361,19 @@ pub struct App {
     restart_attempted: bool,
 }
 
+/// Whether a menu, dropdown or popup is open (egui draws them, like the
+/// app's dialogs, on the foreground layer). While one is, the keyboard is
+/// its: Escape closes it instead of reaching the shell, and nothing typed
+/// goes to the terminal underneath.
+fn floating_layer_open(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|layer| layer.order == egui::Order::Foreground)
+    })
+}
+
 impl eframe::App for App {
     /// Strip all navigation keys from raw input before egui's begin_frame
     /// can use them for focus traversal. egui's Focus::begin_frame reads
@@ -386,7 +404,13 @@ impl eframe::App for App {
                 .map(|id| id == self.vp_id("notes_textedit"))
                 .unwrap_or(false)
         });
-        if active_is_editor || any_overlay || notes_has_focus {
+        if active_is_editor || notes_has_focus {
+            // Text boxes keep Tab for indenting. Ctrl+Tab means nothing in
+            // one, and egui would either type a tab or move the keyboard to
+            // the next widget, leaving the editor without it.
+            raw_input.events.retain(|event| !input::is_ctrl_tab(event));
+        }
+        if active_is_editor || any_overlay || notes_has_focus || floating_layer_open(_ctx) {
             return;
         }
         let intercepted = &mut self.raw_intercepted_keys;
@@ -576,10 +600,7 @@ impl eframe::App for App {
             for (pane_id, content) in results.drain(..) {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                     if let PaneContent::FileEditor(ref mut ed) = pane.content {
-                        if !ed.dirty {
-                            ed.content = content;
-                        }
-                        ed.loading = false;
+                        ed.apply_file_text(content);
                     }
                 }
             }
@@ -1269,6 +1290,7 @@ impl App {
     /// close button, and context menu close.
     fn close_pane_full(&mut self, pid: u32) {
         log::debug!("close: one tab (pane {pid})");
+        self.capture_closed_unstarted_session(pid);
         if let Some(pane) = self.pane_state.find(pid) {
             if let PaneContent::Terminal(sid) = pane.content {
                 self.remove_session_and_cleanup(sid);
@@ -1362,6 +1384,70 @@ impl App {
         std::thread::Builder::new()
             .name("closed-session-save".into())
             .spawn(move || {
+                closed_sessions::save_closed_session(
+                    ansi_bytes,
+                    cwd,
+                    title,
+                    title_pinned,
+                    shell,
+                    workspace_id,
+                    workspace_name,
+                    cols,
+                    rows,
+                    line_count,
+                    max_sessions,
+                    claude_session_id,
+                );
+            })
+            .ok();
+    }
+
+    /// Record a restored session that is being closed before it was ever
+    /// opened, so Recently Closed can bring it back like any other (running
+    /// ones go through [`Self::remove_session_and_cleanup`]). Its shell never
+    /// started, so the output kept from the earlier run is what it saves; the
+    /// file is read off the UI thread. Does nothing for any other tab, or
+    /// when scrollback is not saved on close. Call it before the pane goes.
+    pub(super) fn capture_closed_unstarted_session(&self, pid: u32) {
+        if !self.settings.save_scrollback_on_close {
+            return;
+        }
+        let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) else {
+            return;
+        };
+        let PaneContent::DeferredTerminal {
+            cwd,
+            pending_command,
+            title_pinned,
+            scrollback_file,
+            ..
+        } = &self.pane_state.panes[idx].content
+        else {
+            return;
+        };
+        let cwd = cwd.clone().unwrap_or_default();
+        let title = self.tab_display_text(idx);
+        let title_pinned = *title_pinned;
+        let scrollback_file = scrollback_file.clone();
+        let claude_session_id = pending_command
+            .as_deref()
+            .and_then(claude_session::resumed_session_id);
+        let workspace = self.workspace_store.find_for_cwd(&cwd);
+        let workspace_id = workspace.map(|w| w.id);
+        let workspace_name = workspace.map(|w| w.name.clone());
+        // The shell and size it would have started with.
+        let shell = self.configured_shell().name().to_string();
+        let (cols, rows) = state::RESTORED_TERMINAL_SIZE;
+        let max_sessions = self.settings.max_closed_sessions;
+
+        std::thread::Builder::new()
+            .name("closed-session-save".into())
+            .spawn(move || {
+                let ansi_bytes = scrollback_file
+                    .as_deref()
+                    .and_then(state::read_active_scrollback)
+                    .unwrap_or_default();
+                let line_count = ansi_bytes.iter().filter(|&&b| b == b'\n').count();
                 closed_sessions::save_closed_session(
                     ansi_bytes,
                     cwd,
@@ -3110,7 +3196,11 @@ impl App {
                 }
             }
 
-            if !active_is_editor && !any_other_widget_focused && !modal_open {
+            if !active_is_editor
+                && !any_other_widget_focused
+                && !modal_open
+                && !floating_layer_open(ctx)
+            {
 
                 // Focus-in / focus-out events (?1004h)
                 if active_session_id != self.last_focused_sid {
@@ -3975,6 +4065,13 @@ impl App {
             }
         }
 
+        // What was done in the splits' tab bars: the same handling as a
+        // session-list row, except that closing a tab closes it as its
+        // split's ✖ does.
+        let mut tab_bar_actions = std::mem::take(&mut self.tab_bar_actions);
+        self.deferred_duplicate |= tab_bar_actions.duplicate_session;
+        self.process_tab_actions(&mut tab_bar_actions, close_guard::TabClose::Pane);
+
         // Phase D-3: Handle pane context menu actions (3-dot menu on split panes)
         for action in pane_context_actions {
             use ui::PaneContextAction;
@@ -4166,92 +4263,10 @@ impl App {
             self.sync_active_group_from_pane(pid);
         }
 
-        // 5b. Materialize any DeferredTerminal that is now the active pane.
-        // This runs after activate_pane() so the deferred pane spawns in the same
-        // update() call as the click, meaning the terminal is ready by the next frame.
-        if let Some(pid) = self.pane_state.active_pane_id {
-            if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
-                if matches!(
-                    &self.pane_state.panes[pane_idx].content,
-                    PaneContent::DeferredTerminal { .. }
-                ) {
-                    let (cwd, pending_command, saved_title, title_pinned, scrollback_file) =
-                        if let PaneContent::DeferredTerminal {
-                            cwd,
-                            pending_command,
-                            saved_title,
-                            title_pinned,
-                            scrollback_file,
-                        } = &self.pane_state.panes[pane_idx].content
-                        {
-                            (
-                                cwd.clone(),
-                                pending_command.clone(),
-                                saved_title.clone(),
-                                *title_pinned,
-                                scrollback_file.clone(),
-                            )
-                        } else {
-                            unreachable!()
-                        };
-                    let scrollback = scrollback_file.and_then(|f| {
-                        let dir = crate::util::data_dir()?.join("active_scrollback");
-                        let compressed = std::fs::read(dir.join(&f)).ok()?;
-                        zstd::decode_all(compressed.as_slice()).ok()
-                    });
-                    let shell = self.configured_shell();
-                    match self.spawn_session_with_scrollback(
-                        &shell,
-                        80,
-                        24,
-                        cwd.clone(),
-                        scrollback.as_deref(),
-                    ) {
-                        Some(sid) => {
-                            if let Some(entry) = self.session_state.find_mut(sid) {
-                                if let Some(cmd) = pending_command {
-                                    entry.pending_command = Some(cmd);
-                                }
-                                if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
-                                    let session = entry.session.read();
-                                    if title_pinned {
-                                        session.pin_title(Some(t));
-                                    } else {
-                                        session.set_title(t);
-                                    }
-                                }
-                            }
-                            self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
-                            self.pane_state.panes[pane_idx].last_size = (0, 0);
-                            self.session_state.active_id = Some(sid);
-                            self.update_is_active_flags();
-                            ctx.request_repaint();
-                        }
-                        None => {
-                            log::error!("failed to materialize deferred terminal, converting to plain terminal placeholder");
-                            let fallback_shell = self.configured_shell();
-                            if let Some(sid) = self.spawn_session(&fallback_shell, 80, 24, cwd) {
-                                self.pane_state.panes[pane_idx].content =
-                                    PaneContent::Terminal(sid);
-                                self.pane_state.panes[pane_idx].last_size = (0, 0);
-                                self.session_state.active_id = Some(sid);
-                                self.update_is_active_flags();
-                            } else {
-                                log::error!("fallback spawn also failed, removing pane");
-                                let pane_id = self.pane_state.panes[pane_idx].id;
-                                self.pane_state.panes.remove(pane_idx);
-                                self.pane_state.pane_trees.remove(&pane_id);
-                                if self.pane_state.active_pane_id == Some(pane_id) {
-                                    self.pane_state.active_pane_id =
-                                        self.pane_state.panes.first().map(|p| p.id);
-                                }
-                            }
-                            ctx.request_repaint();
-                        }
-                    }
-                }
-            }
-        }
+        // 5b. Start the restored sessions the splits now show. This runs after
+        // activate_pane() so a clicked one starts in the same update() as the
+        // click, and its terminal is ready by the next frame.
+        self.start_shown_restored_sessions(ctx);
 
         // 5c. Sync Claude session IDs from foreground worker to session entries.
         {
@@ -4291,9 +4306,7 @@ impl App {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == *pane_id) {
                     match pane.content {
                         PaneContent::FileEditor(ref mut ed) if *new_text != ed.content => {
-                            ed.content = new_text.clone();
-                            ed.dirty = true;
-                            ed.save_error = false;
+                            ed.apply_edit(new_text.clone());
                         }
                         PaneContent::NoteEditor(ref ne)
                             if *new_text != self.note_store.get(ne.workspace_id) =>
@@ -4382,8 +4395,7 @@ impl App {
                                 path.extension().and_then(|e| e.to_str()) == Some("md") && md_pref;
                             ed.path = path.clone();
                             ed.untitled = false;
-                            ed.dirty = false;
-                            ed.save_error = false;
+                            ed.mark_saved();
                             saved_ok = true;
                         }
                         Err(e) => {
@@ -4503,6 +4515,7 @@ impl App {
                         stale: false,
                         loading: true,
                         untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4559,6 +4572,7 @@ impl App {
                         stale: false,
                         loading: true,
                         untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4614,6 +4628,7 @@ impl App {
                         stale: false,
                         loading: true,
                         untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4854,6 +4869,7 @@ impl App {
                             stale: false,
                             loading: true,
                             untitled: false,
+                            saved_text_hash: None,
                         }),
                         manual_width: None,
                         last_size: (0, 0),

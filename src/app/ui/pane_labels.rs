@@ -343,6 +343,7 @@ mod tests {
             stale: false,
             loading: false,
             untitled: false,
+            saved_text_hash: None,
         })
     }
 

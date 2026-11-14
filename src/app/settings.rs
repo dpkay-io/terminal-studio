@@ -44,6 +44,9 @@ pub(super) struct AppSettings {
     pub(super) save_scrollback_on_exit: bool,
     pub(super) log_level: LogLevel,
     pub(super) info_bar_position: InfoBarPosition,
+    /// A row of tabs above each split, one per tab it holds. The session
+    /// list shows every tab either way.
+    pub(super) show_tab_bar: bool,
 }
 
 impl Default for AppSettings {
@@ -68,6 +71,7 @@ impl Default for AppSettings {
             save_scrollback_on_exit: true,
             log_level: LogLevel::default(),
             info_bar_position: InfoBarPosition::default(),
+            show_tab_bar: true,
         }
     }
 }

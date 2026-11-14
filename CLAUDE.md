@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (970 tests)
+cargo test               # all unit tests (986 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -50,8 +50,9 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 |------|---------------|
 | `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()`: a pane's workspace by its folder first (single source for tab grouping, sidebar, titlebar, info bar) |
 | `src/app/fonts.rs` | Font definitions: egui's fonts first, then memory-mapped system fallbacks per OS (symbols, dingbats ✓✕✗, CJK, Hangul) so those don't render as boxes |
-| `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management |
-| `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct; `FileEditorState::write_to_disk()` (the one save path) and `has_unsaved_changes()` |
+| `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management; `shown_pane_ids()` (the tab each split on screen shows) |
+| `src/app/deferred_terminals.rs` | `start_shown_restored_sessions()`: a restored session waits as `DeferredTerminal` until a split shows it — any split, not only the focused one — then starts with its saved output, name and pending command |
+| `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct; `FileEditorState::write_to_disk()` (the one save path), `has_unsaved_changes()`, and `apply_edit()` / `apply_file_text()` / `mark_saved()`, which compare the buffer to a hash of the file's text so undoing back to it clears the `*` |
 | `src/app/close_guard.rs` | `request_close_tab()` / `TabClose`: every single-tab close (header ✖, ⇧⌘W, pane menu, session list ✕/middle click/menu) asks "Save changes?" first when the tab has unsaved edits; `has_unsaved_changes()` / `unsaved_count()` |
 | `src/app/session_state.rs` | `SessionState`: session list management, find/add/remove operations |
 | `src/app/settings.rs` | `AppSettings`, `CursorStyle` enum; user settings (theme, fonts, cursor, scrollback); JSON persistence |
@@ -64,9 +65,9 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
 | `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing) |
-| `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the titlebar's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet) — the single path for titlebar buttons, shortcuts, command palette and the macOS menu bar |
+| `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the view's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet, and the tab bar, which has no titlebar button) — the single path for titlebar buttons, shortcuts, command palette, the macOS menu bar and the Settings checkbox |
 | `src/app/macos_fullscreen.rs` | macOS only: in native full screen AppKit puts the title bar winit adds for the switch (title + traffic lights) in a child strip window (`NSToolbarFullScreenWindow`) that slides down under the menu bar on hover, over the app's title bar. On every entry (and at launch for a restored window) that strip is emptied and made click-through; window style and the menu bar are left alone |
-| `src/app/macos_menu.rs` | macOS only: adds Settings… to the app menu, a View menu (Hide/Show Sidebar, Hide/Show Explorer, Switcher, Recently Closed Sessions) and Help → Keyboard Shortcuts, each showing its current shortcut. The menu never claims those keys (an item disables itself while AppKit matches a key press against its own chord), so the app's own key handling stays the only one. Clicks are queued and run by the focused window's frame |
+| `src/app/macos_menu.rs` | macOS only: adds Settings… to the app menu, a View menu (Hide/Show Sidebar, Hide/Show Explorer, Hide/Show Tab Bar, Switcher, Recently Closed Sessions) and Help → Keyboard Shortcuts, each showing its current shortcut. The menu never claims those keys (an item disables itself while AppKit matches a key press against its own chord), so the app's own key handling stays the only one. Clicks are queued and run by the focused window's frame |
 
 ### File System & Git (`src/app/`)
 
@@ -95,6 +96,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update pill, toolbar, focus tracking |
 | `src/app/ui/update_pill.rs` | Titlebar update pill: label and click action per `UpdateStatus` (available, downloading, installing, restart) |
 | `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()`, `pane_cwd()`: display text, tooltip, colour and path derivation for a pane — the one source for the session list row, the split header and dialogs, so an edited file reads `* name` (`! name` after a failed save) everywhere. No rendering |
+| `src/app/ui/tab_bar.rs` | The optional row of tabs above each split (`settings.show_tab_bar`, on by default; Settings, View menu, command palette, ⌥⇧⌘T / Ctrl+Alt+Shift+T). One tab per tab the split holds, in its order: click shows it, double-click renames a terminal, ✕ / middle click close it like the split's ✖, right-click gives the session-list row's menu (`App::pane_menu`), drag reorders it, moves it into a gap in another split's tab bar (`DropTarget::GroupTabBar`) or splits it off at an edge. Actions run through the session list's `process_tab_actions`; the info bar below keeps the split buttons |
 | `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, ✖ closes the tab the split shows (right-click: close all tabs in the split, confirmed when more than one); `info_bar_layout()` places the buttons and gives the text the rest. Position/hidden is per split (`EditorGroup.info_bar`, saved with the group layout; unset follows `settings.info_bar_position`, which is the place the user last moved a bar to — hiding one doesn't change it, and a revealed bar goes there). A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
 | `src/app/ui/command_palette.rs` | Command palette: action search/filter/dispatch; keyboard-driven execution |
@@ -115,7 +117,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/ui_kit/containers.rs` | `dialog()`, `DialogConfig`, `DialogResponse`, `DialogAnchor`, `DialogWidth`; flex-box layouts |
 | `src/ui_kit/layout.rs` | Grid/flex helpers; responsive layout utilities |
 | `src/ui_kit/lists.rs` | Scrollable list rendering with selection tracking |
-| `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling |
+| `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling; `one_line_elided()` (one line ending in …) and `full_hover_text()` (a tooltip that never wraps, so it grows when its text does) |
 
 ### Utilities & Infrastructure
 
@@ -181,7 +183,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 - `render_node()` in `app.rs` recurses the tree, calling `split_rect()` to divide screen space and rendering each leaf
 - 4px interactive dividers support drag-to-resize (ratio clamped to [0.1, 0.9])
 - Keyboard shortcuts: `Ctrl+Shift+\` (horizontal split), `Ctrl+Shift+-` (vertical split), `Ctrl+Shift+W` (close pane), `Alt+Arrow` (focus movement), `Ctrl+Shift+[` / `Ctrl+Shift+]` (⇧⌘[ / ⇧⌘] on macOS: previous/next pane **within the focused split only**). These work from a file editor too (`layout_shortcuts.rs`)
-- There is no tab bar. Each split's info bar is its header, and the left nav session list is the only session navigator — it groups rows into split sections, marks which panes are on screen, and owns rename / close / copy-path / reveal
+- Each split has an optional tab bar (`tab_bar.rs`, on by default) above its info bar. The left nav session list shows every tab either way — it groups rows into split sections and marks which panes are on screen. Rename / close / copy-path / reveal / labels are the same in both (`pane_menu`, `render_rename_field`, `process_tab_actions`)
 - Drag-and-drop: dropping on the middle of a split joins that split; dropping in the outer third of any edge splits it (`edge_zone()` in `src/app/drag.rs`); dropping on a left-nav section header joins that split
 - **Note:** `pane_trees` is not persisted to disk — splits reset on restart
 
@@ -328,9 +330,9 @@ Color32::from_rgb(30, 30, 46)
 | File | Tests | Coverage |
 |------|-------|---------|
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
-| `src/app/input.rs` | 26 | keyboard→PTY byte translation for all keys and modifier combinations |
-| `src/app/pane_state.rs` | 77 | pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs) |
-| `src/app/drag.rs` | 70 | drag payload/target resolution, edge-zone geometry, split-edge drops, one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
+| `src/app/input.rs` | 30 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection |
+| `src/app/pane_state.rs` | 78 | each split's shown tab, pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs) |
+| `src/app/drag.rs` | 76 | drag payload/target resolution, edge-zone geometry, split-edge drops, tab-bar drops (reorder, move to a gap in another split, open new things there), one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
 | `src/app/ui/left_panel/sections.rs` | 17 | split-section labels, frozen sort order (close/open while hovered keeps rows in place), three-state row prominence |
 | `src/app/ui/info_bar.rs` | 8 | position serde, button layout order/overlap, text never under a button, narrow split, reveal hot zone |
@@ -349,7 +351,8 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
 | `src/app/persistence.rs` | 27 | session serialization, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load) |
-| `src/app/pane.rs` | 11 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits) |
+| `src/app/pane.rs` | 15 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits), undoing back to the saved text leaves nothing unsaved |
+| `src/app/ui/tab_bar.rs` | 3 | drop gap from the pointer, hidden tabs keep their place in the order, empty bar |
 | `src/pty/mod.rs` | 8 | shell detection, session manager operations |
 | `src/app/workspace_git_worker.rs` | 8 | workspace-scoped git state |
 | `src/file_search_worker.rs` | 8 | file fuzzy search, result filtering |
@@ -387,7 +390,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **970 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **986 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 

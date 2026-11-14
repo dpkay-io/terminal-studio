@@ -1,6 +1,7 @@
 mod context_menu;
 pub(in crate::app) mod sections;
 mod session_list;
+pub(in crate::app) use session_list::BADGE_R;
 mod workspace_section;
 
 use super::super::App;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 /// Deferred actions collected while rendering the session list section.
+#[derive(Default)]
 pub(in crate::app) struct SessionListActions {
     pub spawn_new_session: Option<ShellKind>,
     pub spawn_new_session_cwd: Option<(ShellKind, PathBuf)>,
@@ -26,6 +28,8 @@ pub(in crate::app) struct SessionListActions {
     pub copy_path_pane_id: Option<u32>,
     pub open_in_explorer_pane_id: Option<u32>,
     pub commit_rename: Option<(u32, String)>,
+    /// `start_rename_pane_id` came from a tab bar, so its box opens there.
+    pub rename_in_tab_bar: bool,
 }
 
 /// Deferred actions collected while rendering the workspace section.
@@ -66,18 +70,8 @@ impl App {
         // ── Left panel: sessions (top) + workspaces (bottom) ───────────────
         let mut sess_actions = SessionListActions {
             spawn_new_session: self.deferred_spawn.take(),
-            spawn_new_session_cwd: None,
-            new_file: false,
             duplicate_session: std::mem::replace(&mut self.deferred_duplicate, false),
-            quit_pane_id: None,
-            clicked_sidebar_pane_id: None,
-            open_folder_path: None,
-            toggle_label: None,
-            show_new_label_for_pane: None,
-            start_rename_pane_id: None,
-            copy_path_pane_id: None,
-            open_in_explorer_pane_id: None,
-            commit_rename: None,
+            ..Default::default()
         };
         if let Some(ws_id) = self.deferred_open_workspace.take() {
             self.navigate_to_workspace(ws_id);

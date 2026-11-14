@@ -294,6 +294,23 @@ fn find_session_jsonl_in_any_project(projects_dir: &Path, session_id: &str) -> b
     false
 }
 
+/// Start of the command that resumes one Claude conversation by its id.
+const RESUME_COMMAND_PREFIX: &str = "claude --resume ";
+
+fn resume_command_for(session_id: &str) -> String {
+    format!("{RESUME_COMMAND_PREFIX}\"{session_id}\"")
+}
+
+/// The conversation id in a command [`claude_resume_command`] built, so a
+/// session closed before it ever started can still resume that conversation.
+pub(crate) fn resumed_session_id(command: &str) -> Option<String> {
+    let id = command
+        .strip_prefix(RESUME_COMMAND_PREFIX)?
+        .trim()
+        .trim_matches('"');
+    (!id.is_empty()).then(|| id.to_string())
+}
+
 /// Returns the `claude --resume "<id>"` command if the session file exists on
 /// disk, or `None` if the specific session can't be found.
 ///
@@ -307,12 +324,12 @@ pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> Option<Stri
             .join(&project_name)
             .join(format!("{session_id}.jsonl"));
         if jsonl.exists() {
-            return Some(format!("claude --resume \"{}\"", session_id));
+            return Some(resume_command_for(session_id));
         }
         #[cfg(target_os = "linux")]
         if is_wsl() && find_session_jsonl_in_any_project(&claude_home.join("projects"), session_id)
         {
-            return Some(format!("claude --resume \"{}\"", session_id));
+            return Some(resume_command_for(session_id));
         }
     }
     None
@@ -322,6 +339,15 @@ pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> Option<Stri
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn a_resume_command_gives_back_its_conversation_id() {
+        let cmd = resume_command_for("abc-123");
+        assert_eq!(resumed_session_id(&cmd).as_deref(), Some("abc-123"));
+        assert_eq!(resumed_session_id("claude --continue"), None);
+        assert_eq!(resumed_session_id("claude --resume \"\""), None);
+        assert_eq!(resumed_session_id("ls -la"), None);
+    }
 
     // ── is_claude_process ────────────────────────────────────────────────────
 

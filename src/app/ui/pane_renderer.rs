@@ -557,6 +557,7 @@ fn render_file_editor_leaf(
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
                                         .frame(false)
+                                        .lock_focus(true)
                                         .interactive(!modal_open)
                                         .layouter(&mut layouter),
                                 )
@@ -567,6 +568,7 @@ fn render_file_editor_leaf(
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
                                         .frame(false)
+                                        .lock_focus(true)
                                         .interactive(!modal_open),
                                 )
                             };
@@ -688,6 +690,7 @@ fn render_note_editor_leaf(
                             .desired_width(f32::INFINITY)
                             .hint_text("Notes for this workspace\u{2026}")
                             .frame(false)
+                            .lock_focus(true)
                             .interactive(!rctx.modal_open),
                     );
                     route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
@@ -1137,7 +1140,25 @@ fn render_group_node(
                 return;
             }
 
-            // Split rect into optional info bar and content (rest)
+            // The tab bar, when on, runs along the top of the split; the info
+            // bar and the content share what is below it.
+            let (tab_bar_rect, body) = if app.settings.show_tab_bar {
+                let bar = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width(), theme::HEADER_H.min(rect.height())),
+                );
+                (
+                    Some(bar),
+                    egui::Rect::from_min_max(bar.left_bottom(), rect.max),
+                )
+            } else {
+                (None, rect)
+            };
+            if let Some(bar) = tab_bar_rect {
+                app.render_tab_bar(&mut leaf_ui, &group, group_id, is_focused, bar);
+            }
+
+            // Split the rest into optional info bar and content
             let info_bar_pos = app.info_bar_position(group_id);
             let info_h = if info_bar_pos != InfoBarPosition::Hidden {
                 theme::INFO_BAR_H
@@ -1147,25 +1168,25 @@ fn render_group_node(
 
             let (info_bar_rect, content_rect) = match info_bar_pos {
                 InfoBarPosition::Top => {
-                    let ib = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), info_h));
+                    let ib = egui::Rect::from_min_size(body.min, egui::vec2(body.width(), info_h));
                     let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + info_h),
-                        egui::vec2(rect.width(), (rect.height() - info_h).max(0.0)),
+                        egui::pos2(body.min.x, body.min.y + info_h),
+                        egui::vec2(body.width(), (body.height() - info_h).max(0.0)),
                     );
                     (Some(ib), cr)
                 }
                 InfoBarPosition::Bottom => {
                     let cr = egui::Rect::from_min_size(
-                        rect.min,
-                        egui::vec2(rect.width(), (rect.height() - info_h).max(0.0)),
+                        body.min,
+                        egui::vec2(body.width(), (body.height() - info_h).max(0.0)),
                     );
                     let ib = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, cr.max.y),
-                        egui::vec2(rect.width(), info_h),
+                        egui::pos2(body.min.x, cr.max.y),
+                        egui::vec2(body.width(), info_h),
                     );
                     (Some(ib), cr)
                 }
-                InfoBarPosition::Hidden => (None, rect),
+                InfoBarPosition::Hidden => (None, body),
             };
 
             // Render info bar (or show toggle when hidden)
@@ -1206,7 +1227,7 @@ fn render_group_node(
                         );
                     });
                 });
-                hit_test_drop(app, &leaf_ui, rect, content_rect, group_id);
+                hit_test_drop(app, &leaf_ui, body, content_rect, group_id);
                 return;
             }
 
@@ -1309,7 +1330,7 @@ fn render_group_node(
 
             // Route this leaf's drop target: near a content edge the drop
             // splits the group, anywhere else in the leaf it joins the group.
-            hit_test_drop(app, &leaf_ui, rect, content_rect, group_id);
+            hit_test_drop(app, &leaf_ui, body, content_rect, group_id);
 
             // Click-to-focus: if clicked in this group's area, set focus
             let any_drag = leaf_ui
@@ -1321,7 +1342,11 @@ fn render_group_node(
                     .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
             {
                 if let Some(pos) = leaf_ui.ctx().input(|inp| inp.pointer.interact_pos()) {
-                    if rect.contains(pos) {
+                    // Only a click on the split itself: one on a dialog, menu
+                    // or popup drawn over it (Settings, a right-click menu)
+                    // must not move focus to the split underneath.
+                    let on_this_layer = leaf_ui.ctx().layer_id_at(pos) == Some(leaf_ui.layer_id());
+                    if rect.contains(pos) && on_this_layer {
                         *clicked_group_id = Some(group_id);
                     }
                 }

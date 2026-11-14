@@ -43,6 +43,25 @@ fn safe_ratio(v: f32, default: f32) -> f32 {
     }
 }
 
+/// Folder holding the scrollback saved with the session file, which restored
+/// sessions read back when they start.
+pub(super) fn active_scrollback_dir() -> Option<PathBuf> {
+    crate::util::data_dir().map(|d| d.join(ACTIVE_SCROLLBACK_DIR_NAME))
+}
+
+const ACTIVE_SCROLLBACK_DIR_NAME: &str = "active_scrollback";
+
+/// Columns and rows a restored session's shell starts at, before the first
+/// layout gives it its real size.
+pub(super) const RESTORED_TERMINAL_SIZE: (u16, u16) = (80, 24);
+
+/// Read and decompress one saved scrollback file. None when it is missing or
+/// unreadable; the session then starts without its old output.
+pub(super) fn read_active_scrollback(file: &str) -> Option<Vec<u8>> {
+    let compressed = std::fs::read(active_scrollback_dir()?.join(file)).ok()?;
+    zstd::decode_all(compressed.as_slice()).ok()
+}
+
 /// Name of a running session's scrollback file, written under one save's
 /// `stamp`. Names from earlier saves (and the bare `<index>.zst` of older
 /// versions) never repeat, so a restored session's file is never overwritten.
@@ -252,6 +271,8 @@ impl App {
             deferred_close_pane: false,
             rename_pane_id: None,
             rename_text: String::new(),
+            rename_in_tab_bar: false,
+            tab_bar_actions: Default::default(),
             scroll_to_pane: None,
             reveal_file_path: None,
             reveal_highlight: None,
@@ -1381,7 +1402,7 @@ impl App {
 
     fn save_active_scrollbacks(&self) -> HashMap<u32, String> {
         let mut result = HashMap::new();
-        let Some(dir) = crate::util::data_dir().map(|d| d.join("active_scrollback")) else {
+        let Some(dir) = active_scrollback_dir() else {
             return result;
         };
         std::fs::create_dir_all(&dir).ok();
@@ -1653,7 +1674,6 @@ impl App {
                     None
                 }
             });
-        let scrollback_dir = crate::util::data_dir().map(|d| d.join("active_scrollback"));
 
         // Count Claude sessions per CWD to determine whether --continue
         // fallback is safe (only when a single Claude session exists per CWD).
@@ -1681,11 +1701,10 @@ impl App {
                 } else {
                     Some(s.cwd.clone())
                 };
-                let scrollback = s.scrollback_file.as_ref().and_then(|f| {
-                    let dir = scrollback_dir.as_ref()?;
-                    let compressed = std::fs::read(dir.join(f)).ok()?;
-                    zstd::decode_all(compressed.as_slice()).ok()
-                });
+                let scrollback = s
+                    .scrollback_file
+                    .as_deref()
+                    .and_then(read_active_scrollback);
                 // Only replay the command if there's no scrollback to restore.
                 // When scrollback exists, the user sees the old session output
                 // above the new prompt — replaying the command would wipe it
@@ -1693,8 +1712,8 @@ impl App {
                 let replay_command = scrollback.is_none() || s.scrollback_file.is_none();
                 if let Some(sid) = self.spawn_session_with_scrollback(
                     &default_shell(),
-                    80,
-                    24,
+                    RESTORED_TERMINAL_SIZE.0,
+                    RESTORED_TERMINAL_SIZE.1,
                     cwd,
                     scrollback.as_deref(),
                 ) {
@@ -1811,9 +1830,15 @@ impl App {
                         save_error: false,
                         workspace_id: *workspace_id,
                         show_preview: is_md,
-                        stale: false,
+                        // Read the file again in the background: it may have
+                        // changed since the last run, and its text is what
+                        // tells an edit apart from the saved version. Unsaved
+                        // edits in the buffer are kept.
+                        stale: !*untitled,
                         loading: false,
                         untitled: *untitled,
+                        // A new buffer's "file" is empty.
+                        saved_text_hash: untitled.then(|| super::pane::text_hash("")),
                     })
                 }
                 SavedPaneContent::FileDiff { path } => {
@@ -2324,6 +2349,7 @@ impl App {
                         stale: false,
                         loading: true,
                         untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -2439,6 +2465,17 @@ impl App {
             }
 
             // Group-aware variants — will be wired in a follow-up task
+            DragAction::ReorderTabInGroup {
+                pane_id,
+                group_id,
+                to_index,
+            } => {
+                if let Some(group) = self.pane_state.groups.get_mut(&group_id) {
+                    group.reorder(pane_id, to_index);
+                }
+                self.pane_state.focused_group_id = group_id;
+                self.activate_pane(pane_id);
+            }
             DragAction::MoveTabToGroup {
                 pane_id,
                 target_group_id,
@@ -2593,6 +2630,7 @@ impl App {
                 stale: false,
                 loading: true,
                 untitled: false,
+                saved_text_hash: None,
             }),
             manual_width: None,
             last_size: (0, 0),

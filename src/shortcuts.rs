@@ -18,6 +18,7 @@ pub enum AppAction {
     // Panel navigation
     ToggleLeftSidebar,
     ToggleRightSidebar,
+    ToggleTabBar,
     FocusTerminal,
 
     // Tab management
@@ -106,6 +107,7 @@ impl AppAction {
         match self {
             Self::ToggleLeftSidebar => "toggle_left_sidebar",
             Self::ToggleRightSidebar => "toggle_right_sidebar",
+            Self::ToggleTabBar => "toggle_tab_bar",
             Self::FocusTerminal => "focus_terminal",
             Self::NewTerminalTab => "new_terminal_tab",
             Self::NewFile => "new_file",
@@ -158,6 +160,7 @@ impl AppAction {
         match name {
             "toggle_left_sidebar" => Some(Self::ToggleLeftSidebar),
             "toggle_right_sidebar" => Some(Self::ToggleRightSidebar),
+            "toggle_tab_bar" => Some(Self::ToggleTabBar),
             "focus_terminal" => Some(Self::FocusTerminal),
             "new_terminal_tab" => Some(Self::NewTerminalTab),
             "new_file" => Some(Self::NewFile),
@@ -211,6 +214,7 @@ impl AppAction {
         match self {
             Self::ToggleLeftSidebar => "Toggle left sidebar",
             Self::ToggleRightSidebar => "Toggle right sidebar",
+            Self::ToggleTabBar => "Toggle tab bar",
             Self::FocusTerminal => "Focus terminal",
             Self::NewTerminalTab => "New terminal tab",
             Self::NewFile => "New file",
@@ -285,6 +289,7 @@ impl AppAction {
                 | Self::CloseCurrentPane
                 | Self::ToggleLeftSidebar
                 | Self::ToggleRightSidebar
+                | Self::ToggleTabBar
                 | Self::PreviousTab
                 | Self::NextTab
         ) || self.tab_index().is_some()
@@ -502,6 +507,8 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
     let mut bindings = vec![
         (cs(B), AppAction::ToggleLeftSidebar),
         (cs(E), AppAction::ToggleRightSidebar),
+        // T for tabs. Ctrl+Alt+T alone opens a terminal on Ubuntu.
+        (cas(T).with_shift(), AppAction::ToggleTabBar),
         (cs(Backtick), AppAction::FocusTerminal),
         (cs(N), AppAction::NewTerminalTab),
         (cas(N), AppAction::NewFile),
@@ -583,6 +590,9 @@ fn mac_system_override(action: AppAction, standard: &Shortcut) -> Option<Shortcu
         _ if action.tab_index().is_some() => Some(without_shift),
         // Shift-Command-/ opens the Help menu search.
         AppAction::ToggleShortcutHelp => Some(without_shift),
+        // Command-, opens Settings in every Mac app, and the app menu's
+        // Settings… item shows it there.
+        AppAction::OpenSettings => Some(without_shift),
         // Command-` (with or without Shift) cycles windows; VS Code uses Control-`.
         AppAction::FocusTerminal => Some(Shortcut {
             shift: false,
@@ -881,6 +891,7 @@ impl ShortcutRegistry {
                 &[
                     AppAction::ToggleLeftSidebar,
                     AppAction::ToggleRightSidebar,
+                    AppAction::ToggleTabBar,
                     AppAction::FocusTerminal,
                     AppAction::ToggleFullscreen,
                 ],
@@ -978,6 +989,7 @@ mod tests {
     const ALL_ACTIONS: &[AppAction] = &[
         AppAction::ToggleLeftSidebar,
         AppAction::ToggleRightSidebar,
+        AppAction::ToggleTabBar,
         AppAction::FocusTerminal,
         AppAction::NewTerminalTab,
         AppAction::NewFile,
@@ -1204,6 +1216,8 @@ mod tests {
             (AppAction::OpenFileFinder, "\u{2318}P"),
             (AppAction::SwitchToTab1, "\u{2318}1"),
             (AppAction::ToggleShortcutHelp, "\u{2318}/"),
+            (AppAction::OpenSettings, "\u{2318},"),
+            (AppAction::ToggleTabBar, "\u{2325}\u{21E7}\u{2318}T"),
             (AppAction::FocusTerminal, "\u{2303}`"),
             (AppAction::OpenQuickSwitcher, "\u{2303}\u{21E7}Space"),
             (AppAction::RevealInExplorer, "\u{2325}\u{2318}R"),

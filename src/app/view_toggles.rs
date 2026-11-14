@@ -1,21 +1,24 @@
-//! The titlebar's show/hide actions: sidebar, explorer, switcher, recently
-//! closed sessions, settings and keyboard shortcuts.
+//! The view's show/hide actions: sidebar, explorer, tab bar, switcher,
+//! recently closed sessions, settings and keyboard shortcuts.
 //!
-//! The titlebar buttons, their keyboard shortcuts, the command palette and
-//! the macOS menu bar all run these through [`App::toggle_view`], so each one
-//! opens and closes the same way wherever it is triggered from.
+//! The titlebar buttons, keyboard shortcuts, the command palette, the macOS
+//! menu bar and the Settings checkbox all run these through
+//! [`App::toggle_view`], so each one opens and closes the same way wherever
+//! it is triggered from.
 
 use super::App;
 use crate::shortcuts::AppAction;
 
-/// Every action [`App::toggle_view`] handles, in titlebar order.
-pub(super) const VIEW_TOGGLES: [AppAction; 6] = [
+/// Every action [`App::toggle_view`] handles: the titlebar's, in titlebar
+/// order, then the tab bar (which has no titlebar button).
+pub(super) const VIEW_TOGGLES: [AppAction; 7] = [
     AppAction::ToggleLeftSidebar,
     AppAction::OpenQuickSwitcher,
     AppAction::ReopenClosedSession,
     AppAction::ToggleShortcutHelp,
     AppAction::ToggleRightSidebar,
     AppAction::OpenSettings,
+    AppAction::ToggleTabBar,
 ];
 
 impl App {
@@ -27,6 +30,7 @@ impl App {
         Some(match action {
             AppAction::ToggleLeftSidebar => self.show_left_panel,
             AppAction::ToggleRightSidebar => self.show_right_panel,
+            AppAction::ToggleTabBar => self.settings.show_tab_bar,
             AppAction::OpenQuickSwitcher => self.show_quick_switcher,
             AppAction::ReopenClosedSession => self.show_closed_sessions,
             AppAction::ToggleShortcutHelp => self.show_shortcut_help,
@@ -41,6 +45,10 @@ impl App {
         match action {
             AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
             AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
+            AppAction::ToggleTabBar => {
+                self.settings.show_tab_bar = !self.settings.show_tab_bar;
+                self.settings.save();
+            }
             AppAction::OpenQuickSwitcher => {
                 self.show_quick_switcher = !self.show_quick_switcher;
                 if !self.show_quick_switcher {

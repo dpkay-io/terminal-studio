@@ -32,7 +32,9 @@ impl App {
             AppAction::SplitHorizontal => requests.split = Some(SplitDir::Horizontal),
             AppAction::SplitVertical => requests.split = Some(SplitDir::Vertical),
             AppAction::CloseCurrentPane => requests.close_pane = true,
-            AppAction::ToggleLeftSidebar | AppAction::ToggleRightSidebar => {
+            AppAction::ToggleLeftSidebar
+            | AppAction::ToggleRightSidebar
+            | AppAction::ToggleTabBar => {
                 self.toggle_view(action);
             }
             // Both cycle inside the focused split only. Cycling across every
