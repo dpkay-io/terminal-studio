@@ -405,16 +405,21 @@ impl eframe::App for App {
             || self.show_global_search
             || self.session_search_active
             || self.dir_search_active;
-        let notes_has_focus = _ctx.memory(|m| {
-            m.focused()
-                .map(|id| id == self.vp_id("notes_textedit"))
-                .unwrap_or(false)
-        });
+        let notes_has_focus = self.notes_has_focus(_ctx);
         if active_is_editor || notes_has_focus {
-            // Text boxes keep Tab for indenting. Ctrl+Tab means nothing in
-            // one, and egui would either type a tab or move the keyboard to
-            // the next widget, leaving the editor without it.
-            raw_input.events.retain(|event| !input::is_ctrl_tab(event));
+            // Text boxes keep Tab for indenting. Ctrl+Tab must not reach
+            // egui, which would type a tab or move the keyboard to the next
+            // widget; it is kept for the layout shortcuts instead
+            // (`run_held_layout_keys`), so "Switch to last session" works
+            // from a text box too.
+            let held = &mut self.raw_intercepted_keys;
+            raw_input.events.retain(|event| {
+                if input::is_ctrl_tab(event) {
+                    held.push(event.clone());
+                    return false;
+                }
+                true
+            });
         }
         if active_is_editor || any_overlay || notes_has_focus || floating_layer_open(_ctx) {
             return;
@@ -3206,6 +3211,10 @@ impl App {
                 }) {
                     self.apply_layout_shortcut(action, &numbered_tabs, &mut layout_requests);
                 }
+            }
+            // Ctrl+Tab the raw input hook kept away from a text box.
+            if (active_is_editor || self.notes_has_focus(ctx)) && !modal_open {
+                self.run_held_layout_keys(&numbered_tabs, &mut layout_requests);
             }
 
             if !active_is_editor

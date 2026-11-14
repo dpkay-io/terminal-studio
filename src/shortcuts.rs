@@ -36,6 +36,7 @@ pub enum AppAction {
     SwitchToTab9,
     PreviousTab,
     NextTab,
+    SwitchToLastSession,
 
     // Pane splits
     SplitHorizontal,
@@ -123,6 +124,7 @@ impl AppAction {
             Self::SwitchToTab9 => "switch_to_tab_9",
             Self::PreviousTab => "previous_tab",
             Self::NextTab => "next_tab",
+            Self::SwitchToLastSession => "switch_to_last_session",
             Self::SplitHorizontal => "split_horizontal",
             Self::SplitVertical => "split_vertical",
             Self::OpenSettings => "open_settings",
@@ -176,6 +178,7 @@ impl AppAction {
             "switch_to_tab_9" => Some(Self::SwitchToTab9),
             "previous_tab" => Some(Self::PreviousTab),
             "next_tab" => Some(Self::NextTab),
+            "switch_to_last_session" => Some(Self::SwitchToLastSession),
             "split_horizontal" => Some(Self::SplitHorizontal),
             "split_vertical" => Some(Self::SplitVertical),
             "open_settings" => Some(Self::OpenSettings),
@@ -230,6 +233,7 @@ impl AppAction {
             Self::SwitchToTab9 => "Switch to tab 9",
             Self::PreviousTab => "Previous tab",
             Self::NextTab => "Next tab",
+            Self::SwitchToLastSession => "Switch to last session",
             Self::SplitHorizontal => "Split horizontal",
             Self::SplitVertical => "Split vertical",
             Self::OpenSettings => "Open settings",
@@ -292,6 +296,7 @@ impl AppAction {
                 | Self::ToggleTabBar
                 | Self::PreviousTab
                 | Self::NextTab
+                | Self::SwitchToLastSession
         ) || self.tab_index().is_some()
     }
 
@@ -515,6 +520,13 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
         (cs(W), AppAction::CloseCurrentPane),
         (cs(OpenBracket), AppAction::PreviousTab),
         (cs(CloseBracket), AppAction::NextTab),
+        // Ctrl+Tab on every platform (the physical Control key on a Mac,
+        // where Command-Tab is the system's app switcher). A terminal can't
+        // tell it from Tab, so no shell or TUI loses anything.
+        (
+            Shortcut::key(Tab).with_control(),
+            AppAction::SwitchToLastSession,
+        ),
         (cs(Backslash), AppAction::SplitHorizontal),
         (cs(Minus), AppAction::SplitVertical),
         (cs(Comma), AppAction::OpenSettings),
@@ -904,6 +916,7 @@ impl ShortcutRegistry {
                     AppAction::CloseCurrentPane,
                     AppAction::PreviousTab,
                     AppAction::NextTab,
+                    AppAction::SwitchToLastSession,
                     AppAction::SwitchToTab1,
                     AppAction::SwitchToTab9,
                 ],
@@ -1005,6 +1018,7 @@ mod tests {
         AppAction::SwitchToTab9,
         AppAction::PreviousTab,
         AppAction::NextTab,
+        AppAction::SwitchToLastSession,
         AppAction::SplitHorizontal,
         AppAction::SplitVertical,
         AppAction::OpenSettings,
@@ -1416,10 +1430,35 @@ mod tests {
                         !editing.contains(&shortcut.key),
                         "{action:?} uses a text editing key"
                     );
-                    assert!(shortcut.ctrl, "{action:?} has no Command/Ctrl");
+                    assert!(
+                        shortcut.ctrl || shortcut.control,
+                        "{action:?} has no Command/Ctrl/Control"
+                    );
                 }
             }
         }
+    }
+
+    #[test]
+    fn last_session_defaults_to_control_tab_everywhere() {
+        let chord = Shortcut::key(egui::Key::Tab).with_control();
+        for bindings in [standard_default_bindings(), mac_default_bindings()] {
+            assert!(bindings.contains(&(chord.clone(), AppAction::SwitchToLastSession)));
+        }
+    }
+
+    #[test]
+    fn last_session_id_roundtrips() {
+        let action = AppAction::SwitchToLastSession;
+        assert_eq!(action.name(), "switch_to_last_session");
+        assert_eq!(AppAction::from_name("switch_to_last_session"), Some(action));
+        assert_eq!(action.description(), "Switch to last session");
+    }
+
+    #[test]
+    fn control_tab_is_not_os_reserved_on_mac() {
+        let chord = Shortcut::key(egui::Key::Tab).with_control();
+        assert!(!macos_system_chords().contains(&chord));
     }
 
     #[test]

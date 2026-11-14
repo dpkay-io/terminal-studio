@@ -40,6 +40,12 @@ impl App {
             // Both cycle inside the focused split only. Cycling across every
             // visible pane used to yank focus into another split, which has no
             // way back on the keyboard now that each split owns its own order.
+            AppAction::SwitchToLastSession => {
+                let allowed = self.tab_cycle_candidates();
+                requests.activate_pane = self
+                    .pane_state
+                    .previous_active_pane(self.pane_state.active_pane_id, &allowed);
+            }
             AppAction::PreviousTab | AppAction::NextTab => {
                 if let Some(cur) = self.pane_state.active_pane_id {
                     let allowed = self.tab_cycle_candidates();
@@ -59,5 +65,34 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Layout chords `raw_input_hook` kept away from a focused text box
+    /// (Ctrl+Tab), run like the editor's other layout shortcuts.
+    pub(super) fn run_held_layout_keys(&mut self, numbered: &[u32], requests: &mut LayoutRequests) {
+        for event in std::mem::take(&mut self.raw_intercepted_keys) {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            if let Some(action) = self
+                .shortcut_registry
+                .match_event(&key, &modifiers)
+                .filter(|action| action.arranges_layout())
+            {
+                self.apply_layout_shortcut(action, numbered, requests);
+            }
+        }
+    }
+
+    /// The notes box has the keyboard.
+    pub(super) fn notes_has_focus(&self, ctx: &egui::Context) -> bool {
+        let notes_id = self.vp_id("notes_textedit");
+        ctx.memory(|m| m.focused() == Some(notes_id))
     }
 }

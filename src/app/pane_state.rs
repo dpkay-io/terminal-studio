@@ -514,6 +514,20 @@ impl PaneState {
     }
 
     /// The pane after `current` in the focused group's own order, wrapping.
+    /// The pane used most recently before `current`, among `allowed`, in
+    /// any split; ties go to the higher id. Drives "Switch to last session".
+    pub(super) fn previous_active_pane(
+        &self,
+        current: Option<u32>,
+        allowed: &[u32],
+    ) -> Option<u32> {
+        self.panes
+            .iter()
+            .filter(|p| Some(p.id) != current && allowed.contains(&p.id))
+            .max_by_key(|p| (p.last_active_at, p.id))
+            .map(|p| p.id)
+    }
+
     pub(super) fn next_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
         self.step_pane_in_focused_group(current, allowed, true)
     }
@@ -558,6 +572,47 @@ mod tests {
             last_active_at: 0,
             workspace_id: None,
         }
+    }
+
+    fn state_with_stamps(stamps: &[(u32, u64)]) -> PaneState {
+        let mut state = PaneState::new();
+        for &(id, t) in stamps {
+            let mut pane = make_pane(id);
+            pane.last_active_at = t;
+            state.panes.push(pane);
+        }
+        state
+    }
+
+    #[test]
+    fn previous_active_pane_picks_most_recent_other() {
+        let state = state_with_stamps(&[(1, 100), (2, 300), (3, 200)]);
+        assert_eq!(state.previous_active_pane(Some(2), &[1, 2, 3]), Some(3));
+    }
+
+    #[test]
+    fn previous_active_pane_none_when_alone() {
+        let state = state_with_stamps(&[(1, 100)]);
+        assert_eq!(state.previous_active_pane(Some(1), &[1]), None);
+    }
+
+    #[test]
+    fn previous_active_pane_skips_disallowed() {
+        let state = state_with_stamps(&[(1, 100), (2, 300), (3, 900)]);
+        assert_eq!(state.previous_active_pane(Some(2), &[1, 2]), Some(1));
+    }
+
+    #[test]
+    fn previous_active_pane_after_previous_closed() {
+        let mut state = state_with_stamps(&[(1, 100), (2, 300), (3, 200)]);
+        state.panes.retain(|p| p.id != 3);
+        assert_eq!(state.previous_active_pane(Some(2), &[1, 2, 3]), Some(1));
+    }
+
+    #[test]
+    fn previous_active_pane_ties_pick_the_higher_id() {
+        let state = state_with_stamps(&[(1, 100), (2, 100), (3, 300)]);
+        assert_eq!(state.previous_active_pane(Some(3), &[1, 2, 3]), Some(2));
     }
 
     #[test]
