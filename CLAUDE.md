@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1015 tests)
+cargo test               # all unit tests (1021 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -332,7 +332,8 @@ Color32::from_rgb(30, 30, 46)
 | File | Tests | Coverage |
 |------|-------|---------|
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
-| `src/app/input.rs` | 30 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection |
+| `src/app/input.rs` | 32 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection and holding it back from text boxes |
+| `src/app/layout_shortcuts.rs` | 4 | layout keys from an editor apply only from its own text box, the notes box or no focus — never a rename or filter field |
 | `src/app/pane_state.rs` | 83 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs) |
 | `src/app/drag.rs` | 76 | drag payload/target resolution, edge-zone geometry, split-edge drops, tab-bar drops (reorder, move to a gap in another split, open new things there), one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
@@ -354,7 +355,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
-| `src/app/persistence.rs` | 29 | session serialization, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order (old files load empty) |
+| `src/app/persistence.rs` | 30 | session serialization, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order (old files load empty), saved indices stay aligned after a pane that can't be restored |
 | `src/app/pane.rs` | 15 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits), undoing back to the saved text leaves nothing unsaved |
 | `src/app/ui/tab_bar.rs` | 3 | drop gap from the pointer, hidden tabs keep their place in the order, empty bar |
 | `src/pty/mod.rs` | 8 | shell detection, session manager operations |
@@ -394,7 +395,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1015 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1021 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
