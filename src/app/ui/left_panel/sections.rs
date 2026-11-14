@@ -7,7 +7,7 @@ use crate::pane_tree::SplitDir;
 /// A two-leaf root gets spatial labels, which map onto what the user sees. Any
 /// deeper tree falls back to indices, because "Left" stops being meaningful
 /// once a side is itself subdivided.
-pub(super) fn section_labels(layout: &GroupNode) -> Vec<(GroupId, String)> {
+pub(in crate::app) fn section_labels(layout: &GroupNode) -> Vec<(GroupId, String)> {
     let ids = layout.group_ids();
     if ids.len() < 2 {
         return Vec::new();

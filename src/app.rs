@@ -2702,6 +2702,8 @@ impl App {
 
         // ── Visible pane indices (all panes, no workspace filtering) ──────
         let visible_indices: Vec<usize> = self.pane_state.visible_leaf_indices();
+        // What ⌘1–9 open: the focused split's rows, in left nav order.
+        let numbered_tabs = self.numbered_tab_targets();
         // If the active pane was removed, fall back to the first available pane.
         if let Some(pid) = self.pane_state.active_pane_id {
             let pane_exists = self.pane_state.panes.iter().any(|p| p.id == pid);
@@ -3202,7 +3204,7 @@ impl App {
                 while let Some(action) = ctx.input_mut(|i| {
                     self.shortcut_registry.consume_where(i, AppAction::arranges_layout)
                 }) {
-                    self.apply_layout_shortcut(action, &visible_indices, &mut layout_requests);
+                    self.apply_layout_shortcut(action, &numbered_tabs, &mut layout_requests);
                 }
             }
 
@@ -3288,7 +3290,7 @@ impl App {
                             if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
                                 match action {
                                     a if a.arranges_layout() => {
-                                        self.apply_layout_shortcut(a, &visible_indices, &mut layout_requests);
+                                        self.apply_layout_shortcut(a, &numbered_tabs, &mut layout_requests);
                                     }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));

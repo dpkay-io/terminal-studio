@@ -20,12 +20,12 @@ pub(super) struct LayoutRequests {
 
 impl App {
     /// Run one shortcut for which [`AppAction::arranges_layout`] holds.
-    /// `visible_indices` are the pane indices in on-screen order, which the
-    /// numbered tab shortcuts count through.
+    /// `numbered` are the pane ids ⌘1–9 open, top first
+    /// ([`App::numbered_tab_targets`]).
     pub(super) fn apply_layout_shortcut(
         &mut self,
         action: AppAction,
-        visible_indices: &[usize],
+        numbered: &[u32],
         requests: &mut LayoutRequests,
     ) {
         match action {
@@ -54,8 +54,8 @@ impl App {
                 }
             }
             _ => {
-                if let Some(&idx) = action.tab_index().and_then(|i| visible_indices.get(i)) {
-                    requests.activate_pane = Some(self.pane_state.panes[idx].id);
+                if let Some(&pane_id) = action.tab_index().and_then(|i| numbered.get(i)) {
+                    requests.activate_pane = Some(pane_id);
                 }
             }
         }

@@ -3,7 +3,15 @@
 //! order the list shows, so it has to be current while the list is hidden.
 
 use super::ui::left_panel::nav_order::{NavPane, SectionKey};
+use super::ui::left_panel::sections;
 use super::App;
+use crate::editor_group::GroupId;
+
+/// The section ⌘1–9 count through: the whole list while there is one split
+/// (the list is drawn flat then), else the focused split's section.
+fn numbered_section(has_splits: bool, focused: GroupId) -> Option<SectionKey> {
+    has_splits.then_some(SectionKey::Group(focused))
+}
 
 impl App {
     /// One `NavPane` per pane, in `panes` order, into `out` (cleared first).
@@ -30,5 +38,34 @@ impl App {
         self.nav_order
             .refresh(&panes, self.settings.nav_stable_rows, hold);
         self.nav_panes_buf = panes;
+    }
+
+    /// Pane ids ⌘1–9 open, in left nav order: the focused split's rows that
+    /// the workspace/label filter shows.
+    pub(super) fn numbered_tab_targets(&self) -> Vec<u32> {
+        let has_splits = !sections::section_labels(&self.pane_state.group_layout).is_empty();
+        let section = numbered_section(has_splits, self.pane_state.focused_group_id);
+        self.nav_order.numbered(section, |id| {
+            self.pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == id)
+                .is_some_and(|p| self.pane_passes_tab_filter(p))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numbered_counts_the_whole_list_without_splits() {
+        assert_eq!(numbered_section(false, 4), None);
+    }
+
+    #[test]
+    fn numbered_counts_the_focused_split_with_splits() {
+        assert_eq!(numbered_section(true, 4), Some(SectionKey::Group(4)));
     }
 }
