@@ -45,6 +45,7 @@ mod macos_menu;
 mod macos_quit;
 mod markdown;
 mod multi_window;
+mod nav_order_sync;
 mod pane;
 mod pane_state;
 mod persistence;
@@ -221,9 +222,14 @@ pub struct App {
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
     global_search_selected: usize,
 
-    // Frozen recency order for the left nav session list — keeps rows from
-    // jumping out from under the pointer when activating one bumps its recency
-    session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+    // The left nav's row order for this window (`NavOrder`): the list, ⌘1–9
+    // and the saved session all read it.
+    nav_order: crate::app::ui::left_panel::nav_order::NavOrder,
+    // Whether the pointer was over the session list when it was last drawn;
+    // holds the order still on the next refresh. Per window.
+    nav_list_hovered: bool,
+    // Reused every frame by `refresh_nav_order`, so it allocates nothing.
+    nav_panes_buf: Vec<crate::app::ui::left_panel::nav_order::NavPane>,
 
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
@@ -1538,6 +1544,10 @@ impl App {
         }
 
         Self::handle_frameless_resize(ctx);
+
+        // Before anything reads the left nav order this frame (shortcuts,
+        // the session list).
+        self.refresh_nav_order();
 
         #[cfg(target_os = "macos")]
         self.sync_macos_menu(ctx);

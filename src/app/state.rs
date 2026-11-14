@@ -257,7 +257,9 @@ impl App {
                 Duration::from_millis(200),
             ),
             global_search_selected: 0,
-            session_sort_cache: Default::default(),
+            nav_order: Default::default(),
+            nav_list_hovered: false,
+            nav_panes_buf: Vec::new(),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
             detection_lines_hash: HashMap::new(),
@@ -861,7 +863,8 @@ impl App {
             &mut self.session_workspace_filter,
             &mut view.session_workspace_filter,
         );
-        swap(&mut self.session_sort_cache, &mut view.session_sort_cache);
+        swap(&mut self.nav_order, &mut view.nav_order);
+        swap(&mut self.nav_list_hovered, &mut view.nav_list_hovered);
         {
             let temp = view.focused_group_id;
             view.focused_group_id = Some(self.pane_state.focused_group_id);

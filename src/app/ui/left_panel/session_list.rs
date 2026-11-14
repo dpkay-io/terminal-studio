@@ -835,13 +835,10 @@ impl App {
                 ui.set_min_width(outer_w);
                 ui.set_max_width(outer_w);
                 let matcher = SkimMatcherV2::default();
-                let recency: Vec<(u32, u64)> = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .map(|p| (p.id, p.last_active_at))
-                    .collect();
-                let ordered_ids = self.session_sort_cache.order(&recency, pointer_inside);
+                // Refreshed at the start of the frame; held on the next one
+                // while the pointer is over the list.
+                self.nav_list_hovered = pointer_inside;
+                let ordered_ids = self.nav_order.order();
                 // Panes currently on screen — one per split. Computed once per
                 // frame, not once per row: this list redraws every frame.
                 let visible_pane_ids = self.pane_state.shown_pane_ids();
@@ -859,7 +856,7 @@ impl App {
                     .filter_map(|&i| self.row_label(i, session_filter, &matcher).map(|r| (i, r)))
                     .collect();
 
-                // Pass 2: bucket the visible rows per split. Recency order is
+                // Pass 2: bucket the visible rows per split. The nav order is
                 // preserved inside each bucket. A pane belonging to no group
                 // (see `PaneState::group_of`) would otherwise be unreachable —
                 // the left nav is the only navigator — so it lands in "Other".

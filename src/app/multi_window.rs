@@ -45,9 +45,10 @@ pub(super) struct WindowView {
     pub(super) session_workspace_filter: Option<Option<u64>>,
     pub(super) focused_group_id: Option<crate::editor_group::GroupId>,
     /// Per window: every viewport renders its own session list in the same
-    /// frame, so a shared cache would let the window without the pointer
-    /// recompute the order the hovered window is trying to hold still.
-    pub(super) session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+    /// frame, so a shared order would let the window without the pointer
+    /// move rows the hovered window is trying to hold still.
+    pub(super) nav_order: crate::app::ui::left_panel::nav_order::NavOrder,
+    pub(super) nav_list_hovered: bool,
 }
 
 impl WindowView {
@@ -81,7 +82,8 @@ impl WindowView {
             was_focused: true,
             session_workspace_filter: None,
             focused_group_id: None,
-            session_sort_cache: Default::default(),
+            nav_order: Default::default(),
+            nav_list_hovered: false,
         }
     }
 }

@@ -5,7 +5,8 @@ use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
 
-const NAV_STABLE_ROWS_HINT: &str = "The top rows of each section in the session list never move on their own. \
+const NAV_STABLE_ROWS_HINT: &str =
+    "The top rows of each section in the session list never move on their own. \
      A session you use from below them moves to the top. 0 sorts by most recent.";
 
 impl App {

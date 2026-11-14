@@ -117,7 +117,9 @@ impl NavOrder {
         self.order
             .iter()
             .copied()
-            .filter(|id| section.map_or(true, |key| self.seen.get(id).is_some_and(|s| s.live == key)))
+            .filter(|id| {
+                section.map_or(true, |key| self.seen.get(id).is_some_and(|s| s.live == key))
+            })
             .filter(|&id| shown(id))
             .take(NUMBERED_TAB_COUNT)
             .collect()
@@ -125,8 +127,8 @@ impl NavOrder {
 
     /// Drop closed panes, append new ones, track each pane's live section.
     fn sync_membership(&mut self, panes: &[NavPane]) {
-        let unchanged = panes.len() == self.order.len()
-            && panes.iter().all(|p| self.seen.contains_key(&p.id));
+        let unchanged =
+            panes.len() == self.order.len() && panes.iter().all(|p| self.seen.contains_key(&p.id));
         if !unchanged {
             let present: HashSet<u32> = panes.iter().map(|p| p.id).collect();
             self.order.retain(|id| present.contains(id));
@@ -155,7 +157,11 @@ impl NavOrder {
         if !panes.iter().any(|p| self.is_pending(p)) {
             return;
         }
-        let mut pending: Vec<NavPane> = panes.iter().filter(|p| self.is_pending(p)).copied().collect();
+        let mut pending: Vec<NavPane> = panes
+            .iter()
+            .filter(|p| self.is_pending(p))
+            .copied()
+            .collect();
         pending.sort_by_key(|p| (p.last_active_at, p.id));
         for p in pending {
             let Some(seen) = self.seen.get(&p.id).copied() else {
@@ -259,7 +265,11 @@ mod tests {
     }
 
     fn bump(panes: &mut [NavPane], id: u32, t: u64) {
-        panes.iter_mut().find(|p| p.id == id).unwrap().last_active_at = t;
+        panes
+            .iter_mut()
+            .find(|p| p.id == id)
+            .unwrap()
+            .last_active_at = t;
     }
 
     fn move_to(panes: &mut [NavPane], id: u32, section: SectionKey) {
@@ -411,13 +421,7 @@ mod tests {
 
     #[test]
     fn rule_counts_rows_per_section() {
-        let mut panes = vec![
-            p(1, A, 0),
-            p(4, B, 0),
-            p(2, A, 0),
-            p(5, B, 0),
-            p(3, A, 0),
-        ];
+        let mut panes = vec![p(1, A, 0), p(4, B, 0), p(2, A, 0), p(5, B, 0), p(3, A, 0)];
         let mut o = NavOrder::restore(&[1, 4, 2, 5, 3], &panes);
         bump(&mut panes, 3, 10);
         o.refresh(&panes, 2, false);
