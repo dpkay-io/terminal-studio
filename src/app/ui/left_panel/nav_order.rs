@@ -403,7 +403,7 @@ mod tests {
             }
             o.refresh(&panes, 0, false);
             let mut expected = panes.clone();
-            expected.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+            expected.sort_by_key(|p| Reverse(p.last_active_at));
             let expected: Vec<u32> = expected.iter().map(|p| p.id).collect();
             assert_eq!(o.order(), expected.as_slice(), "after {add}/{id}");
         }
