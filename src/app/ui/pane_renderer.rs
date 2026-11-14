@@ -86,6 +86,23 @@ pub(in crate::app) struct RenderCtx<'a> {
 /// file's text.
 const FILE_EDITOR_TEXT_ID: &str = "file_editor_text";
 
+/// Keyboard rule for a pane's text box. The active pane's box takes the
+/// keyboard whenever nothing else holds it, like a terminal, so a new or
+/// just-opened file is ready for typing. Any other pane's box gives it up:
+/// a box in a split the user has left (by the session list, a drag or a
+/// shortcut) must not keep taking their keys.
+fn route_text_focus(ui: &egui::Ui, text_box: &egui::Response, is_active: bool, modal_open: bool) {
+    if !is_active {
+        if text_box.has_focus() {
+            text_box.surrender_focus();
+        }
+        return;
+    }
+    if !modal_open && ui.memory(|m| m.focused().is_none()) {
+        text_box.request_focus();
+    }
+}
+
 fn render_terminal_leaf(
     ui: &mut egui::Ui,
     sid: u32,
@@ -553,12 +570,7 @@ fn render_file_editor_leaf(
                                         .interactive(!modal_open),
                                 )
                             };
-                            // Like a terminal, the active editor takes the
-                            // keyboard whenever nothing else holds it, so a
-                            // new or just-opened file is ready for typing.
-                            if is_focused && !modal_open && ui.memory(|m| m.focused().is_none()) {
-                                te_resp.request_focus();
-                            }
+                            route_text_focus(ui, &te_resp, is_focused, modal_open);
 
                             if !search_highlights.is_empty() {
                                 let mono_id =
@@ -678,6 +690,7 @@ fn render_note_editor_leaf(
                             .frame(false)
                             .interactive(!rctx.modal_open),
                     );
+                    route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
                     if !search_highlights.is_empty() {
                         let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
                         let cw = ui.fonts(|f| {
