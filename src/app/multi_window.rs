@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -45,9 +46,10 @@ pub(super) struct WindowView {
     pub(super) session_workspace_filter: Option<Option<u64>>,
     pub(super) focused_group_id: Option<crate::editor_group::GroupId>,
     /// Per window: every viewport renders its own session list in the same
-    /// frame, so a shared cache would let the window without the pointer
-    /// recompute the order the hovered window is trying to hold still.
-    pub(super) session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+    /// frame, so a shared order would let the window without the pointer
+    /// move rows the hovered window is trying to hold still.
+    pub(super) nav_order: crate::app::ui::left_panel::nav_order::NavOrder,
+    pub(super) nav_list_hovered: bool,
 }
 
 impl WindowView {
@@ -81,7 +83,8 @@ impl WindowView {
             was_focused: true,
             session_workspace_filter: None,
             focused_group_id: None,
-            session_sort_cache: Default::default(),
+            nav_order: Default::default(),
+            nav_list_hovered: false,
         }
     }
 }
@@ -126,4 +129,91 @@ pub(super) struct ExtraWindow {
     pub(super) inner_size: [f32; 2],
     pub(super) view: WindowView,
     pub(super) close_requested: bool,
+}
+
+/// Which file a save writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SaveKind {
+    /// `session.json` (`App::save_session`).
+    Session,
+    /// `windows.json` (`App::save_windows`).
+    Windows,
+}
+
+/// The saves waiting for an extra window's frame to end.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct PendingSaves {
+    pub(super) session: bool,
+    pub(super) windows: bool,
+}
+
+/// Saves asked for while an extra window's view is swapped into `App`
+/// (`App::with_window_view`). `App`'s per-window fields hold that window's
+/// view then, and the main window's sit in a local the save can't reach, so
+/// saving at once would write one window's state as another's. They run
+/// once the view is swapped back. A `Cell`, because the saves take `&self`.
+#[derive(Debug, Default)]
+pub(super) struct DeferredSaves(Cell<PendingSaves>);
+
+impl DeferredSaves {
+    /// Whether a save of `kind` may run now. Inside a window's frame it may
+    /// not: it is remembered for [`Self::take`] instead.
+    pub(super) fn may_save_now(&self, in_window_frame: bool, kind: SaveKind) -> bool {
+        if !in_window_frame {
+            return true;
+        }
+        let mut pending = self.0.get();
+        match kind {
+            SaveKind::Session => pending.session = true,
+            SaveKind::Windows => pending.windows = true,
+        }
+        self.0.set(pending);
+        false
+    }
+
+    /// The saves waiting, cleared.
+    pub(super) fn take(&self) -> PendingSaves {
+        self.0.take()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_outside_a_window_frame_runs_now() {
+        let saves = DeferredSaves::default();
+        assert!(saves.may_save_now(false, SaveKind::Session));
+        assert_eq!(saves.take(), PendingSaves::default());
+    }
+
+    #[test]
+    fn a_save_inside_a_window_frame_waits() {
+        let saves = DeferredSaves::default();
+        assert!(!saves.may_save_now(true, SaveKind::Session));
+        assert_eq!(
+            saves.take(),
+            PendingSaves {
+                session: true,
+                windows: false
+            }
+        );
+    }
+
+    #[test]
+    fn waiting_saves_are_kept_per_kind_and_taken_once() {
+        let saves = DeferredSaves::default();
+        assert!(!saves.may_save_now(true, SaveKind::Windows));
+        assert!(!saves.may_save_now(true, SaveKind::Session));
+        assert!(!saves.may_save_now(true, SaveKind::Session));
+        assert_eq!(
+            saves.take(),
+            PendingSaves {
+                session: true,
+                windows: true
+            }
+        );
+        assert_eq!(saves.take(), PendingSaves::default());
+    }
 }

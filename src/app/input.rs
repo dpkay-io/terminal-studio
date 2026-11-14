@@ -29,6 +29,19 @@ pub(super) fn is_ctrl_tab(event: &egui::Event) -> bool {
     )
 }
 
+/// Move every Ctrl+Tab event out of `events` into `held`, in order. A focused
+/// text box must never see Ctrl+Tab (egui would type a tab or move focus);
+/// the held events go to the layout shortcuts instead.
+pub(super) fn hold_ctrl_tab(events: &mut Vec<egui::Event>, held: &mut Vec<egui::Event>) {
+    events.retain(|event| {
+        if is_ctrl_tab(event) {
+            held.push(event.clone());
+            return false;
+        }
+        true
+    });
+}
+
 pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> Option<Vec<u8>> {
     use egui::Key::*;
     // Cmd combinations belong to the app and the OS, never to the shell.
@@ -274,6 +287,30 @@ mod tests {
             "Shift+Tab outdents"
         );
         assert!(!is_ctrl_tab(&egui::Event::Text("\t".into())));
+    }
+
+    #[test]
+    fn hold_ctrl_tab_moves_only_ctrl_tab() {
+        let ctrl_tab = key_press(egui::Key::Tab, egui::Modifiers::CTRL);
+        let ctrl_tab_up = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL,
+        };
+        let tab = key_press(egui::Key::Tab, egui::Modifiers::NONE);
+        let text = egui::Event::Text("a".into());
+        let mut events = vec![
+            tab.clone(),
+            ctrl_tab.clone(),
+            text.clone(),
+            ctrl_tab_up.clone(),
+        ];
+        let mut held = Vec::new();
+        hold_ctrl_tab(&mut events, &mut held);
+        assert_eq!(events, vec![tab, text]);
+        assert_eq!(held, vec![ctrl_tab, ctrl_tab_up]);
     }
 
     fn key_press(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {

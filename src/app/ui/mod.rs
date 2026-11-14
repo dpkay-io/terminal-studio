@@ -8,7 +8,7 @@ mod info_bar;
 pub(in crate::app) mod left_panel;
 mod pane_labels;
 mod pane_renderer;
-pub(super) use pane_renderer::PaneContextAction;
+pub(super) use pane_renderer::{active_text_box_id, PaneContextAction};
 pub(crate) mod search_bar;
 mod settings_overlay;
 mod tab_bar;

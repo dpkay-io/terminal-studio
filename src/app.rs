@@ -45,9 +45,11 @@ mod macos_menu;
 mod macos_quit;
 mod markdown;
 mod multi_window;
+mod nav_order_sync;
 mod pane;
 mod pane_state;
 mod persistence;
+mod restart;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
 mod session_state;
@@ -70,7 +72,7 @@ use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use labels::LabelRegistry;
 use markdown::render_markdown;
-use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
+use multi_window::{ExtraWindow, PendingWindowFocus};
 use pane::{
     ConflictResolverState, FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry,
     RightTab, TermSelection,
@@ -176,6 +178,9 @@ pub struct App {
     // Key events stripped from raw_input by raw_input_hook (Tab, arrows, Escape).
     // Stored here so the terminal input routing can still send them to the PTY.
     raw_intercepted_keys: Vec<egui::Event>,
+    /// While an extra window's frame holds a Ctrl+Tab: the widget the
+    /// keyboard was parked away from (`hold_extra_window_keys`).
+    parked_focus: Option<Option<egui::Id>>,
 
     // ── Multi-window support ──────────────────────────────────────────────
     /// Extra OS windows opened via "Open in new window" on a workspace.
@@ -185,6 +190,8 @@ pub struct App {
     /// `None` when rendering the main window, `Some(id)` when rendering an extra
     /// viewport. Used by per-window-aware code (e.g. workspace switcher filter).
     current_window_id: Option<WindowId>,
+    /// Saves asked for during an extra window's frame; run after it.
+    deferred_saves: multi_window::DeferredSaves,
 
     // ── Per-frame UI caches ───────────────────────────────────────────────
     /// Cached cell dimensions for the central panel font measurement.
@@ -221,9 +228,16 @@ pub struct App {
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
     global_search_selected: usize,
 
-    // Frozen recency order for the left nav session list — keeps rows from
-    // jumping out from under the pointer when activating one bumps its recency
-    session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+    // The left nav's row order for this window (`NavOrder`): the list, ⌘1–9
+    // and the saved session all read it.
+    nav_order: crate::app::ui::left_panel::nav_order::NavOrder,
+    // Whether the pointer was over the session list when it was last drawn;
+    // holds the order still on the next refresh. Per window.
+    nav_list_hovered: bool,
+    // Reused every frame by `refresh_nav_order`, so it allocates nothing.
+    nav_panes_buf: Vec<crate::app::ui::left_panel::nav_order::NavPane>,
+    /// Reused each frame: pane → left nav section (`pane_sections_into`).
+    nav_sections_buf: HashMap<u32, crate::editor_group::GroupId>,
 
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
@@ -359,6 +373,8 @@ pub struct App {
 
     // Set once when restart_app() is attempted — prevents retrying every frame
     restart_attempted: bool,
+    /// The Restart pill was clicked; the main window's frame restarts.
+    restart_requested: bool,
 }
 
 /// Whether a menu, dropdown or popup is open (egui draws them, like the
@@ -382,33 +398,21 @@ impl eframe::App for App {
     /// gets everything.
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.raw_intercepted_keys.clear();
-        let active_is_editor = self
-            .pane_state
-            .active_pane_id
-            .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-            .map(|p| {
-                matches!(
-                    p.content,
-                    PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)
-                )
-            })
-            .unwrap_or(false);
+        let active_is_editor = self.active_pane_is_text_editor();
         let any_overlay = self.any_modal_open()
             || self.term_search.active
             || self.text_search.active
             || self.show_global_search
             || self.session_search_active
             || self.dir_search_active;
-        let notes_has_focus = _ctx.memory(|m| {
-            m.focused()
-                .map(|id| id == self.vp_id("notes_textedit"))
-                .unwrap_or(false)
-        });
+        let notes_has_focus = self.notes_has_focus(_ctx);
         if active_is_editor || notes_has_focus {
-            // Text boxes keep Tab for indenting. Ctrl+Tab means nothing in
-            // one, and egui would either type a tab or move the keyboard to
-            // the next widget, leaving the editor without it.
-            raw_input.events.retain(|event| !input::is_ctrl_tab(event));
+            // Text boxes keep Tab for indenting. Ctrl+Tab must not reach
+            // egui, which would type a tab or move the keyboard to the next
+            // widget; it is kept for the layout shortcuts instead
+            // (`run_held_layout_keys`), so "Switch to last session" works
+            // from a text box too.
+            input::hold_ctrl_tab(&mut raw_input.events, &mut self.raw_intercepted_keys);
         }
         if active_is_editor || any_overlay || notes_has_focus || floating_layer_open(_ctx) {
             return;
@@ -482,18 +486,7 @@ impl eframe::App for App {
             }
         }
 
-        if !self.restart_attempted {
-            if let Some(ref uc) = self.workers.update_checker {
-                if matches!(
-                    uc.state().status,
-                    crate::updater::UpdateStatus::RestartRequired
-                ) {
-                    self.restart_attempted = true;
-                    self.save_session();
-                    crate::updater::restart_app();
-                }
-            }
-        }
+        self.restart_if_due();
 
         // Auto-close panes whose shell process has exited, then reap any
         // remaining orphan sessions (no pane references them).
@@ -1117,52 +1110,32 @@ impl eframe::App for App {
         // ── Render each extra window via an immediate viewport ────────────
         // `show_viewport_immediate` runs synchronously and accepts FnOnce, so
         // the closure can borrow `&mut self`. We snapshot the metadata first
-        // (id, viewport_id, title, size) so we don't hold a borrow on
+        // (index, viewport_id, title, size) so we don't hold a borrow on
         // `extra_windows` across the call.
-        let extras_info: Vec<(usize, egui::ViewportId, String, [f32; 2], WindowId)> = self
+        let extras_info: Vec<(usize, egui::ViewportId, String, [f32; 2])> = self
             .extra_windows
             .iter()
             .enumerate()
-            .map(|(i, w)| {
-                (
-                    i,
-                    w.viewport_id,
-                    w.title.clone(),
-                    w.inner_size,
-                    w.id.clone(),
-                )
-            })
+            .map(|(i, w)| (i, w.viewport_id, w.title.clone(), w.inner_size))
             .collect();
-        for (idx, viewport_id, title, inner_size, win_id) in extras_info {
+        for (idx, viewport_id, title, inner_size) in extras_info {
             let builder = egui::ViewportBuilder::default()
                 .with_title(&title)
                 .with_inner_size(inner_size)
                 .with_min_inner_size([theme::MIN_WINDOW_W, theme::MIN_WINDOW_H])
                 .with_decorations(false);
             ctx.show_viewport_immediate(viewport_id, builder, |vp_ctx, _class| {
-                // Swap this extra window's view into App's per-window fields,
-                // render, then swap back. The placeholder used during swap is
-                // discarded once the real view is restored.
-                let mut view = std::mem::replace(
-                    &mut self.extra_windows[idx].view,
-                    WindowView::new_for_workspace(0),
-                );
-                self.swap_view(&mut view);
-                let prev_window = self.current_window_id.take();
-                self.current_window_id = Some(win_id.clone());
-
-                self.render_window_body(vp_ctx);
-                self.harvest_drag_input(Some(idx), vp_ctx);
+                self.with_window_view(idx, |app| {
+                    app.render_window_body(vp_ctx);
+                    app.harvest_drag_input(Some(idx), vp_ctx);
+                    app.restore_parked_focus(vp_ctx);
+                });
 
                 // Capture the current inner_size for persistence.
                 let new_size = vp_ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
                 if let Some(sz) = new_size {
                     self.extra_windows[idx].inner_size = [sz.x, sz.y];
                 }
-
-                self.current_window_id = prev_window;
-                self.swap_view(&mut view);
-                self.extra_windows[idx].view = view;
 
                 if vp_ctx.input(|i| i.viewport().close_requested()) {
                     self.extra_windows[idx].close_requested = true;
@@ -1538,6 +1511,11 @@ impl App {
         }
 
         Self::handle_frameless_resize(ctx);
+
+        // Before anything reads the left nav order this frame (shortcuts,
+        // the session list).
+        self.refresh_nav_order();
+        self.hold_extra_window_keys(ctx);
 
         #[cfg(target_os = "macos")]
         self.sync_macos_menu(ctx);
@@ -2482,7 +2460,7 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
-                                            .id(self.vp_id("notes_textedit"))
+                                            .id(self.notes_text_id())
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
@@ -2750,10 +2728,7 @@ impl App {
             panel_w_snap   = panel_rect.width();
 
 
-            let active_is_editor = self.pane_state.active_pane_id
-                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
-                .unwrap_or(false);
+            let active_is_editor = self.active_pane_is_text_editor();
             let active_session_id: Option<u32> = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .and_then(|p| match &p.content { PaneContent::Terminal(sid) => Some(*sid), _ => None });
@@ -3188,12 +3163,20 @@ impl App {
 
             // Tab and split chords from an editor, which otherwise keeps every
             // key for typing; the terminal loop below runs the same ones.
-            if active_is_editor && !modal_open {
+            // Not while a rename field, a filter box or a menu has the
+            // keyboard: the keys are theirs then.
+            let text_box_keys_apply = !modal_open && self.text_box_layout_keys_apply(ctx);
+            if active_is_editor && text_box_keys_apply {
                 while let Some(action) = ctx.input_mut(|i| {
                     self.shortcut_registry.consume_where(i, AppAction::arranges_layout)
                 }) {
-                    self.apply_layout_shortcut(action, &visible_indices, &mut layout_requests);
+                    self.apply_layout_shortcut(action, &mut layout_requests);
                 }
+            }
+            // Ctrl+Tab held back from a text box (`raw_input_hook`, or
+            // `hold_extra_window_keys` in an extra window).
+            if (active_is_editor || self.notes_has_focus(ctx)) && text_box_keys_apply {
+                self.run_held_layout_keys(&mut layout_requests);
             }
 
             if !active_is_editor
@@ -3278,7 +3261,7 @@ impl App {
                             if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
                                 match action {
                                     a if a.arranges_layout() => {
-                                        self.apply_layout_shortcut(a, &visible_indices, &mut layout_requests);
+                                        self.apply_layout_shortcut(a, &mut layout_requests);
                                     }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));

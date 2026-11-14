@@ -949,10 +949,7 @@ impl App {
         if resp.clicked() {
             match pill.action {
                 PillAction::OpenSettings => self.show_settings = true,
-                PillAction::Restart => {
-                    self.save_session();
-                    crate::updater::restart_app();
-                }
+                PillAction::Restart => self.request_restart(ui.ctx()),
             }
         }
         Some(x)

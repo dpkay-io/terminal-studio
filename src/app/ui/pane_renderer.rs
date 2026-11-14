@@ -86,12 +86,30 @@ pub(in crate::app) struct RenderCtx<'a> {
 /// file's text.
 const FILE_EDITOR_TEXT_ID: &str = "file_editor_text";
 
+/// Frame memory slot holding the active pane's text box id, one per viewport.
+const ACTIVE_TEXT_BOX_SLOT: &str = "active_text_box";
+
+/// Where this viewport's active pane's text box id is kept for the frame.
+fn active_text_box_key(ctx: &egui::Context) -> egui::Id {
+    egui::Id::new(ACTIVE_TEXT_BOX_SLOT).with(ctx.viewport_id())
+}
+
+/// The text box of the active pane (file or note editor) in this viewport,
+/// as last drawn. Layout shortcuts typed into it belong to the layout.
+pub(in crate::app) fn active_text_box_id(ctx: &egui::Context) -> Option<egui::Id> {
+    ctx.data(|d| d.get_temp(active_text_box_key(ctx)))
+}
+
 /// Keyboard rule for a pane's text box. The active pane's box takes the
 /// keyboard whenever nothing else holds it, like a terminal, so a new or
 /// just-opened file is ready for typing. Any other pane's box gives it up:
 /// a box in a split the user has left (by the session list, a drag or a
 /// shortcut) must not keep taking their keys.
 fn route_text_focus(ui: &egui::Ui, text_box: &egui::Response, is_active: bool, modal_open: bool) {
+    if is_active {
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(active_text_box_key(ui.ctx()), text_box.id));
+    }
     if !is_active {
         if text_box.has_focus() {
             text_box.surrender_focus();

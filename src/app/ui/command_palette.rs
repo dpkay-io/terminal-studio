@@ -773,6 +773,7 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         NewTerminalTab,
         NewFile,
         CloseCurrentPane,
+        SwitchToLastSession,
         SplitHorizontal,
         SplitVertical,
         OpenSettings,
