@@ -860,8 +860,8 @@ impl App {
                     .collect();
 
                 // Pass 2: bucket the visible rows per split. The nav order is
-                // preserved inside each bucket. A pane belonging to no group
-                // (see `PaneState::group_of`) would otherwise be unreachable —
+                // preserved inside each bucket. A pane in no on-screen split
+                // (see `PaneState::pane_sections_into`) would be unreachable —
                 // the left nav is the only navigator — so it lands in "Other".
                 let sections = sections::section_labels(&self.pane_state.group_layout);
                 if sections.is_empty() {
@@ -878,17 +878,17 @@ impl App {
                     .collect();
                 let mut buckets: Vec<Vec<&(usize, RowLabel)>> = vec![Vec::new(); sections.len()];
                 let mut other: Vec<&(usize, RowLabel)> = Vec::new();
+                // The same pane → section map the nav order is built from.
+                let mut section_of = std::mem::take(&mut self.nav_sections_buf);
+                self.pane_state.pane_sections_into(&mut section_of);
                 for row in &visible {
                     let pane_id = self.pane_state.panes[row.0].id;
-                    match self
-                        .pane_state
-                        .group_of(pane_id)
-                        .and_then(|gid| slot.get(&gid))
-                    {
+                    match section_of.get(&pane_id).and_then(|gid| slot.get(gid)) {
                         Some(&i) => buckets[i].push(row),
                         None => other.push(row),
                     }
                 }
+                self.nav_sections_buf = section_of;
 
                 // Pass 3: draw. Sections with no visible rows draw no header.
                 for (i, (gid, label)) in sections.iter().enumerate() {
@@ -966,8 +966,6 @@ impl App {
         );
     }
 
-    /// Compute a row's display data and apply the three list filters.
-    /// `None` means the row is filtered out and must not be drawn.
     /// Whether the session list shows this pane's row right now (its text,
     /// workspace and label filters) — the one test ⌘1–9 share with the list.
     pub(in crate::app) fn pane_shown_in_list(
@@ -979,6 +977,8 @@ impl App {
             .is_some()
     }
 
+    /// Compute a row's display data and apply the three list filters.
+    /// `None` means the row is filtered out and must not be drawn.
     fn row_label(
         &self,
         pane_idx: usize,

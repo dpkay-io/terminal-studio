@@ -100,8 +100,14 @@ impl App {
 
     /// The notes box has the keyboard.
     pub(super) fn notes_has_focus(&self, ctx: &egui::Context) -> bool {
-        let notes_id = self.notes_text_id();
-        ctx.memory(|m| m.focused() == Some(notes_id))
+        self.keyboard_focus(ctx) == Some(self.notes_text_id())
+    }
+
+    /// The widget with the keyboard as the user sees it: while focus is
+    /// parked for a held Ctrl+Tab (`hold_extra_window_keys`), the one it
+    /// was taken from.
+    fn keyboard_focus(&self, ctx: &egui::Context) -> Option<egui::Id> {
+        seen_focus(self.parked_focus, ctx.memory(|m| m.focused()))
     }
 
     /// The active pane is a file or note editor, which keeps every key for
@@ -124,7 +130,7 @@ impl App {
     pub(super) fn text_box_layout_keys_apply(&self, ctx: &egui::Context) -> bool {
         !super::floating_layer_open(ctx)
             && text_box_keys_reach_layout(
-                ctx.memory(|m| m.focused()),
+                self.keyboard_focus(ctx),
                 super::ui::active_text_box_id(ctx),
                 self.notes_text_id(),
             )
@@ -134,7 +140,15 @@ impl App {
     /// so an extra window's frame starts with an empty held-key list and
     /// holds its own Ctrl+Tab back from a text box here, before any panel
     /// draws.
+    ///
+    /// By then egui (0.28) has already read the Tab as "move the keyboard to
+    /// the next widget" (`Focus::begin_frame`), and the notes box, which has
+    /// no `lock_focus`, would hand it on as it draws — as would the first
+    /// widget drawn when nothing had it. So for this frame the keyboard is
+    /// parked on an id no widget uses, and `restore_parked_focus` gives it
+    /// back afterwards.
     pub(super) fn hold_extra_window_keys(&mut self, ctx: &egui::Context) {
+        self.parked_focus = None;
         if self.current_window_id.is_none() {
             return;
         }
@@ -142,9 +156,61 @@ impl App {
         if self.active_pane_is_text_editor() || self.notes_has_focus(ctx) {
             let mut held = std::mem::take(&mut self.raw_intercepted_keys);
             ctx.input_mut(|i| input::hold_ctrl_tab(&mut i.events, &mut held));
+            if !held.is_empty() {
+                self.parked_focus = Some(ctx.memory(|m| m.focused()));
+                ctx.memory_mut(|m| m.request_focus(parked_focus_id()));
+            }
             self.raw_intercepted_keys = held;
         }
     }
+
+    /// End of an extra window's frame: give the keyboard back to the widget
+    /// `hold_extra_window_keys` parked it away from, unless something took
+    /// it meanwhile.
+    pub(super) fn restore_parked_focus(&mut self, ctx: &egui::Context) {
+        let Some(parked_from) = self.parked_focus.take() else {
+            return;
+        };
+        let now = ctx.memory(|m| m.focused());
+        ctx.memory_mut(|m| match focus_after_park(parked_from, now) {
+            Some(FocusAfterPark::Give(id)) => m.request_focus(id),
+            Some(FocusAfterPark::Clear) => m.surrender_focus(parked_focus_id()),
+            None => {}
+        });
+    }
+}
+
+/// Where the keyboard is parked during a frame that held a Ctrl+Tab.
+const PARKED_FOCUS_SLOT: &str = "ctrl_tab_parked_focus";
+
+fn parked_focus_id() -> egui::Id {
+    egui::Id::new(PARKED_FOCUS_SLOT)
+}
+
+/// The focus the user sees: `parked` (the focus before parking) while the
+/// keyboard is parked, else `focused`.
+fn seen_focus(parked: Option<Option<egui::Id>>, focused: Option<egui::Id>) -> Option<egui::Id> {
+    parked.unwrap_or(focused)
+}
+
+/// What to do with the keyboard at the end of a parked frame.
+#[derive(Debug, PartialEq, Eq)]
+enum FocusAfterPark {
+    /// Give it back to this widget.
+    Give(egui::Id),
+    /// Nothing had it before: leave nothing with it.
+    Clear,
+}
+
+/// `None` when something took the keyboard during the frame: that stays.
+fn focus_after_park(
+    parked_from: Option<egui::Id>,
+    now: Option<egui::Id>,
+) -> Option<FocusAfterPark> {
+    if now != Some(parked_focus_id()) {
+        return None;
+    }
+    Some(parked_from.map_or(FocusAfterPark::Clear, FocusAfterPark::Give))
 }
 
 /// Whether a layout key pressed while a file editor or the notes box is in
@@ -168,6 +234,42 @@ mod tests {
 
     fn id(name: &str) -> egui::Id {
         egui::Id::new(name)
+    }
+
+    #[test]
+    fn parked_focus_is_seen_as_where_it_was() {
+        assert_eq!(
+            seen_focus(Some(Some(id("notes"))), Some(parked_focus_id())),
+            Some(id("notes"))
+        );
+        assert_eq!(seen_focus(Some(None), Some(parked_focus_id())), None);
+    }
+
+    #[test]
+    fn unparked_focus_is_seen_as_it_is() {
+        assert_eq!(seen_focus(None, Some(id("filter"))), Some(id("filter")));
+        assert_eq!(seen_focus(None, None), None);
+    }
+
+    #[test]
+    fn parked_focus_goes_back_where_it_was() {
+        assert_eq!(
+            focus_after_park(Some(id("notes")), Some(parked_focus_id())),
+            Some(FocusAfterPark::Give(id("notes")))
+        );
+        assert_eq!(
+            focus_after_park(None, Some(parked_focus_id())),
+            Some(FocusAfterPark::Clear)
+        );
+    }
+
+    #[test]
+    fn focus_taken_during_a_parked_frame_is_kept() {
+        assert_eq!(
+            focus_after_park(Some(id("notes")), Some(id("editor"))),
+            None
+        );
+        assert_eq!(focus_after_park(Some(id("notes")), None), None);
     }
 
     #[test]

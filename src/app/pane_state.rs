@@ -206,6 +206,26 @@ impl PaneState {
             .map(|g| g.id)
     }
 
+    /// Each pane's left nav section, into `out` (cleared first): the split
+    /// holding it, when that split is on screen. A pane in no on-screen split
+    /// is left out (the list draws it under "Other"). With one split the
+    /// whole list is one section, so every pane is in it. One pass over the
+    /// groups, so it is cheap enough for every frame.
+    pub(super) fn pane_sections_into(&self, out: &mut HashMap<u32, GroupId>) {
+        out.clear();
+        let on_screen = self.group_layout.group_ids();
+        for gid in &on_screen {
+            if let Some(group) = self.groups.get(gid) {
+                out.extend(group.pane_ids.iter().map(|&pid| (pid, *gid)));
+            }
+        }
+        if let [only] = on_screen[..] {
+            for pane in &self.panes {
+                out.entry(pane.id).or_insert(only);
+            }
+        }
+    }
+
     /// Get the focused group.
     #[allow(dead_code)]
     pub(super) fn focused_group(&self) -> Option<&EditorGroup> {
@@ -513,7 +533,6 @@ impl PaneState {
         Some(cycle[next])
     }
 
-    /// The pane after `current` in the focused group's own order, wrapping.
     /// The pane used most recently before `current`, among `allowed`, in
     /// any split; ties go to the higher id. Drives "Switch to last session".
     pub(super) fn previous_active_pane(
@@ -528,6 +547,7 @@ impl PaneState {
             .map(|p| p.id)
     }
 
+    /// The pane after `current` in the focused group's own order, wrapping.
     pub(super) fn next_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
         self.step_pane_in_focused_group(current, allowed, true)
     }
@@ -1240,6 +1260,40 @@ mod tests {
         state.focused_group_id = g1;
         state.active_pane_id = Some(1);
         state
+    }
+
+    fn pane_sections(state: &PaneState) -> Vec<(u32, GroupId)> {
+        let mut out = HashMap::new();
+        state.pane_sections_into(&mut out);
+        let mut v: Vec<(u32, GroupId)> = out.into_iter().collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn pane_sections_name_each_panes_split() {
+        let state = make_grouped_state();
+        assert_eq!(pane_sections(&state), [(1, 1), (2, 1), (3, 2)]);
+    }
+
+    #[test]
+    fn pane_sections_leave_out_a_split_missing_from_the_layout() {
+        // The list draws such a pane under "Other"; the order must agree.
+        let mut state = make_grouped_state();
+        state.panes.push(make_pane(4));
+        state.create_group(4);
+        assert_eq!(pane_sections(&state), [(1, 1), (2, 1), (3, 2)]);
+    }
+
+    #[test]
+    fn pane_sections_with_one_split_put_every_pane_in_it() {
+        // No splits: the whole list is one section.
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        state.panes.push(make_pane(2));
+        let g = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: g };
+        assert_eq!(pane_sections(&state), [(1, g), (2, g)]);
     }
 
     #[test]

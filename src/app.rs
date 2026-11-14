@@ -49,6 +49,7 @@ mod nav_order_sync;
 mod pane;
 mod pane_state;
 mod persistence;
+mod restart;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
 mod session_state;
@@ -71,7 +72,7 @@ use git_diff::{render_git_diff, GitStageAction};
 use input::{key_to_pty_bytes, mouse_event_bytes};
 use labels::LabelRegistry;
 use markdown::render_markdown;
-use multi_window::{ExtraWindow, PendingWindowFocus, WindowView};
+use multi_window::{ExtraWindow, PendingWindowFocus};
 use pane::{
     ConflictResolverState, FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry,
     RightTab, TermSelection,
@@ -177,6 +178,9 @@ pub struct App {
     // Key events stripped from raw_input by raw_input_hook (Tab, arrows, Escape).
     // Stored here so the terminal input routing can still send them to the PTY.
     raw_intercepted_keys: Vec<egui::Event>,
+    /// While an extra window's frame holds a Ctrl+Tab: the widget the
+    /// keyboard was parked away from (`hold_extra_window_keys`).
+    parked_focus: Option<Option<egui::Id>>,
 
     // ── Multi-window support ──────────────────────────────────────────────
     /// Extra OS windows opened via "Open in new window" on a workspace.
@@ -186,6 +190,8 @@ pub struct App {
     /// `None` when rendering the main window, `Some(id)` when rendering an extra
     /// viewport. Used by per-window-aware code (e.g. workspace switcher filter).
     current_window_id: Option<WindowId>,
+    /// Saves asked for during an extra window's frame; run after it.
+    deferred_saves: multi_window::DeferredSaves,
 
     // ── Per-frame UI caches ───────────────────────────────────────────────
     /// Cached cell dimensions for the central panel font measurement.
@@ -230,6 +236,8 @@ pub struct App {
     nav_list_hovered: bool,
     // Reused every frame by `refresh_nav_order`, so it allocates nothing.
     nav_panes_buf: Vec<crate::app::ui::left_panel::nav_order::NavPane>,
+    /// Reused each frame: pane → left nav section (`pane_sections_into`).
+    nav_sections_buf: HashMap<u32, crate::editor_group::GroupId>,
 
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
@@ -365,6 +373,8 @@ pub struct App {
 
     // Set once when restart_app() is attempted — prevents retrying every frame
     restart_attempted: bool,
+    /// The Restart pill was clicked; the main window's frame restarts.
+    restart_requested: bool,
 }
 
 /// Whether a menu, dropdown or popup is open (egui draws them, like the
@@ -476,18 +486,7 @@ impl eframe::App for App {
             }
         }
 
-        if !self.restart_attempted {
-            if let Some(ref uc) = self.workers.update_checker {
-                if matches!(
-                    uc.state().status,
-                    crate::updater::UpdateStatus::RestartRequired
-                ) {
-                    self.restart_attempted = true;
-                    self.save_session();
-                    crate::updater::restart_app();
-                }
-            }
-        }
+        self.restart_if_due();
 
         // Auto-close panes whose shell process has exited, then reap any
         // remaining orphan sessions (no pane references them).
@@ -1111,52 +1110,32 @@ impl eframe::App for App {
         // ── Render each extra window via an immediate viewport ────────────
         // `show_viewport_immediate` runs synchronously and accepts FnOnce, so
         // the closure can borrow `&mut self`. We snapshot the metadata first
-        // (id, viewport_id, title, size) so we don't hold a borrow on
+        // (index, viewport_id, title, size) so we don't hold a borrow on
         // `extra_windows` across the call.
-        let extras_info: Vec<(usize, egui::ViewportId, String, [f32; 2], WindowId)> = self
+        let extras_info: Vec<(usize, egui::ViewportId, String, [f32; 2])> = self
             .extra_windows
             .iter()
             .enumerate()
-            .map(|(i, w)| {
-                (
-                    i,
-                    w.viewport_id,
-                    w.title.clone(),
-                    w.inner_size,
-                    w.id.clone(),
-                )
-            })
+            .map(|(i, w)| (i, w.viewport_id, w.title.clone(), w.inner_size))
             .collect();
-        for (idx, viewport_id, title, inner_size, win_id) in extras_info {
+        for (idx, viewport_id, title, inner_size) in extras_info {
             let builder = egui::ViewportBuilder::default()
                 .with_title(&title)
                 .with_inner_size(inner_size)
                 .with_min_inner_size([theme::MIN_WINDOW_W, theme::MIN_WINDOW_H])
                 .with_decorations(false);
             ctx.show_viewport_immediate(viewport_id, builder, |vp_ctx, _class| {
-                // Swap this extra window's view into App's per-window fields,
-                // render, then swap back. The placeholder used during swap is
-                // discarded once the real view is restored.
-                let mut view = std::mem::replace(
-                    &mut self.extra_windows[idx].view,
-                    WindowView::new_for_workspace(0),
-                );
-                self.swap_view(&mut view);
-                let prev_window = self.current_window_id.take();
-                self.current_window_id = Some(win_id.clone());
-
-                self.render_window_body(vp_ctx);
-                self.harvest_drag_input(Some(idx), vp_ctx);
+                self.with_window_view(idx, |app| {
+                    app.render_window_body(vp_ctx);
+                    app.harvest_drag_input(Some(idx), vp_ctx);
+                    app.restore_parked_focus(vp_ctx);
+                });
 
                 // Capture the current inner_size for persistence.
                 let new_size = vp_ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
                 if let Some(sz) = new_size {
                     self.extra_windows[idx].inner_size = [sz.x, sz.y];
                 }
-
-                self.current_window_id = prev_window;
-                self.swap_view(&mut view);
-                self.extra_windows[idx].view = view;
 
                 if vp_ctx.input(|i| i.viewport().close_requested()) {
                     self.extra_windows[idx].close_requested = true;
@@ -2749,10 +2728,7 @@ impl App {
             panel_w_snap   = panel_rect.width();
 
 
-            let active_is_editor = self.pane_state.active_pane_id
-                .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
-                .map(|p| matches!(p.content, PaneContent::FileEditor(_) | PaneContent::NoteEditor(_)))
-                .unwrap_or(false);
+            let active_is_editor = self.active_pane_is_text_editor();
             let active_session_id: Option<u32> = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
                 .and_then(|p| match &p.content { PaneContent::Terminal(sid) => Some(*sid), _ => None });

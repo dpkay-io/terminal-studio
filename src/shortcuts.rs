@@ -13,6 +13,20 @@ fn os_reserved_shortcuts() -> Vec<Shortcut> {
     Vec::new()
 }
 
+/// The numbered tab shortcuts (⌘1–9), in order: the one place their count
+/// and each one's index come from.
+pub const NUMBERED_TAB_ACTIONS: [AppAction; 9] = [
+    AppAction::SwitchToTab1,
+    AppAction::SwitchToTab2,
+    AppAction::SwitchToTab3,
+    AppAction::SwitchToTab4,
+    AppAction::SwitchToTab5,
+    AppAction::SwitchToTab6,
+    AppAction::SwitchToTab7,
+    AppAction::SwitchToTab8,
+    AppAction::SwitchToTab9,
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AppAction {
     // Panel navigation
@@ -268,18 +282,7 @@ impl AppAction {
     }
 
     pub fn tab_index(self) -> Option<usize> {
-        match self {
-            Self::SwitchToTab1 => Some(0),
-            Self::SwitchToTab2 => Some(1),
-            Self::SwitchToTab3 => Some(2),
-            Self::SwitchToTab4 => Some(3),
-            Self::SwitchToTab5 => Some(4),
-            Self::SwitchToTab6 => Some(5),
-            Self::SwitchToTab7 => Some(6),
-            Self::SwitchToTab8 => Some(7),
-            Self::SwitchToTab9 => Some(8),
-            _ => None,
-        }
+        NUMBERED_TAB_ACTIONS.iter().position(|&a| a == self)
     }
 
     /// Actions that only arrange tabs, splits and side panels. A text editor
@@ -1466,5 +1469,12 @@ mod tests {
         assert_eq!(AppAction::SwitchToTab1.tab_index(), Some(0));
         assert_eq!(AppAction::SwitchToTab9.tab_index(), Some(8));
         assert_eq!(AppAction::NewTerminalTab.tab_index(), None);
+    }
+
+    #[test]
+    fn each_numbered_tab_action_has_its_own_index() {
+        for (i, action) in NUMBERED_TAB_ACTIONS.iter().enumerate() {
+            assert_eq!(action.tab_index(), Some(i));
+        }
     }
 }

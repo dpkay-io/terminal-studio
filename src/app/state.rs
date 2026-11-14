@@ -19,7 +19,9 @@ use alacritty_terminal::grid::Dimensions;
 
 use super::drag;
 use super::labels::LabelRegistry;
-use super::multi_window::{ExtraWindow, PendingWindowFocus, SavedExtraWindow, WindowView};
+use super::multi_window::{
+    ExtraWindow, PendingWindowFocus, SaveKind, SavedExtraWindow, WindowView,
+};
 use super::pane::{
     FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry, RightTab, SessionEntry,
 };
@@ -233,9 +235,11 @@ impl App {
             term_selecting: false,
             term_selection_sid: None,
             raw_intercepted_keys: Vec::new(),
+            parked_focus: None,
             extra_windows: Vec::new(),
             next_window_id: 1,
             current_window_id: None,
+            deferred_saves: Default::default(),
             cached_cell_size: None,
             subdir_cache: HashMap::new(),
             subdir_load_tx,
@@ -262,6 +266,7 @@ impl App {
             nav_order: Default::default(),
             nav_list_hovered: false,
             nav_panes_buf: Vec::new(),
+            nav_sections_buf: HashMap::new(),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
             detection_lines_hash: HashMap::new(),
@@ -321,6 +326,7 @@ impl App {
             last_right_panel_cwd: None,
             spawn_guard: super::spawn_guard::SpawnGuard::default(),
             restart_attempted: false,
+            restart_requested: false,
         };
 
         let (init_cols, init_rows) = {
@@ -877,6 +883,12 @@ impl App {
     }
 
     pub(super) fn save_windows(&self) {
+        if !self
+            .deferred_saves
+            .may_save_now(self.current_window_id.is_some(), SaveKind::Windows)
+        {
+            return;
+        }
         let Some(path) = windows_data_path() else {
             return;
         };
@@ -1443,6 +1455,12 @@ impl App {
     }
 
     pub(super) fn save_session(&self) {
+        if !self
+            .deferred_saves
+            .may_save_now(self.current_window_id.is_some(), SaveKind::Session)
+        {
+            return;
+        }
         let Some(path) = session_data_path() else {
             return;
         };
@@ -1653,18 +1671,11 @@ impl App {
             window_nav_orders: self
                 .extra_windows
                 .iter()
-                .map(|w| {
-                    // A save from inside this window's frame: its view is
-                    // swapped into `self` and `w.view` is a placeholder.
-                    let order = if self.current_window_id.as_ref() == Some(&w.id) {
-                        &self.nav_order
-                    } else {
-                        &w.view.nav_order
-                    };
-                    SavedWindowNavOrder {
-                        window: w.id.clone(),
-                        order: saved_nav_indices(order.order(), &pane_id_to_index),
-                    }
+                // Never inside a window's frame (`deferred_saves`), so every
+                // window's own view is in place.
+                .map(|w| SavedWindowNavOrder {
+                    window: w.id.clone(),
+                    order: saved_nav_indices(w.view.nav_order.order(), &pane_id_to_index),
                 })
                 .collect(),
         };
@@ -2279,20 +2290,45 @@ impl App {
             return;
         }
 
+        self.with_window_view(idx, |app| {
+            let action = drag::resolve_drag(&mut app.drag_state, &app.pane_state, app.active_group);
+            app.execute_drag_action(action, ctx);
+        });
+    }
+
+    /// Run `f` with extra window `idx`'s view swapped into `App`'s
+    /// per-window fields (and `current_window_id` naming it), then swap it
+    /// back and run the saves asked for meanwhile (`deferred_saves`).
+    pub(super) fn with_window_view<R>(&mut self, idx: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        // The placeholder is dropped once the real view is back.
         let mut view = std::mem::replace(
             &mut self.extra_windows[idx].view,
             WindowView::new_for_workspace(0),
         );
         self.swap_view(&mut view);
-        let prev_window = self.current_window_id.take();
-        self.current_window_id = Some(self.extra_windows[idx].id.clone());
+        let prev_window = self
+            .current_window_id
+            .replace(self.extra_windows[idx].id.clone());
 
-        let action = drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
-        self.execute_drag_action(action, ctx);
+        let out = f(self);
 
         self.current_window_id = prev_window;
         self.swap_view(&mut view);
         self.extra_windows[idx].view = view;
+        self.run_deferred_saves();
+        out
+    }
+
+    /// The saves an extra window's frame asked for, now that its view is
+    /// swapped back.
+    fn run_deferred_saves(&self) {
+        let pending = self.deferred_saves.take();
+        if pending.session {
+            self.save_session();
+        }
+        if pending.windows {
+            self.save_windows();
+        }
     }
 
     pub(super) fn execute_drag_action(&mut self, action: drag::DragAction, ctx: &egui::Context) {

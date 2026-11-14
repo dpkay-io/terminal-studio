@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1030 tests)
+cargo test               # all unit tests (1044 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -50,7 +50,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 |------|---------------|
 | `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()`: a pane's workspace by its folder first (single source for tab grouping, sidebar, titlebar, info bar) |
 | `src/app/fonts.rs` | Font definitions: egui's fonts first, then memory-mapped system fallbacks per OS (symbols, dingbats ✓✕✗, CJK, Hangul) so those don't render as boxes |
-| `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management; `shown_pane_ids()` (the tab each split on screen shows) |
+| `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management; `shown_pane_ids()` (the tab each split on screen shows); `pane_sections_into()`: each pane's left nav section, the one map the nav order and the session list's sections both read |
 | `src/app/deferred_terminals.rs` | `start_shown_restored_sessions()`: a restored session waits as `DeferredTerminal` until a split shows it — any split, not only the focused one — then starts with its saved output, name and pending command |
 | `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct; `FileEditorState::write_to_disk()` (the one save path), `has_unsaved_changes()`, and `apply_edit()` / `apply_file_text()` / `mark_saved()`, which compare the buffer to a hash of the file's text so undoing back to it clears the `*` |
 | `src/app/close_guard.rs` | `request_close_tab()` / `TabClose`: every single-tab close (header ✖, ⇧⌘W, pane menu, session list ✕/middle click/menu) asks "Save changes?" first when the tab has unsaved edits; `has_unsaved_changes()` / `unsaved_count()` |
@@ -61,10 +61,11 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/feedback.rs` | `FlashManager`, `FlashTarget`, `FlashKind`: subtle UI flash feedback (copy, paste, error) with auto-fade |
 | `src/app/markdown.rs` | `render_markdown()`: headers, bold, code blocks, lists, blockquotes, links |
 | `src/app/persistence.rs` | `AppSession`, `SavedPane`, `SavedPaneContent`, `SavedSession`; JSON serialization; session restore. A restored session that was never opened keeps its scrollback file across saves (`SavedPaneContent::DeferredTerminal.scrollback_file`); running sessions' files are written under a per-save stamp so they never overwrite it |
-| `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces |
+| `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces. `DeferredSaves`: a save asked for during an extra window's frame (its view is swapped into `App` by `App::with_window_view`) waits until the view is swapped back, so it never writes one window's state as another's |
+| `src/app/restart.rs` | Restarting into an installed update: the Restart pill / Settings button only ask for it (`request_restart`), and the main window's frame saves and restarts (`restart_if_due`), since a restart exits at once and a save from an extra window's frame would wait |
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
-| `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box |
+| `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box; extra windows hold it in `hold_extra_window_keys()` and park the keyboard for that frame (egui has already read the Tab as a focus move), then `restore_parked_focus()` gives it back |
 | `src/app/nav_order_sync.rs` | `refresh_nav_order()`: feeds the window's `NavOrder` once per window frame (also while the left panel is hidden); `numbered_tab_targets()`: what ⌘1–9 open — the focused split's rows in left nav order (the whole list without splits), filtered like the list |
 | `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the view's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet, and the tab bar, which has no titlebar button) — the single path for titlebar buttons, shortcuts, command palette, the macOS menu bar and the Settings checkbox |
 | `src/app/macos_fullscreen.rs` | macOS only: in native full screen AppKit puts the title bar winit adds for the switch (title + traffic lights) in a child strip window (`NSToolbarFullScreenWindow`) that slides down under the menu bar on hover, over the app's title bar. On every entry (and at launch for a restored window) that strip is emptied and made click-through; window style and the menu bar are left alone |
@@ -333,8 +334,8 @@ Color32::from_rgb(30, 30, 46)
 |------|-------|---------|
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 32 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection and holding it back from text boxes |
-| `src/app/layout_shortcuts.rs` | 4 | layout keys from an editor apply only from its own text box, the notes box or no focus — never a rename or filter field |
-| `src/app/pane_state.rs` | 83 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs) |
+| `src/app/layout_shortcuts.rs` | 8 | layout keys from an editor apply only from its own text box, the notes box or no focus — never a rename or filter field; parked focus is seen where it was and given back unless something took it |
+| `src/app/pane_state.rs` | 83 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs), each pane's left nav section (a split missing from the layout gives none; one split holds every pane) |
 | `src/app/drag.rs` | 76 | drag payload/target resolution, edge-zone geometry, split-edge drops, tab-bar drops (reorder, move to a gap in another split, open new things there), one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
 | `src/app/ui/left_panel/sections.rs` | 9 | split-section labels, three-state row prominence |
@@ -366,7 +367,9 @@ Color32::from_rgb(30, 30, 46)
 | `src/md_detector.rs` | 7 | markdown path detection |
 | `src/util.rs` | 12 | atomic write, JSON loading, directory expansion, git root, parent dir of a bare name |
 | `src/app/file_browser.rs` | 10 | directory listing, file entry sorting, gitignore parsing |
-| `src/shortcuts.rs` | 27 | keybinding parsing, action resolution, layout chords never use a text-editing key, Ctrl+Tab = last session on every platform and not OS-reserved on macOS |
+| `src/shortcuts.rs` | 28 | keybinding parsing, action resolution, layout chords never use a text-editing key, Ctrl+Tab = last session on every platform and not OS-reserved on macOS, each numbered tab action's index |
+| `src/app/multi_window.rs` | 3 | saves outside a window's frame run at once; inside one they wait, per kind, and are taken once |
+| `src/app/restart.rs` | 3 | an installed update restarts once, a Restart click always (retry after a failure), nothing otherwise |
 | `src/keybindings.rs` | 6 | keybinding config loading, JSON handling |
 | `src/app/settings.rs` | 10 | settings persistence, JSON config, rows that stay in place (default, old files, clamp) |
 | `src/search_worker.rs` | 6 | cross-session fuzzy search |
@@ -395,7 +398,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1030 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1044 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 

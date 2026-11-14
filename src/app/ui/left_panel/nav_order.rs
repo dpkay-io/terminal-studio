@@ -25,7 +25,7 @@ use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 /// How many rows the numbered tab shortcuts (⌘1–9) reach.
-pub(in crate::app) const NUMBERED_TAB_COUNT: usize = 9;
+pub(in crate::app) const NUMBERED_TAB_COUNT: usize = crate::shortcuts::NUMBERED_TAB_ACTIONS.len();
 
 /// The left nav section a pane is listed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

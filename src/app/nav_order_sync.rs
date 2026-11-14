@@ -15,19 +15,24 @@ fn numbered_section(has_splits: bool, focused: GroupId) -> Option<SectionKey> {
 }
 
 impl App {
-    /// One `NavPane` per pane, in `panes` order, into `out` (cleared first).
-    pub(super) fn nav_panes_into(&self, out: &mut Vec<NavPane>) {
+    /// One `NavPane` per pane, in `panes` order, into `out` (cleared first),
+    /// each in the section the session list draws it under
+    /// (`PaneState::pane_sections_into`).
+    pub(super) fn nav_panes_into(&mut self, out: &mut Vec<NavPane>) {
+        let mut sections = std::mem::take(&mut self.nav_sections_buf);
+        self.pane_state.pane_sections_into(&mut sections);
         out.clear();
         out.extend(self.pane_state.panes.iter().map(|p| {
             NavPane {
                 id: p.id,
-                section: self
-                    .pane_state
-                    .group_of(p.id)
+                section: sections
+                    .get(&p.id)
+                    .copied()
                     .map_or(SectionKey::Other, SectionKey::Group),
                 last_active_at: p.last_active_at,
             }
         }));
+        self.nav_sections_buf = sections;
     }
 
     /// Bring this window's order up to date. Held when the pointer was over
