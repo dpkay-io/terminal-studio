@@ -22,6 +22,11 @@ pub enum InfoBarPosition {
     Hidden,
 }
 
+/// Left nav rows per section that never move on their own (0 = sort every
+/// section by most recent).
+pub(super) const NAV_STABLE_ROWS_DEFAULT: usize = 7;
+pub(super) const NAV_STABLE_ROWS_MAX: usize = 100;
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub(super) struct AppSettings {
@@ -47,6 +52,9 @@ pub(super) struct AppSettings {
     /// A row of tabs above each split, one per tab it holds. The session
     /// list shows every tab either way.
     pub(super) show_tab_bar: bool,
+    /// The top rows of each left nav section that stay in place; a session
+    /// used from below them moves to the top (`NavOrder`).
+    pub(super) nav_stable_rows: usize,
 }
 
 impl Default for AppSettings {
@@ -72,6 +80,7 @@ impl Default for AppSettings {
             log_level: LogLevel::default(),
             info_bar_position: InfoBarPosition::default(),
             show_tab_bar: true,
+            nav_stable_rows: NAV_STABLE_ROWS_DEFAULT,
         }
     }
 }
@@ -83,9 +92,17 @@ impl AppSettings {
             theme::set_theme(s.theme_id);
             return s;
         };
-        let s: Self = crate::util::safe_json_load(&path).unwrap_or_default();
+        let s = crate::util::safe_json_load::<Self>(&path)
+            .unwrap_or_default()
+            .sanitized();
         theme::set_theme(s.theme_id);
         s
+    }
+
+    /// Values a hand-edited file may hold out of range, brought back in.
+    fn sanitized(mut self) -> Self {
+        self.nav_stable_rows = self.nav_stable_rows.min(NAV_STABLE_ROWS_MAX);
+        self
     }
 
     pub(super) fn save(&self) {
@@ -127,6 +144,26 @@ mod tests {
         assert!(!s.scroll_on_output);
         assert_eq!(s.default_shell, None);
         assert!(!s.show_sys_monitor);
+    }
+
+    #[test]
+    fn nav_stable_rows_defaults_to_seven() {
+        assert_eq!(AppSettings::default().nav_stable_rows, 7);
+    }
+
+    #[test]
+    fn old_settings_file_gets_default_stable_rows() {
+        let s: AppSettings = serde_json::from_str(r#"{"font_size":14.0}"#).unwrap();
+        assert_eq!(s.nav_stable_rows, 7);
+    }
+
+    #[test]
+    fn nav_stable_rows_clamped_on_load() {
+        let s = AppSettings {
+            nav_stable_rows: 5000,
+            ..Default::default()
+        };
+        assert_eq!(s.sanitized().nav_stable_rows, 100);
     }
 
     #[test]

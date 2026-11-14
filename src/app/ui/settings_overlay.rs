@@ -1,9 +1,12 @@
-use super::super::settings::CursorStyle;
+use super::super::settings::{CursorStyle, NAV_STABLE_ROWS_MAX};
 use super::super::App;
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
+
+const NAV_STABLE_ROWS_HINT: &str = "The top rows of each section in the session list never move on their own. \
+     A session you use from below them moves to the top. 0 sorts by most recent.";
 
 impl App {
     pub(in crate::app) fn render_settings_overlay(&mut self, ctx: &egui::Context) {
@@ -131,6 +134,26 @@ impl App {
                                     self.toggle_view(AppAction::ToggleTabBar);
                                 }
                             }
+
+                            ui.add_space(theme::SP_4);
+
+                            // Left nav rows that never move on their own.
+                            ui.horizontal(|ui| {
+                                ui.label("Rows that stay in place:");
+                                let mut rows = self.settings.nav_stable_rows;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut rows)
+                                            .range(0..=NAV_STABLE_ROWS_MAX)
+                                            .speed(1.0),
+                                    )
+                                    .on_hover_text(NAV_STABLE_ROWS_HINT)
+                                    .changed()
+                                {
+                                    self.settings.nav_stable_rows = rows;
+                                    settings_changed = true;
+                                }
+                            });
 
                             // Show system monitor
                             {
