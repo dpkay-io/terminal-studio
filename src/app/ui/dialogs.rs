@@ -9,6 +9,28 @@ use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 
+/// A close that covers this many tabs or fewer happens without asking,
+/// unless one of them holds unsaved edits.
+const MAX_CLOSED_WITHOUT_ASKING: usize = 1;
+/// What happens to unsaved edits, ending the note under a close or quit.
+const UNSAVED_LOST: &str = "will be lost";
+const UNSAVED_KEPT: &str = "will reopen next time";
+const UNSAVED_FILE_BODY: &str = "Your changes will be lost if you don't save them.";
+/// The editor's save chord: the platform's primary modifier plus S.
+const SAVE_SHORTCUT: Shortcut = Shortcut::primary(egui::Key::S);
+const UNSAVED_DIALOG_W: f32 = 380.0;
+const UNSAVED_DIALOG_MAX_H: f32 = 160.0;
+
+/// "1 file has unsaved changes that will be lost." — or None when there are
+/// no unsaved edits to warn about.
+fn unsaved_note(count: usize, fate: &str) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(format!("1 file has unsaved changes that {fate}.")),
+        n => Some(format!("{n} files have unsaved changes that {fate}.")),
+    }
+}
+
 impl App {
     fn switcher_collect_entries(&self, pane: &PaneEntry) -> Option<(String, String)> {
         match &pane.content {
@@ -1000,6 +1022,208 @@ impl App {
         }
     }
 
+    /// The panes a close-all request covers: the single source for the
+    /// dialog's count and for the close itself.
+    pub(in crate::app) fn close_all_pane_ids(&self, target: CloseAllTarget) -> Vec<u32> {
+        let group = match target {
+            CloseAllTarget::All => return self.pane_state.panes.iter().map(|p| p.id).collect(),
+            CloseAllTarget::EditorGroup(gid) => {
+                return self
+                    .pane_state
+                    .groups
+                    .get(&gid)
+                    .map(|g| g.pane_ids.clone())
+                    .unwrap_or_default()
+            }
+            CloseAllTarget::Group(group) => group,
+            CloseAllTarget::ActiveGroup => self.active_group,
+        };
+        self.pane_state
+            .panes
+            .iter()
+            .filter(|p| {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, p) == group
+            })
+            .map(|p| p.id)
+            .collect()
+    }
+
+    /// Closes the panes `target` covers. Several are confirmed first, and so
+    /// is any that holds unsaved edits; a single saved tab closes at once,
+    /// the same as closing it on its own.
+    pub(in crate::app) fn request_close_all(&mut self, target: CloseAllTarget) {
+        let pane_ids = self.close_all_pane_ids(target);
+        if pane_ids.len() > MAX_CLOSED_WITHOUT_ASKING || self.unsaved_count(&pane_ids) > 0 {
+            log::debug!("close: asking before closing {} tabs", pane_ids.len());
+            self.close_all_target = target;
+            self.show_close_all_confirm = true;
+            self.close_all_frames_open = 0;
+        } else if !pane_ids.is_empty() {
+            self.close_panes(&pane_ids);
+        }
+    }
+
+    fn close_all_group_title(&self, group: Option<u64>) -> String {
+        let group_name = match group {
+            None => "Other".to_string(),
+            Some(id) => self
+                .workspace_store
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| "Unknown".to_string()),
+        };
+        format!("Close \"{}\" Sessions", group_name)
+    }
+
+    /// Closes these panes, their sessions once no pane shows them, and
+    /// empty splits; keeps one terminal open when nothing is left.
+    fn close_panes(&mut self, pane_ids: &[u32]) {
+        log::debug!("close: {} tabs together {pane_ids:?}", pane_ids.len());
+        for &pid in pane_ids {
+            self.capture_closed_unstarted_session(pid);
+        }
+        let session_ids: Vec<u32> = self
+            .pane_state
+            .panes
+            .iter()
+            .filter(|p| pane_ids.contains(&p.id))
+            .filter_map(|p| match &p.content {
+                PaneContent::Terminal(sid) => Some(*sid),
+                _ => None,
+            })
+            .collect();
+
+        self.pane_state.panes.retain(|p| !pane_ids.contains(&p.id));
+        // Sync editor groups with surviving panes (collapse empty groups).
+        self.pane_state.sync_groups_with_panes();
+        // Prune closed panes from split trees, preserving surviving siblings.
+        let affected_roots: Vec<u32> = self
+            .pane_state
+            .pane_trees
+            .iter()
+            .filter(|(_, tree)| tree.leaf_ids().iter().any(|lid| pane_ids.contains(lid)))
+            .map(|(&rpid, _)| rpid)
+            .collect();
+        for rpid in affected_roots {
+            let all_leaves_closing = self
+                .pane_state
+                .pane_trees
+                .get(&rpid)
+                .map(|t| t.leaf_ids().iter().all(|lid| pane_ids.contains(lid)))
+                .unwrap_or(true);
+            if all_leaves_closing {
+                self.pane_state.pane_trees.remove(&rpid);
+            } else {
+                // Remove only the closing panes, keeping survivors
+                let closing_in_tree: Vec<u32> = self
+                    .pane_state
+                    .pane_trees
+                    .get(&rpid)
+                    .map(|t| {
+                        t.leaf_ids()
+                            .into_iter()
+                            .filter(|lid| pane_ids.contains(lid))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut needs_rekey = false;
+                for pid in closing_in_tree {
+                    if let Some(tree) = self.pane_state.pane_trees.get_mut(&rpid) {
+                        use crate::pane_tree::RemoveResult;
+                        match tree.remove_pane(pid) {
+                            RemoveResult::CollapseToSibling(replacement) => {
+                                self.pane_state.pane_trees.insert(rpid, replacement);
+                                if pid == rpid {
+                                    needs_rekey = true;
+                                    break;
+                                }
+                            }
+                            RemoveResult::IsTarget => {
+                                self.pane_state.pane_trees.remove(&rpid);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if needs_rekey {
+                    if let Some(tree) = self.pane_state.pane_trees.remove(&rpid) {
+                        let new_key = tree.first_leaf_id();
+                        self.pane_state.pane_trees.insert(new_key, tree);
+                    }
+                }
+            }
+        }
+        if self
+            .pane_state
+            .active_pane_id
+            .is_some_and(|id| pane_ids.contains(&id))
+        {
+            self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
+        }
+
+        for sid in &session_ids {
+            if self.pane_state.panes_referencing_session(*sid) == 0 {
+                self.remove_session_and_cleanup(*sid);
+            }
+        }
+
+        self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
+            self.pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == apid)
+                .and_then(|p| match &p.content {
+                    PaneContent::Terminal(sid) => Some(*sid),
+                    _ => None,
+                })
+                .or_else(|| self.session_state.sessions.first().map(|e| e.id))
+        } else {
+            self.session_state.sessions.first().map(|e| e.id)
+        };
+        self.update_is_active_flags();
+
+        if self.pane_state.panes.is_empty() {
+            if let Some(sid) = self.session_state.active_id {
+                let pane_id = self.pane_state.next_pane_id;
+                self.pane_state.next_pane_id += 1;
+                self.pane_state.panes.push(PaneEntry {
+                    id: pane_id,
+                    content: PaneContent::Terminal(sid),
+                    manual_width: None,
+                    last_size: (0, 0),
+                    labels: vec![],
+                    last_active_at: crate::util::now_millis(),
+                    workspace_id: self.active_group,
+                });
+                self.pane_state.pane_trees.insert(
+                    pane_id,
+                    PaneNode::Leaf {
+                        pane_id,
+                        last_size: (0, 0),
+                    },
+                );
+                if self.pane_state.groups.is_empty() {
+                    let gid = self.pane_state.create_group(pane_id);
+                    self.pane_state.group_layout =
+                        crate::editor_group::GroupNode::Leaf { group_id: gid };
+                    self.pane_state.focused_group_id = gid;
+                } else {
+                    self.pane_state.add_pane_to_group(
+                        self.pane_state.focused_group_id,
+                        pane_id,
+                        None,
+                    );
+                }
+                self.pane_state.active_pane_id = Some(pane_id);
+            }
+        }
+
+        self.save_session();
+    }
+
     pub(in crate::app) fn render_close_all_confirm(&mut self, ctx: &egui::Context) {
         if !self.show_close_all_confirm {
             return;
@@ -1012,49 +1236,20 @@ impl App {
             ..Default::default()
         };
 
-        let (title, count) = match self.close_all_target {
-            CloseAllTarget::All => (
-                "Close All Sessions".to_string(),
-                self.pane_state.panes.len(),
-            ),
-            CloseAllTarget::EditorGroup(gid) => {
-                let cnt = self
-                    .pane_state
-                    .groups
-                    .get(&gid)
-                    .map(|g| g.pane_ids.len())
-                    .unwrap_or(0);
-                (
-                    format!("Close {} Tab{}", cnt, if cnt == 1 { "" } else { "s" }),
-                    cnt,
-                )
-            }
-            _ => {
-                let group = match self.close_all_target {
-                    CloseAllTarget::Group(g) => g,
-                    _ => self.active_group,
-                };
-                let group_name = match group {
-                    None => "Other".to_string(),
-                    Some(id) => self
-                        .workspace_store
-                        .workspaces
-                        .iter()
-                        .find(|w| w.id == id)
-                        .map(|w| w.name.clone())
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                };
-                let cnt = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .filter(|p| {
-                        Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                            == group
-                    })
-                    .count();
-                (format!("Close \"{}\" Sessions", group_name), cnt)
-            }
+        let closing = self.close_all_pane_ids(self.close_all_target);
+        let count = closing.len();
+        let unsaved = self.unsaved_count(&closing);
+        let plural = if count == 1 { "" } else { "s" };
+        // A split holds tabs; everywhere else the list is of sessions.
+        let noun = match self.close_all_target {
+            CloseAllTarget::EditorGroup(_) => "tab",
+            _ => "session",
+        };
+        let title = match self.close_all_target {
+            CloseAllTarget::All => "Close All Sessions".to_string(),
+            CloseAllTarget::EditorGroup(_) => format!("Close {count} Tab{plural}"),
+            CloseAllTarget::Group(group) => self.close_all_group_title(group),
+            CloseAllTarget::ActiveGroup => self.close_all_group_title(self.active_group),
         };
 
         let mut cancel_clicked = false;
@@ -1062,10 +1257,11 @@ impl App {
             ui_kit::dialog_header(ui, &title);
 
             ui.label(format!(
-                "This will close {} session{}. Are you sure?",
-                count,
-                if count == 1 { "" } else { "s" }
+                "This will close {count} {noun}{plural}. Are you sure?"
             ));
+            if let Some(note) = unsaved_note(unsaved, UNSAVED_LOST) {
+                ui.label(egui::RichText::new(note).color(theme::active().warning));
+            }
 
             ui_kit::dialog_footer(ui, |ui| {
                 if ui_kit::action_button(ui, "Close All", true, ui_kit::ActionButtonStyle::Danger)
@@ -1096,183 +1292,95 @@ impl App {
 
             let target = std::mem::take(&mut self.close_all_target);
 
-            let pane_ids_to_close: Vec<u32> = match target {
-                CloseAllTarget::All => self.pane_state.panes.iter().map(|p| p.id).collect(),
-                CloseAllTarget::EditorGroup(gid) => self
-                    .pane_state
-                    .groups
-                    .get(&gid)
-                    .map(|g| g.pane_ids.clone())
-                    .unwrap_or_default(),
-                _ => {
-                    let group = match target {
-                        CloseAllTarget::Group(g) => g,
-                        _ => self.active_group,
-                    };
-                    self.pane_state
-                        .panes
-                        .iter()
-                        .filter(|p| {
-                            Self::pane_group(&self.session_state.sessions, &self.workspace_store, p)
-                                == group
-                        })
-                        .map(|p| p.id)
-                        .collect()
-                }
-            };
-
-            let session_ids: Vec<u32> = self
-                .pane_state
-                .panes
-                .iter()
-                .filter(|p| pane_ids_to_close.contains(&p.id))
-                .filter_map(|p| match &p.content {
-                    PaneContent::Terminal(sid) => Some(*sid),
-                    _ => None,
-                })
-                .collect();
-
-            self.pane_state
-                .panes
-                .retain(|p| !pane_ids_to_close.contains(&p.id));
-            // Sync editor groups with surviving panes (collapse empty groups).
-            self.pane_state.sync_groups_with_panes();
-            // Prune closed panes from split trees, preserving surviving siblings.
-            let affected_roots: Vec<u32> = self
-                .pane_state
-                .pane_trees
-                .iter()
-                .filter(|(_, tree)| {
-                    tree.leaf_ids()
-                        .iter()
-                        .any(|lid| pane_ids_to_close.contains(lid))
-                })
-                .map(|(&rpid, _)| rpid)
-                .collect();
-            for rpid in affected_roots {
-                let all_leaves_closing = self
-                    .pane_state
-                    .pane_trees
-                    .get(&rpid)
-                    .map(|t| {
-                        t.leaf_ids()
-                            .iter()
-                            .all(|lid| pane_ids_to_close.contains(lid))
-                    })
-                    .unwrap_or(true);
-                if all_leaves_closing {
-                    self.pane_state.pane_trees.remove(&rpid);
-                } else {
-                    // Remove only the closing panes, keeping survivors
-                    let closing_in_tree: Vec<u32> = self
-                        .pane_state
-                        .pane_trees
-                        .get(&rpid)
-                        .map(|t| {
-                            t.leaf_ids()
-                                .into_iter()
-                                .filter(|lid| pane_ids_to_close.contains(lid))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let mut needs_rekey = false;
-                    for pid in closing_in_tree {
-                        if let Some(tree) = self.pane_state.pane_trees.get_mut(&rpid) {
-                            use crate::pane_tree::RemoveResult;
-                            match tree.remove_pane(pid) {
-                                RemoveResult::CollapseToSibling(replacement) => {
-                                    self.pane_state.pane_trees.insert(rpid, replacement);
-                                    if pid == rpid {
-                                        needs_rekey = true;
-                                        break;
-                                    }
-                                }
-                                RemoveResult::IsTarget => {
-                                    self.pane_state.pane_trees.remove(&rpid);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    if needs_rekey {
-                        if let Some(tree) = self.pane_state.pane_trees.remove(&rpid) {
-                            let new_key = tree.first_leaf_id();
-                            self.pane_state.pane_trees.insert(new_key, tree);
-                        }
-                    }
-                }
-            }
-            if self
-                .pane_state
-                .active_pane_id
-                .is_some_and(|id| pane_ids_to_close.contains(&id))
-            {
-                self.pane_state.active_pane_id = self.pane_state.panes.last().map(|p| p.id);
-            }
-
-            for sid in &session_ids {
-                if self.pane_state.panes_referencing_session(*sid) == 0 {
-                    self.remove_session_and_cleanup(*sid);
-                }
-            }
-
-            self.session_state.active_id = if let Some(apid) = self.pane_state.active_pane_id {
-                self.pane_state
-                    .panes
-                    .iter()
-                    .find(|p| p.id == apid)
-                    .and_then(|p| match &p.content {
-                        PaneContent::Terminal(sid) => Some(*sid),
-                        _ => None,
-                    })
-                    .or_else(|| self.session_state.sessions.first().map(|e| e.id))
-            } else {
-                self.session_state.sessions.first().map(|e| e.id)
-            };
-            self.update_is_active_flags();
-
-            if self.pane_state.panes.is_empty() {
-                if let Some(sid) = self.session_state.active_id {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    self.pane_state.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::Terminal(sid),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    });
-                    self.pane_state.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (0, 0),
-                        },
-                    );
-                    if self.pane_state.groups.is_empty() {
-                        let gid = self.pane_state.create_group(pane_id);
-                        self.pane_state.group_layout =
-                            crate::editor_group::GroupNode::Leaf { group_id: gid };
-                        self.pane_state.focused_group_id = gid;
-                    } else {
-                        self.pane_state.add_pane_to_group(
-                            self.pane_state.focused_group_id,
-                            pane_id,
-                            None,
-                        );
-                    }
-                    self.pane_state.active_pane_id = Some(pane_id);
-                }
-            }
-
-            self.save_session();
+            let pane_ids = self.close_all_pane_ids(target);
+            self.close_panes(&pane_ids);
         } else if resp.dismissed || cancel_clicked {
             self.show_close_all_confirm = false;
             self.close_all_frames_open = 0;
             self.close_all_target = CloseAllTarget::default();
+        }
+    }
+
+    /// "Save changes?" for one tab with unsaved edits that is being closed.
+    /// A file can be saved and closed, closed without saving, or kept open.
+    /// An untitled buffer has no file to save to, so it offers Don't Save and
+    /// Cancel; the user cancels and saves it with ⌘S to choose where.
+    pub(in crate::app) fn render_unsaved_close_confirm(&mut self, ctx: &egui::Context) {
+        let Some((pane_id, via)) = self.pending_tab_close else {
+            return;
+        };
+        let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) else {
+            // Closed some other way meanwhile: nothing left to ask about.
+            self.pending_tab_close = None;
+            return;
+        };
+        // Only an editor can hold unsaved edits. Its plain name: the tab text
+        // adds an unsaved mark that reads oddly inside the question.
+        let PaneContent::FileEditor(ed) = &self.pane_state.panes[idx].content else {
+            self.pending_tab_close = None;
+            return;
+        };
+        let name = super::pane_labels::file_name(&ed.path);
+        let untitled = ed.untitled;
+
+        let config = ui_kit::DialogConfig {
+            width: ui_kit::DialogWidth::Fixed(UNSAVED_DIALOG_W),
+            max_height: UNSAVED_DIALOG_MAX_H,
+            ..Default::default()
+        };
+        let (mut save, mut discard, mut cancel) = (false, false, false);
+        let resp = ui_kit::dialog(ctx, self.vp_id("unsaved_close"), config, |ui| {
+            ui_kit::dialog_header(ui, &format!("Save changes to \u{201c}{name}\u{201d}?"));
+            if untitled {
+                ui.label(format!(
+                    "This has never been saved. Cancel and press {} to keep it, \
+                     or close it without saving.",
+                    SAVE_SHORTCUT.label()
+                ));
+            } else {
+                ui.label(UNSAVED_FILE_BODY);
+            }
+            ui_kit::dialog_footer(ui, |ui| {
+                if !untitled
+                    && ui_kit::action_button(ui, "Save", true, ui_kit::ActionButtonStyle::Primary)
+                        .clicked()
+                {
+                    save = true;
+                }
+                if ui_kit::action_button(ui, "Don't Save", true, ui_kit::ActionButtonStyle::Danger)
+                    .clicked()
+                {
+                    discard = true;
+                }
+                if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
+                    .clicked()
+                {
+                    cancel = true;
+                }
+            });
+        });
+        // Enter saves a file, the safe default; for an untitled buffer it does
+        // nothing, so a stray Enter can never throw the text away.
+        if !untitled && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+            save = true;
+        }
+
+        if save {
+            let saved = match &mut self.pane_state.panes[idx].content {
+                PaneContent::FileEditor(ed) => ed.write_to_disk(),
+                _ => false,
+            };
+            self.pending_tab_close = None;
+            // A failed save keeps the tab open with its edits; the editor
+            // shows the save error.
+            if saved {
+                self.close_tab_now(pane_id, via);
+            }
+        } else if discard {
+            self.pending_tab_close = None;
+            self.close_tab_now(pane_id, via);
+        } else if cancel || resp.dismissed {
+            self.pending_tab_close = None;
         }
     }
 
@@ -1299,6 +1407,8 @@ impl App {
             }
         }
         let total_count = self.pane_state.panes.len();
+        let all_panes: Vec<u32> = self.pane_state.panes.iter().map(|p| p.id).collect();
+        let quit_unsaved = self.unsaved_count(&all_panes);
         let config = ui_kit::DialogConfig {
             width: ui_kit::DialogWidth::Fixed(380.0),
             max_height: 200.0,
@@ -1359,6 +1469,16 @@ impl App {
                 ));
             } else {
                 ui.label("Are you sure you want to quit?");
+            }
+            // Edits are kept with the session, so they come back next time
+            // unless the app is set not to reopen the last session.
+            let fate = if self.settings.restore_last_session {
+                UNSAVED_KEPT
+            } else {
+                UNSAVED_LOST
+            };
+            if let Some(note) = unsaved_note(quit_unsaved, fate) {
+                ui.label(egui::RichText::new(note).color(theme::active().warning));
             }
 
             ui_kit::dialog_footer(ui, |ui| {
@@ -2052,5 +2172,23 @@ impl App {
         } else if resp.dismissed || cancel_clicked {
             self.open_folder_dialog = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsaved_note_counts_files_and_says_what_happens() {
+        assert_eq!(unsaved_note(0, UNSAVED_LOST), None);
+        assert_eq!(
+            unsaved_note(1, UNSAVED_LOST).as_deref(),
+            Some("1 file has unsaved changes that will be lost.")
+        );
+        assert_eq!(
+            unsaved_note(3, UNSAVED_KEPT).as_deref(),
+            Some("3 files have unsaved changes that will reopen next time.")
+        );
     }
 }

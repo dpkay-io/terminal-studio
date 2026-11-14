@@ -433,24 +433,21 @@ impl App {
     }
 
     fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
+        if self.toggle_view(action) {
+            return;
+        }
         match action {
-            AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
-            AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
             AppAction::FocusTerminal => {
                 ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
             }
             AppAction::NewTerminalTab => {
                 self.deferred_spawn = Some(self.configured_shell());
             }
+            AppAction::NewFile => {
+                self.deferred_new_file = true;
+            }
             AppAction::CloseCurrentPane => {
                 self.deferred_close_pane = true;
-            }
-            AppAction::OpenSettings => {
-                self.show_settings = !self.show_settings;
-            }
-            AppAction::ToggleShortcutHelp => self.show_shortcut_help = !self.show_shortcut_help,
-            AppAction::OpenQuickSwitcher => {
-                self.show_quick_switcher = !self.show_quick_switcher;
             }
             AppAction::SplitHorizontal => {
                 self.deferred_split = Some(crate::pane_tree::SplitDir::Horizontal);
@@ -771,8 +768,10 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
     let actions = [
         ToggleLeftSidebar,
         ToggleRightSidebar,
+        ToggleTabBar,
         FocusTerminal,
         NewTerminalTab,
+        NewFile,
         CloseCurrentPane,
         SplitHorizontal,
         SplitVertical,
@@ -888,6 +887,16 @@ mod tests {
                 .iter()
                 .any(|e| e.action == AppAction::OpenFileFinder),
             "OpenFileFinder should be in palette actions"
+        );
+    }
+
+    #[test]
+    fn palette_actions_include_new_file() {
+        let registry = ShortcutRegistry::new();
+        let actions = all_palette_actions(&registry);
+        assert!(
+            actions.iter().any(|e| e.action == AppAction::NewFile),
+            "NewFile is dispatched by the palette, so it must be listed in it"
         );
     }
 }

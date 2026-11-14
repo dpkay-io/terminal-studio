@@ -14,3 +14,7 @@ docs/superpowers/specs/*
 installer/Output/
 tools/*.exe
 *.pdb
+
+# local MCP project-manager state
+.mcp-pm.db
+.mcp-pm.yml

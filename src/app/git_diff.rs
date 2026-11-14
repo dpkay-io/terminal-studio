@@ -735,7 +735,10 @@ fn file_context_menu(
         });
         ui.close_menu();
     }
-    if ui.button("Reveal in file manager").clicked() {
+    if ui
+        .button(crate::util::REVEAL_IN_FILE_MANAGER_LABEL)
+        .clicked()
+    {
         let full = match root_dir {
             Some(root) => root.join(path),
             None => std::path::PathBuf::from(path),

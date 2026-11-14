@@ -72,6 +72,19 @@ impl WorkspaceStore {
             .any(|w| w.name.eq_ignore_ascii_case(name) && exclude_id != Some(w.id))
     }
 
+    /// `base`, or `base 2`, `base 3`, … — the first that no workspace uses.
+    pub fn unique_name(&self, base: &str) -> String {
+        if !self.is_name_taken(base, None) {
+            return base.to_string();
+        }
+        // Every workspace can take at most one candidate, so one more suffix
+        // than there are workspaces is always enough.
+        (2..=self.workspaces.len() + 1)
+            .map(|n| format!("{base} {n}"))
+            .find(|name| !self.is_name_taken(name, None))
+            .unwrap_or_else(|| format!("{base} {}", self.workspaces.len() + 2))
+    }
+
     #[allow(dead_code)]
     pub fn is_color_taken(&self, color: [u8; 3], exclude_id: Option<u64>) -> bool {
         self.workspaces
@@ -639,6 +652,13 @@ mod tests {
         let store = make_store(vec![("MyProject", "/a")]);
         assert!(!store.is_name_taken("MyProject", Some(1)));
         assert!(store.is_name_taken("MyProject", Some(99)));
+    }
+
+    #[test]
+    fn unique_name_skips_every_taken_suffix() {
+        let store = make_store(vec![("app", "/a"), ("App 2", "/b"), ("other", "/c")]);
+        assert_eq!(store.unique_name("fresh"), "fresh");
+        assert_eq!(store.unique_name("app"), "app 3");
     }
 
     #[test]

@@ -50,6 +50,76 @@ pub(super) struct FileEditorState {
     pub(super) stale: bool,
     /// Content is being loaded from a background thread.
     pub(super) loading: bool,
+    /// A brand-new buffer with no path yet; first save prompts for a filename.
+    pub(super) untitled: bool,
+    /// [`text_hash`] of the text the file holds: last read from it, last
+    /// written to it, or empty for a new buffer. An edit that brings the
+    /// buffer back to it (undo, retyping) leaves nothing unsaved. None until
+    /// that text is known, and then any edit counts as unsaved.
+    pub(super) saved_text_hash: Option<u64>,
+}
+
+/// Fingerprint of an editor's text, compared to tell whether the buffer
+/// still matches its file. Computed once per edit, never per frame.
+pub(super) fn text_hash(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl FileEditorState {
+    /// Edits that are not in any file yet: an edited file, or an untitled
+    /// buffer someone typed into.
+    pub(super) fn has_unsaved_changes(&self) -> bool {
+        self.dirty
+    }
+
+    /// Take text typed into the editor. It is unsaved unless it is exactly
+    /// what the file already holds.
+    pub(super) fn apply_edit(&mut self, text: String) {
+        self.dirty = self.saved_text_hash != Some(text_hash(&text));
+        self.content = text;
+        self.save_error = false;
+    }
+
+    /// The file's text, read in the background. It replaces the buffer only
+    /// when nothing in it is unsaved; either way it is what later edits are
+    /// compared to.
+    pub(super) fn apply_file_text(&mut self, text: String) {
+        self.saved_text_hash = Some(text_hash(&text));
+        if !self.dirty {
+            self.content = text;
+        }
+        self.dirty = self.saved_text_hash != Some(text_hash(&self.content));
+        self.loading = false;
+    }
+
+    /// The buffer was just written to its file.
+    pub(super) fn mark_saved(&mut self) {
+        self.saved_text_hash = Some(text_hash(&self.content));
+        self.dirty = false;
+        self.save_error = false;
+    }
+
+    /// Write the buffer to its file. An untitled buffer has none and needs a
+    /// Save As instead, so it is left alone and reported as not saved.
+    pub(super) fn write_to_disk(&mut self) -> bool {
+        if self.untitled {
+            return false;
+        }
+        match std::fs::write(&self.path, &self.content) {
+            Ok(()) => {
+                self.mark_saved();
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to save {}: {e}", self.path.display());
+                self.save_error = true;
+                false
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +160,8 @@ pub(super) enum PaneContent {
         cwd: Option<PathBuf>,
         pending_command: Option<String>,
         saved_title: Option<String>,
+        /// `saved_title` is a name the user gave the session.
+        title_pinned: bool,
         scrollback_file: Option<String>,
     },
     FileEditor(FileEditorState),
@@ -140,6 +212,99 @@ impl Drop for SessionEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn editor(path: PathBuf, untitled: bool) -> FileEditorState {
+        FileEditorState {
+            path,
+            content: "edited".into(),
+            dirty: true,
+            save_error: false,
+            workspace_id: None,
+            show_preview: false,
+            stale: false,
+            loading: false,
+            untitled,
+            saved_text_hash: None,
+        }
+    }
+
+    #[test]
+    fn saving_a_file_writes_it_and_clears_unsaved() {
+        let dir = std::env::temp_dir().join(format!("ts_pane_save_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.txt");
+        let mut ed = editor(path.clone(), false);
+        assert!(ed.has_unsaved_changes());
+        assert!(ed.write_to_disk());
+        assert!(!ed.has_unsaved_changes() && !ed.save_error);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "edited");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn undoing_back_to_the_saved_text_leaves_nothing_unsaved() {
+        let mut ed = editor(PathBuf::from("a.txt"), false);
+        ed.dirty = false;
+        ed.loading = true;
+        ed.apply_file_text("on disk".into());
+        assert!(!ed.has_unsaved_changes() && !ed.loading);
+        assert_eq!(ed.content, "on disk");
+        ed.apply_edit("on disk!".into());
+        assert!(ed.has_unsaved_changes());
+        ed.apply_edit("on disk".into());
+        assert!(!ed.has_unsaved_changes(), "back to the file's text");
+    }
+
+    #[test]
+    fn text_typed_before_the_file_loads_is_kept_and_compared_to_it() {
+        let mut ed = editor(PathBuf::from("a.txt"), false);
+        ed.apply_edit("typed".into());
+        assert!(ed.has_unsaved_changes(), "the file's text is not known yet");
+        ed.apply_file_text("on disk".into());
+        assert_eq!(ed.content, "typed", "unsaved typing is never replaced");
+        assert!(ed.has_unsaved_changes());
+        ed.apply_edit("on disk".into());
+        assert!(!ed.has_unsaved_changes());
+    }
+
+    #[test]
+    fn after_a_save_the_saved_text_is_the_new_baseline() {
+        let dir = std::env::temp_dir().join(format!("ts_pane_baseline_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut ed = editor(dir.join("b.txt"), false);
+        assert!(ed.write_to_disk());
+        ed.apply_edit("edited more".into());
+        assert!(ed.has_unsaved_changes());
+        ed.apply_edit("edited".into());
+        assert!(!ed.has_unsaved_changes(), "matches what was saved");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_new_buffer_emptied_again_has_nothing_unsaved() {
+        let mut ed = editor(PathBuf::from("Untitled-1"), true);
+        ed.dirty = false;
+        ed.saved_text_hash = Some(text_hash(""));
+        ed.apply_edit("x".into());
+        assert!(ed.has_unsaved_changes());
+        ed.apply_edit(String::new());
+        assert!(!ed.has_unsaved_changes());
+    }
+
+    #[test]
+    fn an_untitled_buffer_is_never_written_to_its_name() {
+        let mut ed = editor(PathBuf::from("Untitled-1"), true);
+        assert!(!ed.write_to_disk(), "needs Save As, not a write");
+        assert!(ed.has_unsaved_changes(), "the edits are still unsaved");
+        assert!(!PathBuf::from("Untitled-1").exists());
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_edits_and_flags_the_error() {
+        let mut ed = editor(PathBuf::from("/nonexistent-dir-ts/a.txt"), false);
+        assert!(!ed.write_to_disk());
+        assert!(ed.has_unsaved_changes() && ed.save_error);
+    }
 
     #[test]
     fn test_term_selection_ordered_normal() {
@@ -201,6 +366,8 @@ mod tests {
             show_preview: false,
             stale: false,
             loading: false,
+            untitled: false,
+            saved_text_hash: None,
         };
         let cloned = state.clone();
         assert_eq!(cloned.path, state.path);
@@ -211,6 +378,7 @@ mod tests {
         assert_eq!(cloned.show_preview, state.show_preview);
         assert_eq!(cloned.stale, state.stale);
         assert_eq!(cloned.loading, state.loading);
+        assert_eq!(cloned.untitled, state.untitled);
     }
 
     #[test]
@@ -221,6 +389,7 @@ mod tests {
             cwd: Some(PathBuf::from("/home")),
             pending_command: Some("ls".to_string()),
             saved_title: None,
+            title_pinned: false,
             scrollback_file: None,
         };
         let editor = PaneContent::FileEditor(FileEditorState {
@@ -232,6 +401,8 @@ mod tests {
             show_preview: false,
             stale: false,
             loading: false,
+            untitled: false,
+            saved_text_hash: None,
         });
         let diff = PaneContent::FileDiff(FileDiffState {
             path: PathBuf::from("file.rs"),

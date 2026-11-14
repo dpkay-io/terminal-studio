@@ -5,9 +5,8 @@ use super::super::file_browser;
 use super::super::markdown::render_markdown;
 use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::{CursorStyle, InfoBarPosition};
-use super::super::App;
+use super::super::{App, CloseAllTarget};
 use super::info_bar::InfoBarAction;
-use super::tab_bar::GroupTabBarResult;
 use crate::editor_group::{GroupId, GroupNode};
 use crate::pane_tree::{split_rect, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
@@ -57,14 +56,14 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub clicked_pane_id: &'a mut Option<u32>,
     pub editor_saves: &'a mut Vec<u32>,
     pub editor_preview_toggles: &'a mut Vec<u32>,
-    pub pane_widths_snap: &'a mut Vec<(u32, f32)>,
+    pub pane_rects_snap: &'a mut Vec<(u32, egui::Rect)>,
     pub split_ratio_changes: &'a mut Vec<(u32, f32)>,
     pub pane_context_actions: &'a mut Vec<PaneContextAction>,
     pub term_selection: &'a Option<TermSelection>,
     pub term_selection_sid: Option<u32>,
-    pub workspace_dialog_open: bool,
-    pub workspace_edit_dialog_open: bool,
-    pub show_settings: bool,
+    /// A dialog or overlay owns the keyboard (`App::any_modal_open`): no
+    /// pane takes focus or keys meanwhile.
+    pub modal_open: bool,
     pub font_size: f32,
     pub cursor_style: CursorStyle,
     pub has_splits: bool,
@@ -73,7 +72,6 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub diff_mode_changes: &'a mut Vec<(u32, super::super::diff_parser::DiffViewMode)>,
     pub diff_hunk_navigations: &'a mut Vec<(u32, usize)>,
     pub diff_clear_scroll_to_first: &'a mut Vec<u32>,
-    pub drag_state: &'a mut crate::app::drag::DragState,
     pub scrollbar_clear_restore: &'a mut Vec<u32>,
     pub scrollbar_dragging: &'a mut bool,
     /// (pane_id, new side_by_side value) toggled this frame by the conflict resolver toolbar.
@@ -81,6 +79,29 @@ pub(in crate::app) struct RenderCtx<'a> {
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
+
+/// Keys each file's text box by its pane. Without it every editor drawn in the
+/// same spot shares one cursor and one undo history, so opening another file
+/// put the caret where the last one left it and undo could bring back that
+/// file's text.
+const FILE_EDITOR_TEXT_ID: &str = "file_editor_text";
+
+/// Keyboard rule for a pane's text box. The active pane's box takes the
+/// keyboard whenever nothing else holds it, like a terminal, so a new or
+/// just-opened file is ready for typing. Any other pane's box gives it up:
+/// a box in a split the user has left (by the session list, a drag or a
+/// shortcut) must not keep taking their keys.
+fn route_text_focus(ui: &egui::Ui, text_box: &egui::Response, is_active: bool, modal_open: bool) {
+    if !is_active {
+        if text_box.has_focus() {
+            text_box.surrender_focus();
+        }
+        return;
+    }
+    if !modal_open && ui.memory(|m| m.focused().is_none()) {
+        text_box.request_focus();
+    }
+}
 
 fn render_terminal_leaf(
     ui: &mut egui::Ui,
@@ -143,9 +164,7 @@ fn render_terminal_leaf(
     if is_focused {
         let this_id = ui.id();
         *rctx.active_term_ui_id = Some(this_id);
-        let dialog_open =
-            rctx.workspace_dialog_open || rctx.workspace_edit_dialog_open || rctx.show_settings;
-        if !dialog_open {
+        if !rctx.modal_open {
             let clicked = ui.input(|i| i.pointer.any_pressed())
                 && ui.input(|i| {
                     i.pointer
@@ -410,6 +429,9 @@ fn render_file_editor_leaf(
         }
 
         let is_focused = rctx.focused_pane_id == Some(pane_id);
+        // While a dialog is up its keys are its own: an Enter that confirms
+        // "Save changes?" must not also add a line to the file it saves.
+        let modal_open = rctx.modal_open;
         let search_active = is_focused && rctx.text_search.active;
         let scroll_target = if is_focused {
             rctx.text_search.current_match().map(|m| m.line)
@@ -531,19 +553,26 @@ fn render_file_editor_leaf(
                                 };
                                 ui.add(
                                     egui::TextEdit::multiline(text)
+                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
                                         .frame(false)
+                                        .lock_focus(true)
+                                        .interactive(!modal_open)
                                         .layouter(&mut layouter),
                                 )
                             } else {
                                 ui.add(
                                     egui::TextEdit::multiline(text)
+                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
-                                        .frame(false),
+                                        .frame(false)
+                                        .lock_focus(true)
+                                        .interactive(!modal_open),
                                 )
                             };
+                            route_text_focus(ui, &te_resp, is_focused, modal_open);
 
                             if !search_highlights.is_empty() {
                                 let mono_id =
@@ -588,8 +617,13 @@ fn render_file_editor_leaf(
         }
 
         // Match on the key event's own modifiers: a quick Cmd+S can be released
-        // before the frame samples the live modifier state.
-        if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, egui::Key::S)) {
+        // before the frame samples the live modifier state. Only the active
+        // editor saves: with files side by side in splits, whichever drew
+        // first would otherwise take the key.
+        if is_focused
+            && !modal_open
+            && ui.input_mut(|inp| inp.consume_key(egui::Modifiers::COMMAND, egui::Key::S))
+        {
             rctx.editor_saves.push(pane_id);
         }
     }
@@ -655,8 +689,11 @@ fn render_note_editor_leaf(
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
                             .hint_text("Notes for this workspace\u{2026}")
-                            .frame(false),
+                            .frame(false)
+                            .lock_focus(true)
+                            .interactive(!rctx.modal_open),
                     );
+                    route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
                     if !search_highlights.is_empty() {
                         let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
                         let cw = ui.fonts(|f| {
@@ -825,8 +862,10 @@ fn render_leaf_content(
     let pane = rctx.panes.iter().find(|p| p.id == pane_id);
     let Some(pane) = pane else { return };
 
-    // Track width for resize
-    rctx.pane_widths_snap.push((pane_id, rect.width()));
+    // Track the exact content rect so the PTY grid is sized to match the drawn
+    // area (same paddings), never wider/taller — otherwise content is hidden
+    // past the right edge or under the info bar.
+    rctx.pane_rects_snap.push((pane_id, rect));
 
     ui.allocate_ui_at_rect(rect, |ui| {
         ui.push_id(pane_id, |ui| match &pane.content {
@@ -877,30 +916,6 @@ fn render_leaf_content(
         rect,
         crate::app::feedback::FlashTarget::Pane(pane_id),
     );
-
-    // Drop target highlight for drag-and-drop
-    if rctx.drag_state.is_active() {
-        let accepts = matches!(
-            &rctx.drag_state.payload,
-            Some(crate::app::drag::DragPayload::Tab(_))
-                | Some(crate::app::drag::DragPayload::Session(_))
-                | Some(crate::app::drag::DragPayload::File(_))
-                | Some(crate::app::drag::DragPayload::Diff(_))
-                | Some(crate::app::drag::DragPayload::Note(_))
-        );
-        if accepts {
-            if let Some(pos) = ui.input(|i| i.pointer.hover_pos()) {
-                if rect.contains(pos) {
-                    ui.painter().rect_stroke(
-                        rect.shrink(2.0),
-                        crate::theme::R_SM,
-                        egui::Stroke::new(2.0_f32, crate::theme::active().blue.gamma_multiply(0.6)),
-                    );
-                    rctx.drag_state.drop_target = Some(crate::app::drag::DropTarget::PaneArea);
-                }
-            }
-        }
-    }
 }
 
 fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
@@ -927,6 +942,143 @@ fn node_has_visible_panes(app: &App, node: &GroupNode) -> bool {
     }
 }
 
+/// The area a drop will land in: half of `rect` for a split-edge drop, all of
+/// it for a plain join.
+fn drop_preview_rect(rect: egui::Rect, edge: Option<(SplitDir, bool)>) -> egui::Rect {
+    match edge {
+        None => rect,
+        Some((SplitDir::Horizontal, true)) => {
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() / 2.0, rect.height()))
+        }
+        Some((SplitDir::Horizontal, false)) => egui::Rect::from_min_size(
+            egui::pos2(rect.center().x, rect.min.y),
+            egui::vec2(rect.width() / 2.0, rect.height()),
+        ),
+        Some((SplitDir::Vertical, true)) => {
+            egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), rect.height() / 2.0))
+        }
+        Some((SplitDir::Vertical, false)) => egui::Rect::from_min_size(
+            egui::pos2(rect.min.x, rect.center().y),
+            egui::vec2(rect.width(), rect.height() / 2.0),
+        ),
+    }
+}
+
+/// Translucent highlight over the area a drop will land in.
+fn paint_drop_preview(ui: &egui::Ui, rect: egui::Rect, edge: Option<(SplitDir, bool)>) {
+    let area = drop_preview_rect(rect, edge);
+    let t = theme::active();
+    ui.painter()
+        .rect_filled(area, theme::R_MD, t.accent.gamma_multiply(0.25));
+    ui.painter().rect_stroke(
+        area,
+        theme::R_MD,
+        egui::Stroke::new(theme::STROKE_THIN, t.accent),
+    );
+}
+
+/// Hit-test the active drag against one leaf and paint what a drop would do.
+///
+/// `hit_rect` is the leaf's whole area — info bar included, so the hint never
+/// blinks out over a pane header — while `split_rect` is the content area the
+/// edge zones are measured against. A pointer on the header therefore joins
+/// the split, matching the left-nav section headers.
+///
+/// Called on every leaf path, degenerate ones included: gating this on a
+/// separate hit test elsewhere is what made the hint intermittent.
+fn hit_test_drop(
+    app: &mut App,
+    ui: &egui::Ui,
+    hit_rect: egui::Rect,
+    split_rect: egui::Rect,
+    group_id: GroupId,
+) {
+    use crate::app::drag::{DragAction, DragPayload, DropTarget};
+
+    // A workspace drag only ever opens a window, so it must not preview a drop.
+    if !app.drag_state.is_active()
+        || matches!(app.drag_state.payload, Some(DragPayload::Workspace(_)))
+    {
+        return;
+    }
+    let Some(pos) = ui.ctx().input(|i| i.pointer.hover_pos()) else {
+        return;
+    };
+    if !hit_rect.contains(pos) {
+        return;
+    }
+    // Cloned only once the pointer is known to be here — this runs for every
+    // leaf on every frame of a drag.
+    let Some(payload) = app.drag_state.payload.clone() else {
+        return;
+    };
+
+    let edge = crate::app::drag::edge_zone(split_rect, pos);
+    let target = match edge {
+        Some((dir, before)) => DropTarget::SplitEdge {
+            group_id,
+            dir,
+            before,
+        },
+        None => DropTarget::GroupArea(group_id),
+    };
+
+    // Ask the resolver what this drop would actually do, so a highlight is
+    // never shown for one that does nothing — dragging a pane onto its own
+    // split, or splitting off a group's only pane.
+    if matches!(
+        crate::app::drag::resolve_group(payload, target.clone(), &app.pane_state),
+        DragAction::Noop
+    ) {
+        return;
+    }
+
+    paint_drop_preview(ui, if edge.is_some() { split_rect } else { hit_rect }, edge);
+    app.drag_state.drop_target = Some(target);
+}
+
+/// Apply a deferred action produced by a split's info bar header.
+fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Context) {
+    match action {
+        InfoBarAction::None => {}
+        InfoBarAction::SetPosition(gid, pos) => {
+            // No save_session() here: with scrollback saving on it writes
+            // every terminal's history. The next natural save (pane changes,
+            // quit) records the split's position; the default for new splits
+            // is in settings and saved at once.
+            app.choose_info_bar_position(gid, pos);
+        }
+        InfoBarAction::Split(gid, dir) => {
+            // The split is performed against the focused group, so hand focus
+            // over before requesting it — otherwise clicking the button on a
+            // non-focused split would split the wrong one.
+            app.pane_state.focused_group_id = gid;
+            if let Some(pid) = app
+                .pane_state
+                .groups
+                .get(&gid)
+                .and_then(|g| g.active_pane_id)
+            {
+                // Go through activate_pane so the session active flags, the
+                // recency stamp and the group's own active pane all agree —
+                // setting active_pane_id alone leaves them stale.
+                app.activate_pane(pid);
+            }
+            app.deferred_split = Some(dir);
+            // deferred_split is consumed at the top of the *next* update(), so
+            // guarantee that frame happens instead of relying on the cursor
+            // blink or a stray mouse move to schedule it.
+            ctx.request_repaint();
+        }
+        InfoBarAction::CloseTab(pane_id) => {
+            app.request_close_tab(pane_id, crate::app::close_guard::TabClose::Pane)
+        }
+        InfoBarAction::CloseAllInGroup(gid) => {
+            app.request_close_all(CloseAllTarget::EditorGroup(gid));
+        }
+    }
+}
+
 /// Recursively render the group layout tree.
 #[allow(clippy::too_many_arguments)]
 fn render_group_node(
@@ -939,10 +1091,9 @@ fn render_group_node(
     clicked_group_id: &mut Option<GroupId>,
     editor_saves: &mut Vec<u32>,
     editor_preview_toggles: &mut Vec<u32>,
-    pane_widths_snap: &mut Vec<(u32, f32)>,
+    pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
     split_ratio_changes: &mut Vec<(u32, f32)>,
     pane_context_actions: &mut Vec<PaneContextAction>,
-    group_tab_results: &mut Vec<GroupTabBarResult>,
 ) {
     match node {
         GroupNode::Leaf { group_id } => {
@@ -970,6 +1121,9 @@ fn render_group_node(
                         );
                     });
                 });
+                // No drop target: this leaf names a group that is not in the
+                // map, so a move would detach the pane and have nowhere to put
+                // it. `sync_groups_with_panes` prunes the leaf shortly after.
                 return;
             };
 
@@ -982,66 +1136,69 @@ fn render_group_node(
                 leaf_ui
                     .painter()
                     .rect_filled(rect, 0.0, theme::active().bg_term);
+                hit_test_drop(app, &leaf_ui, rect, rect, group_id);
                 return;
             }
 
-            // Split rect into tab bar (top), optional info bar, and content (rest)
-            let tab_h = theme::HEADER_H;
-            let info_bar_pos = app.settings.info_bar_position;
+            // The tab bar, when on, runs along the top of the split; the info
+            // bar and the content share what is below it.
+            let (tab_bar_rect, body) = if app.settings.show_tab_bar {
+                let bar = egui::Rect::from_min_size(
+                    rect.min,
+                    egui::vec2(rect.width(), theme::HEADER_H.min(rect.height())),
+                );
+                (
+                    Some(bar),
+                    egui::Rect::from_min_max(bar.left_bottom(), rect.max),
+                )
+            } else {
+                (None, rect)
+            };
+            if let Some(bar) = tab_bar_rect {
+                app.render_tab_bar(&mut leaf_ui, &group, group_id, is_focused, bar);
+            }
+
+            // Split the rest into optional info bar and content
+            let info_bar_pos = app.info_bar_position(group_id);
             let info_h = if info_bar_pos != InfoBarPosition::Hidden {
                 theme::INFO_BAR_H
             } else {
                 0.0
             };
-            let tab_bar_rect = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), tab_h));
 
             let (info_bar_rect, content_rect) = match info_bar_pos {
                 InfoBarPosition::Top => {
-                    let ib = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), info_h),
-                    );
+                    let ib = egui::Rect::from_min_size(body.min, egui::vec2(body.width(), info_h));
                     let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h + info_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                        egui::pos2(body.min.x, body.min.y + info_h),
+                        egui::vec2(body.width(), (body.height() - info_h).max(0.0)),
                     );
                     (Some(ib), cr)
                 }
                 InfoBarPosition::Bottom => {
                     let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h - info_h).max(0.0)),
+                        body.min,
+                        egui::vec2(body.width(), (body.height() - info_h).max(0.0)),
                     );
                     let ib = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, cr.max.y),
-                        egui::vec2(rect.width(), info_h),
+                        egui::pos2(body.min.x, cr.max.y),
+                        egui::vec2(body.width(), info_h),
                     );
                     (Some(ib), cr)
                 }
-                InfoBarPosition::Hidden => {
-                    let cr = egui::Rect::from_min_size(
-                        egui::pos2(rect.min.x, rect.min.y + tab_h),
-                        egui::vec2(rect.width(), (rect.height() - tab_h).max(0.0)),
-                    );
-                    (None, cr)
-                }
+                InfoBarPosition::Hidden => (None, body),
             };
-
-            // Render per-group tab bar
-            let tab_result = app.render_group_tab_bar(
-                &mut leaf_ui,
-                &group,
-                group_id,
-                is_focused,
-                tab_h,
-                tab_bar_rect,
-            );
-            group_tab_results.push(tab_result);
 
             // Render info bar (or show toggle when hidden)
             let mut info_bar_action = InfoBarAction::None;
             if let Some(ib_rect) = info_bar_rect {
-                info_bar_action = app.render_info_bar(&mut leaf_ui, ib_rect, group.active_pane_id);
+                info_bar_action = app.render_info_bar(
+                    &mut leaf_ui,
+                    ib_rect,
+                    group.active_pane_id,
+                    group_id,
+                    is_focused,
+                );
             }
 
             // If active pane is filtered out, show empty state
@@ -1057,6 +1214,8 @@ fn render_group_node(
             };
 
             if active_filtered_out {
+                let ctx = leaf_ui.ctx().clone();
+                apply_info_bar_action(app, info_bar_action, &ctx);
                 let t = theme::active();
                 leaf_ui.painter().rect_filled(content_rect, 0.0, t.bg_term);
                 leaf_ui.allocate_ui_at_rect(content_rect, |ui| {
@@ -1068,6 +1227,7 @@ fn render_group_node(
                         );
                     });
                 });
+                hit_test_drop(app, &leaf_ui, body, content_rect, group_id);
                 return;
             }
 
@@ -1082,6 +1242,7 @@ fn render_group_node(
                 let mut scrollbar_dragging = false;
                 let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
                 let focused_pane_id = if is_focused { Some(pid) } else { None };
+                let modal_open = app.any_modal_open();
 
                 {
                     let mut rctx = RenderCtx {
@@ -1095,14 +1256,12 @@ fn render_group_node(
                         clicked_pane_id,
                         editor_saves,
                         editor_preview_toggles,
-                        pane_widths_snap,
+                        pane_rects_snap,
                         split_ratio_changes,
                         pane_context_actions,
                         term_selection: &app.term_selection,
                         term_selection_sid: app.term_selection_sid,
-                        workspace_dialog_open: app.workspace_dialog.is_some(),
-                        workspace_edit_dialog_open: app.workspace_edit_dialog.is_some(),
-                        show_settings: app.show_settings,
+                        modal_open,
                         font_size: app.settings.font_size,
                         cursor_style: app.settings.cursor_style,
                         has_splits,
@@ -1111,7 +1270,6 @@ fn render_group_node(
                         diff_mode_changes: &mut diff_mode_changes,
                         diff_hunk_navigations: &mut diff_hunk_navigations,
                         diff_clear_scroll_to_first: &mut diff_clear_scroll_to_first,
-                        drag_state: &mut app.drag_state,
                         scrollbar_clear_restore: &mut scrollbar_clear_restore,
                         scrollbar_dragging: &mut scrollbar_dragging,
                         conflict_view_toggles: &mut conflict_view_toggles,
@@ -1163,23 +1321,16 @@ fn render_group_node(
             if info_bar_pos == InfoBarPosition::Hidden
                 && app.render_info_bar_show_toggle(&mut leaf_ui, content_rect)
             {
-                info_bar_action = InfoBarAction::SetPosition(InfoBarPosition::Top);
+                info_bar_action =
+                    InfoBarAction::SetPosition(group_id, app.revealed_info_bar_position());
             }
 
-            // Apply info bar position changes
-            if let InfoBarAction::SetPosition(pos) = info_bar_action {
-                app.settings.info_bar_position = pos;
-                app.settings.save();
-            }
+            let ctx = leaf_ui.ctx().clone();
+            apply_info_bar_action(app, info_bar_action, &ctx);
 
-            // Convert PaneArea to GroupArea for group-aware drop routing
-            if matches!(
-                app.drag_state.drop_target,
-                Some(crate::app::drag::DropTarget::PaneArea)
-            ) {
-                app.drag_state.drop_target =
-                    Some(crate::app::drag::DropTarget::GroupArea(group_id));
-            }
+            // Route this leaf's drop target: near a content edge the drop
+            // splits the group, anywhere else in the leaf it joins the group.
+            hit_test_drop(app, &leaf_ui, body, content_rect, group_id);
 
             // Click-to-focus: if clicked in this group's area, set focus
             let any_drag = leaf_ui
@@ -1191,7 +1342,11 @@ fn render_group_node(
                     .input(|inp| inp.pointer.button_clicked(egui::PointerButton::Primary))
             {
                 if let Some(pos) = leaf_ui.ctx().input(|inp| inp.pointer.interact_pos()) {
-                    if rect.contains(pos) {
+                    // Only a click on the split itself: one on a dialog, menu
+                    // or popup drawn over it (Settings, a right-click menu)
+                    // must not move focus to the split underneath.
+                    let on_this_layer = leaf_ui.ctx().layer_id_at(pos) == Some(leaf_ui.layer_id());
+                    if rect.contains(pos) && on_this_layer {
                         *clicked_group_id = Some(group_id);
                     }
                 }
@@ -1224,10 +1379,9 @@ fn render_group_node(
                     clicked_group_id,
                     editor_saves,
                     editor_preview_toggles,
-                    pane_widths_snap,
+                    pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
-                    group_tab_results,
                 );
                 return;
             }
@@ -1243,10 +1397,9 @@ fn render_group_node(
                     clicked_group_id,
                     editor_saves,
                     editor_preview_toggles,
-                    pane_widths_snap,
+                    pane_rects_snap,
                     split_ratio_changes,
                     pane_context_actions,
-                    group_tab_results,
                 );
                 return;
             }
@@ -1263,10 +1416,9 @@ fn render_group_node(
                 clicked_group_id,
                 editor_saves,
                 editor_preview_toggles,
-                pane_widths_snap,
+                pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
-                group_tab_results,
             );
             render_group_node(
                 app,
@@ -1278,10 +1430,9 @@ fn render_group_node(
                 clicked_group_id,
                 editor_saves,
                 editor_preview_toggles,
-                pane_widths_snap,
+                pane_rects_snap,
                 split_ratio_changes,
                 pane_context_actions,
-                group_tab_results,
             );
 
             // Draw divider — reuse existing divider rendering
@@ -1398,10 +1549,9 @@ impl App {
         clicked_group_id: &mut Option<GroupId>,
         editor_saves: &mut Vec<u32>,
         editor_preview_toggles: &mut Vec<u32>,
-        pane_widths_snap: &mut Vec<(u32, f32)>,
+        pane_rects_snap: &mut Vec<(u32, egui::Rect)>,
         split_ratio_changes: &mut Vec<(u32, f32)>,
         pane_context_actions: &mut Vec<PaneContextAction>,
-        group_tab_results: &mut Vec<GroupTabBarResult>,
     ) {
         // Clear stale terminal geometry
         self.active_term_geo = None;
@@ -1417,10 +1567,9 @@ impl App {
             clicked_group_id,
             editor_saves,
             editor_preview_toggles,
-            pane_widths_snap,
+            pane_rects_snap,
             split_ratio_changes,
             pane_context_actions,
-            group_tab_results,
         );
 
         // Global flash overlay (rare — PTY spawn errors)
@@ -1454,6 +1603,64 @@ impl App {
                 egui::FontId::proportional(theme::FONT_STATUS),
                 t.text,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r() -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))
+    }
+
+    #[test]
+    fn join_preview_covers_whole_rect() {
+        assert_eq!(drop_preview_rect(r(), None), r());
+    }
+
+    #[test]
+    fn edge_previews_cover_the_matching_half() {
+        let rect = r();
+        for (edge, expect_min, expect_max) in [
+            (
+                (SplitDir::Horizontal, true),
+                egui::pos2(10.0, 20.0),
+                egui::pos2(110.0, 120.0),
+            ),
+            (
+                (SplitDir::Horizontal, false),
+                egui::pos2(110.0, 20.0),
+                egui::pos2(210.0, 120.0),
+            ),
+            (
+                (SplitDir::Vertical, true),
+                egui::pos2(10.0, 20.0),
+                egui::pos2(210.0, 70.0),
+            ),
+            (
+                (SplitDir::Vertical, false),
+                egui::pos2(10.0, 70.0),
+                egui::pos2(210.0, 120.0),
+            ),
+        ] {
+            let got = drop_preview_rect(rect, Some(edge));
+            assert_eq!(got.min, expect_min, "min for {edge:?}");
+            assert_eq!(got.max, expect_max, "max for {edge:?}");
+        }
+    }
+
+    #[test]
+    fn every_edge_preview_is_half_the_area() {
+        let rect = r();
+        let full = rect.width() * rect.height();
+        for dir in [SplitDir::Horizontal, SplitDir::Vertical] {
+            for before in [true, false] {
+                let half = drop_preview_rect(rect, Some((dir, before)));
+                assert!((half.width() * half.height() - full / 2.0).abs() < 0.01);
+                assert!(rect.contains_rect(half));
+            }
         }
     }
 }

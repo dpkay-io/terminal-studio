@@ -201,39 +201,6 @@ pub fn pill_button(ui: &mut egui::Ui, label: &str, rect: egui::Rect) -> egui::Re
     resp
 }
 
-// ── Dot menu button ────────────────────────────────────────────────────────
-
-pub fn dot_menu_button(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    rect: egui::Rect,
-    open: bool,
-) -> egui::Response {
-    let t = theme::active();
-    let resp = ui.interact(rect, id, egui::Sense::click());
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-
-    let bg = if open || resp.hovered() {
-        t.surface2
-    } else {
-        t.surface1
-    };
-    ui.painter().rect_filled(rect, theme::R_MD, bg);
-
-    let center = rect.center();
-    for i in [-1.0_f32, 0.0, 1.0] {
-        ui.painter().circle_filled(
-            egui::pos2(center.x, center.y + i * theme::DOT_GAP),
-            theme::DOT_R,
-            t.text,
-        );
-    }
-
-    resp
-}
-
 // ── Color swatch ───────────────────────────────────────────────────────────
 
 pub fn color_swatch(ui: &mut egui::Ui, color: [u8; 3], selected: bool) -> egui::Response {

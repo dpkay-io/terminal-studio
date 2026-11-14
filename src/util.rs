@@ -114,6 +114,14 @@ pub fn data_file(filename: &str) -> Option<PathBuf> {
     data_dir().map(|d| d.join(filename))
 }
 
+/// The folder holding `path`, or `None` for a bare name such as an untitled
+/// buffer's (`Path::parent` gives an empty path there, not `None`).
+pub fn parent_dir(path: &Path) -> Option<PathBuf> {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+}
+
 /// Walk up from `path` looking for a `.git` directory. Returns the directory
 /// containing `.git` (the repository root), or `None` if not inside a git repo.
 pub fn find_git_root(path: &Path) -> Option<PathBuf> {
@@ -127,6 +135,14 @@ pub fn find_git_root(path: &Path) -> Option<PathBuf> {
         }
     }
 }
+
+/// Menu label for [`reveal_in_file_manager`], in each platform's own words.
+#[cfg(target_os = "macos")]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in Finder";
+#[cfg(target_os = "windows")]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in File Explorer";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in File Manager";
 
 /// Open the system file manager showing the parent folder of `path`, with the
 /// file/folder selected if the platform supports it.
@@ -287,6 +303,15 @@ mod tests {
         let child = Path::new("C:\\Users\\Dpk\\Project\\src");
         let parent = Path::new("c:\\users\\dpk\\project");
         assert!(path_starts_with(child, parent));
+    }
+
+    #[test]
+    fn parent_dir_is_none_for_a_bare_name() {
+        assert_eq!(parent_dir(Path::new("Untitled-1")), None);
+        assert_eq!(
+            parent_dir(Path::new("/home/u/Untitled-1")),
+            Some(PathBuf::from("/home/u"))
+        );
     }
 
     #[test]

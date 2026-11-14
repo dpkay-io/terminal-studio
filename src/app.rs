@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use egui::FontId;
 
 use crate::editor_group::NavigationDir;
-use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
+use crate::pane_tree::{PaneNode, SplitDir};
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::shortcuts::{AppAction, ShortcutRegistry};
@@ -21,9 +21,11 @@ use alacritty_terminal::{
 // ── Submodules ───────────────────────────────────────────────────────────────
 
 pub(crate) mod claude_session;
+mod close_guard;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
 mod cursor_blink;
+mod deferred_terminals;
 mod diff_parser;
 mod drag;
 mod feedback;
@@ -34,6 +36,11 @@ mod git_diff;
 mod git_worker;
 mod input;
 mod labels;
+mod layout_shortcuts;
+#[cfg(target_os = "macos")]
+mod macos_fullscreen;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 #[cfg(target_os = "macos")]
 mod macos_quit;
 mod markdown;
@@ -49,6 +56,7 @@ mod spawn_guard;
 mod state;
 mod title;
 mod ui;
+mod view_toggles;
 mod watcher;
 mod window_state;
 mod worker_manager;
@@ -71,6 +79,7 @@ use pane_state::PaneState;
 use session_state::SessionState;
 use settings::AppSettings;
 
+use view_toggles::VIEW_TOGGLES;
 use watcher::WatchState;
 use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
@@ -212,6 +221,10 @@ pub struct App {
     global_search_debouncer: crate::app::ui::debounce::Debouncer,
     global_search_selected: usize,
 
+    // Frozen recency order for the left nav session list — keeps rows from
+    // jumping out from under the pointer when activating one bumps its recency
+    session_sort_cache: crate::app::ui::left_panel::sections::SortCache,
+
     // Detected URLs in the currently visible terminal content
     detected_urls: Vec<crate::url_detector::DetectedUrl>,
 
@@ -229,14 +242,22 @@ pub struct App {
 
     // Deferred actions (set by keyboard shortcuts in central panel, consumed by left_panel next frame)
     deferred_spawn: Option<ShellKind>,
+    deferred_new_file: bool,
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
-    tab_rename_pane_id: Option<u32>,
-    tab_rename_text: String,
-    /// Pane ID to scroll into view in the tab bar. Set when opening a
-    /// file/diff/conflict pane, consumed by the tab bar renderer.
-    pub(super) tab_scroll_to_pane: Option<u32>,
+    /// Tab currently being renamed inline, and its edit buffer.
+    rename_pane_id: Option<u32>,
+    rename_text: String,
+    /// The rename box is in the tab's tab bar, not its session-list row.
+    rename_in_tab_bar: bool,
+    /// What was done in the tab bars this frame, run once they are drawn.
+    tab_bar_actions: ui::left_panel::SessionListActions,
+    /// Pane ID to scroll into view in the session navigator. Consumed by the
+    /// left-nav row when it draws, and dropped at the end of the same frame's
+    /// left-panel render either way — a target that is filtered out or in a
+    /// window that is not rendering must not latch here for later activations.
+    pub(super) scroll_to_pane: Option<u32>,
     /// File path to reveal (expand ancestors + highlight + scroll to) in the
     /// directory tree. Set by auto-reveal on pane switch or explicit shortcut.
     /// Consumed by `render_dir_tree` once the target entry is rendered.
@@ -247,6 +268,9 @@ pub struct App {
 
     show_close_all_confirm: bool,
     close_all_frames_open: u32,
+    /// A single tab with unsaved edits waiting on "Save changes?", and the
+    /// close to run once the user answers.
+    pending_tab_close: Option<(u32, close_guard::TabClose)>,
     /// Which group of sessions to close when the close-all dialog is confirmed.
     close_all_target: CloseAllTarget,
     show_quit_confirm: bool,
@@ -337,6 +361,19 @@ pub struct App {
     restart_attempted: bool,
 }
 
+/// Whether a menu, dropdown or popup is open (egui draws them, like the
+/// app's dialogs, on the foreground layer). While one is, the keyboard is
+/// its: Escape closes it instead of reaching the shell, and nothing typed
+/// goes to the terminal underneath.
+fn floating_layer_open(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| {
+        m.areas()
+            .visible_layer_ids()
+            .iter()
+            .any(|layer| layer.order == egui::Order::Foreground)
+    })
+}
+
 impl eframe::App for App {
     /// Strip all navigation keys from raw input before egui's begin_frame
     /// can use them for focus traversal. egui's Focus::begin_frame reads
@@ -367,7 +404,13 @@ impl eframe::App for App {
                 .map(|id| id == self.vp_id("notes_textedit"))
                 .unwrap_or(false)
         });
-        if active_is_editor || any_overlay || notes_has_focus {
+        if active_is_editor || notes_has_focus {
+            // Text boxes keep Tab for indenting. Ctrl+Tab means nothing in
+            // one, and egui would either type a tab or move the keyboard to
+            // the next widget, leaving the editor without it.
+            raw_input.events.retain(|event| !input::is_ctrl_tab(event));
+        }
+        if active_is_editor || any_overlay || notes_has_focus || floating_layer_open(_ctx) {
             return;
         }
         let intercepted = &mut self.raw_intercepted_keys;
@@ -509,7 +552,15 @@ impl eframe::App for App {
             ctx.request_repaint();
         }
 
-        // Drag threshold update + grab cursor
+        // Forget last frame's hit-test. Runs before any window body renders, so
+        // each frame's renderers re-establish the drop target from scratch and
+        // the resolver below sees only what is under the pointer right now.
+        self.drag_state.begin_frame();
+
+        // Drag threshold update + grab cursor. This only ever sees the main
+        // window's pointer; `harvest_drag_input` samples each extra window's
+        // as well. Kept here so a main-window drag crosses the threshold in
+        // the same frame it moves rather than at the end of it.
         if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
             self.drag_state.update_threshold(pos);
         }
@@ -549,10 +600,7 @@ impl eframe::App for App {
             for (pane_id, content) in results.drain(..) {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                     if let PaneContent::FileEditor(ref mut ed) = pane.content {
-                        if !ed.dirty {
-                            ed.content = content;
-                        }
-                        ed.loading = false;
+                        ed.apply_file_text(content);
                     }
                 }
             }
@@ -766,7 +814,9 @@ impl eframe::App for App {
                 .panes
                 .iter()
                 .filter_map(|p| match &p.content {
-                    PaneContent::FileEditor(ed) => Some(ed.path.clone()),
+                    // An untitled buffer's path is only its name; there is
+                    // no file on disk to watch yet.
+                    PaneContent::FileEditor(ed) if !ed.untitled => Some(ed.path.clone()),
                     _ => None,
                 })
                 .collect();
@@ -1062,6 +1112,7 @@ impl eframe::App for App {
         // for each extra window we swap its `WindowView` in/out around the
         // render call.
         self.render_window_body(ctx);
+        self.harvest_drag_input(None, ctx);
 
         // ── Render each extra window via an immediate viewport ────────────
         // `show_viewport_immediate` runs synchronously and accepts FnOnce, so
@@ -1101,6 +1152,7 @@ impl eframe::App for App {
                 self.current_window_id = Some(win_id.clone());
 
                 self.render_window_body(vp_ctx);
+                self.harvest_drag_input(Some(idx), vp_ctx);
 
                 // Capture the current inner_size for persistence.
                 let new_size = vp_ctx.input(|i| i.viewport().inner_rect.map(|r| r.size()));
@@ -1117,6 +1169,24 @@ impl eframe::App for App {
                     vp_ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
+        }
+
+        // ── Drag-and-drop resolution ──────────────────────────────────────
+        // Resolved once here, after every window has rendered, rather than
+        // once per window body. A body sees only its own viewport's input and
+        // the shared `drag_state`, so whichever window rendered first — always
+        // the main one — consumed the drag on a release in its own viewport,
+        // whether or not the target belonged to it. Harvesting first keeps the
+        // release and the hit-test that goes with it together.
+        if self.drag_state.payload.is_some() {
+            let cancelled = self.drag_state.cancelled
+                || (self.drag_state.released && !self.drag_state.threshold_met);
+            if cancelled {
+                self.drag_state.clear();
+            } else if self.drag_state.released {
+                let window_idx = self.drag_state.arm_pending_drop();
+                self.resolve_drag_in_window(window_idx, ctx);
+            }
         }
 
         // Process pending cross-window focus actions (set by sidebar click routing).
@@ -1219,6 +1289,8 @@ impl App {
     /// Consolidates the repeated close logic used by Ctrl+Shift+W, tab-strip
     /// close button, and context menu close.
     fn close_pane_full(&mut self, pid: u32) {
+        log::debug!("close: one tab (pane {pid})");
+        self.capture_closed_unstarted_session(pid);
         if let Some(pane) = self.pane_state.find(pid) {
             if let PaneContent::Terminal(sid) = pane.content {
                 self.remove_session_and_cleanup(sid);
@@ -1271,6 +1343,7 @@ impl App {
         let ansi_bytes = scrollback_capture::extract_grid_as_ansi(&session.term, None);
         let cwd = session.cwd.clone();
         let title = session.title();
+        let title_pinned = session.is_title_pinned();
         let shell = entry.shell.name().to_string();
         let cols = session.term.columns() as u16;
         let rows = session.term.screen_lines() as u16;
@@ -1315,6 +1388,71 @@ impl App {
                     ansi_bytes,
                     cwd,
                     title,
+                    title_pinned,
+                    shell,
+                    workspace_id,
+                    workspace_name,
+                    cols,
+                    rows,
+                    line_count,
+                    max_sessions,
+                    claude_session_id,
+                );
+            })
+            .ok();
+    }
+
+    /// Record a restored session that is being closed before it was ever
+    /// opened, so Recently Closed can bring it back like any other (running
+    /// ones go through [`Self::remove_session_and_cleanup`]). Its shell never
+    /// started, so the output kept from the earlier run is what it saves; the
+    /// file is read off the UI thread. Does nothing for any other tab, or
+    /// when scrollback is not saved on close. Call it before the pane goes.
+    pub(super) fn capture_closed_unstarted_session(&self, pid: u32) {
+        if !self.settings.save_scrollback_on_close {
+            return;
+        }
+        let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) else {
+            return;
+        };
+        let PaneContent::DeferredTerminal {
+            cwd,
+            pending_command,
+            title_pinned,
+            scrollback_file,
+            ..
+        } = &self.pane_state.panes[idx].content
+        else {
+            return;
+        };
+        let cwd = cwd.clone().unwrap_or_default();
+        let title = self.tab_display_text(idx);
+        let title_pinned = *title_pinned;
+        let scrollback_file = scrollback_file.clone();
+        let claude_session_id = pending_command
+            .as_deref()
+            .and_then(claude_session::resumed_session_id);
+        let workspace = self.workspace_store.find_for_cwd(&cwd);
+        let workspace_id = workspace.map(|w| w.id);
+        let workspace_name = workspace.map(|w| w.name.clone());
+        // The shell and size it would have started with.
+        let shell = self.configured_shell().name().to_string();
+        let (cols, rows) = state::RESTORED_TERMINAL_SIZE;
+        let max_sessions = self.settings.max_closed_sessions;
+
+        std::thread::Builder::new()
+            .name("closed-session-save".into())
+            .spawn(move || {
+                let ansi_bytes = scrollback_file
+                    .as_deref()
+                    .and_then(state::read_active_scrollback)
+                    .unwrap_or_default();
+                let line_count = ansi_bytes.iter().filter(|&&b| b == b'\n').count();
+                closed_sessions::save_closed_session(
+                    ansi_bytes,
+                    cwd,
+                    title,
+                    title_pinned,
                     shell,
                     workspace_id,
                     workspace_name,
@@ -1339,6 +1477,7 @@ impl App {
             || self.show_closed_sessions
             || self.palette_open
             || self.show_close_all_confirm
+            || self.pending_tab_close.is_some()
             || self.show_commit_dialog
             || self.show_push_dialog
             || self.show_stage_all_confirm
@@ -1399,6 +1538,9 @@ impl App {
         }
 
         Self::handle_frameless_resize(ctx);
+
+        #[cfg(target_os = "macos")]
+        self.sync_macos_menu(ctx);
 
         // Consume Ctrl+Shift+N before any panels render, so it works even
         // when no terminal panes exist and the CentralPanel shows a placeholder.
@@ -2569,13 +2711,11 @@ impl App {
 
         // ── Output variables collected inside the central panel closure ─────
         let divider_drags: Vec<(usize, usize, f32, f32, f32)> = vec![]; // retained for post-closure mutation compatibility
-        let mut close_pane_id: Option<u32> = None;
         let mut clicked_pane_id: Option<u32> = None;
         let mut clicked_group_id: Option<crate::editor_group::GroupId> = None;
         let mut editor_saves: Vec<u32> = vec![];
         let mut editor_preview_toggles: Vec<u32> = vec![];
-        let mut pane_widths_snap: Vec<(u32, f32)> = vec![];
-        let mut resize_total_h: f32 = 0.0;
+        let mut pane_rects_snap: Vec<(u32, egui::Rect)> = vec![];
         let mut resize_cell_w: f32 = 0.0;
         let mut resize_cell_h: f32 = 0.0;
         let equalize_widths: bool = false;
@@ -2583,14 +2723,12 @@ impl App {
         // Phase D: split / close-split requests collected from key handler
         let mut split_request: Option<SplitDir> = self.deferred_split.take();
         let mut close_split_pane: bool = std::mem::take(&mut self.deferred_close_pane);
+        // Tab and split shortcuts pressed this frame (`layout_shortcuts`).
+        let mut layout_requests = layout_shortcuts::LayoutRequests::default();
         // Phase D: split divider ratio changes (split_id, new_ratio)
         let mut split_ratio_changes: Vec<(u32, f32)> = vec![];
         // Phase D: pane context menu actions (3-dot menu on split panes)
         let mut pane_context_actions: Vec<ui::PaneContextAction> = vec![];
-        // Phase D: move existing tab into split alongside active pane
-        let move_to_split: Option<(u32, SplitDir)> = None;
-        // Group-based tab bar results
-        let mut group_tab_results: Vec<ui::GroupTabBarResult> = vec![];
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
@@ -2609,10 +2747,8 @@ impl App {
             };
             resize_cell_w  = cw;
             resize_cell_h  = ch;
-            resize_total_h = panel_rect.height();
             panel_w_snap   = panel_rect.width();
 
-            let nv = visible_indices.len();
 
             let active_is_editor = self.pane_state.active_pane_id
                 .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
@@ -2641,28 +2777,10 @@ impl App {
                     &mut clicked_group_id,
                     &mut editor_saves,
                     &mut editor_preview_toggles,
-                    &mut pane_widths_snap,
+                    &mut pane_rects_snap,
                     &mut split_ratio_changes,
                     &mut pane_context_actions,
-                    &mut group_tab_results,
                 );
-
-                // Process group tab bar results
-                for result in &group_tab_results {
-                    if result.close_pane_id.is_some() { close_pane_id = result.close_pane_id; }
-                    if result.clicked_pane_id.is_some() { clicked_pane_id = result.clicked_pane_id; }
-                    if result.clicked_group_id.is_some() { clicked_group_id = result.clicked_group_id; }
-                    if let Some((gid, dir)) = result.split_request {
-                        // Focus the requesting group so the split goes to the right place.
-                        self.pane_state.focused_group_id = gid;
-                        if let Some(g) = self.pane_state.groups.get(&gid) {
-                            if let Some(pid) = g.active_pane_id {
-                                self.pane_state.active_pane_id = Some(pid);
-                            }
-                        }
-                        split_request = Some(dir);
-                    }
-                }
 
             // ── URL detection + search overlay ────────────────────────────
             if let (Some(ref geo), Some(sid)) = (&self.active_term_geo, self.session_state.active_id) {
@@ -2985,18 +3103,8 @@ impl App {
                     }
                 });
                 match consumed {
-                    Some(AppAction::ToggleShortcutHelp) => self.show_shortcut_help = !self.show_shortcut_help,
-                    Some(AppAction::OpenQuickSwitcher) => {
-                        self.show_quick_switcher = !self.show_quick_switcher;
-                        if !self.show_quick_switcher {
-                            self.quick_switcher_query.clear();
-                            self.quick_switcher_selected_ws = None;
-                            self.quick_switcher_search_active = false;
-                        }
-                    }
-                    Some(AppAction::OpenSettings) => {
-                        self.show_shortcut_help = false;
-                        self.show_settings = !self.show_settings;
+                    Some(action) if VIEW_TOGGLES.contains(&action) => {
+                        self.toggle_view(action);
                     }
                     Some(AppAction::CommandPalette) => {
                         self.palette_open = !self.palette_open;
@@ -3071,18 +3179,28 @@ impl App {
                     Some(AppAction::NewTerminalTab) => {
                         self.deferred_spawn = Some(self.configured_shell());
                     }
-                    Some(AppAction::ReopenClosedSession) => {
-                        self.show_closed_sessions = !self.show_closed_sessions;
-                        if !self.show_closed_sessions {
-                            self.closed_sessions_query.clear();
-                            self.closed_sessions_selected = 0;
-                        }
+                    Some(AppAction::NewFile) => {
+                        self.deferred_new_file = true;
                     }
                     _ => {}
                 }
             }
 
-            if !active_is_editor && !any_other_widget_focused && !modal_open {
+            // Tab and split chords from an editor, which otherwise keeps every
+            // key for typing; the terminal loop below runs the same ones.
+            if active_is_editor && !modal_open {
+                while let Some(action) = ctx.input_mut(|i| {
+                    self.shortcut_registry.consume_where(i, AppAction::arranges_layout)
+                }) {
+                    self.apply_layout_shortcut(action, &visible_indices, &mut layout_requests);
+                }
+            }
+
+            if !active_is_editor
+                && !any_other_widget_focused
+                && !modal_open
+                && !floating_layer_open(ctx)
+            {
 
                 // Focus-in / focus-out events (?1004h)
                 if active_session_id != self.last_focused_sid {
@@ -3159,11 +3277,9 @@ impl App {
                         egui::Event::Key { key, pressed: true, modifiers, .. } => {
                             if let Some(action) = self.shortcut_registry.match_event(key, modifiers) {
                                 match action {
-                                    AppAction::SplitHorizontal => split_request = Some(SplitDir::Horizontal),
-                                    AppAction::SplitVertical => split_request = Some(SplitDir::Vertical),
-                                    AppAction::CloseCurrentPane => close_split_pane = true,
-                                    AppAction::ToggleLeftSidebar => self.show_left_panel = !self.show_left_panel,
-                                    AppAction::ToggleRightSidebar => self.show_right_panel = !self.show_right_panel,
+                                    a if a.arranges_layout() => {
+                                        self.apply_layout_shortcut(a, &visible_indices, &mut layout_requests);
+                                    }
                                     AppAction::FocusTerminal => {
                                         ctx.memory_mut(|m| m.surrender_focus(egui::Id::NULL));
                                     }
@@ -3188,24 +3304,6 @@ impl App {
                                     AppAction::DuplicateSession => self.deferred_duplicate = true,
                                     AppAction::FocusSessionSearch => { /* handled in global shortcuts block above */ }
                                     AppAction::FocusFileSearch => { /* handled in global shortcuts block above */ }
-                                    AppAction::PreviousTab => {
-                                        if nv > 1 {
-                                            let cur = self.pane_state.active_pane_id
-                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
-                                                .unwrap_or(0);
-                                            let prev = if cur == 0 { nv - 1 } else { cur - 1 };
-                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[prev]].id);
-                                        }
-                                    }
-                                    AppAction::NextTab => {
-                                        if nv > 1 {
-                                            let cur = self.pane_state.active_pane_id
-                                                .and_then(|pid| visible_indices.iter().position(|&i| self.pane_state.panes[i].id == pid))
-                                                .unwrap_or(0);
-                                            let next = (cur + 1) % nv;
-                                            clicked_pane_id = Some(self.pane_state.panes[visible_indices[next]].id);
-                                        }
-                                    }
                                     AppAction::NextWorkspace => {
                                         if self.current_window_id.is_none() {
                                             let ws_ids: Vec<u64> = self.workspace_store.workspaces.iter()
@@ -3300,13 +3398,7 @@ impl App {
                                             }
                                         }
                                     }
-                                    _ => {
-                                        if let Some(tab_idx) = action.tab_index() {
-                                            if tab_idx < nv {
-                                                clicked_pane_id = Some(self.pane_state.panes[visible_indices[tab_idx]].id);
-                                            }
-                                        }
-                                    }
+                                    _ => {}
                                 }
                             }
                             // Alt+Arrow → move focus between editor groups
@@ -3891,6 +3983,11 @@ impl App {
         }
 
         // Phase D-1: Handle split request (Ctrl+Shift+\ or Ctrl+Shift+-)
+        split_request = layout_requests.split.or(split_request);
+        close_split_pane |= layout_requests.close_pane;
+        if layout_requests.activate_pane.is_some() {
+            clicked_pane_id = layout_requests.activate_pane;
+        }
         if let Some(dir) = split_request {
             if let Some(active_pid) = self.pane_state.active_pane_id {
                 // Get current size for the new pane
@@ -3939,7 +4036,7 @@ impl App {
                         workspace_id: self.active_group,
                     });
                     // Split the focused group (new system)
-                    self.pane_state.split_focused_group(new_pane_id, dir);
+                    self.pane_state.split_focused_group(new_pane_id, dir, false);
                     // Also maintain pane_trees for backward compat during migration
                     self.pane_state.pane_trees.insert(
                         new_pane_id,
@@ -3961,118 +4058,19 @@ impl App {
             }
         }
 
-        // Phase D-1b: Handle "Move to split" — move an existing tab into split alongside active pane
-        if let Some((clicked_pane, dir)) = move_to_split {
-            if let Some(active_pid) = self.pane_state.active_pane_id {
-                // When the user clicks split on the active tab, pick the next
-                // visible tab as the source to merge alongside it.
-                let active_root = self.pane_state.root_of(active_pid);
-                let source_pane_id = if clicked_pane == active_pid {
-                    // Pick the next visible tab that is NOT in the same split tree.
-                    let active_vis_pos = visible_indices
-                        .iter()
-                        .position(|&i| self.pane_state.panes[i].id == active_pid);
-                    active_vis_pos.and_then(|pos| {
-                        let len = visible_indices.len();
-                        for offset in 1..len {
-                            let idx = (pos + offset) % len;
-                            let pid = self.pane_state.panes[visible_indices[idx]].id;
-                            if self.pane_state.root_of(pid) != active_root {
-                                return Some(pid);
-                            }
-                        }
-                        None
-                    })
-                } else if self.pane_state.root_of(clicked_pane) == active_root {
-                    None
-                } else {
-                    Some(clicked_pane)
-                };
-
-                if let Some(source_pane_id) = source_pane_id {
-                    if source_pane_id != active_pid {
-                        let source_root = self.pane_state.root_of(source_pane_id);
-                        let active_root = self.pane_state.root_of(active_pid);
-                        if let (Some(source_root_pid), Some(active_root_pid)) =
-                            (source_root, active_root)
-                        {
-                            // Remove the source from its tree (same or different root)
-                            let source_node = if source_root_pid == active_root_pid {
-                                if let Some(tree) =
-                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                {
-                                    match tree.remove_pane(source_pane_id) {
-                                        RemoveResult::IsTarget => None,
-                                        RemoveResult::CollapseToSibling(replacement) => {
-                                            let node = PaneNode::Leaf {
-                                                pane_id: source_pane_id,
-                                                last_size: (80, 24),
-                                            };
-                                            if let Some(tree) =
-                                                self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                            {
-                                                *tree = replacement;
-                                            }
-                                            Some(node)
-                                        }
-                                        RemoveResult::Done => Some(PaneNode::Leaf {
-                                            pane_id: source_pane_id,
-                                            last_size: (80, 24),
-                                        }),
-                                        RemoveResult::NotFound => None,
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                self.pane_state.pane_trees.remove(&source_root_pid)
-                            };
-
-                            // Insert source alongside active pane
-                            if let Some(subtree) = source_node {
-                                let split_id = self.pane_state.next_split_id;
-                                self.pane_state.next_split_id += 1;
-                                if let Some(target_tree) =
-                                    self.pane_state.pane_trees.get_mut(&active_root_pid)
-                                {
-                                    if !target_tree.split_pane_with_node(
-                                        active_pid,
-                                        subtree.clone(),
-                                        split_id,
-                                        dir,
-                                    ) {
-                                        self.pane_state.pane_trees.insert(source_pane_id, subtree);
-                                    } else {
-                                        let moved_leaves = subtree.leaf_ids();
-                                        if let Some(&first) = moved_leaves.first() {
-                                            self.pane_state.active_pane_id = Some(first);
-                                            if let Some(pane) =
-                                                self.pane_state.panes.iter().find(|p| p.id == first)
-                                            {
-                                                if let PaneContent::Terminal(sid) = pane.content {
-                                                    self.session_state.active_id = Some(sid);
-                                                    self.update_is_active_flags();
-                                                }
-                                            }
-                                        }
-                                        ctx.request_repaint();
-                                    }
-                                } else {
-                                    self.pane_state.pane_trees.insert(source_pane_id, subtree);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // Phase D-2: Handle Ctrl+Shift+W — close the focused pane
         if close_split_pane {
             if let Some(active_pid) = self.pane_state.active_pane_id {
-                self.close_pane_full(active_pid);
+                self.request_close_tab(active_pid, close_guard::TabClose::Pane);
             }
         }
+
+        // What was done in the splits' tab bars: the same handling as a
+        // session-list row, except that closing a tab closes it as its
+        // split's ✖ does.
+        let mut tab_bar_actions = std::mem::take(&mut self.tab_bar_actions);
+        self.deferred_duplicate |= tab_bar_actions.duplicate_session;
+        self.process_tab_actions(&mut tab_bar_actions, close_guard::TabClose::Pane);
 
         // Phase D-3: Handle pane context menu actions (3-dot menu on split panes)
         for action in pane_context_actions {
@@ -4080,7 +4078,7 @@ impl App {
             match action {
                 PaneContextAction::MoveToTab(_pid) => {}
                 PaneContextAction::Close(pid) => {
-                    self.close_pane_full(pid);
+                    self.request_close_tab(pid, close_guard::TabClose::Pane);
                 }
                 PaneContextAction::SplitHorizontal(pid) | PaneContextAction::SplitVertical(pid) => {
                     let dir = if matches!(action, PaneContextAction::SplitHorizontal(_)) {
@@ -4131,7 +4129,7 @@ impl App {
                         if let Some(gid) = self.pane_state.group_of(pid) {
                             self.pane_state.focused_group_id = gid;
                         }
-                        self.pane_state.split_focused_group(new_pane_id, dir);
+                        self.pane_state.split_focused_group(new_pane_id, dir, false);
                         // Also maintain pane_trees
                         self.pane_state.pane_trees.insert(
                             new_pane_id,
@@ -4204,12 +4202,6 @@ impl App {
                 Some((right_w - delta_x).max(theme::MIN_PANE_W));
         }
 
-        // 2. Close pane (tab-strip close)
-        if let Some(pid) = close_pane_id {
-            editor_texts.retain(|(id, _)| *id != pid);
-            self.close_pane_full(pid);
-        }
-
         // 3. Equalize pane widths for visible panes (split icon clicked)
         if equalize_widths {
             for &i in &visible_indices {
@@ -4271,85 +4263,10 @@ impl App {
             self.sync_active_group_from_pane(pid);
         }
 
-        // 5b. Materialize any DeferredTerminal that is now the active pane.
-        // This runs after activate_pane() so the deferred pane spawns in the same
-        // update() call as the click, meaning the terminal is ready by the next frame.
-        if let Some(pid) = self.pane_state.active_pane_id {
-            if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
-                if matches!(
-                    &self.pane_state.panes[pane_idx].content,
-                    PaneContent::DeferredTerminal { .. }
-                ) {
-                    let (cwd, pending_command, saved_title, scrollback_file) =
-                        if let PaneContent::DeferredTerminal {
-                            cwd,
-                            pending_command,
-                            saved_title,
-                            scrollback_file,
-                        } = &self.pane_state.panes[pane_idx].content
-                        {
-                            (
-                                cwd.clone(),
-                                pending_command.clone(),
-                                saved_title.clone(),
-                                scrollback_file.clone(),
-                            )
-                        } else {
-                            unreachable!()
-                        };
-                    let scrollback = scrollback_file.and_then(|f| {
-                        let dir = crate::util::data_dir()?.join("active_scrollback");
-                        let compressed = std::fs::read(dir.join(&f)).ok()?;
-                        zstd::decode_all(compressed.as_slice()).ok()
-                    });
-                    let shell = self.configured_shell();
-                    match self.spawn_session_with_scrollback(
-                        &shell,
-                        80,
-                        24,
-                        cwd.clone(),
-                        scrollback.as_deref(),
-                    ) {
-                        Some(sid) => {
-                            if let Some(entry) = self.session_state.find_mut(sid) {
-                                if let Some(cmd) = pending_command {
-                                    entry.pending_command = Some(cmd);
-                                }
-                                if let Some(t) = saved_title.filter(|t| !t.is_empty()) {
-                                    entry.session.read().set_title(t);
-                                }
-                            }
-                            self.pane_state.panes[pane_idx].content = PaneContent::Terminal(sid);
-                            self.pane_state.panes[pane_idx].last_size = (0, 0);
-                            self.session_state.active_id = Some(sid);
-                            self.update_is_active_flags();
-                            ctx.request_repaint();
-                        }
-                        None => {
-                            log::error!("failed to materialize deferred terminal, converting to plain terminal placeholder");
-                            let fallback_shell = self.configured_shell();
-                            if let Some(sid) = self.spawn_session(&fallback_shell, 80, 24, cwd) {
-                                self.pane_state.panes[pane_idx].content =
-                                    PaneContent::Terminal(sid);
-                                self.pane_state.panes[pane_idx].last_size = (0, 0);
-                                self.session_state.active_id = Some(sid);
-                                self.update_is_active_flags();
-                            } else {
-                                log::error!("fallback spawn also failed, removing pane");
-                                let pane_id = self.pane_state.panes[pane_idx].id;
-                                self.pane_state.panes.remove(pane_idx);
-                                self.pane_state.pane_trees.remove(&pane_id);
-                                if self.pane_state.active_pane_id == Some(pane_id) {
-                                    self.pane_state.active_pane_id =
-                                        self.pane_state.panes.first().map(|p| p.id);
-                                }
-                            }
-                            ctx.request_repaint();
-                        }
-                    }
-                }
-            }
-        }
+        // 5b. Start the restored sessions the splits now show. This runs after
+        // activate_pane() so a clicked one starts in the same update() as the
+        // click, and its terminal is ready by the next frame.
+        self.start_shown_restored_sessions(ctx);
 
         // 5c. Sync Claude session IDs from foreground worker to session entries.
         {
@@ -4389,9 +4306,7 @@ impl App {
                 if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == *pane_id) {
                     match pane.content {
                         PaneContent::FileEditor(ref mut ed) if *new_text != ed.content => {
-                            ed.content = new_text.clone();
-                            ed.dirty = true;
-                            ed.save_error = false;
+                            ed.apply_edit(new_text.clone());
                         }
                         PaneContent::NoteEditor(ref ne)
                             if *new_text != self.note_store.get(ne.workspace_id) =>
@@ -4410,19 +4325,90 @@ impl App {
 
         // 7. Editor saves (Ctrl+S)
         for save_id in &editor_saves {
-            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
+            let is_untitled = self
+                .pane_state
+                .panes
+                .iter()
+                .find(|p| p.id == *save_id)
+                .map(|p| matches!(&p.content, PaneContent::FileEditor(ed) if ed.untitled))
+                .unwrap_or(false);
+            if is_untitled {
+                // Untitled buffer: prompt for a filename off-thread; apply next frame.
+                let default_name = self
+                    .pane_state
+                    .panes
+                    .iter()
+                    .find(|p| p.id == *save_id)
+                    .and_then(|p| match &p.content {
+                        PaneContent::FileEditor(ed) => ed
+                            .path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(String::from),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "untitled.txt".to_string());
+                let start_dir = self.active_pane_cwd().or_else(|| {
+                    self.active_group.and_then(|gid| {
+                        self.workspace_store
+                            .workspaces
+                            .iter()
+                            .find(|w| w.id == gid)
+                            .map(|w| w.path.clone())
+                    })
+                });
+                let pane_id = *save_id;
+                let ctx_clone = ctx.clone();
+                std::thread::Builder::new()
+                    .name("save-as-picker".into())
+                    .spawn(move || {
+                        let mut dlg = rfd::FileDialog::new().set_file_name(default_name);
+                        if let Some(dir) = start_dir {
+                            dlg = dlg.set_directory(dir);
+                        }
+                        if let Some(path) = dlg.save_file() {
+                            ctx_clone.data_mut(|d| {
+                                d.insert_temp(egui::Id::new("pending_save_as"), (pane_id, path));
+                            });
+                            ctx_clone.request_repaint();
+                        }
+                    })
+                    .ok();
+            } else if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == *save_id) {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
-                    match std::fs::write(&ed.path, &ed.content) {
+                    ed.write_to_disk();
+                }
+            }
+        }
+
+        // 7b. Apply a completed Save-As dialog result (from an untitled buffer).
+        if let Some((pane_id, path)) = ctx.data_mut(|d| {
+            d.remove_temp::<(u32, std::path::PathBuf)>(egui::Id::new("pending_save_as"))
+        }) {
+            let md_pref = self.md_prefer_preview;
+            let mut saved_ok = false;
+            if let Some(p) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                if let PaneContent::FileEditor(ref mut ed) = p.content {
+                    match std::fs::write(&path, &ed.content) {
                         Ok(()) => {
-                            ed.dirty = false;
-                            ed.save_error = false;
+                            ed.show_preview =
+                                path.extension().and_then(|e| e.to_str()) == Some("md") && md_pref;
+                            ed.path = path.clone();
+                            ed.untitled = false;
+                            ed.mark_saved();
+                            saved_ok = true;
                         }
                         Err(e) => {
-                            log::error!("Failed to save {}: {e}", ed.path.display());
+                            log::error!("Failed to save {}: {e}", path.display());
                             ed.save_error = true;
                         }
                     }
                 }
+            }
+            if saved_ok {
+                crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
+                crate::app::persistence::save_recent_files(&self.recent_files);
+                self.save_session();
             }
         }
 
@@ -4445,13 +4431,19 @@ impl App {
         // after the size has been stable for 150 ms. This prevents ConPTY from
         // issuing a clear-screen sequence on every drag frame, which would leave
         // the terminal blank for as long as the running app takes to redraw.
-        for (pane_id, width) in pane_widths_snap {
+        for (pane_id, content_rect) in pane_rects_snap {
             if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
                 if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
-                    let cols = (((width - theme::TERM_PAD_LEFT) / resize_cell_w) as u16).max(1);
-                    let rows = (((resize_total_h - theme::HEADER_H - theme::TERM_PAD_TOP)
-                        / resize_cell_h) as u16)
-                        .max(1);
+                    // Size the grid from the exact rect the renderer draws into,
+                    // via the shared helper — keeps cols/rows in lockstep with
+                    // visible_cols/visible_rows so no content is clipped.
+                    let (c, r) = crate::renderer::terminal_pass::grid_size_for_rect(
+                        content_rect,
+                        resize_cell_w,
+                        resize_cell_h,
+                    );
+                    let cols = (c as u16).max(1);
+                    let rows = (r as u16).max(1);
                     let target = (cols, rows);
                     if target != self.pane_state.panes[pane_idx].last_size {
                         // Reset debounce timer only if the target itself changed
@@ -4522,6 +4514,8 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4577,6 +4571,8 @@ impl App {
                         show_preview: true,
                         stale: false,
                         loading: true,
+                        untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4631,6 +4627,8 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -4870,6 +4868,8 @@ impl App {
                             show_preview: is_md && self.md_prefer_preview,
                             stale: false,
                             loading: true,
+                            untitled: false,
+                            saved_text_hash: None,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
@@ -4918,6 +4918,7 @@ impl App {
                     cwd: Some(dir_path),
                     pending_command: None,
                     saved_title: None,
+                    title_pinned: false,
                     scrollback_file: None,
                 },
                 manual_width: None,
@@ -4938,22 +4939,10 @@ impl App {
             self.activate_and_scroll_to_pane(pane_id);
         }
 
-        // ── Drag-and-drop resolution ──────────────────────────────────
-        if self.drag_state.is_active() && ctx.input(|i| i.pointer.any_released()) {
-            let action =
-                drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
-            self.execute_drag_action(action, ctx);
-        }
-        if self.drag_state.payload.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.drag_state.clear();
-        }
-        if self.drag_state.payload.is_some()
-            && !self.drag_state.threshold_met
-            && ctx.input(|i| i.pointer.any_released())
-        {
-            self.drag_state.clear();
-        }
-
+        // Drag-and-drop is *not* resolved here — this body runs once per
+        // window and only the window under the pointer hit-tests a target, so
+        // `update()` harvests each window's result and resolves once, after
+        // every window has had its turn. See `DragState::harvest`.
         self.drag_state.paint_overlay(ctx);
 
         self.render_settings_overlay(ctx);
@@ -4969,6 +4958,7 @@ impl App {
         self.render_open_folder_dialog(ctx);
 
         self.render_close_all_confirm(ctx);
+        self.render_unsaved_close_confirm(ctx);
         self.render_quit_confirm(ctx);
         self.render_commit_dialog(ctx);
         self.render_push_dialog(ctx);

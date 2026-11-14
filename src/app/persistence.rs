@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::settings::InfoBarPosition;
 use crate::editor_group::GroupNode;
 use crate::util;
 
@@ -24,6 +25,9 @@ pub(super) struct SavedSession {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) title: Option<String>,
+    /// `title` is a name the user gave the session; absent in older files.
+    #[serde(default)]
+    pub(super) title_pinned: bool,
     #[serde(default)]
     pub(super) scrollback_file: Option<String>,
     #[serde(default)]
@@ -41,12 +45,21 @@ pub(super) enum SavedPaneContent {
         command: Option<String>,
         #[serde(default)]
         title: Option<String>,
+        #[serde(default)]
+        title_pinned: bool,
+        /// Scrollback saved by an earlier run, kept for a restored session
+        /// whose shell hasn't started yet; absent in older files.
+        #[serde(default)]
+        scrollback_file: Option<String>,
     },
     FileEditor {
         path: PathBuf,
         content: String,
         dirty: bool,
         workspace_id: Option<u64>,
+        /// A new buffer never saved to a file; `path` is only its name.
+        #[serde(default)]
+        untitled: bool,
     },
     FileDiff {
         path: PathBuf,
@@ -73,6 +86,9 @@ pub(super) struct SavedEditorGroup {
     pub(super) id: u32,
     pub(super) pane_indices: Vec<usize>,
     pub(super) active_pane_index: Option<usize>,
+    /// The split's own info bar position; absent in older session files.
+    #[serde(default)]
+    pub(super) info_bar: Option<InfoBarPosition>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -187,6 +203,7 @@ mod tests {
             cwd: PathBuf::from("/tmp/mydir"),
             command: Some("ls -la".into()),
             title: Some("my session".into()),
+            title_pinned: true,
             scrollback_file: None,
             claude_session_id: None,
         };
@@ -195,6 +212,7 @@ mod tests {
         assert_eq!(restored.cwd, original.cwd);
         assert_eq!(restored.command, original.command);
         assert_eq!(restored.title, original.title);
+        assert!(restored.title_pinned);
         assert_eq!(restored.claude_session_id, None);
     }
 
@@ -205,6 +223,7 @@ mod tests {
         assert_eq!(s.cwd, PathBuf::from("/home/user"));
         assert_eq!(s.command, None);
         assert_eq!(s.title, None);
+        assert!(!s.title_pinned, "older files have no user-given names");
         assert_eq!(s.claude_session_id, None);
     }
 
@@ -214,6 +233,7 @@ mod tests {
             cwd: PathBuf::from("/home/user/project"),
             command: Some("claude".into()),
             title: Some("Claude session".into()),
+            title_pinned: false,
             scrollback_file: None,
             claude_session_id: Some("abc-def-123-456".into()),
         };
@@ -249,6 +269,8 @@ mod tests {
             cwd: PathBuf::from("/usr/local"),
             command: Some("bash".into()),
             title: Some("my terminal".into()),
+            title_pinned: true,
+            scrollback_file: Some("1.zst".into()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
@@ -257,10 +279,14 @@ mod tests {
                 cwd,
                 command,
                 title,
+                title_pinned,
+                scrollback_file,
             } => {
                 assert_eq!(cwd, PathBuf::from("/usr/local"));
                 assert_eq!(command, Some("bash".into()));
                 assert_eq!(title, Some("my terminal".into()));
+                assert!(title_pinned);
+                assert_eq!(scrollback_file.as_deref(), Some("1.zst"));
             }
             _ => panic!("expected DeferredTerminal variant"),
         }
@@ -273,6 +299,7 @@ mod tests {
             content: "fn main() {}".into(),
             dirty: true,
             workspace_id: Some(99),
+            untitled: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
@@ -282,12 +309,23 @@ mod tests {
                 content,
                 dirty,
                 workspace_id,
+                untitled,
             } => {
                 assert_eq!(path, PathBuf::from("/tmp/test.rs"));
                 assert_eq!(content, "fn main() {}");
                 assert!(dirty);
                 assert_eq!(workspace_id, Some(99));
+                assert!(untitled, "an untitled buffer comes back untitled");
             }
+            _ => panic!("expected FileEditor variant"),
+        }
+    }
+
+    #[test]
+    fn older_file_editor_entries_load_as_files() {
+        let json = r#"{"FileEditor":{"path":"/tmp/a.rs","content":"x","dirty":false,"workspace_id":null}}"#;
+        match serde_json::from_str::<SavedPaneContent>(json).unwrap() {
+            SavedPaneContent::FileEditor { untitled, .. } => assert!(!untitled),
             _ => panic!("expected FileEditor variant"),
         }
     }
@@ -330,6 +368,7 @@ mod tests {
                     cwd: PathBuf::from("/home/user"),
                     command: None,
                     title: None,
+                    title_pinned: false,
                     scrollback_file: None,
                     claude_session_id: None,
                 },
@@ -337,6 +376,7 @@ mod tests {
                     cwd: PathBuf::from("/tmp"),
                     command: Some("vim".into()),
                     title: Some("vim session".into()),
+                    title_pinned: false,
                     scrollback_file: None,
                     claude_session_id: None,
                 },
@@ -355,6 +395,7 @@ mod tests {
                         content: "hello".into(),
                         dirty: false,
                         workspace_id: Some(1),
+                        untitled: false,
                     },
                     manual_width: Some(400.0),
                     labels: vec![],
@@ -457,12 +498,31 @@ mod tests {
             id: 1,
             pane_indices: vec![0, 2, 3],
             active_pane_index: Some(2),
+            info_bar: None,
         };
         let json = serde_json::to_string(&g).unwrap();
         let restored: SavedEditorGroup = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.id, 1);
         assert_eq!(restored.pane_indices, vec![0, 2, 3]);
         assert_eq!(restored.active_pane_index, Some(2));
+    }
+
+    #[test]
+    fn saved_editor_group_keeps_its_info_bar_position() {
+        let g = SavedEditorGroup {
+            id: 1,
+            pane_indices: vec![0],
+            active_pane_index: Some(0),
+            info_bar: Some(InfoBarPosition::Hidden),
+        };
+        let json = serde_json::to_string(&g).unwrap();
+        let restored: SavedEditorGroup = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.info_bar, Some(InfoBarPosition::Hidden));
+
+        // Session files from before per-split positions still load.
+        let old = r#"{"id":1,"pane_indices":[0],"active_pane_index":0}"#;
+        let restored: SavedEditorGroup = serde_json::from_str(old).unwrap();
+        assert_eq!(restored.info_bar, None);
     }
 
     #[test]
@@ -475,11 +535,13 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0, 1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 2,
                     pane_indices: vec![2],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
             ],
             layout: GroupNode::Split {
@@ -511,6 +573,7 @@ mod tests {
                 cwd: PathBuf::from("/home/user"),
                 command: None,
                 title: None,
+                title_pinned: false,
                 scrollback_file: None,
                 claude_session_id: None,
             }],
@@ -547,6 +610,7 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0, 1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 }],
                 layout: GroupNode::Leaf { group_id: 1 },
                 focused_group_id: 1,
@@ -590,6 +654,7 @@ mod tests {
                 id: 5,
                 pane_indices: vec![0],
                 active_pane_index: Some(0),
+                info_bar: None,
             }],
             layout: GroupNode::Leaf { group_id: 5 },
             focused_group_id: 5,
@@ -667,16 +732,19 @@ mod tests {
                     id: 1,
                     pane_indices: vec![0],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 2,
                     pane_indices: vec![1],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
                 SavedEditorGroup {
                     id: 3,
                     pane_indices: vec![2],
                     active_pane_index: Some(0),
+                    info_bar: None,
                 },
             ],
             layout: GroupNode::Split {

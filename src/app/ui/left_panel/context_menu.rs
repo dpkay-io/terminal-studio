@@ -18,12 +18,10 @@ impl App {
         active_fg: Option<ForegroundProcess>,
     ) {
         self.process_workspace_actions(ctx, &ws_actions);
-        self.process_quit_pane(sess_actions.quit_pane_id);
-        self.process_label_toggle(sess_actions.toggle_label);
-        if let Some(pane_id) = sess_actions.show_new_label_for_pane {
-            self.show_new_label_dialog = Some(pane_id);
-        }
-        self.process_sidebar_click(sess_actions.clicked_sidebar_pane_id);
+        self.process_tab_actions(
+            &mut sess_actions,
+            crate::app::close_guard::TabClose::Sidebar,
+        );
         // Consume async folder picker result if available
         let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
             d.remove_temp::<std::path::PathBuf>(egui::Id::new("pending_folder_pick"))
@@ -32,6 +30,188 @@ impl App {
         self.process_open_folder(folder);
         self.process_spawn_session(&sess_actions, &active_fg);
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
+        if sess_actions.new_file | std::mem::replace(&mut self.deferred_new_file, false) {
+            self.create_new_file_pane();
+        }
+    }
+
+    /// What was done to one tab in the session list or a tab bar: close,
+    /// labels, click, copy or reveal its path, rename. `close_via` is how a
+    /// close from there closes it.
+    pub(in crate::app) fn process_tab_actions(
+        &mut self,
+        actions: &mut SessionListActions,
+        close_via: crate::app::close_guard::TabClose,
+    ) {
+        if let Some(pid) = actions.quit_pane_id {
+            self.request_close_tab(pid, close_via);
+        }
+        self.process_label_toggle(actions.toggle_label);
+        if let Some(pane_id) = actions.show_new_label_for_pane {
+            self.show_new_label_dialog = Some(pane_id);
+        }
+        self.process_sidebar_click(actions.clicked_sidebar_pane_id);
+        self.process_row_path_actions(actions);
+        self.process_row_rename(actions);
+    }
+
+    /// Copy a row's directory to the clipboard, or reveal it in the OS file
+    /// manager. A clipboard the OS refuses is swallowed on purpose — not worth
+    /// a dialog — and the flash only fires on the success path, so the
+    /// feedback never claims a copy that did not happen.
+    fn process_row_path_actions(&mut self, sess_actions: &SessionListActions) {
+        if let Some(pid) = sess_actions.copy_path_pane_id {
+            if let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
+                if let Some(cwd) = self.pane_cwd(idx) {
+                    if let Ok(mut clip) = arboard::Clipboard::new() {
+                        let _ = clip.set_text(cwd.to_string_lossy().into_owned());
+                    }
+                    self.flash.trigger(
+                        crate::app::feedback::FlashTarget::Tab(pid),
+                        crate::app::feedback::FlashKind::Success,
+                    );
+                }
+            }
+        }
+        if let Some(pid) = sess_actions.open_in_explorer_pane_id {
+            if let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) {
+                if let Some(cwd) = self.pane_cwd(idx) {
+                    crate::util::reveal_in_file_manager(&cwd);
+                }
+            }
+        }
+    }
+
+    /// Open the inline rename editor on a row, and apply a committed one.
+    /// Only terminals (running or not yet started) have a settable title; the
+    /// menu entry is hidden for everything else, so a commit that reaches here
+    /// for one is a no-op.
+    fn process_row_rename(&mut self, sess_actions: &mut SessionListActions) {
+        // Drop a rename whose pane has since been closed, so its buffer cannot
+        // outlive the row. Checked here rather than in each close path —
+        // `process_quit_pane`, `close_pane_full` and the close-all routes all
+        // remove panes independently, and this covers every one of them.
+        if let Some(pid) = self.rename_pane_id {
+            if !self.pane_state.panes.iter().any(|p| p.id == pid) {
+                self.rename_pane_id = None;
+                self.rename_text.clear();
+            }
+        }
+        if let Some(pid) = sess_actions.start_rename_pane_id {
+            let idx = self.pane_state.panes.iter().position(|p| p.id == pid);
+            self.rename_pane_id = Some(pid);
+            self.rename_in_tab_bar = sess_actions.rename_in_tab_bar;
+            self.rename_text = idx.map(|i| self.tab_display_text(i)).unwrap_or_default();
+        }
+        if let Some((pid, name)) = sess_actions.commit_rename.take() {
+            let Some(idx) = self.pane_state.panes.iter().position(|p| p.id == pid) else {
+                return;
+            };
+            // Confirming the name the row already showed changes nothing:
+            // pinning it would freeze an automatic title for no reason.
+            let shown = self.tab_display_text(idx);
+            // The name stays until the user renames the session again; an
+            // empty name hands it back to the shell's own title. Prompt hooks
+            // set a title on every command, so anything weaker than a pin is
+            // gone after the next one.
+            match &mut self.pane_state.panes[idx].content {
+                PaneContent::Terminal(sid) => {
+                    let Some(e) = self.session_state.find(*sid) else {
+                        return;
+                    };
+                    let session = e.session.read();
+                    if name.is_empty() {
+                        session.pin_title(None);
+                    } else if session.is_title_pinned() || name != shown {
+                        session.pin_title(Some(name));
+                    }
+                }
+                // A restored session whose shell hasn't started yet: the pin
+                // rides along and is applied when the session starts.
+                PaneContent::DeferredTerminal {
+                    saved_title,
+                    title_pinned,
+                    ..
+                } => {
+                    if name.is_empty() {
+                        *saved_title = None;
+                        *title_pinned = false;
+                    } else if *title_pinned || name != shown {
+                        *saved_title = Some(name);
+                        *title_pinned = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Create a fresh, unsaved ("untitled") editor buffer in the active group,
+    /// ready for typing. The first Ctrl+S prompts for a filename via a native
+    /// Save dialog.
+    fn create_new_file_pane(&mut self) {
+        use super::super::super::pane::FileEditorState;
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        let name = self.next_untitled_name();
+        // Made in the folder the user is working in, so the file panel stays
+        // there and Save As starts there.
+        let path = match self.active_pane_cwd() {
+            Some(dir) => dir.join(name),
+            None => std::path::PathBuf::from(name),
+        };
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileEditor(FileEditorState {
+                path,
+                content: String::new(),
+                dirty: false,
+                save_error: false,
+                workspace_id: self.active_group,
+                show_preview: false,
+                stale: false,
+                loading: false,
+                untitled: true,
+                saved_text_hash: Some(super::super::super::pane::text_hash("")),
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        self.pane_state.pane_trees.insert(
+            pane_id,
+            PaneNode::Leaf {
+                pane_id,
+                last_size: (0, 0),
+            },
+        );
+        let gid = if self
+            .pane_state
+            .groups
+            .contains_key(&self.pane_state.focused_group_id)
+        {
+            self.pane_state.focused_group_id
+        } else {
+            let new_gid = self.pane_state.create_group(pane_id);
+            self.pane_state.group_layout =
+                crate::editor_group::GroupNode::Leaf { group_id: new_gid };
+            self.pane_state.focused_group_id = new_gid;
+            new_gid
+        };
+        if self
+            .pane_state
+            .groups
+            .get(&gid)
+            .is_some_and(|g| !g.contains(pane_id))
+        {
+            self.pane_state.add_pane_to_group(gid, pane_id, None);
+        }
+        if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+            g.activate(pane_id);
+        }
+        self.activate_and_scroll_to_pane(pane_id);
     }
 
     fn process_open_folder(&mut self, path: Option<std::path::PathBuf>) {
@@ -95,15 +275,14 @@ impl App {
         }
 
         if let Some(group) = actions.close_all_workspace_id {
-            self.close_all_target = CloseAllTarget::Group(group);
-            self.show_close_all_confirm = true;
-            self.close_all_frames_open = 0;
+            self.request_close_all(CloseAllTarget::Group(group));
         }
     }
 
     /// Handle closing a pane from the sidebar quit button.
-    fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
+    pub(in crate::app) fn process_quit_pane(&mut self, quit_pane_id: Option<u32>) {
         let Some(qpid) = quit_pane_id else { return };
+        log::debug!("close: sidebar tab (pane {qpid})");
         if !self.pane_state.panes.iter().any(|p| p.id == qpid) {
             return;
         }
@@ -145,6 +324,9 @@ impl App {
             }
         }
 
+        for &pid in &panes_to_close {
+            self.capture_closed_unstarted_session(pid);
+        }
         // Collect session IDs to kill, then remove pane entries.
         let killed_sids: Vec<u32> = self
             .pane_state
@@ -229,6 +411,14 @@ impl App {
         let Some(qpid) = clicked_sidebar_pane_id else {
             return;
         };
+        // Visiting the session acknowledges its completed-command badge. The
+        // list row is the only place a user can clear one by hand.
+        if let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == qpid) {
+            if let PaneContent::Terminal(sid) = &pane.content {
+                let sid = *sid;
+                self.completed_badges.remove(&sid);
+            }
+        }
         let group_opt = self
             .pane_state
             .panes

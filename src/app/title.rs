@@ -42,6 +42,23 @@ pub(super) fn shell_escape_arg(s: &str) -> String {
     }
 }
 
+/// A terminal's name in every label: the name the user gave it, word for
+/// word (even one that looks like a shell default, such as "zsh"), or else
+/// what [`effective_title`] makes of the shell's own title.
+pub(super) fn session_title(
+    title: &str,
+    pinned: bool,
+    cwd: &std::path::Path,
+    fg: Option<&ForegroundProcess>,
+    shell: Option<&ShellKind>,
+    workspace_name: Option<&str>,
+) -> String {
+    if pinned {
+        return title.trim().to_string();
+    }
+    effective_title(title, cwd, fg, shell, workspace_name)
+}
+
 pub(super) fn effective_title(
     title: &str,
     cwd: &std::path::Path,
@@ -125,6 +142,21 @@ mod tests {
     #[test]
     fn display_title_windows_path_returns_last_segment() {
         assert_eq!(display_title("C:\\Users\\testuser\\proj"), "proj");
+    }
+
+    #[test]
+    fn a_users_name_shows_as_typed_even_when_it_looks_like_a_shell_default() {
+        let cwd = Path::new("/home/user/myproject");
+        assert_eq!(session_title("zsh", true, cwd, None, None, None), "zsh");
+        assert_eq!(
+            session_title("~/notes", true, cwd, None, None, None),
+            "~/notes"
+        );
+        // Not the user's name: the shell default still gives way to the folder.
+        assert_eq!(
+            session_title("zsh", false, cwd, None, None, None),
+            "myproject"
+        );
     }
 
     #[test]

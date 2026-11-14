@@ -30,7 +30,7 @@ use super::persistence::{
 };
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
-use super::title::{effective_title, shell_escape_arg};
+use super::title::shell_escape_arg;
 use super::watcher::WatchState;
 use super::{App, CloseAllTarget};
 
@@ -43,12 +43,58 @@ fn safe_ratio(v: f32, default: f32) -> f32 {
     }
 }
 
+/// Folder holding the scrollback saved with the session file, which restored
+/// sessions read back when they start.
+pub(super) fn active_scrollback_dir() -> Option<PathBuf> {
+    crate::util::data_dir().map(|d| d.join(ACTIVE_SCROLLBACK_DIR_NAME))
+}
+
+const ACTIVE_SCROLLBACK_DIR_NAME: &str = "active_scrollback";
+
+/// Columns and rows a restored session's shell starts at, before the first
+/// layout gives it its real size.
+pub(super) const RESTORED_TERMINAL_SIZE: (u16, u16) = (80, 24);
+
+/// Read and decompress one saved scrollback file. None when it is missing or
+/// unreadable; the session then starts without its old output.
+pub(super) fn read_active_scrollback(file: &str) -> Option<Vec<u8>> {
+    let compressed = std::fs::read(active_scrollback_dir()?.join(file)).ok()?;
+    zstd::decode_all(compressed.as_slice()).ok()
+}
+
+/// Name of a running session's scrollback file, written under one save's
+/// `stamp`. Names from earlier saves (and the bare `<index>.zst` of older
+/// versions) never repeat, so a restored session's file is never overwritten.
+fn scrollback_file_name(stamp: u64, session_index: usize) -> String {
+    format!("{stamp}-{session_index}.zst")
+}
+
+/// Remove every file in the scrollback folder except those in `keep`.
+fn prune_scrollback_dir(dir: &Path, keep: &HashSet<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let kept = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| keep.contains(name));
+        if !kept {
+            std::fs::remove_file(entry.path()).ok();
+        }
+    }
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let ctx = cc.egui_ctx.clone();
 
         #[cfg(target_os = "macos")]
-        super::macos_quit::install(&ctx);
+        {
+            super::macos_quit::install(&ctx);
+            super::macos_menu::install(&ctx);
+            super::macos_fullscreen::install();
+        }
 
         // Reset egui's persisted widget data if the app version changed.
         // This prevents corrupted state from old crashed sessions.
@@ -211,6 +257,7 @@ impl App {
                 Duration::from_millis(200),
             ),
             global_search_selected: 0,
+            session_sort_cache: Default::default(),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
             detection_lines_hash: HashMap::new(),
@@ -218,16 +265,20 @@ impl App {
             terminal_md_content: HashMap::new(),
             drag_state: drag::DragState::new(),
             deferred_spawn: None,
+            deferred_new_file: false,
             deferred_duplicate: false,
             deferred_split: None,
             deferred_close_pane: false,
-            tab_rename_pane_id: None,
-            tab_rename_text: String::new(),
-            tab_scroll_to_pane: None,
+            rename_pane_id: None,
+            rename_text: String::new(),
+            rename_in_tab_bar: false,
+            tab_bar_actions: Default::default(),
+            scroll_to_pane: None,
             reveal_file_path: None,
             reveal_highlight: None,
             deferred_open_workspace: None,
             show_close_all_confirm: false,
+            pending_tab_close: None,
             close_all_frames_open: 0,
             close_all_target: CloseAllTarget::default(),
             show_quit_confirm: false,
@@ -492,7 +543,7 @@ impl App {
             PaneContent::DeferredTerminal { cwd, .. } => cwd.clone(),
             PaneContent::FileEditor(ed) => self
                 .workspace_path(ed.workspace_id)
-                .or_else(|| ed.path.parent().map(|p| p.to_path_buf())),
+                .or_else(|| crate::util::parent_dir(&ed.path)),
             PaneContent::FileDiff(d) => {
                 let ws = self.workspace_store.find_for_cwd(&d.path);
                 ws.map(|w| w.path.clone())
@@ -590,6 +641,17 @@ impl App {
             self.session_workspace_filter,
             self.session_label_filter,
         )
+    }
+
+    /// Ids of every pane the active tab filter lets through — the candidate set
+    /// for Ctrl+Tab cycling.
+    pub(super) fn tab_cycle_candidates(&self) -> Vec<u32> {
+        self.pane_state
+            .panes
+            .iter()
+            .filter(|p| self.pane_passes_tab_filter(p))
+            .map(|p| p.id)
+            .collect()
     }
 
     pub(super) fn has_active_tab_filter(&self) -> bool {
@@ -799,6 +861,7 @@ impl App {
             &mut self.session_workspace_filter,
             &mut view.session_workspace_filter,
         );
+        swap(&mut self.session_sort_cache, &mut view.session_sort_cache);
         {
             let temp = view.focused_group_id;
             view.focused_group_id = Some(self.pane_state.focused_group_id);
@@ -920,6 +983,8 @@ impl App {
                     self.session_state.active_id = Some(sid);
                     self.update_is_active_flags();
                 }
+                // Nothing to reveal for an untitled buffer: it has no file yet.
+                PaneContent::FileEditor(ed) if ed.untitled => {}
                 PaneContent::FileEditor(ed) => {
                     self.reveal_file_path = Some(ed.path.clone());
                 }
@@ -936,7 +1001,7 @@ impl App {
 
     pub(super) fn activate_and_scroll_to_pane(&mut self, pid: u32) {
         self.activate_pane(pid);
-        self.tab_scroll_to_pane = Some(pid);
+        self.scroll_to_pane = Some(pid);
     }
 
     pub(super) fn switch_group(&mut self, group: Option<u64>, cols: u16, rows: u16) {
@@ -1265,7 +1330,11 @@ impl App {
                 }
             });
             if let Some(entry) = self.session_state.find_mut(sid) {
-                entry.restore_title = Some(record.title.clone());
+                if record.title_pinned {
+                    entry.session.read().pin_title(Some(record.title.clone()));
+                } else {
+                    entry.restore_title = Some(record.title.clone());
+                }
                 if let Some(ref claude_id) = record.claude_session_id {
                     entry.pending_command = continue_fallback;
                     entry.claude_session_id = Some(claude_id.clone());
@@ -1315,17 +1384,32 @@ impl App {
         }
     }
 
+    /// Scrollback files restored sessions still point to: their shells
+    /// haven't started, so there is nothing to capture again and the file
+    /// from the earlier run is the only copy.
+    fn deferred_scrollback_files(&self) -> HashSet<String> {
+        self.pane_state
+            .panes
+            .iter()
+            .filter_map(|p| match &p.content {
+                PaneContent::DeferredTerminal {
+                    scrollback_file, ..
+                } => scrollback_file.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn save_active_scrollbacks(&self) -> HashMap<u32, String> {
         let mut result = HashMap::new();
-        let Some(dir) = crate::util::data_dir().map(|d| d.join("active_scrollback")) else {
+        let Some(dir) = active_scrollback_dir() else {
             return result;
         };
         std::fs::create_dir_all(&dir).ok();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                std::fs::remove_file(entry.path()).ok();
-            }
-        }
+        prune_scrollback_dir(&dir, &self.deferred_scrollback_files());
+        // Every save writes under a new stamp, so a running session's file
+        // can never take the name of one a restored session still needs.
+        let stamp = crate::util::now_millis();
         for (idx, entry) in self.session_state.sessions.iter().enumerate() {
             let session = entry.session.read();
             let ansi_bytes = super::scrollback_capture::extract_grid_as_ansi(&session.term, None);
@@ -1333,7 +1417,7 @@ impl App {
             if ansi_bytes.is_empty() {
                 continue;
             }
-            let filename = format!("{}.zst", idx);
+            let filename = scrollback_file_name(stamp, idx);
             let filepath = dir.join(&filename);
             match zstd::encode_all(ansi_bytes.as_slice(), 3) {
                 Ok(compressed) => {
@@ -1392,7 +1476,7 @@ impl App {
             .map(|e| {
                 let s = e.session.read();
                 let cwd = s.cwd.clone();
-                let title_raw = s.title();
+                let title_pinned = s.is_title_pinned();
                 drop(s);
                 let command = self.workers.foreground_worker.get(e.id).map(|fp| {
                     let parts: Vec<String> =
@@ -1407,21 +1491,8 @@ impl App {
                         joined
                     }
                 });
-                let fg = self.workers.foreground_worker.get(e.id);
-                let ws_name = if cwd.as_os_str().is_empty() {
-                    None
-                } else {
-                    self.workspace_store
-                        .find_for_cwd(&cwd)
-                        .map(|w| w.name.clone())
-                };
-                let title = Some(effective_title(
-                    &title_raw,
-                    &cwd,
-                    fg.as_ref(),
-                    Some(&e.shell),
-                    ws_name.as_deref(),
-                ));
+                // Saved as the row shows it; a user-given name word for word.
+                let title = Some(self.session_label(e));
                 let scrollback_file = scrollback_files.get(&e.id).cloned();
                 let claude_session_id = self
                     .workers
@@ -1441,6 +1512,7 @@ impl App {
                     cwd,
                     command,
                     title,
+                    title_pinned,
                     scrollback_file,
                     claude_session_id,
                 }
@@ -1461,17 +1533,27 @@ impl App {
                         cwd,
                         pending_command,
                         saved_title,
-                        ..
+                        title_pinned,
+                        scrollback_file,
                     } => SavedPaneContent::DeferredTerminal {
                         cwd: cwd.clone().unwrap_or_default(),
                         command: pending_command.clone(),
                         title: saved_title.clone(),
+                        title_pinned: *title_pinned,
+                        // Kept on disk by `save_active_scrollbacks`, which
+                        // only runs with scrollback saving on.
+                        scrollback_file: scrollback_file
+                            .clone()
+                            .filter(|_| self.settings.save_scrollback_on_exit),
                     },
+                    // Untitled buffers are kept with their text, the same as an
+                    // edited file, so quitting never throws away typing.
                     PaneContent::FileEditor(ed) => SavedPaneContent::FileEditor {
                         path: ed.path.clone(),
                         content: ed.content.clone(),
                         dirty: ed.dirty,
                         workspace_id: ed.workspace_id,
+                        untitled: ed.untitled,
                     },
                     PaneContent::FileDiff(d) => SavedPaneContent::FileDiff {
                         path: d.path.clone(),
@@ -1527,6 +1609,7 @@ impl App {
                     active_pane_index: g
                         .active_pane_id
                         .and_then(|pid| pane_id_to_index.get(&pid).copied()),
+                    info_bar: g.info_bar,
                 })
                 .collect();
             Some(SavedGroupLayout {
@@ -1591,7 +1674,6 @@ impl App {
                     None
                 }
             });
-        let scrollback_dir = crate::util::data_dir().map(|d| d.join("active_scrollback"));
 
         // Count Claude sessions per CWD to determine whether --continue
         // fallback is safe (only when a single Claude session exists per CWD).
@@ -1619,11 +1701,10 @@ impl App {
                 } else {
                     Some(s.cwd.clone())
                 };
-                let scrollback = s.scrollback_file.as_ref().and_then(|f| {
-                    let dir = scrollback_dir.as_ref()?;
-                    let compressed = std::fs::read(dir.join(f)).ok()?;
-                    zstd::decode_all(compressed.as_slice()).ok()
-                });
+                let scrollback = s
+                    .scrollback_file
+                    .as_deref()
+                    .and_then(read_active_scrollback);
                 // Only replay the command if there's no scrollback to restore.
                 // When scrollback exists, the user sees the old session output
                 // above the new prompt — replaying the command would wipe it
@@ -1631,8 +1712,8 @@ impl App {
                 let replay_command = scrollback.is_none() || s.scrollback_file.is_none();
                 if let Some(sid) = self.spawn_session_with_scrollback(
                     &default_shell(),
-                    80,
-                    24,
+                    RESTORED_TERMINAL_SIZE.0,
+                    RESTORED_TERMINAL_SIZE.1,
                     cwd,
                     scrollback.as_deref(),
                 ) {
@@ -1642,7 +1723,12 @@ impl App {
                                 entry.pending_command = Some(cmd);
                             }
                         }
-                        entry.restore_title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
+                        let title = s.title.as_ref().filter(|t| !t.is_empty()).cloned();
+                        if s.title_pinned {
+                            entry.session.read().pin_title(title);
+                        } else {
+                            entry.restore_title = title;
+                        }
                         if let Some(ref claude_id) = s.claude_session_id {
                             entry.pending_command =
                                 super::claude_session::claude_resume_command(claude_id, &s.cwd)
@@ -1684,6 +1770,7 @@ impl App {
                             }
                         });
                         let saved_title = saved.and_then(|s| s.title.clone());
+                        let title_pinned = saved.is_some_and(|s| s.title_pinned);
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
                         let claude_session_id = saved.and_then(|s| s.claude_session_id.clone());
                         let pending_command = if let Some(ref cid) = claude_session_id {
@@ -1706,6 +1793,7 @@ impl App {
                             cwd,
                             pending_command,
                             saved_title,
+                            title_pinned,
                             scrollback_file,
                         }
                     }
@@ -1714,6 +1802,8 @@ impl App {
                     cwd,
                     command,
                     title,
+                    title_pinned,
+                    scrollback_file,
                 } => PaneContent::DeferredTerminal {
                     cwd: if cwd.as_os_str().is_empty() {
                         None
@@ -1722,13 +1812,15 @@ impl App {
                     },
                     pending_command: command.clone(),
                     saved_title: title.clone(),
-                    scrollback_file: None,
+                    title_pinned: *title_pinned,
+                    scrollback_file: scrollback_file.clone(),
                 },
                 SavedPaneContent::FileEditor {
                     path,
                     content,
                     dirty,
                     workspace_id,
+                    untitled,
                 } => {
                     let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
                     PaneContent::FileEditor(FileEditorState {
@@ -1738,8 +1830,15 @@ impl App {
                         save_error: false,
                         workspace_id: *workspace_id,
                         show_preview: is_md,
-                        stale: false,
+                        // Read the file again in the background: it may have
+                        // changed since the last run, and its text is what
+                        // tells an edit apart from the saved version. Unsaved
+                        // edits in the buffer are kept.
+                        stale: !*untitled,
                         loading: false,
+                        untitled: *untitled,
+                        // A new buffer's "file" is empty.
+                        saved_text_hash: untitled.then(|| super::pane::text_hash("")),
                     })
                 }
                 SavedPaneContent::FileDiff { path } => {
@@ -1851,6 +1950,7 @@ impl App {
                 if let Some(apid) = active_pid {
                     group.activate(apid);
                 }
+                group.info_bar = sg.info_bar;
                 self.pane_state.groups.insert(sg.id, group);
             }
 
@@ -2096,6 +2196,70 @@ impl App {
 
     // ── Drag-and-drop action execution ──────────────────────────────────
 
+    /// Collect one window's drag hit-test and input after its body rendered.
+    /// `window_idx` is `None` for the main window, `Some(i)` for
+    /// `extra_windows[i]`.
+    pub(super) fn harvest_drag_input(&mut self, window_idx: Option<usize>, ctx: &egui::Context) {
+        if self.drag_state.payload.is_none() {
+            return;
+        }
+        let (pos, released, cancelled) = ctx.input(|i| {
+            (
+                i.pointer.hover_pos(),
+                i.pointer.any_released(),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        // `hover_pos` is per-viewport, and a button press captures the pointer
+        // to the window it happened in, so every move during a drag started in
+        // an extra window is delivered to *that* window. Sampling only the main
+        // window's pointer therefore never advanced the 5px threshold for such
+        // a drag: it stayed inactive, drew no drop targets, and its release
+        // cancelled instead of dropping.
+        if let Some(pos) = pos {
+            self.drag_state.update_threshold(pos);
+        }
+        self.drag_state.harvest(window_idx, released, cancelled);
+    }
+
+    /// Resolve the frame's pending drop with `window_idx`'s view swapped in, so
+    /// the drop lands in the window the pointer was actually over. `None` means
+    /// the main window, whose view is already current.
+    pub(super) fn resolve_drag_in_window(
+        &mut self,
+        window_idx: Option<usize>,
+        ctx: &egui::Context,
+    ) {
+        let Some(idx) = window_idx else {
+            let action =
+                drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
+            self.execute_drag_action(action, ctx);
+            return;
+        };
+        // Unreachable today — harvest and resolve happen in the same frame and
+        // windows only close afterwards — but a stale index must never index
+        // out of bounds, so drop the drag instead.
+        if idx >= self.extra_windows.len() {
+            self.drag_state.clear();
+            return;
+        }
+
+        let mut view = std::mem::replace(
+            &mut self.extra_windows[idx].view,
+            WindowView::new_for_workspace(0),
+        );
+        self.swap_view(&mut view);
+        let prev_window = self.current_window_id.take();
+        self.current_window_id = Some(self.extra_windows[idx].id.clone());
+
+        let action = drag::resolve_drag(&mut self.drag_state, &self.pane_state, self.active_group);
+        self.execute_drag_action(action, ctx);
+
+        self.current_window_id = prev_window;
+        self.swap_view(&mut view);
+        self.extra_windows[idx].view = view;
+    }
+
     pub(super) fn execute_drag_action(&mut self, action: drag::DragAction, ctx: &egui::Context) {
         use drag::DragAction;
         match action {
@@ -2184,6 +2348,8 @@ impl App {
                         show_preview: is_md && self.md_prefer_preview,
                         stale: false,
                         loading: true,
+                        untitled: false,
+                        saved_text_hash: None,
                     }),
                     manual_width: None,
                     last_size: (0, 0),
@@ -2307,6 +2473,7 @@ impl App {
                 if let Some(group) = self.pane_state.groups.get_mut(&group_id) {
                     group.reorder(pane_id, to_index);
                 }
+                self.pane_state.focused_group_id = group_id;
                 self.activate_pane(pane_id);
             }
             DragAction::MoveTabToGroup {
@@ -2324,98 +2491,33 @@ impl App {
                 target_group_id,
                 at_index,
             } => {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let entry = PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::Terminal(session_id),
-                    manual_width: None,
-                    last_size: (80, 24),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                };
-                self.pane_state.panes.push(entry);
-                self.pane_state
-                    .add_pane_to_group(target_group_id, pane_id, at_index);
-                self.pane_state.focused_group_id = target_group_id;
-                self.activate_pane(pane_id);
+                if let Some(pane_id) = self.create_terminal_pane_for_session(session_id, 80, 24) {
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
+                }
             }
             DragAction::InsertFileEditorInGroup {
                 path,
                 target_group_id,
                 at_index,
             } => {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-                let entry = PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::FileEditor(FileEditorState {
-                        path: path.clone(),
-                        content: String::new(),
-                        dirty: false,
-                        save_error: false,
-                        workspace_id: self.active_group,
-                        show_preview: is_md && self.md_prefer_preview,
-                        stale: false,
-                        loading: true,
-                    }),
-                    manual_width: None,
-                    last_size: (0, 0),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                };
-                self.pane_state.panes.push(entry);
-                self.pane_state
-                    .add_pane_to_group(target_group_id, pane_id, at_index);
-                self.pane_state.focused_group_id = target_group_id;
-                self.activate_pane(pane_id);
-                let results = std::sync::Arc::clone(&self.file_load_results);
-                let ctx_clone = ctx.clone();
-                std::thread::spawn(move || {
-                    let content = std::fs::read_to_string(&path).unwrap_or_default();
-                    results.lock().push((pane_id, content));
-                    ctx_clone.request_repaint();
-                });
+                if let Some(pane_id) = self.create_file_editor_pane(path, ctx) {
+                    self.pane_state
+                        .add_pane_to_group(target_group_id, pane_id, at_index);
+                    self.pane_state.focused_group_id = target_group_id;
+                    self.activate_pane(pane_id);
+                }
             }
             DragAction::InsertDiffInGroup {
                 rel_path,
                 target_group_id,
                 at_index,
             } => {
-                if let Some(cwd) = self.active_pane_cwd() {
-                    let full_path = cwd.join(&rel_path);
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    let entry = PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::FileDiff(FileDiffState {
-                            path: full_path.clone(),
-                            old_content: String::new(),
-                            new_content: String::new(),
-                            hunks: Vec::new(),
-                            diff_mode: self.settings.diff_view_mode,
-                            current_hunk: 0,
-                            old_highlights: None,
-                            new_highlights: None,
-                            highlight_theme: crate::theme::active().id,
-                            loading: true,
-                            workspace_id: self.active_group,
-                            scroll_to_first_hunk: false,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    };
-                    self.pane_state.panes.push(entry);
+                if let Some(pane_id) = self.create_diff_pane(rel_path) {
                     self.pane_state
                         .add_pane_to_group(target_group_id, pane_id, at_index);
-                    self.pending_diff_panes.insert(full_path, pane_id);
-                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
                     self.pane_state.focused_group_id = target_group_id;
                     self.activate_pane(pane_id);
                 }
@@ -2425,40 +2527,39 @@ impl App {
                 target_group_id,
                 at_index,
             } => {
-                let ws_id = if workspace_id == 0 {
-                    None
-                } else {
-                    Some(workspace_id)
-                };
-                let existing = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .find(|p| {
-                        matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id)
-                    })
-                    .map(|p| p.id);
-                if let Some(pid) = existing {
-                    self.activate_pane(pid);
-                } else {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    let entry = PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::NoteEditor(NoteEditorState {
-                            workspace_id: ws_id,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    };
-                    self.pane_state.panes.push(entry);
+                if let Some(pane_id) = self.create_note_pane(workspace_id) {
                     self.pane_state
                         .add_pane_to_group(target_group_id, pane_id, at_index);
                     self.pane_state.focused_group_id = target_group_id;
                     self.activate_pane(pane_id);
+                }
+            }
+            DragAction::SplitWithPayload {
+                payload,
+                group_id,
+                dir,
+                before,
+            } => {
+                let (cols, rows) = self
+                    .pane_state
+                    .groups
+                    .get(&group_id)
+                    .and_then(|g| g.active_pane_id)
+                    .and_then(|pid| self.pane_state.panes.iter().find(|p| p.id == pid))
+                    .map(|p| p.last_size)
+                    .unwrap_or((80, 24));
+
+                if let Some(new_pane_id) = self.create_pane_for_payload(payload, cols, rows, ctx) {
+                    // Focus the target group so split_focused_group acts on it.
+                    // Only after the pane exists: on the failure paths (stale
+                    // tab id, diff with no cwd) moving focus here would leave
+                    // focused_group_id pointing at a group that active_pane_id
+                    // is not in, so the focus ring and the keyboard would
+                    // disagree about which split is live.
+                    self.pane_state.focused_group_id = group_id;
+                    self.pane_state
+                        .split_focused_group(new_pane_id, dir, before);
+                    self.activate_pane(new_pane_id);
                 }
             }
         }
@@ -2482,13 +2583,214 @@ impl App {
             },
         );
     }
+
+    // ── Pane creation for drag payloads ─────────────────────────────────
+    //
+    // Each helper appends a `PaneEntry` to `pane_state.panes` and returns its
+    // id. Placement (which group the pane lands in) is the caller's job.
+
+    fn create_terminal_pane_for_session(
+        &mut self,
+        session_id: u32,
+        cols: u16,
+        rows: u16,
+    ) -> Option<u32> {
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::Terminal(session_id),
+            manual_width: None,
+            last_size: (cols, rows),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        Some(pane_id)
+    }
+
+    /// Create a file-editor pane and kick off the background file read.
+    fn create_file_editor_pane(
+        &mut self,
+        path: std::path::PathBuf,
+        ctx: &egui::Context,
+    ) -> Option<u32> {
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileEditor(FileEditorState {
+                path: path.clone(),
+                content: String::new(),
+                dirty: false,
+                save_error: false,
+                workspace_id: self.active_group,
+                show_preview: is_md && self.md_prefer_preview,
+                stale: false,
+                loading: true,
+                untitled: false,
+                saved_text_hash: None,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        let results = std::sync::Arc::clone(&self.file_load_results);
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            results.lock().push((pane_id, content));
+            ctx_clone.request_repaint();
+        });
+        Some(pane_id)
+    }
+
+    /// Create a diff pane for `rel_path` under the active pane's cwd and queue
+    /// the diff job. Returns `None` when there is no active cwd to resolve
+    /// `rel_path` against.
+    fn create_diff_pane(&mut self, rel_path: String) -> Option<u32> {
+        let cwd = self.active_pane_cwd()?;
+        let full_path = cwd.join(&rel_path);
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::FileDiff(FileDiffState {
+                path: full_path.clone(),
+                old_content: String::new(),
+                new_content: String::new(),
+                hunks: Vec::new(),
+                diff_mode: self.settings.diff_view_mode,
+                current_hunk: 0,
+                old_highlights: None,
+                new_highlights: None,
+                highlight_theme: crate::theme::active().id,
+                loading: true,
+                workspace_id: self.active_group,
+                scroll_to_first_hunk: false,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        self.pending_diff_panes.insert(full_path, pane_id);
+        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+        Some(pane_id)
+    }
+
+    /// Create a note pane for `workspace_id` (0 meaning "no workspace"). Notes
+    /// are unique per workspace: if one is already open it is activated in
+    /// place and `None` is returned so the caller does not move it.
+    fn create_note_pane(&mut self, workspace_id: u64) -> Option<u32> {
+        let ws_id = if workspace_id == 0 {
+            None
+        } else {
+            Some(workspace_id)
+        };
+        let existing = self
+            .pane_state
+            .panes
+            .iter()
+            .find(|p| matches!(&p.content, PaneContent::NoteEditor(ne) if ne.workspace_id == ws_id))
+            .map(|p| p.id);
+        if let Some(pid) = existing {
+            self.activate_pane(pid);
+            return None;
+        }
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::NoteEditor(NoteEditorState {
+                workspace_id: ws_id,
+            }),
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: crate::util::now_millis(),
+            workspace_id: self.active_group,
+        });
+        Some(pane_id)
+    }
+
+    /// Create a pane for a dragged payload without placing it in any group.
+    ///
+    /// Returns the new pane id, or `None` if the payload cannot become a pane
+    /// (a `Workspace` drag), the underlying resource could not be opened, or
+    /// the payload resolved to an already-open pane that was activated in
+    /// place (a `Note`). For `Tab`, the pane already exists and is only
+    /// detached from its old group here; the caller's `split_focused_group`
+    /// re-homes it.
+    fn create_pane_for_payload(
+        &mut self,
+        payload: super::drag::DragPayload,
+        cols: u16,
+        rows: u16,
+        ctx: &egui::Context,
+    ) -> Option<u32> {
+        use super::drag::DragPayload;
+        match payload {
+            DragPayload::Tab(pane_id) => {
+                // A stale id must not become a group naming a phantom pane.
+                self.pane_state.find(pane_id)?;
+                self.pane_state.detach_pane_from_group(pane_id);
+                Some(pane_id)
+            }
+            DragPayload::Session(session_id) => {
+                self.create_terminal_pane_for_session(session_id, cols, rows)
+            }
+            DragPayload::File(path) => self.create_file_editor_pane(path, ctx),
+            DragPayload::Diff(rel_path) => self.create_diff_pane(rel_path),
+            DragPayload::Note(workspace_id) => self.create_note_pane(workspace_id),
+            DragPayload::Workspace(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
-    use super::App;
+    use super::{prune_scrollback_dir, scrollback_file_name, App};
     use crate::workspace::{Workspace, WorkspaceStore};
+    use std::collections::HashSet;
+
+    #[test]
+    fn saving_scrollback_keeps_the_files_restored_sessions_still_need() {
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ts_scrollback_prune_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["1.zst", "2.zst", "100-0.zst"] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let keep: HashSet<String> = ["1.zst".to_string()].into();
+        prune_scrollback_dir(&dir, &keep);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["1.zst"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_scrollback_names_never_reuse_an_earlier_saves_names() {
+        // Older versions wrote `<index>.zst`; every save now writes under its
+        // own stamp, so neither an old name nor an earlier save's is reused.
+        assert_ne!(scrollback_file_name(5, 1), "1.zst");
+        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(6, 1));
+        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(5, 2));
+    }
 
     const STALE_WS: u64 = 1;
     const CWD_WS: u64 = 2;
@@ -2520,6 +2822,7 @@ mod tests {
             cwd: cwd.map(std::path::PathBuf::from),
             pending_command: None,
             saved_title: None,
+            title_pinned: false,
             scrollback_file: None,
         };
         pane
@@ -2555,6 +2858,7 @@ mod tests {
                 cwd: None,
                 pending_command: None,
                 saved_title: None,
+                title_pinned: false,
                 scrollback_file: None,
             },
             manual_width: None,

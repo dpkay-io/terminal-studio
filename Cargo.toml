@@ -28,7 +28,7 @@ vte = "0.13"
 alacritty_terminal = "0.26"
 
 # Cross-platform PTY: ConPTY on Windows, openpty on Unix
-portable-pty = "0.8"
+portable-pty = "0.9"
 
 # Error handling
 anyhow = "1"

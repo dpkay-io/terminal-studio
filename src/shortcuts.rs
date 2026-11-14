@@ -18,10 +18,12 @@ pub enum AppAction {
     // Panel navigation
     ToggleLeftSidebar,
     ToggleRightSidebar,
+    ToggleTabBar,
     FocusTerminal,
 
     // Tab management
     NewTerminalTab,
+    NewFile,
     CloseCurrentPane,
     SwitchToTab1,
     SwitchToTab2,
@@ -105,8 +107,10 @@ impl AppAction {
         match self {
             Self::ToggleLeftSidebar => "toggle_left_sidebar",
             Self::ToggleRightSidebar => "toggle_right_sidebar",
+            Self::ToggleTabBar => "toggle_tab_bar",
             Self::FocusTerminal => "focus_terminal",
             Self::NewTerminalTab => "new_terminal_tab",
+            Self::NewFile => "new_file",
             Self::CloseCurrentPane => "close_current_pane",
             Self::SwitchToTab1 => "switch_to_tab_1",
             Self::SwitchToTab2 => "switch_to_tab_2",
@@ -156,8 +160,10 @@ impl AppAction {
         match name {
             "toggle_left_sidebar" => Some(Self::ToggleLeftSidebar),
             "toggle_right_sidebar" => Some(Self::ToggleRightSidebar),
+            "toggle_tab_bar" => Some(Self::ToggleTabBar),
             "focus_terminal" => Some(Self::FocusTerminal),
             "new_terminal_tab" => Some(Self::NewTerminalTab),
+            "new_file" => Some(Self::NewFile),
             "close_current_pane" => Some(Self::CloseCurrentPane),
             "switch_to_tab_1" => Some(Self::SwitchToTab1),
             "switch_to_tab_2" => Some(Self::SwitchToTab2),
@@ -208,8 +214,10 @@ impl AppAction {
         match self {
             Self::ToggleLeftSidebar => "Toggle left sidebar",
             Self::ToggleRightSidebar => "Toggle right sidebar",
+            Self::ToggleTabBar => "Toggle tab bar",
             Self::FocusTerminal => "Focus terminal",
             Self::NewTerminalTab => "New terminal tab",
+            Self::NewFile => "New file",
             Self::CloseCurrentPane => "Close current pane",
             Self::SwitchToTab1 => "Switch to tab 1",
             Self::SwitchToTab2 => "Switch to tab 2",
@@ -270,6 +278,23 @@ impl AppAction {
         }
     }
 
+    /// Actions that only arrange tabs, splits and side panels. A text editor
+    /// has no use for their chords, so they also work while one has the
+    /// keyboard (see `app/layout_shortcuts.rs`).
+    pub fn arranges_layout(self) -> bool {
+        matches!(
+            self,
+            Self::SplitHorizontal
+                | Self::SplitVertical
+                | Self::CloseCurrentPane
+                | Self::ToggleLeftSidebar
+                | Self::ToggleRightSidebar
+                | Self::ToggleTabBar
+                | Self::PreviousTab
+                | Self::NextTab
+        ) || self.tab_index().is_some()
+    }
+
     /// Actions that stay available while a modal or dialog is open, and
     /// regardless of which widget has keyboard focus.
     pub fn is_global(self) -> bool {
@@ -282,6 +307,7 @@ impl AppAction {
                 | Self::RightTabDirectory
                 | Self::OpenQuickSwitcher
                 | Self::NewTerminalTab
+                | Self::NewFile
                 | Self::ZoomPane
                 | Self::SearchAllSessions
                 | Self::ReopenClosedSession
@@ -481,8 +507,11 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
     let mut bindings = vec![
         (cs(B), AppAction::ToggleLeftSidebar),
         (cs(E), AppAction::ToggleRightSidebar),
+        // T for tabs. Ctrl+Alt+T alone opens a terminal on Ubuntu.
+        (cas(T).with_shift(), AppAction::ToggleTabBar),
         (cs(Backtick), AppAction::FocusTerminal),
         (cs(N), AppAction::NewTerminalTab),
+        (cas(N), AppAction::NewFile),
         (cs(W), AppAction::CloseCurrentPane),
         (cs(OpenBracket), AppAction::PreviousTab),
         (cs(CloseBracket), AppAction::NextTab),
@@ -561,6 +590,9 @@ fn mac_system_override(action: AppAction, standard: &Shortcut) -> Option<Shortcu
         _ if action.tab_index().is_some() => Some(without_shift),
         // Shift-Command-/ opens the Help menu search.
         AppAction::ToggleShortcutHelp => Some(without_shift),
+        // Command-, opens Settings in every Mac app, and the app menu's
+        // Settings… item shows it there.
+        AppAction::OpenSettings => Some(without_shift),
         // Command-` (with or without Shift) cycles windows; VS Code uses Control-`.
         AppAction::FocusTerminal => Some(Shortcut {
             shift: false,
@@ -859,6 +891,7 @@ impl ShortcutRegistry {
                 &[
                     AppAction::ToggleLeftSidebar,
                     AppAction::ToggleRightSidebar,
+                    AppAction::ToggleTabBar,
                     AppAction::FocusTerminal,
                     AppAction::ToggleFullscreen,
                 ],
@@ -867,6 +900,7 @@ impl ShortcutRegistry {
                 "Tab Management",
                 &[
                     AppAction::NewTerminalTab,
+                    AppAction::NewFile,
                     AppAction::CloseCurrentPane,
                     AppAction::PreviousTab,
                     AppAction::NextTab,
@@ -955,8 +989,10 @@ mod tests {
     const ALL_ACTIONS: &[AppAction] = &[
         AppAction::ToggleLeftSidebar,
         AppAction::ToggleRightSidebar,
+        AppAction::ToggleTabBar,
         AppAction::FocusTerminal,
         AppAction::NewTerminalTab,
+        AppAction::NewFile,
         AppAction::CloseCurrentPane,
         AppAction::SwitchToTab1,
         AppAction::SwitchToTab2,
@@ -1180,6 +1216,8 @@ mod tests {
             (AppAction::OpenFileFinder, "\u{2318}P"),
             (AppAction::SwitchToTab1, "\u{2318}1"),
             (AppAction::ToggleShortcutHelp, "\u{2318}/"),
+            (AppAction::OpenSettings, "\u{2318},"),
+            (AppAction::ToggleTabBar, "\u{2325}\u{21E7}\u{2318}T"),
             (AppAction::FocusTerminal, "\u{2303}`"),
             (AppAction::OpenQuickSwitcher, "\u{2303}\u{21E7}Space"),
             (AppAction::RevealInExplorer, "\u{2325}\u{2318}R"),
@@ -1362,6 +1400,25 @@ mod tests {
     fn action_names_round_trip() {
         for action in ALL_ACTIONS {
             assert_eq!(AppAction::from_name(action.name()), Some(*action));
+        }
+    }
+
+    #[test]
+    fn layout_chords_never_take_a_text_editing_key() {
+        // Editors keep these for typing; a layout shortcut on one of them
+        // would break copy, paste, undo or cursor movement in a file.
+        use egui::Key::*;
+        let editing = [A, C, V, X, Y, Z, ArrowLeft, ArrowRight, ArrowUp, ArrowDown];
+        for bindings in [standard_default_bindings(), mac_default_bindings()] {
+            for (shortcut, action) in bindings {
+                if action.arranges_layout() {
+                    assert!(
+                        !editing.contains(&shortcut.key),
+                        "{action:?} uses a text editing key"
+                    );
+                    assert!(shortcut.ctrl, "{action:?} has no Command/Ctrl");
+                }
+            }
         }
     }
 

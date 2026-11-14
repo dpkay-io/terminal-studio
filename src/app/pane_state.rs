@@ -4,6 +4,7 @@ use crate::editor_group::{EditorGroup, GroupId, GroupNode, GroupRemoveResult};
 use crate::pane_tree::{PaneNode, RemoveResult, SplitDir};
 
 use super::pane::PaneEntry;
+use super::settings::InfoBarPosition;
 
 /// Returned by [`PaneState::close_leaf`] so the caller can perform session cleanup.
 #[allow(dead_code)]
@@ -187,6 +188,16 @@ impl PaneState {
 
     // ── Editor-group methods ────────────────────────────────────
 
+    /// The tab each split on screen shows, in layout order. A group that is
+    /// in no split (left over while the layout catches up) shows nothing.
+    pub(super) fn shown_pane_ids(&self) -> Vec<u32> {
+        self.group_layout
+            .group_ids()
+            .into_iter()
+            .filter_map(|gid| self.groups.get(&gid)?.active_pane_id)
+            .collect()
+    }
+
     /// Find which group contains a pane.
     pub(super) fn group_of(&self, pane_id: u32) -> Option<GroupId> {
         self.groups
@@ -207,6 +218,54 @@ impl PaneState {
         self.groups.get_mut(&self.focused_group_id)
     }
 
+    /// Where a split's info bar sits: the split's own choice, else `default`.
+    pub(super) fn info_bar_position(
+        &self,
+        group_id: GroupId,
+        default: InfoBarPosition,
+    ) -> InfoBarPosition {
+        self.groups
+            .get(&group_id)
+            .and_then(|group| group.info_bar)
+            .unwrap_or(default)
+    }
+
+    /// Moves or hides one split's info bar, leaving every other split's as it
+    /// is. Returns false when the split no longer exists.
+    pub(super) fn set_info_bar_position(
+        &mut self,
+        group_id: GroupId,
+        position: InfoBarPosition,
+    ) -> bool {
+        let Some(group) = self.groups.get_mut(&group_id) else {
+            return false;
+        };
+        group.info_bar = Some(position);
+        true
+    }
+
+    /// The user moved or hid one split's info bar. Moving it (top or bottom)
+    /// also makes that the place new splits open with; hiding stays with that
+    /// split. Splits still following the old `default` keep where they are.
+    /// Returns the new default when it changes.
+    pub(super) fn choose_info_bar_position(
+        &mut self,
+        group_id: GroupId,
+        position: InfoBarPosition,
+        default: InfoBarPosition,
+    ) -> Option<InfoBarPosition> {
+        if !self.set_info_bar_position(group_id, position)
+            || position == InfoBarPosition::Hidden
+            || position == default
+        {
+            return None;
+        }
+        for group in self.groups.values_mut() {
+            group.info_bar.get_or_insert(default);
+        }
+        Some(position)
+    }
+
     /// Create a new group with an initial pane and register it. Returns the new
     /// group ID. Does NOT modify `group_layout` — caller must do that.
     pub(super) fn create_group(&mut self, initial_pane_id: u32) -> GroupId {
@@ -218,7 +277,6 @@ impl PaneState {
     }
 
     /// Add a pane to an existing group at a specific position.
-    #[allow(dead_code)]
     pub(super) fn add_pane_to_group(&mut self, group_id: GroupId, pane_id: u32, at: Option<usize>) {
         if let Some(group) = self.groups.get_mut(&group_id) {
             group.insert_pane(pane_id, at);
@@ -227,23 +285,63 @@ impl PaneState {
 
     /// Split the focused group: create a new group with `new_pane_id`, add it
     /// to the layout tree adjacent to `focused_group_id` in direction `dir`.
+    /// When `before` is true the new group is placed before (left/top of) the
+    /// focused group in the layout; otherwise it is placed after (right/bottom).
     /// Returns the new group's ID.
-    #[allow(dead_code)]
-    pub(super) fn split_focused_group(&mut self, new_pane_id: u32, dir: SplitDir) -> GroupId {
+    pub(super) fn split_focused_group(
+        &mut self,
+        new_pane_id: u32,
+        dir: SplitDir,
+        before: bool,
+    ) -> GroupId {
         let new_group_id = self.create_group(new_pane_id);
         let split_id = self.next_split_id;
         self.next_split_id += 1;
-        self.group_layout
-            .split_group(self.focused_group_id, new_group_id, split_id, dir);
+        let placed = self.group_layout.split_group(
+            self.focused_group_id,
+            new_group_id,
+            split_id,
+            dir,
+            before,
+        );
+        if !placed {
+            log::warn!(
+                "split_focused_group: focused group {} is absent from the layout tree; \
+                 new group {} (pane {}) is not reachable in the layout",
+                self.focused_group_id,
+                new_group_id,
+                new_pane_id
+            );
+        }
         self.focused_group_id = new_group_id;
         self.active_pane_id = Some(new_pane_id);
         new_group_id
     }
 
+    /// Delete `group_id` from the map and collapse it out of the layout tree.
+    ///
+    /// When the group was the entire layout there is no sibling to collapse
+    /// into, so the tree resets to the same empty sentinel `PaneState::new`
+    /// starts from. Leaving it naming an erased group is what strands the next
+    /// pane: `add_pane_to_group` silently no-ops on a group id that is not in
+    /// the map, so the pane ends up in `panes` but in no group at all.
+    fn erase_group(&mut self, group_id: GroupId) {
+        self.groups.remove(&group_id);
+        match self.group_layout.remove_group(group_id) {
+            GroupRemoveResult::CollapseToSibling(replacement) => {
+                self.group_layout = replacement;
+            }
+            GroupRemoveResult::IsTarget => {
+                self.group_layout = GroupNode::Leaf { group_id: 0 };
+                self.focused_group_id = 0;
+            }
+            _ => {}
+        }
+    }
+
     /// Remove a pane from its group. If the group becomes empty, collapse it
     /// from the layout. Returns info about what happened for the caller to
     /// manage focus.
-    #[allow(dead_code)]
     pub(super) fn close_pane_in_group(&mut self, pane_id: u32) -> Option<CloseGroupResult> {
         let group_id = self.group_of(pane_id)?;
         let group = self.groups.get_mut(&group_id)?;
@@ -252,17 +350,8 @@ impl PaneState {
         self.panes.retain(|p| p.id != pane_id);
 
         if became_empty {
-            self.groups.remove(&group_id);
             let sibling = self.group_layout.sibling_of(group_id);
-            match self.group_layout.remove_group(group_id) {
-                GroupRemoveResult::CollapseToSibling(replacement) => {
-                    self.group_layout = replacement;
-                }
-                GroupRemoveResult::IsTarget => {
-                    self.focused_group_id = 0;
-                }
-                _ => {}
-            }
+            self.erase_group(group_id);
             let focus_gid = sibling.or_else(|| {
                 let first = self.group_layout.first_group_id();
                 if self.groups.contains_key(&first) {
@@ -328,12 +417,23 @@ impl PaneState {
         }
 
         for gid in &empty_group_ids {
-            self.groups.remove(gid);
-            if let GroupRemoveResult::CollapseToSibling(replacement) =
-                self.group_layout.remove_group(*gid)
-            {
-                self.group_layout = replacement;
-            }
+            self.erase_group(*gid);
+        }
+
+        // Drop layout leaves naming a group that is not in the map at all.
+        // The loop above only sees groups that exist, so it cannot catch these:
+        // session restore skips any saved group whose panes all failed to
+        // restore, yet still installs the saved layout that names it. Left in
+        // place, such a leaf renders a split with nothing in it and silently
+        // swallows panes, because `add_pane_to_group` no-ops on an unknown id.
+        let orphan_ids: Vec<GroupId> = self
+            .group_layout
+            .group_ids()
+            .into_iter()
+            .filter(|gid| !self.groups.contains_key(gid))
+            .collect();
+        for gid in orphan_ids {
+            self.erase_group(gid);
         }
 
         if !self.groups.contains_key(&self.focused_group_id) {
@@ -351,7 +451,6 @@ impl PaneState {
     }
 
     /// Move a pane from its current group to a target group.
-    #[allow(dead_code)]
     pub(super) fn move_pane_to_group(
         &mut self,
         pane_id: u32,
@@ -371,24 +470,75 @@ impl PaneState {
             return;
         }
         // Remove from source
-        let source_became_empty = self
-            .groups
-            .get_mut(&source_group_id)
-            .map(|s| s.remove_pane(pane_id))
-            .unwrap_or(false);
-        if source_became_empty {
-            self.groups.remove(&source_group_id);
-            if let GroupRemoveResult::CollapseToSibling(replacement) =
-                self.group_layout.remove_group(source_group_id)
-            {
-                self.group_layout = replacement;
-            }
-        }
+        self.detach_pane_from_group(pane_id);
         // Insert into target
         if let Some(target) = self.groups.get_mut(&target_group_id) {
             target.insert_pane(pane_id, at);
             target.activate(pane_id);
         }
+    }
+
+    /// Step through the focused group's own pane order, wrapping at the ends.
+    ///
+    /// `allowed` is the set of pane ids that pass the active tab filter; panes
+    /// outside it are skipped so cycling never lands on a hidden pane that
+    /// would render as the "filtered out" empty state. Returns `None` when
+    /// there is nothing else in this group to cycle to.
+    fn step_pane_in_focused_group(
+        &self,
+        current: u32,
+        allowed: &[u32],
+        forward: bool,
+    ) -> Option<u32> {
+        let group = self.groups.get(&self.focused_group_id)?;
+        let cycle: Vec<u32> = group
+            .pane_ids
+            .iter()
+            .copied()
+            .filter(|pid| allowed.contains(pid))
+            .collect();
+        if cycle.len() < 2 {
+            return None;
+        }
+        // From a pane outside this split, start at its first pane going
+        // forward and its last going back, so the key never skips one.
+        let Some(pos) = cycle.iter().position(|&p| p == current) else {
+            return if forward { cycle.first() } else { cycle.last() }.copied();
+        };
+        let next = if forward {
+            (pos + 1) % cycle.len()
+        } else {
+            (pos + cycle.len() - 1) % cycle.len()
+        };
+        Some(cycle[next])
+    }
+
+    /// The pane after `current` in the focused group's own order, wrapping.
+    pub(super) fn next_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
+        self.step_pane_in_focused_group(current, allowed, true)
+    }
+
+    /// The pane before `current` in the focused group's own order, wrapping.
+    pub(super) fn prev_pane_in_focused_group(&self, current: u32, allowed: &[u32]) -> Option<u32> {
+        self.step_pane_in_focused_group(current, allowed, false)
+    }
+
+    /// Remove `pane_id` from whichever group holds it, deleting that group and
+    /// collapsing the layout if it became empty. Returns true if a pane was
+    /// actually detached.
+    pub(super) fn detach_pane_from_group(&mut self, pane_id: u32) -> bool {
+        let Some(source_group_id) = self.group_of(pane_id) else {
+            return false;
+        };
+        let became_empty = self
+            .groups
+            .get_mut(&source_group_id)
+            .map(|s| s.remove_pane(pane_id))
+            .unwrap_or(false);
+        if became_empty {
+            self.erase_group(source_group_id);
+        }
+        true
     }
 }
 
@@ -797,6 +947,8 @@ mod tests {
                 show_preview: false,
                 stale: false,
                 loading: false,
+                untitled: false,
+                saved_text_hash: None,
             }),
             manual_width: None,
             last_size: (0, 0),
@@ -919,6 +1071,100 @@ mod tests {
 
     use crate::editor_group::GroupNode;
 
+    #[test]
+    fn info_bar_position_is_per_split() {
+        let mut state = make_grouped_state();
+        let (g1, g2) = (1, 2);
+        assert!(state.groups.contains_key(&g1) && state.groups.contains_key(&g2));
+        let default = InfoBarPosition::Top;
+        assert_eq!(state.info_bar_position(g1, default), default);
+
+        assert!(state.set_info_bar_position(g1, InfoBarPosition::Hidden));
+        assert_eq!(
+            state.info_bar_position(g1, default),
+            InfoBarPosition::Hidden
+        );
+        assert_eq!(
+            state.info_bar_position(g2, default),
+            default,
+            "other split unchanged"
+        );
+
+        assert!(state.set_info_bar_position(g2, InfoBarPosition::Bottom));
+        assert_eq!(
+            state.info_bar_position(g1, default),
+            InfoBarPosition::Hidden
+        );
+        assert_eq!(
+            state.info_bar_position(g2, default),
+            InfoBarPosition::Bottom
+        );
+    }
+
+    #[test]
+    fn info_bar_position_falls_back_to_the_default() {
+        let mut state = make_grouped_state();
+        // A split that never chose follows whatever the default is.
+        assert_eq!(
+            state.info_bar_position(1, InfoBarPosition::Bottom),
+            InfoBarPosition::Bottom
+        );
+        // A split that is gone can't be set, and reads as the default.
+        assert!(!state.set_info_bar_position(99, InfoBarPosition::Hidden));
+        assert_eq!(
+            state.info_bar_position(99, InfoBarPosition::Top),
+            InfoBarPosition::Top
+        );
+    }
+
+    #[test]
+    fn a_new_split_starts_with_the_default_info_bar() {
+        let mut state = make_grouped_state();
+        state.set_info_bar_position(1, InfoBarPosition::Hidden);
+        state.panes.push(make_pane(4));
+        let g3 = state.create_group(4);
+        assert_eq!(
+            state.info_bar_position(g3, InfoBarPosition::Top),
+            InfoBarPosition::Top
+        );
+    }
+
+    #[test]
+    fn moving_an_info_bar_makes_it_the_default_for_new_splits() {
+        let mut state = make_grouped_state();
+        let old = InfoBarPosition::Bottom;
+        assert_eq!(
+            state.choose_info_bar_position(1, InfoBarPosition::Top, old),
+            Some(InfoBarPosition::Top)
+        );
+        let new = InfoBarPosition::Top;
+        assert_eq!(state.info_bar_position(1, new), InfoBarPosition::Top);
+        // The split that was following the old default stays where it was.
+        assert_eq!(state.info_bar_position(2, new), old);
+        // A split made afterwards opens with the new default.
+        state.panes.push(make_pane(4));
+        let g3 = state.create_group(4);
+        assert_eq!(state.info_bar_position(g3, new), new);
+    }
+
+    #[test]
+    fn hiding_or_keeping_an_info_bar_leaves_the_default() {
+        let mut state = make_grouped_state();
+        let default = InfoBarPosition::Top;
+        assert_eq!(
+            state.choose_info_bar_position(1, InfoBarPosition::Hidden, default),
+            None
+        );
+        assert_eq!(state.info_bar_position(1, default), InfoBarPosition::Hidden);
+        assert_eq!(state.choose_info_bar_position(2, default, default), None);
+        // A split that is gone changes nothing.
+        assert_eq!(
+            state.choose_info_bar_position(99, InfoBarPosition::Bottom, default),
+            None
+        );
+        assert_eq!(state.groups[&2].info_bar, Some(default));
+    }
+
     fn make_grouped_state() -> PaneState {
         let mut state = PaneState::new();
         state.panes.push(make_pane(1));
@@ -935,7 +1181,7 @@ mod tests {
         state.next_split_id += 1;
         state
             .group_layout
-            .split_group(g1, g2, split_id, SplitDir::Horizontal);
+            .split_group(g1, g2, split_id, SplitDir::Horizontal, false);
         state.focused_group_id = g1;
         state.active_pane_id = Some(1);
         state
@@ -948,6 +1194,16 @@ mod tests {
         assert_eq!(state.group_of(1), Some(1));
         assert_eq!(state.group_of(2), Some(1));
         assert_eq!(state.group_of(3), Some(2));
+    }
+
+    #[test]
+    fn each_split_shows_its_active_tab() {
+        let mut state = make_grouped_state();
+        assert_eq!(state.shown_pane_ids(), vec![1, 3]);
+        // A group outside the layout is not on screen.
+        state.panes.push(make_pane(4));
+        state.create_group(4);
+        assert_eq!(state.shown_pane_ids(), vec![1, 3]);
     }
 
     #[test]
@@ -988,6 +1244,195 @@ mod tests {
         assert_eq!(g.pane_ids, vec![1, 4, 2]);
     }
 
+    /// Group 1 holds [1, 2, 3] and is focused; group 2 holds [8, 9].
+    fn make_cycle_state() -> PaneState {
+        let mut state = PaneState::new();
+        for id in [1, 2, 3, 8, 9] {
+            state.panes.push(make_pane(id));
+        }
+        state.next_pane_id = 10;
+        let g1 = state.create_group(1);
+        state.groups.get_mut(&g1).unwrap().insert_pane(2, None);
+        state.groups.get_mut(&g1).unwrap().insert_pane(3, None);
+        let g2 = state.create_group(8);
+        state.groups.get_mut(&g2).unwrap().insert_pane(9, None);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        let split_id = state.next_split_id;
+        state.next_split_id += 1;
+        state
+            .group_layout
+            .split_group(g1, g2, split_id, SplitDir::Horizontal, false);
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+        state
+    }
+
+    #[test]
+    fn next_pane_in_group_wraps_within_group() {
+        let ps = make_cycle_state();
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 2, 3]), Some(2));
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 2, 3]), Some(1));
+    }
+
+    #[test]
+    fn prev_pane_in_group_wraps_within_group() {
+        let ps = make_cycle_state();
+        assert_eq!(ps.prev_pane_in_focused_group(2, &[1, 2, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 2, 3]), Some(3));
+    }
+
+    #[test]
+    fn next_pane_in_group_ignores_other_groups() {
+        let ps = make_cycle_state();
+        // 8 and 9 live in the unfocused group; cycling must never reach them
+        // even though they pass the filter.
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 2, 3, 8, 9]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 2, 3, 8, 9]), Some(3));
+    }
+
+    #[test]
+    fn next_pane_in_group_single_pane_is_none() {
+        let mut ps = make_cycle_state();
+        ps.focused_group_id = 2; // group 2 filtered down to one pane
+        assert_eq!(ps.next_pane_in_focused_group(8, &[8]), None);
+        assert_eq!(ps.prev_pane_in_focused_group(8, &[8]), None);
+    }
+
+    #[test]
+    fn next_pane_in_group_respects_filter() {
+        let ps = make_cycle_state();
+        // Pane 2 is hidden by the tab filter, so cycling skips over it.
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 3]), Some(3));
+        assert_eq!(ps.next_pane_in_focused_group(3, &[1, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(1, &[1, 3]), Some(3));
+    }
+
+    #[test]
+    fn cycle_from_pane_outside_the_group_starts_at_the_first() {
+        let ps = make_cycle_state();
+        // `current` belongs to the other group — start at the head of the
+        // cycle (the tail going back) rather than returning None, so the key
+        // never feels dead and never skips the first pane.
+        assert_eq!(ps.next_pane_in_focused_group(9, &[1, 2, 3]), Some(1));
+        assert_eq!(ps.prev_pane_in_focused_group(9, &[1, 2, 3]), Some(3));
+    }
+
+    #[test]
+    fn cycle_in_unknown_focused_group_is_none() {
+        let mut ps = make_cycle_state();
+        ps.focused_group_id = 999;
+        assert_eq!(ps.next_pane_in_focused_group(1, &[1, 2, 3]), None);
+    }
+
+    #[test]
+    fn detach_pane_keeps_group_with_remaining_panes() {
+        let mut state = make_grouped_state();
+        let layout_before = state.group_layout.group_ids();
+        // Group 1 holds panes [1, 2] — detaching 2 must not remove the group.
+        assert!(state.detach_pane_from_group(2));
+        assert!(state.groups.contains_key(&1));
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
+        assert_eq!(state.group_layout.group_ids(), layout_before);
+    }
+
+    #[test]
+    fn detach_sole_pane_removes_group_and_collapses_layout() {
+        let mut state = make_grouped_state();
+        // Group 2 holds only pane 3 — detaching it empties and collapses group 2.
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+        assert!(state.detach_pane_from_group(3));
+        assert!(!state.groups.contains_key(&2));
+        assert!(state.groups.contains_key(&1));
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+    }
+
+    #[test]
+    fn detach_unknown_pane_is_noop() {
+        let mut state = make_grouped_state();
+        let layout_before = state.group_layout.group_ids();
+        assert!(!state.detach_pane_from_group(99));
+        assert_eq!(state.groups.len(), 2);
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1, 2]);
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), layout_before);
+    }
+
+    #[test]
+    fn detach_sole_pane_of_only_group_resets_layout_to_sentinel() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        let g1 = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+
+        assert!(state.detach_pane_from_group(1));
+        // groups and group_layout must agree: no group survives, and the
+        // layout no longer names the erased group.
+        assert!(state.groups.is_empty());
+        assert!(!state.group_layout.group_ids().contains(&g1));
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
+        assert_eq!(state.focused_group_id, 0);
+    }
+
+    #[test]
+    fn move_pane_to_same_group_with_index_keeps_group() {
+        let mut state = make_grouped_state();
+        // Group 2 holds only pane 3; "moving" it into its own group must hit
+        // the early return and leave the group intact.
+        state.move_pane_to_group(3, 2, Some(0));
+        assert!(
+            state.groups.contains_key(&2),
+            "group 2 must survive a same-group move of its sole pane"
+        );
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn move_pane_to_same_group_without_index_keeps_group() {
+        let mut state = make_grouped_state();
+        state.move_pane_to_group(3, 2, None);
+        assert!(state.groups.contains_key(&2));
+        assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+        assert_eq!(state.group_layout.group_ids(), vec![1, 2]);
+    }
+
+    #[test]
+    fn detach_then_split_within_multi_pane_group() {
+        let mut state = make_grouped_state();
+        // Tab payload: pane 2 dragged onto its own group's edge (group 1 has [1, 2]).
+        state.focused_group_id = 1;
+        assert!(state.detach_pane_from_group(2));
+        assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
+        let new_gid = state.split_focused_group(2, SplitDir::Vertical, false);
+        assert_eq!(state.group_layout.group_ids(), vec![1, new_gid, 2]);
+        assert!(state.groups.get(&new_gid).unwrap().contains(2));
+    }
+
+    #[test]
+    fn detach_return_value_tracks_whether_pane_was_found() {
+        let mut state = make_grouped_state();
+        assert!(state.detach_pane_from_group(2)); // group survives
+        assert!(state.detach_pane_from_group(1)); // group dies
+        assert!(!state.detach_pane_from_group(1)); // already gone
+    }
+
+    /// The `SplitWithPayload` handler focuses the target group, then detaches
+    /// the dragged pane, then splits. Detaching may collapse the *source*
+    /// group out of the layout — the target group must survive that.
+    #[test]
+    fn detach_then_split_keeps_target_group_in_layout() {
+        let mut state = make_grouped_state();
+        // Drag pane 3 (sole occupant of group 2) onto group 1's edge.
+        state.focused_group_id = 1;
+        assert!(state.detach_pane_from_group(3));
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+        let new_gid = state.split_focused_group(3, SplitDir::Vertical, true);
+        assert_eq!(state.group_layout.group_ids(), vec![new_gid, 1]);
+        assert!(state.groups.get(&new_gid).unwrap().contains(3));
+    }
+
     #[test]
     fn split_focused_group_creates_new_group_and_updates_layout() {
         let mut state = PaneState::new();
@@ -998,7 +1443,7 @@ mod tests {
         state.active_pane_id = Some(1);
 
         state.panes.push(make_pane(2));
-        let g2 = state.split_focused_group(2, SplitDir::Horizontal);
+        let g2 = state.split_focused_group(2, SplitDir::Horizontal, false);
 
         // New group created
         assert!(state.groups.contains_key(&g2));
@@ -1008,6 +1453,28 @@ mod tests {
         assert_eq!(state.active_pane_id, Some(2));
         // Layout is now a split
         assert_eq!(state.group_layout.group_ids(), vec![g1, g2]);
+    }
+
+    #[test]
+    fn split_focused_group_before_places_new_group_first() {
+        let mut state = PaneState::new();
+        state.panes.push(make_pane(1));
+        let g1 = state.create_group(1);
+        state.group_layout = GroupNode::Leaf { group_id: g1 };
+        state.focused_group_id = g1;
+        state.active_pane_id = Some(1);
+
+        state.panes.push(make_pane(2));
+        let g2 = state.split_focused_group(2, SplitDir::Horizontal, true);
+
+        // New group created
+        assert!(state.groups.contains_key(&g2));
+        assert!(state.groups.get(&g2).unwrap().contains(2));
+        // Focus moved to new group
+        assert_eq!(state.focused_group_id, g2);
+        assert_eq!(state.active_pane_id, Some(2));
+        // Layout is now a split with the new group first
+        assert_eq!(state.group_layout.group_ids(), vec![g2, g1]);
     }
 
     #[test]
@@ -1065,6 +1532,11 @@ mod tests {
         assert!(state.groups.is_empty());
         assert_eq!(state.focused_group_id, 0);
         assert_eq!(state.active_pane_id, None);
+        // The layout must not keep naming the group that was just erased —
+        // the next add_pane_to_group would no-op against it and strand the
+        // pane outside every group.
+        assert!(!state.group_layout.group_ids().contains(&gid));
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
     }
 
     #[test]
@@ -1110,6 +1582,31 @@ mod tests {
         assert_eq!(state.groups.get(&1).unwrap().pane_ids, vec![1]);
         // Group 2 still has pane 3
         assert_eq!(state.groups.get(&2).unwrap().pane_ids, vec![3]);
+    }
+
+    #[test]
+    fn sync_prunes_layout_groups_absent_from_the_map() {
+        let mut state = make_grouped_state();
+        // Session restore skips a saved group whose panes all failed to
+        // restore, but still installs the layout naming it. The group is not
+        // in `groups` at all, so the empty-group sweep cannot see it.
+        state.groups.remove(&2);
+        state.panes.retain(|p| p.id != 3);
+        state.sync_groups_with_panes();
+        assert_eq!(state.group_layout.group_ids(), vec![1]);
+        assert_eq!(state.focused_group_id, 1);
+    }
+
+    #[test]
+    fn sync_resets_layout_when_every_group_is_absent() {
+        let mut state = make_grouped_state();
+        state.groups.clear();
+        state.panes.clear();
+        state.sync_groups_with_panes();
+        // No group survives, so the layout must fall back to the same empty
+        // sentinel `PaneState::new` starts from rather than keep naming one.
+        assert_eq!(state.group_layout.group_ids(), vec![0]);
+        assert_eq!(state.focused_group_id, 0);
     }
 
     #[test]

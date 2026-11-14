@@ -1,5 +1,7 @@
 mod context_menu;
+pub(in crate::app) mod sections;
 mod session_list;
+pub(in crate::app) use session_list::BADGE_R;
 mod workspace_section;
 
 use super::super::App;
@@ -11,15 +13,23 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 /// Deferred actions collected while rendering the session list section.
+#[derive(Default)]
 pub(in crate::app) struct SessionListActions {
     pub spawn_new_session: Option<ShellKind>,
     pub spawn_new_session_cwd: Option<(ShellKind, PathBuf)>,
+    pub new_file: bool,
     pub duplicate_session: bool,
     pub quit_pane_id: Option<u32>,
     pub clicked_sidebar_pane_id: Option<u32>,
     pub open_folder_path: Option<PathBuf>,
     pub toggle_label: Option<(u32, u32)>,
     pub show_new_label_for_pane: Option<u32>,
+    pub start_rename_pane_id: Option<u32>,
+    pub copy_path_pane_id: Option<u32>,
+    pub open_in_explorer_pane_id: Option<u32>,
+    pub commit_rename: Option<(u32, String)>,
+    /// `start_rename_pane_id` came from a tab bar, so its box opens there.
+    pub rename_in_tab_bar: bool,
 }
 
 /// Deferred actions collected while rendering the workspace section.
@@ -60,13 +70,8 @@ impl App {
         // ── Left panel: sessions (top) + workspaces (bottom) ───────────────
         let mut sess_actions = SessionListActions {
             spawn_new_session: self.deferred_spawn.take(),
-            spawn_new_session_cwd: None,
             duplicate_session: std::mem::replace(&mut self.deferred_duplicate, false),
-            quit_pane_id: None,
-            clicked_sidebar_pane_id: None,
-            open_folder_path: None,
-            toggle_label: None,
-            show_new_label_for_pane: None,
+            ..Default::default()
         };
         if let Some(ws_id) = self.deferred_open_workspace.take() {
             self.navigate_to_workspace(ws_id);
@@ -159,6 +164,15 @@ impl App {
         {
             self.drag_state.drop_target = Some(crate::app::drag::DropTarget::NewWindow);
         }
+
+        // Drop an unconsumed scroll request. The row clears it when it draws,
+        // but a target that is filtered out, sitting in a section with no
+        // visible rows, or hidden behind the global-search view never gets the
+        // chance — and a value left here would re-scroll on every later frame.
+        // Must run before the deferred actions below, which can set a fresh one.
+        // ponytail: the first window to render wins; a pane only visible in
+        // another viewport loses its scroll. Key it per window if that bites.
+        self.scroll_to_pane = None;
 
         // ── Process deferred actions ──────────────────────────────────────────
         self.process_left_panel_actions(ctx, sess_actions, ws_actions, active_fg);

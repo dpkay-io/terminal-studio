@@ -16,6 +16,9 @@ pub struct ClosedSessionRecord {
     pub id: u64,
     pub closed_at: u64,
     pub title: String,
+    /// `title` is a name the user gave the session; absent in older files.
+    #[serde(default)]
+    pub title_pinned: bool,
     pub cwd: PathBuf,
     pub shell: String,
     pub workspace_id: Option<u64>,
@@ -120,6 +123,7 @@ pub fn save_closed_session(
     ansi_bytes: Vec<u8>,
     cwd: PathBuf,
     title: String,
+    title_pinned: bool,
     shell: String,
     workspace_id: Option<u64>,
     workspace_name: Option<String>,
@@ -135,6 +139,13 @@ pub fn save_closed_session(
     };
     std::fs::create_dir_all(&dir).ok();
 
+    // Closing several tabs at once saves each on its own thread. Each one
+    // reads the manifest, adds its record and writes it back, so without
+    // this one would overwrite another's record (or take the same id).
+    static MANIFEST_UPDATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _update = MANIFEST_UPDATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut manifest = ClosedSessionManifest::load();
     let id = manifest.allocate_id();
 
@@ -162,6 +173,7 @@ pub fn save_closed_session(
         id,
         closed_at: epoch_secs(),
         title,
+        title_pinned,
         cwd,
         shell,
         workspace_id,
@@ -234,13 +246,17 @@ mod tests {
     use std::fs;
 
     fn temp_dir() -> PathBuf {
+        // Tests run in parallel: a clock reading alone can repeat, and two
+        // tests sharing a folder see each other's files. Process id plus a
+        // counter is unique for every call.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "terminal_studio_test_{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
+            "terminal_studio_test_{}_{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
+        // A reused process id could meet a folder an aborted run left behind.
+        fs::remove_dir_all(&dir).ok();
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -250,6 +266,7 @@ mod tests {
             id,
             closed_at: epoch_secs(),
             title: format!("Session {}", id),
+            title_pinned: false,
             cwd: PathBuf::from("/tmp"),
             shell: "bash".to_string(),
             workspace_id: None,
@@ -370,6 +387,7 @@ mod tests {
             id: 42,
             closed_at: 1700000000,
             title: "My Session".to_string(),
+            title_pinned: true,
             cwd: PathBuf::from("C:\\Users\\test"),
             shell: "powershell".to_string(),
             workspace_id: Some(123),
