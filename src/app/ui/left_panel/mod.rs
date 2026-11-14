@@ -1,4 +1,5 @@
 mod context_menu;
+pub(in crate::app) mod nav_order;
 pub(in crate::app) mod sections;
 mod session_list;
 pub(in crate::app) use session_list::BADGE_R;
