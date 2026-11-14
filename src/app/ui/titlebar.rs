@@ -262,8 +262,7 @@ impl App {
                                     if self.current_window_id.is_some() {
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     } else if self.session_state.sessions.is_empty() {
-                                        self.quit_confirmed = true;
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                        self.quit_app(ctx);
                                     } else {
                                         self.show_quit_confirm = true;
                                     }
@@ -864,8 +863,7 @@ impl App {
                                     if self.current_window_id.is_some() {
                                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                     } else if self.session_state.sessions.is_empty() {
-                                        self.quit_confirmed = true;
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                        self.quit_app(ctx);
                                     } else {
                                         self.show_quit_confirm = true;
                                     }
