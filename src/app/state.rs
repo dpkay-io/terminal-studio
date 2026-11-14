@@ -31,6 +31,7 @@ use super::persistence::{
 use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
 use super::title::shell_escape_arg;
+use super::ui::left_panel::nav_order::NavOrder;
 use super::watcher::WatchState;
 use super::{App, CloseAllTarget};
 
@@ -1647,6 +1648,12 @@ impl App {
                 .cloned()
                 .collect(),
             group_layout,
+            nav_order: self
+                .nav_order
+                .order()
+                .iter()
+                .filter_map(|pid| pane_id_to_index.get(pid).copied())
+                .collect(),
         };
 
         if let Ok(text) = serde_json::to_string_pretty(&state) {
@@ -1970,6 +1977,16 @@ impl App {
             // and ensure focused_group_id exists.
             self.pane_state.sync_groups_with_panes();
         }
+
+        // After the group layout: a pane's section is its group.
+        let saved_nav_order: Vec<u32> = state
+            .nav_order
+            .iter()
+            .filter_map(|&idx| pane_ids.get(idx).copied())
+            .collect();
+        let mut nav_panes = Vec::with_capacity(self.pane_state.panes.len());
+        self.nav_panes_into(&mut nav_panes);
+        self.nav_order = NavOrder::restore(&saved_nav_order, &nav_panes);
 
         self.active_group = state.active_group;
         for (group, pane_index) in &state.last_pane_per_group {

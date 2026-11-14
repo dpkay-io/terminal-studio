@@ -145,6 +145,10 @@ pub(super) struct AppSession {
     pub(super) shown_md_tabs: Vec<PathBuf>,
     #[serde(default)]
     pub(super) group_layout: Option<SavedGroupLayout>,
+    /// The left nav's row order (`NavOrder`), as indices into `panes`. Empty
+    /// in older files: the list then starts in most-recent-first order.
+    #[serde(default)]
+    pub(super) nav_order: Vec<usize>,
 }
 
 pub(super) fn session_data_path() -> Option<PathBuf> {
@@ -426,6 +430,7 @@ mod tests {
                 PathBuf::from("/docs/CHANGELOG.md"),
             ],
             group_layout: None,
+            nav_order: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();
@@ -566,6 +571,20 @@ mod tests {
     }
 
     #[test]
+    fn app_session_nav_order_roundtrip() {
+        let original: AppSession = serde_json::from_str(r#"{"nav_order":[2,0,1]}"#).unwrap();
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: AppSession = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.nav_order, vec![2, 0, 1]);
+    }
+
+    #[test]
+    fn old_session_file_has_empty_nav_order() {
+        let restored: AppSession = serde_json::from_str(r#"{"sessions":[]}"#).unwrap();
+        assert!(restored.nav_order.is_empty());
+    }
+
+    #[test]
     fn app_session_with_group_layout_roundtrip() {
         use crate::editor_group::GroupNode;
         let original = AppSession {
@@ -617,6 +636,7 @@ mod tests {
                 next_group_id: 2,
                 next_split_id: 1,
             }),
+            nav_order: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();
