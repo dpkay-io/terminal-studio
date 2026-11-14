@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1044 tests)
+cargo test               # all unit tests (1046 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -62,6 +62,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/markdown.rs` | `render_markdown()`: headers, bold, code blocks, lists, blockquotes, links |
 | `src/app/persistence.rs` | `AppSession`, `SavedPane`, `SavedPaneContent`, `SavedSession`; JSON serialization; session restore. A restored session that was never opened keeps its scrollback file across saves (`SavedPaneContent::DeferredTerminal.scrollback_file`); running sessions' files are written under a per-save stamp so they never overwrite it |
 | `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces. `DeferredSaves`: a save asked for during an extra window's frame (its view is swapped into `App` by `App::with_window_view`) waits until the view is swapped back, so it never writes one window's state as another's |
+| `src/app/quit.rs` | `App::quit_app()` / `close_main_window()`: every quit (the quit dialog, the main window's close button, macOS ⌘Q) closes the main window, which ends the app, from whichever window it is asked in. The quit dialog is drawn in every open window |
 | `src/app/restart.rs` | Restarting into an installed update: the Restart pill / Settings button only ask for it (`request_restart`), and the main window's frame saves and restarts (`restart_if_due`), since a restart exits at once and a save from an extra window's frame would wait |
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
@@ -335,7 +336,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
 | `src/app/input.rs` | 32 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection and holding it back from text boxes |
 | `src/app/layout_shortcuts.rs` | 8 | layout keys from an editor apply only from its own text box, the notes box or no focus — never a rename or filter field; parked focus is seen where it was and given back unless something took it |
-| `src/app/pane_state.rs` | 83 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs), each pane's left nav section (a split missing from the layout gives none; one split holds every pane) |
+| `src/app/pane_state.rs` | 86 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs), each pane's left nav section (a split missing from the layout gives none; one split holds every pane) |
 | `src/app/drag.rs` | 76 | drag payload/target resolution, edge-zone geometry, split-edge drops, tab-bar drops (reorder, move to a gap in another split, open new things there), one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
 | `src/app/ui/left_panel/sections.rs` | 9 | split-section labels, three-state row prominence |
@@ -370,6 +371,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/shortcuts.rs` | 28 | keybinding parsing, action resolution, layout chords never use a text-editing key, Ctrl+Tab = last session on every platform and not OS-reserved on macOS, each numbered tab action's index |
 | `src/app/multi_window.rs` | 3 | saves outside a window's frame run at once; inside one they wait, per kind, and are taken once |
 | `src/app/restart.rs` | 3 | an installed update restarts once, a Restart click always (retry after a failure), nothing otherwise |
+| `src/app/quit.rs` | 2 | a quit from an extra window closes the main window (not itself); from the main window, the main window |
 | `src/keybindings.rs` | 6 | keybinding config loading, JSON handling |
 | `src/app/settings.rs` | 10 | settings persistence, JSON config, rows that stay in place (default, old files, clamp) |
 | `src/search_worker.rs` | 6 | cross-session fuzzy search |
@@ -398,7 +400,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1044 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1046 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 

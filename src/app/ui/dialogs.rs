@@ -1501,9 +1501,7 @@ impl App {
         }
 
         if do_quit {
-            self.show_quit_confirm = false;
-            self.quit_confirmed = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.quit_app(ctx);
         } else if resp.dismissed || cancel_clicked {
             self.show_quit_confirm = false;
         }

@@ -49,6 +49,7 @@ mod nav_order_sync;
 mod pane;
 mod pane_state;
 mod persistence;
+mod quit;
 mod restart;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
@@ -452,7 +453,8 @@ impl eframe::App for App {
 
         #[cfg(target_os = "macos")]
         if macos_quit::take_request() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            // Asks first (the close request below), unlike `quit_app`.
+            quit::close_main_window(ctx);
         }
 
         // ── Enforce minimum window size (decorations(false) means the OS won't) ──
