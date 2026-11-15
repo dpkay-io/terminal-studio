@@ -143,7 +143,11 @@ fn render_terminal_leaf(
         } else {
             None
         };
-        let mut geo = crate::renderer::terminal_pass::TerminalView::new(Arc::clone(&session)).show(
+        let mut geo = crate::renderer::terminal_pass::TerminalView::new(
+            Arc::clone(&session),
+            &rctx.sessions[idx].render_snapshot,
+        )
+        .show(
             ui,
             is_focused,
             rctx.cursor_alpha,

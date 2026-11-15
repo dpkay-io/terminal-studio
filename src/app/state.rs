@@ -448,6 +448,7 @@ impl App {
                     restore_title: None,
                     claude_session_id: None,
                     hangup,
+                    render_snapshot: Default::default(),
                     _scrollback_tracking: scrollback_tracking,
                 };
                 if self.session_state.active_id.is_none() {
