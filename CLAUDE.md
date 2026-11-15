@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1046 tests)
+cargo test               # all unit tests (1072 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -37,12 +37,12 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/terminal/mod.rs` | `Session` struct wrapping `Term<EventProxy>`; `EventProxy` (`EventListener` impl); `TermSize` (`Dimensions` impl) |
 | `src/terminal/tests.rs` | 12 terminal emulator tests using `alacritty_terminal` APIs |
 | `src/pty/mod.rs` | `SessionManager`: spawn/resize PTY sessions; `ShellKind` enum; each session gets dedicated reader/writer threads |
-| `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks |
+| `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks (`advance_chunk`: feed, keep a scrolled-up view in place, bump the content generation) under the session's output gate; each chunk's write lock is released with `unlock_fair` so a waiting frame gets it |
 | `src/pty/shell_integration.rs` | Shell prompt integration helpers; OSC 7 injection for bash/zsh/fish |
 | `src/pty/foreground.rs` | Platform-specific foreground process detection (Windows toolhelp / Linux /proc) |
 | `src/pty/foreground_worker.rs` | `ForegroundWorker`: background thread polling foreground detection every 500ms; UI reads from cache |
 | `src/renderer/mod.rs` | Re-export of `terminal_pass` |
-| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry`, `SelectionRange` — cell rendering using `alacritty_terminal` grid API |
+| `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry`, `SelectionRange`, `TerminalSnapshot` — cell rendering using `alacritty_terminal` grid API. Each session keeps the snapshot it was last drawn from (`SessionEntry.render_snapshot`); a frame waits at most `LOCK_WAIT_BUDGET` (2 ms) for the lock, else paints that snapshot — never a blank terminal |
 
 ### App State & Logic (`src/app/`)
 
@@ -66,6 +66,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/restart.rs` | Restarting into an installed update: the Restart pill / Settings button only ask for it (`request_restart`), and the main window's frame saves and restarts (`restart_if_due`), since a restart exits at once and a save from an extra window's frame would wait |
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
+| `src/app/scrollback_saver.rs` | `ScrollbackSaver`: saves running sessions' scrollback in the background and does every write of `session.json` (the UI thread only builds the JSON). A changed session is captured once its output is quiet for `SETTLE` (10 s) or changing for `MAX_STALE` (60 s), `SLICE_LINES` (2 000) per read lock while output waits on the session's output gate; a capture a resize tore is dropped. After each session write it prunes the scrollback folder to the files the JSON names plus each session's latest. `adopt()` keeps a restored session's file as its latest; `capture_all_now()` + `flush()` back `App::save_session_final()` (quit, restart). Sessions are tracked by a `SaverTracking` guard on `SessionEntry` |
+| `src/app/scrollback_capture.rs` | `extract_grid_as_ansi()`, `AnsiCapture` (the same capture a few lines at a time; lines are independent, so any step size gives the same bytes) |
 | `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box; extra windows hold it in `hold_extra_window_keys()` and park the keyboard for that frame (egui has already read the Tab as a focus move), then `restore_parked_focus()` gives it back |
 | `src/app/nav_order_sync.rs` | `refresh_nav_order()`: feeds the window's `NavOrder` once per window frame (also while the left panel is hidden); `numbered_tab_targets()`: what ⌘1–9 open — the focused split's rows in left nav order (the whole list without splits), filtered like the list |
 | `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the view's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet, and the tab bar, which has no titlebar button) — the single path for titlebar buttons, shortcuts, command palette, the macOS menu bar and the Settings checkbox |
@@ -167,10 +169,10 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 
 **Threading model:**
 - UI runs on the main thread
-- Each PTY has a dedicated `pty-reader-N` thread: reads bytes → tee CWD → alacritty `Processor::advance` under write lock → `ctx.request_repaint_after(8ms)`
+- Each PTY has a dedicated `pty-reader-N` thread: reads bytes → tee CWD → alacritty `Processor::advance` under write lock (4 KB per lock, released with `unlock_fair`) → `ctx.request_repaint_after(8ms)`
 - Each PTY has a dedicated `pty-writer-N` thread: drains `mpsc::Receiver<Vec<u8>>` → writes to PTY master
 - UI sends input via `SessionEntry.pty_tx: mpsc::Sender<Vec<u8>>`; alacritty's `PtyWrite` events go through the same channel
-- `Session` state is `Arc<RwLock<Session>>` — shared between reader thread and UI thread
+- `Session` state is `Arc<RwLock<Session>>` — shared between reader thread and UI thread. `parking_lot`'s lock is fair: a parked writer makes new readers wait, so nothing may hold a read lock long (the scrollback saver reads in slices). `Session::content_generation()` is bumped under the write lock on every grid change; `Session::output_gate()` is held by the reader while feeding and by the saver while capturing (lock order: gate, then session; the UI never takes the gate)
 - `alive` flag is `Arc<AtomicBool>` — signals reader thread to stop
 - Background singleton threads (each uses `Arc<AtomicBool> alive` + `Arc<Mutex<>> results`):
   - `ForegroundWorker`: process detection polling (500ms)
@@ -179,6 +181,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
   - `SearchWorker`: cross-session fuzzy search
   - `FileSearchWorker`: file path fuzzy search
   - `UpdateChecker`: GitHub releases polling (24h interval)
+  - `ScrollbackSaver`: scrollback captures and `session.json` writes (1 s tick)
+- Closing a tab: `closed-session-save` thread captures the session's scrollback and looks up its Claude conversation (`claude_session::pick_claude_session_id`)
   - `SysMonitor`: CPU/RAM/network stats
 
 **Pane tree (in-tab splits):**
@@ -350,14 +354,16 @@ Color32::from_rgb(30, 30, 46)
 | `src/workspace.rs` | 17 | store CRUD, find_for_cwd, find_for_path, unique name, note store |
 | `src/app/workspace_ui.rs` | 5 | open-folder dialog: Save as Workspace on outside workspaces / off inside one / existing kept, default name and colour always free, generated colours distinct |
 | `src/app/watcher.rs` | 16 | file system watch, git refresh debounce, directory caching |
-| `src/terminal/tests.rs` | 12 | session dims, resize, content preservation, OSC title, a user-given (pinned) title outlasting the shell's, cursor, bracketed paste, mouse SGR |
+| `src/terminal/tests.rs` | 14 | session dims, resize (bumps the content generation only when the size changes), content preservation, OSC title, a user-given (pinned) title outlasting the shell's, cursor, bracketed paste, mouse SGR |
 | `src/search.rs` | 11 | text search, match finding, index navigation |
-| `src/renderer/terminal_pass.rs` | 10 | terminal geometry, cell rendering, scrollbar hit-testing, selection |
-| `src/pty/reader.rs` | 10 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming |
+| `src/renderer/terminal_pass.rs` | 15 | terminal geometry, cell rendering, scrollbar hit-testing, selection, a busy lock paints the last snapshot (background only before the first draw) |
+| `src/pty/reader.rs` | 11 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming, a fed chunk bumps the generation and keeps a scrolled-up view in place |
+| `src/app/scrollback_capture.rs` | 17 | ANSI capture: colours, attributes, wide chars, trailing blanks, max lines, round trips; a capture in steps of any size equals one read |
+| `src/app/scrollback_saver.rs` | 17 | save timing (settle, stale under constant output, saved), sliced capture (equals one read, dropped when resized, completes under constant output), passes write only changed sessions and ask for a session save, empty and dropped sessions, final capture writes only changed ones, saving off, adopt (and off), prune keeps referenced + latest, names never reused, flush, tracking guard |
 | `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
-| `src/app/persistence.rs` | 34 | session serialization, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order and each extra window's (old files load empty), saved indices stay aligned after a pane that can't be restored |
+| `src/app/persistence.rs` | 35 | session serialization, the scrollback files a saved state names, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order and each extra window's (old files load empty), saved indices stay aligned after a pane that can't be restored |
 | `src/app/pane.rs` | 15 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits), undoing back to the saved text leaves nothing unsaved |
 | `src/app/ui/tab_bar.rs` | 3 | drop gap from the pointer, hidden tabs keep their place in the order, empty bar |
 | `src/pty/mod.rs` | 8 | shell detection, session manager operations |
@@ -392,7 +398,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
-| `src/app/state.rs` | 12 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; saving scrollback keeps the files restored-but-unopened sessions still need, new names never reuse old ones |
+| `src/app/state.rs` | 10 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
 | `src/app/ui/pane_renderer.rs` | 3 | drop-preview geometry: join covers the leaf, each edge covers the matching half |
 | `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
 | `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
@@ -400,7 +406,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1046 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1072 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 

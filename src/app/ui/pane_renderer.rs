@@ -1064,8 +1064,7 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
     match action {
         InfoBarAction::None => {}
         InfoBarAction::SetPosition(gid, pos) => {
-            // No save_session() here: with scrollback saving on it writes
-            // every terminal's history. The next natural save (pane changes,
+            // No save_session() here: the next natural save (pane changes,
             // quit) records the split's position; the default for new splits
             // is in settings and saved at once.
             app.choose_info_bar_position(gid, pos);
