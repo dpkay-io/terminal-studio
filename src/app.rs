@@ -1311,56 +1311,67 @@ impl App {
         self.save_session();
     }
 
+    /// Record a running session that is closing for Recently Closed. Only
+    /// cheap reads happen here; the scrollback capture and the Claude
+    /// session lookup (which reads files) run on the save thread, which
+    /// holds the session until it is done.
     fn capture_closed_session(&self, sid: u32) {
         let Some(entry) = self.session_state.find(sid) else {
             return;
         };
-        let session = entry.session.read();
-
-        let ansi_bytes = scrollback_capture::extract_grid_as_ansi(&session.term, None);
-        let cwd = session.cwd.clone();
-        let title = session.title();
-        let title_pinned = session.is_title_pinned();
+        let session_arc = Arc::clone(&entry.session);
+        let (cwd, title, title_pinned) = {
+            let session = entry.session.read();
+            (
+                session.cwd.clone(),
+                session.title(),
+                session.is_title_pinned(),
+            )
+        };
         let shell = entry.shell.name().to_string();
-        let cols = session.term.columns() as u16;
-        let rows = session.term.screen_lines() as u16;
-        let line_count = session.term.grid().history_size() + session.term.screen_lines();
-        let workspace_id = self.workspace_store.find_for_cwd(&cwd).map(|w| w.id);
-        let workspace_name = self
-            .workspace_store
-            .find_for_cwd(&cwd)
-            .map(|w| w.name.clone());
+        let workspace = self.workspace_store.find_for_cwd(&cwd);
+        let workspace_id = workspace.map(|w| w.id);
+        let workspace_name = workspace.map(|w| w.name.clone());
         let max_sessions = self.settings.max_closed_sessions;
-        let claude_session_id = self
-            .workers
-            .foreground_worker
+        let foreground = &self.workers.foreground_worker;
+        let known_claude_id = foreground
             .get_claude_session_id(sid)
-            .or_else(|| entry.claude_session_id.clone())
-            .or_else(|| {
-                let scanned =
-                    claude_session::lookup_claude_session_id_by_cwd_any(&cwd.to_string_lossy())?;
-                let already_taken = self.session_state.sessions.iter().any(|other| {
-                    other.id != sid
-                        && (other.claude_session_id.as_deref() == Some(scanned.as_str())
-                            || self
-                                .workers
-                                .foreground_worker
-                                .get_claude_session_id(other.id)
-                                .as_deref()
-                                == Some(scanned.as_str()))
-                });
-                if already_taken {
-                    None
-                } else {
-                    Some(scanned)
-                }
-            });
-
-        drop(session);
+            .or_else(|| entry.claude_session_id.clone());
+        // Conversations other open sessions hold, so a folder scan never
+        // gives this one theirs.
+        let taken: std::collections::HashSet<String> = self
+            .session_state
+            .sessions
+            .iter()
+            .filter(|other| other.id != sid)
+            .flat_map(|other| {
+                [
+                    other.claude_session_id.clone(),
+                    foreground.get_claude_session_id(other.id),
+                ]
+            })
+            .flatten()
+            .collect();
 
         std::thread::Builder::new()
             .name("closed-session-save".into())
             .spawn(move || {
+                let (ansi_bytes, cols, rows, line_count) = {
+                    let session = session_arc.read();
+                    let term = &session.term;
+                    (
+                        scrollback_capture::extract_grid_as_ansi(term, None),
+                        term.columns() as u16,
+                        term.screen_lines() as u16,
+                        term.grid().history_size() + term.screen_lines(),
+                    )
+                };
+                drop(session_arc);
+                let claude_session_id = claude_session::pick_claude_session_id(
+                    known_claude_id,
+                    || claude_session::lookup_claude_session_id_by_cwd_any(&cwd.to_string_lossy()),
+                    &taken,
+                );
                 closed_sessions::save_closed_session(
                     ansi_bytes,
                     cwd,
@@ -1376,6 +1387,7 @@ impl App {
                     claude_session_id,
                 );
             })
+            .map_err(|e| log::warn!("failed to start the closed-session save: {e}"))
             .ok();
     }
 

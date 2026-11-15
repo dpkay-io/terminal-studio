@@ -228,6 +228,18 @@ pub(crate) fn lookup_claude_session_id_by_cwd_any(cwd: &str) -> Option<String> {
 /// absent, or the JSON is malformed / missing the `"sessionId"` field.
 ///
 /// On WSL, falls back to scanning all session files (Linux PID ≠ Windows PID).
+/// The Claude conversation a closing session had: the one already known
+/// for it, else the newest one `scan` finds for its folder unless another
+/// open session holds it (`taken`). `scan` reads files, so it runs only when
+/// needed, off the UI thread.
+pub(crate) fn pick_claude_session_id(
+    known: Option<String>,
+    scan: impl FnOnce() -> Option<String>,
+    taken: &std::collections::HashSet<String>,
+) -> Option<String> {
+    known.or_else(|| scan().filter(|scanned| !taken.contains(scanned)))
+}
+
 pub(crate) fn lookup_claude_session_id(pid: u32) -> Option<String> {
     let dir = claude_sessions_dir()?;
     if let Some(sid) = lookup_claude_session_id_in(&dir, pid) {
@@ -338,6 +350,36 @@ pub(crate) fn claude_resume_command(session_id: &str, cwd: &Path) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_id_wins_without_scanning() {
+        let picked = pick_claude_session_id(
+            Some("known".into()),
+            || panic!("no scan when the id is known"),
+            &std::collections::HashSet::new(),
+        );
+        assert_eq!(picked.as_deref(), Some("known"));
+    }
+
+    #[test]
+    fn scanned_id_used_when_free() {
+        let picked = pick_claude_session_id(
+            None,
+            || Some("scanned".into()),
+            &["other".to_string()].into(),
+        );
+        assert_eq!(picked.as_deref(), Some("scanned"));
+    }
+
+    #[test]
+    fn scanned_id_taken_by_another_session_is_dropped() {
+        let picked = pick_claude_session_id(
+            None,
+            || Some("scanned".into()),
+            &["scanned".to_string()].into(),
+        );
+        assert_eq!(picked, None);
+    }
     use tempfile::tempdir;
 
     #[test]
