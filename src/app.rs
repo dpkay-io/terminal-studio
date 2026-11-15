@@ -53,6 +53,7 @@ mod quit;
 mod restart;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
+mod scrollback_saver;
 mod session_state;
 pub(crate) mod settings;
 mod spawn_guard;
