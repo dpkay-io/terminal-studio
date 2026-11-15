@@ -110,6 +110,11 @@ pub struct Session {
     /// that sees the same value under two read locks saw the same content.
     /// Scrolling the view changes nothing and doesn't bump it.
     content_generation: Arc<AtomicU64>,
+    /// Held by the PTY reader while it feeds output, and by the scrollback
+    /// saver while it captures in slices, so output waits (in the OS
+    /// buffer) instead of moving the lines mid-capture. The UI never takes
+    /// it. Lock order: this gate, then the session lock.
+    output_gate: Arc<Mutex<()>>,
 }
 
 impl Session {
@@ -146,6 +151,7 @@ impl Session {
             bell,
             pending_clipboard: None,
             content_generation: Arc::new(AtomicU64::new(0)),
+            output_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -179,6 +185,7 @@ impl Session {
             bell,
             pending_clipboard: None,
             content_generation: Arc::new(AtomicU64::new(0)),
+            output_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -216,6 +223,11 @@ impl Session {
     /// A handle to the content generation, readable without the lock.
     pub fn content_generation(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.content_generation)
+    }
+
+    /// A handle to the output gate (see the field).
+    pub fn output_gate(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.output_gate)
     }
 
     /// Record a change to the grid's content. Takes `&mut self` so it can

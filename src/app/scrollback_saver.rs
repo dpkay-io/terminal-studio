@@ -110,14 +110,18 @@ impl SaveClock {
 }
 
 /// Capture a session's grid a slice at a time, letting go of the lock
-/// between slices (`between_slices` runs then). None when the content
-/// changed meanwhile: the lines moved, so the capture would be torn.
+/// between slices (`between_slices` runs then). Output waits on the
+/// session's output `gate` meanwhile, so only a change from the UI (a
+/// resize) can move the lines: then the capture would be torn and None is
+/// returned.
 fn capture_sliced(
     session: &RwLock<Session>,
     generation: &AtomicU64,
+    gate: &Mutex<()>,
     slice_lines: usize,
     mut between_slices: impl FnMut(),
 ) -> Option<(u64, Vec<u8>)> {
+    let _gate = gate.lock();
     let guard = session.read();
     let start = generation.load(Ordering::Acquire);
     let mut capture = AnsiCapture::begin(&guard.term, None);
@@ -156,6 +160,7 @@ enum Msg {
         id: u32,
         session: Weak<RwLock<Session>>,
         generation: Arc<AtomicU64>,
+        gate: Arc<Mutex<()>>,
     },
     Untrack(u32),
     Adopt(u32),
@@ -174,6 +179,7 @@ struct Tracked {
     /// Weak, so a closed session is never kept alive here.
     session: Weak<RwLock<Session>>,
     generation: Arc<AtomicU64>,
+    gate: Arc<Mutex<()>>,
     clock: SaveClock,
 }
 
@@ -219,7 +225,8 @@ impl Worker {
                 id,
                 session,
                 generation,
-            } => self.track(id, session, generation, Instant::now()),
+                gate,
+            } => self.track(id, session, generation, gate, Instant::now()),
             Msg::Untrack(id) => self.forget(id),
             Msg::Adopt(id) => self.adopt(id),
             Msg::SetEnabled(on) => self.set_enabled(on),
@@ -244,6 +251,7 @@ impl Worker {
         id: u32,
         session: Weak<RwLock<Session>>,
         generation: Arc<AtomicU64>,
+        gate: Arc<Mutex<()>>,
         now: Instant,
     ) {
         let clock = SaveClock::new(generation.load(Ordering::Acquire), now);
@@ -252,6 +260,7 @@ impl Worker {
             Tracked {
                 session,
                 generation,
+                gate,
                 clock,
             },
         );
@@ -327,10 +336,15 @@ impl Worker {
                 continue;
             };
             let generation = Arc::clone(&tracked.generation);
-            // Changed mid-capture: tried again on a later pass.
-            if let Some((seen, bytes)) =
-                capture_sliced(&session, &generation, SLICE_LINES, std::thread::yield_now)
-            {
+            let gate = Arc::clone(&tracked.gate);
+            // Resized mid-capture: tried again on a later pass.
+            if let Some((seen, bytes)) = capture_sliced(
+                &session,
+                &generation,
+                &gate,
+                SLICE_LINES,
+                std::thread::yield_now,
+            ) {
                 drop(session);
                 wrote |= self.store(id, seen, &bytes, stamp);
             }
@@ -477,11 +491,15 @@ impl ScrollbackSaver {
     }
 
     pub(super) fn track(&self, id: u32, session: &Arc<RwLock<Session>>) -> SaverTracking {
-        let generation = session.read().content_generation();
+        let (generation, gate) = {
+            let s = session.read();
+            (s.content_generation(), s.output_gate())
+        };
         self.send(Msg::Track {
             id,
             session: Arc::downgrade(session),
             generation,
+            gate,
         });
         SaverTracking {
             id,
@@ -608,8 +626,11 @@ mod tests {
     }
 
     fn track(worker: &mut Worker, id: u32, session: &Arc<RwLock<Session>>, now: Instant) {
-        let generation = session.read().content_generation();
-        worker.track(id, Arc::downgrade(session), generation, now);
+        let (generation, gate) = {
+            let s = session.read();
+            (s.content_generation(), s.output_gate())
+        };
+        worker.track(id, Arc::downgrade(session), generation, gate, now);
     }
 
     // ── SaveClock ─────────────────────────────────────────────────────────
@@ -661,7 +682,8 @@ mod tests {
         let session = session_with(&many_lines(500));
         let generation = session.read().content_generation();
         let whole = extract_grid_as_ansi(&session.read().term, None);
-        let (seen, bytes) = capture_sliced(&session, &generation, 7, || {}).unwrap();
+        let gate = session.read().output_gate();
+        let (seen, bytes) = capture_sliced(&session, &generation, &gate, 7, || {}).unwrap();
         assert_eq!(bytes, whole);
         assert_eq!(seen, generation.load(Ordering::Acquire));
     }
@@ -670,10 +692,38 @@ mod tests {
     fn sliced_capture_aborts_when_content_changes() {
         let session = session_with(&many_lines(500));
         let generation = session.read().content_generation();
-        let result = capture_sliced(&session, &generation, 7, || {
+        let gate = session.read().output_gate();
+        // A resize from the UI: it doesn't wait on the output gate.
+        let result = capture_sliced(&session, &generation, &gate, 7, || {
             session.write().mark_content_changed();
         });
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn sliced_capture_completes_under_constant_output() {
+        let session = session_with(&many_lines(5_000));
+        let generation = session.read().content_generation();
+        let gate = session.read().output_gate();
+        let stop = Arc::new(AtomicBool::new(false));
+        let output = {
+            let (session, gate, stop) =
+                (Arc::clone(&session), Arc::clone(&gate), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut processor: Processor<StdSyncHandler> = Processor::new();
+                while !stop.load(Ordering::Relaxed) {
+                    // As the PTY reader feeds: under the output gate.
+                    let _gate = gate.lock();
+                    let mut s = session.write();
+                    processor.advance(&mut s.term, b"spinner\r\n");
+                    s.mark_content_changed();
+                }
+            })
+        };
+        let result = capture_sliced(&session, &generation, &gate, 7, std::thread::yield_now);
+        stop.store(true, Ordering::Relaxed);
+        output.join().unwrap();
+        assert!(result.is_some());
     }
 
     // ── Worker passes ─────────────────────────────────────────────────────

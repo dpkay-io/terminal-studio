@@ -168,6 +168,7 @@ pub fn reader_thread(
     let mut processor: Processor<StdSyncHandler> = Processor::new();
     let mut cwd_parser = vte::Parser::new();
     let mut buf = [0u8; 65536];
+    let output_gate = session.read().output_gate();
 
     loop {
         if !alive.load(Ordering::Relaxed) {
@@ -204,6 +205,8 @@ pub fn reader_thread(
         }
 
         // ── Feed alacritty Term in 4 KB chunks (UI can render between chunks) ─
+        // Waits here while the scrollback saver captures this session.
+        let _gate = output_gate.lock();
         let mut pos = 0;
         while pos < n {
             let end = (pos + FEED_CHUNK_BYTES).min(n);
