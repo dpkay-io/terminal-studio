@@ -291,6 +291,7 @@ impl SessionManager {
                 let mut s = session.write();
                 injected_history_lines =
                     crate::app::scrollback_inject::inject_scrollback(&mut s.term, ansi_bytes);
+                s.mark_content_changed();
             }
         }
 

@@ -132,6 +132,29 @@ fn hex_digit(b: u8) -> Option<u8> {
     }
 }
 
+/// Bytes fed per write lock: keeps each hold short (≈0.6 ms at full
+/// speed) so a frame never waits long for the lock.
+const FEED_CHUNK_BYTES: usize = 4096;
+
+/// Feed one chunk to the emulator under the caller's write lock and record
+/// the change. A view scrolled up stays on the same lines.
+fn advance_chunk(s: &mut Session, processor: &mut Processor<StdSyncHandler>, bytes: &[u8]) {
+    let offset_before = s.term.grid().display_offset();
+    let history_before = s.term.grid().history_size();
+    processor.advance(&mut s.term, bytes);
+    // alacritty's Grid::scroll_up() resets display_offset to 0.
+    // Restore scroll position so the user doesn't snap to the
+    // bottom whenever the shell produces output.
+    if offset_before > 0 && s.term.grid().display_offset() == 0 {
+        let added = s.term.grid().history_size().saturating_sub(history_before);
+        let target = (offset_before + added).min(s.term.grid().history_size());
+        let delta = target.min(i32::MAX as usize) as i32;
+        s.term
+            .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
+    }
+    s.mark_content_changed();
+}
+
 /// Feeds bytes through the alacritty Processor (main emulator) and a tee
 /// VTE parser (OSC-7 CWD tracking). Releases the session write lock between
 /// 4 KB chunks so the UI thread can render between bursts.
@@ -183,23 +206,12 @@ pub fn reader_thread(
         // ── Feed alacritty Term in 4 KB chunks (UI can render between chunks) ─
         let mut pos = 0;
         while pos < n {
-            let end = (pos + 4096).min(n);
-            {
-                let mut s = session.write();
-                let offset_before = s.term.grid().display_offset();
-                let history_before = s.term.grid().history_size();
-                processor.advance(&mut s.term, &buf[pos..end]);
-                // alacritty's Grid::scroll_up() resets display_offset to 0.
-                // Restore scroll position so the user doesn't snap to the
-                // bottom whenever the shell produces output.
-                if offset_before > 0 && s.term.grid().display_offset() == 0 {
-                    let added = s.term.grid().history_size().saturating_sub(history_before);
-                    let target = (offset_before + added).min(s.term.grid().history_size());
-                    let delta = target.min(i32::MAX as usize) as i32;
-                    s.term
-                        .scroll_display(alacritty_terminal::grid::Scroll::Delta(delta));
-                }
-            }
+            let end = (pos + FEED_CHUNK_BYTES).min(n);
+            let mut s = session.write();
+            advance_chunk(&mut s, &mut processor, &buf[pos..end]);
+            // Hand the lock straight to a parked reader (the UI drawing a
+            // frame) instead of taking it again for the next chunk.
+            parking_lot::RwLockWriteGuard::unlock_fair(s);
             pos = end;
         }
 
@@ -220,6 +232,24 @@ pub fn reader_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advance_chunk_bumps_generation_and_keeps_scroll_position() {
+        let mut session = Session::new_for_test(1, 20, 5);
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        let many_lines: Vec<u8> = (0..50)
+            .flat_map(|i| format!("line {i}\r\n").into_bytes())
+            .collect();
+        advance_chunk(&mut session, &mut processor, &many_lines);
+        session
+            .term
+            .scroll_display(alacritty_terminal::grid::Scroll::Delta(10));
+        let generation = session.content_generation();
+        let before = generation.load(Ordering::Acquire);
+        advance_chunk(&mut session, &mut processor, b"more\r\nand more\r\n");
+        assert_eq!(generation.load(Ordering::Acquire), before + 1);
+        assert_eq!(session.term.grid().display_offset(), 12);
+    }
 
     #[test]
     fn test_osc7_file_triple_slash() {
