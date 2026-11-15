@@ -440,7 +440,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.save_session();
+        self.save_session_final();
         self.save_windows();
         for entry in &self.session_state.sessions {
             entry
@@ -490,6 +490,7 @@ impl eframe::App for App {
         }
 
         self.restart_if_due();
+        self.save_session_if_saver_asked();
 
         // Auto-close panes whose shell process has exited, then reap any
         // remaining orphan sessions (no pane references them).

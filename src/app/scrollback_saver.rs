@@ -158,6 +158,7 @@ enum Msg {
         generation: Arc<AtomicU64>,
     },
     Untrack(u32),
+    Adopt(u32),
     SetEnabled(bool),
     WriteSession {
         path: PathBuf,
@@ -220,6 +221,7 @@ impl Worker {
                 generation,
             } => self.track(id, session, generation, Instant::now()),
             Msg::Untrack(id) => self.forget(id),
+            Msg::Adopt(id) => self.adopt(id),
             Msg::SetEnabled(on) => self.set_enabled(on),
             Msg::WriteSession {
                 path,
@@ -253,6 +255,15 @@ impl Worker {
                 clock,
             },
         );
+    }
+
+    /// The session's content is what its `latest` file holds: not due
+    /// until it changes.
+    fn adopt(&mut self, id: u32) {
+        if let Some(tracked) = self.tracked.get_mut(&id) {
+            let generation = tracked.generation.load(Ordering::Acquire);
+            tracked.clock.saved_at(generation);
+        }
     }
 
     fn forget(&mut self, id: u32) {
@@ -478,6 +489,18 @@ impl ScrollbackSaver {
         }
     }
 
+    /// A restored session started with the output kept in `file`: that
+    /// file stays its latest (so it is never pruned) until its output
+    /// changes and is captured again. Call it right after [`Self::track`].
+    pub(super) fn adopt(&self, id: u32, file: String) {
+        if !self.shared.enabled.load(Ordering::Acquire) {
+            return;
+        }
+        // Set here so a session write right after already names it.
+        self.shared.latest.lock().insert(id, file);
+        self.send(Msg::Adopt(id));
+    }
+
     pub(super) fn set_enabled(&self, on: bool) {
         // Seen at once by the UI; the worker clears its state in order.
         self.shared.enabled.store(on, Ordering::Release);
@@ -670,7 +693,7 @@ mod tests {
         let latest = w.shared.latest.lock().clone();
         let name = latest.get(&7).expect("saved").clone();
         assert!(name.ends_with("-7.zst"));
-        assert_eq!(files_in(&dir), [name.clone()]);
+        assert_eq!(files_in(&dir), std::slice::from_ref(&name));
         let text = zstd::decode_all(std::fs::read(dir.join(&name)).unwrap().as_slice()).unwrap();
         assert!(String::from_utf8_lossy(&text).contains("hello saver"));
         assert!(w.shared.session_save_wanted.swap(false, Ordering::AcqRel));
@@ -680,6 +703,39 @@ mod tests {
         assert_eq!(files_in(&dir), [name]);
         assert!(!w.shared.session_save_wanted.load(Ordering::Acquire));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adopted_file_is_latest_and_not_captured_again() {
+        let dir = temp_dir("adopt");
+        let saver = ScrollbackSaver::spawn(Some(dir.clone()), egui::Context::default());
+        saver.set_enabled(true);
+        let session = session_with("restored output\r\n");
+        let _guard = saver.track(3, &session);
+        saver.adopt(3, "5-0.zst".into());
+        assert_eq!(
+            saver.latest_files().get(&3).map(String::as_str),
+            Some("5-0.zst")
+        );
+        saver.capture_all_now(FINAL_SAVE_TIMEOUT);
+        assert!(
+            files_in(&dir).is_empty(),
+            "the restored file already holds it"
+        );
+        assert_eq!(
+            saver.latest_files().get(&3).map(String::as_str),
+            Some("5-0.zst")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adopt_does_nothing_with_saving_off() {
+        let saver = ScrollbackSaver::spawn(None, egui::Context::default());
+        let session = session_with("x\r\n");
+        let _guard = saver.track(3, &session);
+        saver.adopt(3, "5-0.zst".into());
+        assert!(saver.latest_files().is_empty());
     }
 
     #[test]

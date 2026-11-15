@@ -53,6 +53,7 @@ impl App {
         let pending_command = pending_command.clone();
         let saved_title = saved_title.clone();
         let title_pinned = *title_pinned;
+        let scrollback_file = scrollback_file.clone();
         let scrollback = scrollback_file
             .as_deref()
             .and_then(state::read_active_scrollback);
@@ -67,6 +68,9 @@ impl App {
             scrollback.as_deref(),
         ) {
             Some(sid) => {
+                if let Some(file) = scrollback_file.filter(|_| scrollback.is_some()) {
+                    self.workers.scrollback_saver.adopt(sid, file);
+                }
                 if let Some(entry) = self.session_state.find_mut(sid) {
                     if let Some(cmd) = pending_command {
                         entry.pending_command = Some(cmd);

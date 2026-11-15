@@ -66,29 +66,6 @@ pub(super) fn read_active_scrollback(file: &str) -> Option<Vec<u8>> {
     zstd::decode_all(compressed.as_slice()).ok()
 }
 
-/// Name of a running session's scrollback file, written under one save's
-/// `stamp`. Names from earlier saves (and the bare `<index>.zst` of older
-/// versions) never repeat, so a restored session's file is never overwritten.
-fn scrollback_file_name(stamp: u64, session_index: usize) -> String {
-    format!("{stamp}-{session_index}.zst")
-}
-
-/// Remove every file in the scrollback folder except those in `keep`.
-fn prune_scrollback_dir(dir: &Path, keep: &HashSet<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let kept = entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| keep.contains(name));
-        if !kept {
-            std::fs::remove_file(entry.path()).ok();
-        }
-    }
-}
-
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let ctx = cc.egui_ctx.clone();
@@ -157,6 +134,9 @@ impl App {
         let loaded_settings = AppSettings::load();
         let last_update_check = loaded_settings.last_update_check;
         let show_sys_monitor = loaded_settings.show_sys_monitor;
+        let scrollback_saver =
+            super::scrollback_saver::ScrollbackSaver::spawn(active_scrollback_dir(), ctx.clone());
+        scrollback_saver.set_enabled(loaded_settings.save_scrollback_on_exit);
         let (subdir_load_tx, subdir_load_rx) = std::sync::mpsc::channel();
         let workspace_store = WorkspaceStore::load();
         let note_store = NoteStore::load(&workspace_store.workspaces);
@@ -224,6 +204,7 @@ impl App {
                     None
                 },
                 update_checker: UpdateChecker::spawn(ctx.clone(), last_update_check),
+                scrollback_saver,
             },
             was_focused: true,
             first_frame: true,
@@ -447,6 +428,7 @@ impl App {
                 injected_lines,
                 hangup,
             )) => {
+                let scrollback_tracking = self.workers.scrollback_saver.track(id, &session);
                 let entry = SessionEntry {
                     id,
                     session,
@@ -466,6 +448,7 @@ impl App {
                     restore_title: None,
                     claude_session_id: None,
                     hangup,
+                    _scrollback_tracking: scrollback_tracking,
                 };
                 if self.session_state.active_id.is_none() {
                     self.session_state.active_id = Some(id);
@@ -1401,59 +1384,6 @@ impl App {
         }
     }
 
-    /// Scrollback files restored sessions still point to: their shells
-    /// haven't started, so there is nothing to capture again and the file
-    /// from the earlier run is the only copy.
-    fn deferred_scrollback_files(&self) -> HashSet<String> {
-        self.pane_state
-            .panes
-            .iter()
-            .filter_map(|p| match &p.content {
-                PaneContent::DeferredTerminal {
-                    scrollback_file, ..
-                } => scrollback_file.clone(),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn save_active_scrollbacks(&self) -> HashMap<u32, String> {
-        let mut result = HashMap::new();
-        let Some(dir) = active_scrollback_dir() else {
-            return result;
-        };
-        std::fs::create_dir_all(&dir).ok();
-        prune_scrollback_dir(&dir, &self.deferred_scrollback_files());
-        // Every save writes under a new stamp, so a running session's file
-        // can never take the name of one a restored session still needs.
-        let stamp = crate::util::now_millis();
-        for (idx, entry) in self.session_state.sessions.iter().enumerate() {
-            let session = entry.session.read();
-            let ansi_bytes = super::scrollback_capture::extract_grid_as_ansi(&session.term, None);
-            drop(session);
-            if ansi_bytes.is_empty() {
-                continue;
-            }
-            let filename = scrollback_file_name(stamp, idx);
-            let filepath = dir.join(&filename);
-            match zstd::encode_all(ansi_bytes.as_slice(), 3) {
-                Ok(compressed) => {
-                    if std::fs::write(&filepath, &compressed).is_ok() {
-                        result.insert(entry.id, filename);
-                    }
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Failed to compress scrollback for session {}: {}",
-                        entry.id,
-                        e
-                    );
-                }
-            }
-        }
-        result
-    }
-
     pub(super) fn save_session(&self) {
         if !self
             .deferred_saves
@@ -1465,9 +1395,10 @@ impl App {
             return;
         };
 
-        // Save active scrollback if enabled
+        // Each running session's newest capture by the scrollback saver;
+        // nothing is captured here, on the UI thread.
         let scrollback_files: HashMap<u32, String> = if self.settings.save_scrollback_on_exit {
-            self.save_active_scrollbacks()
+            self.workers.scrollback_saver.latest_files()
         } else {
             HashMap::new()
         };
@@ -1563,8 +1494,8 @@ impl App {
                         command: pending_command.clone(),
                         title: saved_title.clone(),
                         title_pinned: *title_pinned,
-                        // Kept on disk by `save_active_scrollbacks`, which
-                        // only runs with scrollback saving on.
+                        // Kept on disk while this names it; dropped (and
+                        // pruned) with scrollback saving off.
                         scrollback_file: scrollback_file
                             .clone()
                             .filter(|_| self.settings.save_scrollback_on_exit),
@@ -1680,10 +1611,35 @@ impl App {
                 .collect(),
         };
 
-        if let Ok(text) = serde_json::to_string_pretty(&state) {
-            if let Err(e) = crate::util::atomic_write(&path, &text) {
-                log::error!("failed to save session state: {e}");
+        match serde_json::to_string_pretty(&state) {
+            // Written (and the scrollback folder pruned) off the UI thread.
+            Ok(text) => {
+                self.workers
+                    .scrollback_saver
+                    .write_session(path, text, state.scrollback_files())
             }
+            Err(e) => log::error!("failed to serialize session state: {e}"),
+        }
+    }
+
+    /// The save for quitting and restarting: capture every session whose
+    /// output changed since its last capture, write the session file, and
+    /// wait for both (up to `FINAL_SAVE_TIMEOUT` each).
+    pub(super) fn save_session_final(&self) {
+        use super::scrollback_saver::FINAL_SAVE_TIMEOUT;
+        let saver = &self.workers.scrollback_saver;
+        if self.settings.save_scrollback_on_exit {
+            saver.capture_all_now(FINAL_SAVE_TIMEOUT);
+        }
+        self.save_session();
+        saver.flush(FINAL_SAVE_TIMEOUT);
+    }
+
+    /// The scrollback saver wrote a file the session file doesn't name yet.
+    /// Main window frame only, where a save is never held back.
+    pub(super) fn save_session_if_saver_asked(&self) {
+        if self.workers.scrollback_saver.take_session_save_request() {
+            self.save_session();
         }
     }
 
@@ -2826,42 +2782,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
-    use super::{prune_scrollback_dir, scrollback_file_name, App};
+    use super::App;
     use crate::workspace::{Workspace, WorkspaceStore};
-    use std::collections::HashSet;
-
-    #[test]
-    fn saving_scrollback_keeps_the_files_restored_sessions_still_need() {
-        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "ts_scrollback_prune_{}_{}",
-            std::process::id(),
-            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in ["1.zst", "2.zst", "100-0.zst"] {
-            std::fs::write(dir.join(name), b"x").unwrap();
-        }
-        let keep: HashSet<String> = ["1.zst".to_string()].into();
-        prune_scrollback_dir(&dir, &keep);
-        let mut left: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        left.sort();
-        assert_eq!(left, ["1.zst"]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn new_scrollback_names_never_reuse_an_earlier_saves_names() {
-        // Older versions wrote `<index>.zst`; every save now writes under its
-        // own stamp, so neither an old name nor an earlier save's is reused.
-        assert_ne!(scrollback_file_name(5, 1), "1.zst");
-        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(6, 1));
-        assert_ne!(scrollback_file_name(5, 1), scrollback_file_name(5, 2));
-    }
 
     const STALE_WS: u64 = 1;
     const CWD_WS: u64 = 2;

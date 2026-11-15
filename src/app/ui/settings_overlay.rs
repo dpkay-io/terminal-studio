@@ -74,6 +74,7 @@ impl App {
                                     .changed()
                                 {
                                     self.settings.save_scrollback_on_exit = save_exit;
+                                    self.workers.scrollback_saver.set_enabled(save_exit);
                                     settings_changed = true;
                                 }
                                 ui.add_space(theme::SP_2);

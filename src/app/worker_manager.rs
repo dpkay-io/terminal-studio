@@ -24,4 +24,6 @@ pub(super) struct WorkerManager {
     pub(super) sys_monitor: Option<SysMonitor>,
     /// Self-update: background checker for new releases.
     pub(super) update_checker: Option<UpdateChecker>,
+    /// Saves running sessions' scrollback and writes `session.json`.
+    pub(super) scrollback_saver: super::scrollback_saver::ScrollbackSaver,
 }
