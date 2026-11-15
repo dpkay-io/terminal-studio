@@ -14,53 +14,127 @@ use crate::terminal::EventProxy;
 ///
 /// If `max_lines` is Some(n), only the last `n` lines are captured.
 pub fn extract_grid_as_ansi(term: &Term<EventProxy>, max_lines: Option<usize>) -> Vec<u8> {
-    let grid = term.grid();
-    let cols = term.columns();
-    let screen_lines = term.screen_lines();
-    let history_size = grid.history_size();
-    let total_lines = history_size + screen_lines;
+    let mut capture = AnsiCapture::begin(term, max_lines);
+    while !capture.step(term, usize::MAX) {}
+    capture.finish()
+}
 
-    let lines_to_capture = max_lines.unwrap_or(total_lines).min(total_lines);
-    let skip_lines = total_lines.saturating_sub(lines_to_capture);
+/// SGR attributes the output stream currently has set.
+#[derive(Clone, Copy, PartialEq)]
+struct Pen {
+    fg: Color,
+    bg: Color,
+    bold: bool,
+    dim: bool,
+    underline: bool,
+    strike: bool,
+    inverse: bool,
+}
 
-    let start_line = -(history_size as i32) + skip_lines as i32;
-    let nominal_end = screen_lines as i32;
+impl Pen {
+    const DEFAULT: Pen = Pen {
+        fg: Color::Named(NamedColor::Foreground),
+        bg: Color::Named(NamedColor::Background),
+        bold: false,
+        dim: false,
+        underline: false,
+        strike: false,
+        inverse: false,
+    };
 
-    // Find last non-empty line to avoid trailing blank lines in the capture.
-    let mut end_line = start_line;
-    for line_idx in (start_line..nominal_end).rev() {
-        if find_line_end(grid, line_idx, cols) > 0 {
-            end_line = line_idx + 1;
-            break;
+    fn of(cell: &alacritty_terminal::term::cell::Cell) -> Pen {
+        Pen {
+            fg: cell.fg,
+            bg: cell.bg,
+            bold: cell.flags.contains(Flags::BOLD),
+            dim: cell.flags.contains(Flags::DIM),
+            underline: cell.flags.contains(Flags::UNDERLINE),
+            strike: cell.flags.contains(Flags::STRIKEOUT),
+            inverse: cell.flags.contains(Flags::INVERSE),
+        }
+    }
+}
+
+/// A capture of the grid as ANSI bytes, taken a few lines at a time so a
+/// background reader can let go of the session lock between steps. Each
+/// line ends with the attributes reset, so lines are independent and any
+/// step size gives the same bytes. Line positions count from the bottom, so
+/// the grid must not change between steps (see `Session::content_generation`).
+pub struct AnsiCapture {
+    buf: Vec<u8>,
+    next_line: i32,
+    end_line: i32,
+    prev_empty: bool,
+}
+
+impl AnsiCapture {
+    pub fn begin(term: &Term<EventProxy>, max_lines: Option<usize>) -> Self {
+        let grid = term.grid();
+        let cols = term.columns();
+        let screen_lines = term.screen_lines();
+        let history_size = grid.history_size();
+        let total_lines = history_size + screen_lines;
+
+        let lines_to_capture = max_lines.unwrap_or(total_lines).min(total_lines);
+        let skip_lines = total_lines.saturating_sub(lines_to_capture);
+
+        let start_line = -(history_size as i32) + skip_lines as i32;
+        let nominal_end = screen_lines as i32;
+
+        // Find last non-empty line to avoid trailing blank lines in the capture.
+        let end_line = (start_line..nominal_end)
+            .rev()
+            .find(|&line_idx| find_line_end(grid, line_idx, cols) > 0)
+            .map_or(start_line, |line_idx| line_idx + 1);
+
+        let actual_lines = (end_line - start_line).max(0) as usize;
+        AnsiCapture {
+            buf: Vec::with_capacity(actual_lines * cols * ESTIMATED_BYTES_PER_CELL),
+            next_line: start_line,
+            end_line,
+            prev_empty: false,
         }
     }
 
-    let actual_lines = (end_line - start_line).max(0) as usize;
-    let estimated_size = actual_lines * cols * 3;
-    let mut buf = Vec::with_capacity(estimated_size);
+    /// Capture up to `max_lines` more lines. True once every line is in.
+    pub fn step(&mut self, term: &Term<EventProxy>, max_lines: usize) -> bool {
+        let grid = term.grid();
+        let cols = term.columns();
+        let stop = self.end_line.min(
+            self.next_line
+                .saturating_add(max_lines.min(i32::MAX as usize) as i32),
+        );
+        for line_idx in self.next_line..stop {
+            self.write_line(grid, line_idx, cols);
+        }
+        self.next_line = stop;
+        self.next_line >= self.end_line
+    }
 
-    let mut cur_fg = Color::Named(NamedColor::Foreground);
-    let mut cur_bg = Color::Named(NamedColor::Background);
-    let mut cur_bold = false;
-    let mut cur_dim = false;
-    let mut cur_underline = false;
-    let mut cur_strike = false;
-    let mut cur_inverse = false;
+    pub fn finish(self) -> Vec<u8> {
+        self.buf
+    }
 
-    let mut prev_empty = false;
-    for line_idx in start_line..end_line {
+    fn write_line(
+        &mut self,
+        grid: &alacritty_terminal::grid::Grid<alacritty_terminal::term::cell::Cell>,
+        line_idx: i32,
+        cols: usize,
+    ) {
+        let buf = &mut self.buf;
         let line_end = find_line_end(grid, line_idx, cols);
 
         // Collapse runs of empty lines to a single blank line.
         if line_end == 0 {
-            if !prev_empty {
+            if !self.prev_empty {
                 buf.extend_from_slice(b"\r\n");
             }
-            prev_empty = true;
-            continue;
+            self.prev_empty = true;
+            return;
         }
-        prev_empty = false;
+        self.prev_empty = false;
 
+        let mut pen = Pen::DEFAULT;
         for col in 0..line_end {
             let cell = &grid[Line(line_idx)][Column(col)];
 
@@ -68,38 +142,19 @@ pub fn extract_grid_as_ansi(term: &Term<EventProxy>, max_lines: Option<usize>) -
                 continue;
             }
 
-            let cell_bold = cell.flags.contains(Flags::BOLD);
-            let cell_dim = cell.flags.contains(Flags::DIM);
-            let cell_underline = cell.flags.contains(Flags::UNDERLINE);
-            let cell_strike = cell.flags.contains(Flags::STRIKEOUT);
-            let cell_inverse = cell.flags.contains(Flags::INVERSE);
-
-            let needs_sgr = cell.fg != cur_fg
-                || cell.bg != cur_bg
-                || cell_bold != cur_bold
-                || cell_dim != cur_dim
-                || cell_underline != cur_underline
-                || cell_strike != cur_strike
-                || cell_inverse != cur_inverse;
-
-            if needs_sgr {
+            let cell_pen = Pen::of(cell);
+            if cell_pen != pen {
                 emit_sgr(
-                    &mut buf,
-                    cell.fg,
-                    cell.bg,
-                    cell_bold,
-                    cell_dim,
-                    cell_underline,
-                    cell_strike,
-                    cell_inverse,
+                    buf,
+                    cell_pen.fg,
+                    cell_pen.bg,
+                    cell_pen.bold,
+                    cell_pen.dim,
+                    cell_pen.underline,
+                    cell_pen.strike,
+                    cell_pen.inverse,
                 );
-                cur_fg = cell.fg;
-                cur_bg = cell.bg;
-                cur_bold = cell_bold;
-                cur_dim = cell_dim;
-                cur_underline = cell_underline;
-                cur_strike = cell_strike;
-                cur_inverse = cell_inverse;
+                pen = cell_pen;
             }
 
             let mut char_buf = [0u8; 4];
@@ -108,30 +163,16 @@ pub fn extract_grid_as_ansi(term: &Term<EventProxy>, max_lines: Option<usize>) -
         }
 
         // Reset attributes at end of line if any are active
-        let has_attrs = cur_bold
-            || cur_dim
-            || cur_underline
-            || cur_strike
-            || cur_inverse
-            || !matches!(cur_fg, Color::Named(NamedColor::Foreground))
-            || !matches!(cur_bg, Color::Named(NamedColor::Background));
-
-        if has_attrs {
+        if pen != Pen::DEFAULT {
             buf.extend_from_slice(b"\x1b[0m");
-            cur_fg = Color::Named(NamedColor::Foreground);
-            cur_bg = Color::Named(NamedColor::Background);
-            cur_bold = false;
-            cur_dim = false;
-            cur_underline = false;
-            cur_strike = false;
-            cur_inverse = false;
         }
 
         buf.extend_from_slice(b"\r\n");
     }
-
-    buf
 }
+
+/// Capacity guess for the output: a character plus some SGR per cell.
+const ESTIMATED_BYTES_PER_CELL: usize = 3;
 
 /// Find the rightmost non-default column in a line (trims trailing whitespace).
 fn find_line_end(
@@ -279,6 +320,52 @@ mod tests {
     fn feed_bytes(session: &mut Session, data: &[u8]) {
         let mut processor: Processor<StdSyncHandler> = Processor::new();
         processor.advance(&mut session.term, data);
+    }
+
+    /// Styled text, wide characters and runs of blank lines, with
+    /// thousands of lines in history.
+    fn varied_session() -> Session {
+        let mut session = make_session(40, 10);
+        let mut data = Vec::new();
+        for i in 0..5_000 {
+            match i % 7 {
+                0 => {
+                    data.extend_from_slice(format!("\x1b[1;31mbold red {i}\x1b[0m\r\n").as_bytes())
+                }
+                1 => data.extend_from_slice("wide 日本語 text\r\n".as_bytes()),
+                2 | 3 => data.extend_from_slice(b"\r\n"),
+                4 => data.extend_from_slice(
+                    format!("\x1b[4;38;2;10;20;30mrgb {i}\x1b[0m tail\r\n").as_bytes(),
+                ),
+                _ => data.extend_from_slice(format!("plain line {i}\r\n").as_bytes()),
+            }
+        }
+        feed_bytes(&mut session, &data);
+        session
+    }
+
+    fn sliced(term: &Term<EventProxy>, slice: usize) -> Vec<u8> {
+        let mut capture = AnsiCapture::begin(term, None);
+        while !capture.step(term, slice) {}
+        capture.finish()
+    }
+
+    #[test]
+    fn sliced_capture_matches_full_capture() {
+        let session = varied_session();
+        let full = extract_grid_as_ansi(&session.term, None);
+        assert!(full.len() > 50_000);
+        for slice in [1, 7, 2_000] {
+            assert_eq!(sliced(&session.term, slice), full, "slice {slice}");
+        }
+    }
+
+    #[test]
+    fn sliced_capture_of_empty_grid_is_empty() {
+        let session = make_session(80, 24);
+        let mut capture = AnsiCapture::begin(&session.term, None);
+        assert!(capture.step(&session.term, 1));
+        assert!(capture.finish().is_empty());
     }
 
     #[test]
