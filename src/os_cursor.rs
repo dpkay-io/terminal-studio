@@ -151,22 +151,6 @@ mod imp {
         Connection::new(lib, display)
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn no_display_makes_no_connection_and_nothing_to_close() {
-            // Headless (no $DISPLAY): XOpenDisplay gives null. Building and
-            // dropping a Connection from it used to call XCloseDisplay(NULL)
-            // and kill the process with SIGSEGV.
-            let Ok(lib) = xlib::Xlib::open() else {
-                return; // no libX11 here: nothing to load, nothing to close
-            };
-            assert!(Connection::new(lib, std::ptr::null_mut()).is_none());
-        }
-    }
-
     /// Physical pixels on the X screen. Under Wayland this is XWayland's
     /// idea of the pointer, but winit reports no file drops there anyway.
     pub(super) fn screen_position() -> Option<(f64, f64, ScreenUnit)> {
@@ -193,6 +177,22 @@ mod imp {
             };
             (found != 0).then(|| (f64::from(root_x), f64::from(root_y), ScreenUnit::Pixels))
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn no_display_makes_no_connection_and_nothing_to_close() {
+            // Headless (no $DISPLAY): XOpenDisplay gives null. Building and
+            // dropping a Connection from it used to call XCloseDisplay(NULL)
+            // and kill the process with SIGSEGV.
+            let Ok(lib) = xlib::Xlib::open() else {
+                return; // no libX11 here: nothing to load, nothing to close
+            };
+            assert!(Connection::new(lib, std::ptr::null_mut()).is_none());
+        }
     }
 }
 
