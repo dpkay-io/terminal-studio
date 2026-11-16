@@ -3,8 +3,8 @@
 //!
 //! The UI thread only builds the session JSON. This worker captures a
 //! session's output once it has been quiet for [`SETTLE`] (or changing for
-//! [`MAX_STALE`]), reading the grid [`SLICE_LINES`] at a time so no read
-//! lock is held long: `parking_lot`'s lock is fair, so a long read here
+//! [`MAX_STALE`]), reading the grid a [`SLICE`] at a time so no read lock
+//! is held long, however fast the machine: `parking_lot`'s lock is fair, so a long read here
 //! would make the PTY reader wait, and every UI read wait behind it. At quit
 //! [`ScrollbackSaver::capture_all_now`] captures what is left, in parallel.
 
@@ -15,10 +15,11 @@ use std::sync::{mpsc, Arc, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::Term;
 use parking_lot::{Mutex, RwLock};
 
 use super::scrollback_capture::{extract_grid_as_ansi, AnsiCapture};
-use crate::terminal::Session;
+use crate::terminal::{EventProxy, Session};
 
 /// How often the worker looks for sessions to save.
 pub(super) const SAVER_TICK: Duration = Duration::from_secs(1);
@@ -27,8 +28,22 @@ pub(super) const SETTLE: Duration = Duration::from_secs(10);
 /// Output changing for this long without a save: saved anyway, so a crash
 /// under constant output loses at most this much.
 pub(super) const MAX_STALE: Duration = Duration::from_secs(60);
-/// Lines captured per read lock (≈1 ms at 200 columns).
-pub(super) const SLICE_LINES: usize = 2_000;
+/// How much of the grid one read lock covers: lines are captured
+/// `step_lines` at a time until `budget` has passed, then the lock is let go.
+#[derive(Clone, Copy)]
+pub(super) struct Slice {
+    pub(super) step_lines: usize,
+    pub(super) budget: Duration,
+}
+/// Lines per step: about 0.05 ms at 200 columns on a fast machine, so a
+/// slice overruns its budget by little even on a slow one.
+const SLICE_STEP_LINES: usize = 64;
+/// Longest a capture holds a session's read lock at a time.
+const SLICE_BUDGET: Duration = Duration::from_millis(1);
+pub(super) const SLICE: Slice = Slice {
+    step_lines: SLICE_STEP_LINES,
+    budget: SLICE_BUDGET,
+};
 /// Longest the app waits at quit for the last captures and writes.
 pub(super) const FINAL_SAVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// zstd level for scrollback files.
@@ -118,14 +133,14 @@ fn capture_sliced(
     session: &RwLock<Session>,
     generation: &AtomicU64,
     gate: &Mutex<()>,
-    slice_lines: usize,
+    slice: Slice,
     mut between_slices: impl FnMut(),
 ) -> Option<(u64, Vec<u8>)> {
     let _gate = gate.lock();
     let guard = session.read();
     let start = generation.load(Ordering::Acquire);
     let mut capture = AnsiCapture::begin(&guard.term, None);
-    let mut done = capture.step(&guard.term, slice_lines);
+    let mut done = capture_slice(&mut capture, &guard.term, slice);
     drop(guard);
     while !done {
         between_slices();
@@ -133,9 +148,22 @@ fn capture_sliced(
         if generation.load(Ordering::Acquire) != start {
             return None;
         }
-        done = capture.step(&guard.term, slice_lines);
+        done = capture_slice(&mut capture, &guard.term, slice);
     }
     Some((start, capture.finish()))
+}
+
+/// One slice under a read lock the caller holds. True once every line is in.
+fn capture_slice(capture: &mut AnsiCapture, term: &Term<EventProxy>, slice: Slice) -> bool {
+    let started = Instant::now();
+    loop {
+        if capture.step(term, slice.step_lines.max(1)) {
+            return true;
+        }
+        if started.elapsed() >= slice.budget {
+            return false;
+        }
+    }
 }
 
 /// One read of the whole grid, for the final save.
@@ -338,13 +366,9 @@ impl Worker {
             let generation = Arc::clone(&tracked.generation);
             let gate = Arc::clone(&tracked.gate);
             // Resized mid-capture: tried again on a later pass.
-            if let Some((seen, bytes)) = capture_sliced(
-                &session,
-                &generation,
-                &gate,
-                SLICE_LINES,
-                std::thread::yield_now,
-            ) {
+            if let Some((seen, bytes)) =
+                capture_sliced(&session, &generation, &gate, SLICE, std::thread::yield_now)
+            {
                 drop(session);
                 wrote |= self.store(id, seen, &bytes, stamp);
             }
@@ -677,13 +701,48 @@ mod tests {
 
     // ── Sliced capture ────────────────────────────────────────────────────
 
+    /// One 7-line step per read lock, however fast the machine.
+    const ONE_STEP_PER_LOCK: Slice = Slice {
+        step_lines: 7,
+        budget: Duration::ZERO,
+    };
+
+    #[test]
+    fn time_budget_decides_how_many_steps_share_a_lock() {
+        let session = session_with(&many_lines(500));
+        let generation = session.read().content_generation();
+        let gate = session.read().output_gate();
+        let whole = extract_grid_as_ansi(&session.read().term, None);
+        let mut releases = 0;
+        let (_, bytes) = capture_sliced(&session, &generation, &gate, ONE_STEP_PER_LOCK, || {
+            releases += 1
+        })
+        .unwrap();
+        assert_eq!(bytes, whole);
+        assert!(
+            releases > 500 / 7 - 2,
+            "a zero budget lets go after each step ({releases})"
+        );
+
+        let mut releases = 0;
+        let unbounded = Slice {
+            step_lines: 7,
+            budget: Duration::MAX,
+        };
+        let (_, bytes) =
+            capture_sliced(&session, &generation, &gate, unbounded, || releases += 1).unwrap();
+        assert_eq!(bytes, whole);
+        assert_eq!(releases, 0, "an endless budget reads it all under one lock");
+    }
+
     #[test]
     fn sliced_capture_matches_one_read() {
         let session = session_with(&many_lines(500));
         let generation = session.read().content_generation();
         let whole = extract_grid_as_ansi(&session.read().term, None);
         let gate = session.read().output_gate();
-        let (seen, bytes) = capture_sliced(&session, &generation, &gate, 7, || {}).unwrap();
+        let (seen, bytes) =
+            capture_sliced(&session, &generation, &gate, ONE_STEP_PER_LOCK, || {}).unwrap();
         assert_eq!(bytes, whole);
         assert_eq!(seen, generation.load(Ordering::Acquire));
     }
@@ -694,7 +753,7 @@ mod tests {
         let generation = session.read().content_generation();
         let gate = session.read().output_gate();
         // A resize from the UI: it doesn't wait on the output gate.
-        let result = capture_sliced(&session, &generation, &gate, 7, || {
+        let result = capture_sliced(&session, &generation, &gate, ONE_STEP_PER_LOCK, || {
             session.write().mark_content_changed();
         });
         assert!(result.is_none());
@@ -720,7 +779,13 @@ mod tests {
                 }
             })
         };
-        let result = capture_sliced(&session, &generation, &gate, 7, std::thread::yield_now);
+        let result = capture_sliced(
+            &session,
+            &generation,
+            &gate,
+            ONE_STEP_PER_LOCK,
+            std::thread::yield_now,
+        );
         stop.store(true, Ordering::Relaxed);
         output.join().unwrap();
         assert!(result.is_some());

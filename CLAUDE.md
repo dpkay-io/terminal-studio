@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1072 tests)
+cargo test               # all unit tests (1073 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -66,7 +66,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/restart.rs` | Restarting into an installed update: the Restart pill / Settings button only ask for it (`request_restart`), and the main window's frame saves and restarts (`restart_if_due`), since a restart exits at once and a save from an extra window's frame would wait |
 | `src/app/workspace_ui.rs` | Workspace management UI; preset color picker; new/edit/delete dialogs |
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
-| `src/app/scrollback_saver.rs` | `ScrollbackSaver`: saves running sessions' scrollback in the background and does every write of `session.json` (the UI thread only builds the JSON). A changed session is captured once its output is quiet for `SETTLE` (10 s) or changing for `MAX_STALE` (60 s), `SLICE_LINES` (2 000) per read lock while output waits on the session's output gate; a capture a resize tore is dropped. After each session write it prunes the scrollback folder to the files the JSON names plus each session's latest. `adopt()` keeps a restored session's file as its latest; `capture_all_now()` + `flush()` back `App::save_session_final()` (quit, restart). Sessions are tracked by a `SaverTracking` guard on `SessionEntry` |
+| `src/app/scrollback_saver.rs` | `ScrollbackSaver`: saves running sessions' scrollback in the background and does every write of `session.json` (the UI thread only builds the JSON). A changed session is captured once its output is quiet for `SETTLE` (10 s) or changing for `MAX_STALE` (60 s), read in slices of at most `SLICE_BUDGET` (1 ms) per read lock while output waits on the session's output gate; a capture a resize tore is dropped. After each session write it prunes the scrollback folder to the files the JSON names plus each session's latest. `adopt()` keeps a restored session's file as its latest; `capture_all_now()` + `flush()` back `App::save_session_final()` (quit, restart). Sessions are tracked by a `SaverTracking` guard on `SessionEntry` |
 | `src/app/scrollback_capture.rs` | `extract_grid_as_ansi()`, `AnsiCapture` (the same capture a few lines at a time; lines are independent, so any step size gives the same bytes) |
 | `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box; extra windows hold it in `hold_extra_window_keys()` and park the keyboard for that frame (egui has already read the Tab as a focus move), then `restore_parked_focus()` gives it back |
 | `src/app/nav_order_sync.rs` | `refresh_nav_order()`: feeds the window's `NavOrder` once per window frame (also while the left panel is hidden); `numbered_tab_targets()`: what ⌘1–9 open — the focused split's rows in left nav order (the whole list without splits), filtered like the list |
@@ -359,7 +359,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/renderer/terminal_pass.rs` | 15 | terminal geometry, cell rendering, scrollbar hit-testing, selection, a busy lock paints the last snapshot (background only before the first draw) |
 | `src/pty/reader.rs` | 11 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming, a fed chunk bumps the generation and keeps a scrolled-up view in place |
 | `src/app/scrollback_capture.rs` | 17 | ANSI capture: colours, attributes, wide chars, trailing blanks, max lines, round trips; a capture in steps of any size equals one read |
-| `src/app/scrollback_saver.rs` | 17 | save timing (settle, stale under constant output, saved), sliced capture (equals one read, dropped when resized, completes under constant output), passes write only changed sessions and ask for a session save, empty and dropped sessions, final capture writes only changed ones, saving off, adopt (and off), prune keeps referenced + latest, names never reused, flush, tracking guard |
+| `src/app/scrollback_saver.rs` | 18 | save timing (settle, stale under constant output, saved), sliced capture (equals one read, the time budget decides how much one lock covers, dropped when resized, completes under constant output), passes write only changed sessions and ask for a session save, empty and dropped sessions, final capture writes only changed ones, saving off, adopt (and off), prune keeps referenced + latest, names never reused, flush, tracking guard |
 | `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
@@ -406,7 +406,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1072 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1073 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
