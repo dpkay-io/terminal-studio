@@ -366,7 +366,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/workspace_colors.rs` | 10 | first preset when empty, a batch of 8 clearly different, never a used colour or a repeat, avoids a custom colour near a preset, farthest free candidate, prefers presets, deterministic, past every candidate, OKLab reference values |
 | `src/app/pending_open.rs` | 3 | each window takes its own requests in order, closed windows dropped, shared across threads |
 | `src/app/os_drop.rs` | 8 | zones (terminal pastes, other pane opens in its split, outside panes, unknown pointer), sorting folders/text/binary/missing/empty, size limit without reading, every zone paints, wording |
-| `src/os_cursor.rs` | 4 | pixels and points to window points (zoom), no scale no position, OS pointer finite |
+| `src/os_cursor.rs` | 4 (+1 Linux) | pixels and points to window points (zoom), no scale no position, OS pointer finite; Linux: no X display makes no connection, so nothing calls `XCloseDisplay(NULL)` (headless SIGSEGV) |
 | `src/app/ui/open_folders_dialog.rs` | 4 | the first name field takes the keyboard (one and several folders), rows draw for saved/unsaved/nested, title, problem wording |
 | `src/app/ui/color_choice.rs` | 2 | a swatch click inside a dialog-layer area picks it, the custom picker opens inline (no popup) |
 | `src/app/ui/titlebar.rs` | 1 | workspace tint only when enabled |

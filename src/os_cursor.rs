@@ -131,12 +131,40 @@ mod imp {
         static CONNECTION: Option<Connection> = open();
     }
 
+    impl Connection {
+        /// The only way to make a `Connection`: none for a null display, so
+        /// `Drop` never hands `XCloseDisplay` a null pointer (it crashes).
+        fn new(lib: xlib::Xlib, display: *mut xlib::Display) -> Option<Connection> {
+            if display.is_null() {
+                None
+            } else {
+                Some(Connection { lib, display })
+            }
+        }
+    }
+
     fn open() -> Option<Connection> {
         let lib = xlib::Xlib::open().ok()?;
         // SAFETY: a null name opens the display named by $DISPLAY, or fails
-        // with null.
+        // with null (no $DISPLAY, no server).
         let display = unsafe { (lib.XOpenDisplay)(std::ptr::null()) };
-        (!display.is_null()).then_some(Connection { lib, display })
+        Connection::new(lib, display)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn no_display_makes_no_connection_and_nothing_to_close() {
+            // Headless (no $DISPLAY): XOpenDisplay gives null. Building and
+            // dropping a Connection from it used to call XCloseDisplay(NULL)
+            // and kill the process with SIGSEGV.
+            let Ok(lib) = xlib::Xlib::open() else {
+                return; // no libX11 here: nothing to load, nothing to close
+            };
+            assert!(Connection::new(lib, std::ptr::null_mut()).is_none());
+        }
     }
 
     /// Physical pixels on the X screen. Under Wayland this is XWayland's
