@@ -1,6 +1,6 @@
 use super::super::super::pane::{PaneContent, PaneEntry};
 use super::super::super::title::shell_escape_arg;
-use super::super::super::workspace_ui::{OpenFolderDialog, WorkspaceEditDialog};
+use super::super::super::workspace_ui::WorkspaceEditDialog;
 use super::super::super::{App, CloseAllTarget};
 use super::{SessionListActions, WorkspaceSectionActions};
 use crate::app::claude_session::is_claude_process;
@@ -22,12 +22,6 @@ impl App {
             &mut sess_actions,
             crate::app::close_guard::TabClose::Sidebar,
         );
-        // Consume async folder picker result if available
-        let async_folder: Option<std::path::PathBuf> = ctx.data_mut(|d| {
-            d.remove_temp::<std::path::PathBuf>(egui::Id::new("pending_folder_pick"))
-        });
-        let folder = sess_actions.open_folder_path.take().or(async_folder);
-        self.process_open_folder(folder);
         self.process_spawn_session(&sess_actions, &active_fg);
         self.process_duplicate_session(sess_actions.duplicate_session, &active_fg);
         if sess_actions.new_file | std::mem::replace(&mut self.deferred_new_file, false) {
@@ -212,18 +206,6 @@ impl App {
             g.activate(pane_id);
         }
         self.activate_and_scroll_to_pane(pane_id);
-    }
-
-    fn process_open_folder(&mut self, path: Option<std::path::PathBuf>) {
-        let Some(path) = path else { return };
-        let preferred = self.configured_shell();
-        let shells = self.available_shells.clone();
-        self.open_folder_dialog = Some(OpenFolderDialog::new(
-            path,
-            preferred,
-            shells,
-            &self.workspace_store,
-        ));
     }
 
     /// Handle open-workspace, edit-workspace, and new-window-workspace actions.
@@ -501,7 +483,18 @@ impl App {
         let Some((new_shell, cwd)) = spawn_with_cwd else {
             return;
         };
+        self.spawn_terminal_pane(&new_shell, cwd);
+    }
 
+    /// Start `shell` in `cwd` in a new tab of the focused split (making one
+    /// when there is none), focus it and flash its row. The tab joins the
+    /// session list's current workspace and label filters, so it stays in
+    /// view. Returns the new pane, or None when the shell could not start.
+    pub(in crate::app) fn spawn_terminal_pane(
+        &mut self,
+        shell: &crate::pty::ShellKind,
+        cwd: Option<std::path::PathBuf>,
+    ) -> Option<u32> {
         let (cols, rows) = self
             .pane_state
             .panes
@@ -515,71 +508,73 @@ impl App {
                     .map(|p| p.last_size)
                     .unwrap_or((80, 24))
             });
-        if let Some(new_id) = self.spawn_session(&new_shell, cols, rows, cwd) {
-            self.session_state.active_id = Some(new_id);
-            if !self
-                .pane_state
-                .panes
-                .iter()
-                .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
-            {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let filter_ws = match self.session_workspace_filter {
-                    Some(Some(id)) => Some(id),
-                    _ => self.active_group,
-                };
-                let filter_labels = self
-                    .session_label_filter
-                    .map(|id| vec![id])
-                    .unwrap_or_default();
-                self.pane_state.panes.push(PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::Terminal(new_id),
-                    manual_width: None,
-                    last_size: (cols, rows),
-                    labels: filter_labels,
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: filter_ws,
-                });
-                self.pane_state.pane_trees.insert(
-                    pane_id,
-                    PaneNode::Leaf {
-                        pane_id,
-                        last_size: (cols, rows),
-                    },
-                );
-                let gid = if self
-                    .pane_state
-                    .groups
-                    .contains_key(&self.pane_state.focused_group_id)
-                {
-                    self.pane_state.focused_group_id
-                } else {
-                    let new_gid = self.pane_state.create_group(pane_id);
-                    self.pane_state.group_layout =
-                        crate::editor_group::GroupNode::Leaf { group_id: new_gid };
-                    self.pane_state.focused_group_id = new_gid;
-                    new_gid
-                };
-                if self
-                    .pane_state
-                    .groups
-                    .get(&gid)
-                    .is_some_and(|g| !g.contains(pane_id))
-                {
-                    self.pane_state.add_pane_to_group(gid, pane_id, None);
-                }
-                if let Some(g) = self.pane_state.groups.get_mut(&gid) {
-                    g.activate(pane_id);
-                }
-                self.activate_and_scroll_to_pane(pane_id);
-                self.flash.trigger(
-                    crate::app::feedback::FlashTarget::Tab(pane_id),
-                    crate::app::feedback::FlashKind::Success,
-                );
-            }
+        let new_id = self.spawn_session(shell, cols, rows, cwd)?;
+        self.session_state.active_id = Some(new_id);
+        let existing = self
+            .pane_state
+            .panes
+            .iter()
+            .find(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
+            .map(|p| p.id);
+        if existing.is_some() {
+            return existing;
         }
+        let pane_id = self.pane_state.next_pane_id;
+        self.pane_state.next_pane_id += 1;
+        let filter_ws = match self.session_workspace_filter {
+            Some(Some(id)) => Some(id),
+            _ => self.active_group,
+        };
+        let filter_labels = self
+            .session_label_filter
+            .map(|id| vec![id])
+            .unwrap_or_default();
+        self.pane_state.panes.push(PaneEntry {
+            id: pane_id,
+            content: PaneContent::Terminal(new_id),
+            manual_width: None,
+            last_size: (cols, rows),
+            labels: filter_labels,
+            last_active_at: crate::util::now_millis(),
+            workspace_id: filter_ws,
+        });
+        self.pane_state.pane_trees.insert(
+            pane_id,
+            PaneNode::Leaf {
+                pane_id,
+                last_size: (cols, rows),
+            },
+        );
+        let gid = if self
+            .pane_state
+            .groups
+            .contains_key(&self.pane_state.focused_group_id)
+        {
+            self.pane_state.focused_group_id
+        } else {
+            let new_gid = self.pane_state.create_group(pane_id);
+            self.pane_state.group_layout =
+                crate::editor_group::GroupNode::Leaf { group_id: new_gid };
+            self.pane_state.focused_group_id = new_gid;
+            new_gid
+        };
+        if self
+            .pane_state
+            .groups
+            .get(&gid)
+            .is_some_and(|g| !g.contains(pane_id))
+        {
+            self.pane_state.add_pane_to_group(gid, pane_id, None);
+        }
+        if let Some(g) = self.pane_state.groups.get_mut(&gid) {
+            g.activate(pane_id);
+        }
+        self.activate_and_scroll_to_pane(pane_id);
+        self.flash.trigger(
+            crate::app::feedback::FlashTarget::Tab(pane_id),
+            crate::app::feedback::FlashKind::Success,
+        );
+        Some(pane_id)
     }
 
     /// Handle duplicating the active session.

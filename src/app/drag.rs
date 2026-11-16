@@ -35,6 +35,13 @@ pub(super) enum DropTarget {
         dir: SplitDir,
         before: bool,
     },
+    /// Drop between two left nav rows of the same section: the dragged row
+    /// moves just above `anchor` (just below with `after`) in the left nav
+    /// only — the split's tab order stays as it is.
+    NavRow {
+        anchor: u32,
+        after: bool,
+    },
 }
 
 #[allow(dead_code)]
@@ -103,6 +110,12 @@ pub(super) enum DragAction {
         workspace_id: u64,
         target_group_id: GroupId,
         at_index: Option<usize>,
+    },
+    /// Move a left nav row next to another (see `DropTarget::NavRow`).
+    PlaceNavRow {
+        pane_id: u32,
+        anchor: u32,
+        after: bool,
     },
     /// Split `group_id` and put the dragged payload in the newly created group.
     SplitWithPayload {
@@ -337,10 +350,23 @@ pub(super) fn resolve_drag(
 
     // Route group targets to new resolver, old targets to old resolver
     match &target {
+        DropTarget::NavRow { anchor, after } => resolve_nav_row(&payload, *anchor, *after),
         DropTarget::GroupArea(_)
         | DropTarget::GroupTabBar { .. }
         | DropTarget::SplitEdge { .. } => resolve_group(payload, target, pane_state),
         _ => resolve(payload, target, pane_state, active_group),
+    }
+}
+
+/// Only a row of the list itself (a tab) can be placed between its rows.
+fn resolve_nav_row(payload: &DragPayload, anchor: u32, after: bool) -> DragAction {
+    match payload {
+        DragPayload::Tab(pane_id) => DragAction::PlaceNavRow {
+            pane_id: *pane_id,
+            anchor,
+            after,
+        },
+        _ => DragAction::Noop,
     }
 }
 
@@ -1471,6 +1497,52 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_row_dropped_between_nav_rows_is_placed_there() {
+        let ps = make_pane_state(vec![
+            (1, PaneContent::Terminal(10)),
+            (2, PaneContent::Terminal(20)),
+        ]);
+        let mut state = DragState::new();
+        state.set_payload(DragPayload::Tab(1), egui::pos2(0.0, 0.0), "a");
+        state.drop_target = Some(DropTarget::NavRow {
+            anchor: 2,
+            after: true,
+        });
+        let action = resolve_drag(&mut state, &ps, None);
+        assert!(matches!(
+            action,
+            DragAction::PlaceNavRow {
+                pane_id: 1,
+                anchor: 2,
+                after: true
+            }
+        ));
+        assert!(state.payload.is_none(), "the drag is over");
+    }
+
+    #[test]
+    fn only_tabs_can_be_placed_between_nav_rows() {
+        let ps = make_pane_state(vec![(1, PaneContent::Terminal(10))]);
+        for payload in [
+            DragPayload::Session(10),
+            DragPayload::Workspace(1),
+            DragPayload::File(PathBuf::from("/f")),
+            DragPayload::Note(1),
+        ] {
+            let mut state = DragState::new();
+            state.set_payload(payload, egui::pos2(0.0, 0.0), "x");
+            state.drop_target = Some(DropTarget::NavRow {
+                anchor: 1,
+                after: false,
+            });
+            assert!(matches!(
+                resolve_drag(&mut state, &ps, None),
+                DragAction::Noop
+            ));
+        }
     }
 
     #[test]

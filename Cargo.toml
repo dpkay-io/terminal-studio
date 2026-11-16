@@ -97,6 +97,11 @@ windows-sys = { version = "0.52", features = [
 libc = "0.2"
 plist = "1"
 
+# Pointer position while files are dragged in from another app (`os_cursor`).
+# libX11 is loaded at runtime, as winit does; already in the tree via winit.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11-dl = "2.21"
+
 [dev-dependencies]
 tempfile = "3"
 # Builds the event-loop errors eframe reports, for the renderer-fallback

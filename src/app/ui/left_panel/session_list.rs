@@ -33,7 +33,11 @@ struct RowLabel {
     pane_ws: Option<u64>,
 }
 
+/// Thickness of the line showing where a dragged row will land.
+const NAV_DROP_LINE_W: f32 = 2.0;
 const NEW_MENU_LABEL: &str = "+ New \u{25be}";
+const OPEN_FOLDER_MENU_LABEL: &str = "Open Folder\u{2026}";
+const OPEN_FOLDER_MENU_TOOLTIP: &str = "Pick one or more folders; each opens in its own terminal";
 /// Holds Duplicate and Close All when the sidebar is too narrow for them.
 const HEADER_MORE_LABEL: &str = "\u{22ef}";
 const HEADER_MORE_TOOLTIP: &str = "More session actions";
@@ -387,23 +391,12 @@ impl App {
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Open Folder\u{2026}").clicked() {
-                                let ctx = ui.ctx().clone();
-                                std::thread::Builder::new()
-                                    .name("folder-picker".into())
-                                    .spawn(move || {
-                                        let result = rfd::FileDialog::new().pick_folder();
-                                        if let Some(path) = result {
-                                            ctx.data_mut(|d| {
-                                                d.insert_temp(
-                                                    egui::Id::new("pending_folder_pick"),
-                                                    path,
-                                                );
-                                            });
-                                            ctx.request_repaint();
-                                        }
-                                    })
-                                    .ok();
+                            if ui
+                                .button(OPEN_FOLDER_MENU_LABEL)
+                                .on_hover_text(OPEN_FOLDER_MENU_TOOLTIP)
+                                .clicked()
+                            {
+                                self.pick_folders_async(ui.ctx());
                                 ui.close_menu();
                             }
                         },
@@ -1377,6 +1370,8 @@ impl App {
         // ── Right-click context menu ────────────────────────
         resp.context_menu(|ui| self.pane_menu(ui, pane_idx, false, actions));
 
+        self.hit_test_nav_row_drop(ui, &painter, &resp, pane_id);
+
         // Drag source: every row in this list is an already-open pane, so it
         // drags as a Tab. A Session payload only covered terminal rows, and
         // even those resolved to FocusExistingTab — the pane it looks for is
@@ -1387,6 +1382,48 @@ impl App {
                 .set_payload(crate::app::drag::DragPayload::Tab(pane_id), origin, label);
         }
     }
+    /// While a row of this list is dragged over `anchor`'s row (same split
+    /// section), the gap it would land in: above the row's middle, the gap
+    /// above it; below, the gap below. Draws the line there and arms the
+    /// drop, unless the drop would leave the order as it is.
+    fn hit_test_nav_row_drop(
+        &mut self,
+        ui: &egui::Ui,
+        painter: &egui::Painter,
+        row: &egui::Response,
+        anchor: u32,
+    ) {
+        if !self.drag_state.is_active() {
+            return;
+        }
+        let Some(crate::app::drag::DragPayload::Tab(dragged)) = self.drag_state.payload else {
+            return;
+        };
+        // `contains_pointer`, not `hovered`: egui reports nothing as hovered
+        // while something is being dragged.
+        if !row.contains_pointer() {
+            return;
+        }
+        let Some(pos) = ui.ctx().input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        let rect = row.rect;
+        let after = pos.y > rect.center().y;
+        if !self.nav_order.would_move(dragged, anchor, after) {
+            return;
+        }
+        self.drag_state.drop_target = Some(crate::app::drag::DropTarget::NavRow { anchor, after });
+        let y = if after { rect.max.y } else { rect.min.y };
+        // Above the rows, which would otherwise paint over half the line at
+        // the gap they share; the painter's clip keeps it inside the list.
+        let line_layer = egui::LayerId::new(egui::Order::Foreground, ui.id().with("nav_drop_line"));
+        painter.clone().with_layer_id(line_layer).hline(
+            rect.x_range(),
+            y,
+            egui::Stroke::new(NAV_DROP_LINE_W, theme::active().accent),
+        );
+    }
+
     /// Whether the rename box is up in a tab bar rather than in the list.
     pub(in crate::app) fn renaming_in_tab_bar(&self) -> bool {
         self.rename_pane_id.is_some() && self.rename_in_tab_bar && self.settings.show_tab_bar

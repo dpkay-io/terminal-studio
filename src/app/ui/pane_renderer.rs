@@ -1606,35 +1606,6 @@ impl App {
         // Global flash overlay (rare — PTY spawn errors)
         self.flash
             .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
-
-        // ── File drag hover overlay ────────────────────────────────────────
-        let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
-        if hovering_files {
-            let t = theme::active();
-            let painter = ui.painter();
-            painter.rect_filled(
-                content_rect,
-                theme::R_MD,
-                egui::Color32::from_rgba_unmultiplied(
-                    t.surface0.r(),
-                    t.surface0.g(),
-                    t.surface0.b(),
-                    180,
-                ),
-            );
-            painter.rect_stroke(
-                content_rect.shrink(theme::SP_1),
-                4.0,
-                egui::Stroke::new(2.0_f32, t.blue),
-            );
-            painter.text(
-                content_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Drop file(s) to paste path",
-                egui::FontId::proportional(theme::FONT_STATUS),
-                t.text,
-            );
-        }
     }
 }
 

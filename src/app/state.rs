@@ -153,6 +153,8 @@ impl App {
             workspace_dialog: None,
             workspace_edit_dialog: None,
             open_folder_dialog: None,
+            open_queue: Default::default(),
+            drop_pane_rects: Vec::new(),
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
             workspace_search_query: String::new(),
@@ -2292,6 +2294,13 @@ impl App {
         use drag::DragAction;
         match action {
             DragAction::Noop => {}
+            DragAction::PlaceNavRow {
+                pane_id,
+                anchor,
+                after,
+            } => {
+                self.nav_order.place(pane_id, anchor, after);
+            }
             DragAction::ReorderTab {
                 from_pane_id,
                 to_index,

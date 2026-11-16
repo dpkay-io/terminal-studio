@@ -21,7 +21,8 @@
 - **Multi-pane terminal** — split horizontally or vertically into as many panes as you need, each independently resizable with drag dividers
 - **GPU rendering via wgpu** — smooth, pixel-perfect text rendered on the GPU through egui's wgpu backend
 - **Full VTE/ANSI emulation** — 256-color, SGR attributes, mouse reporting, bracketed paste, alternate screen (same VTE parser as Alacritty)
-- **Workspace system** — named workspaces bound to directories; custom accent color auto-activates when your CWD matches
+- **Workspace system** — named workspaces bound to directories; custom accent color auto-activates when your CWD matches; open several folders at once, each with a distinct color picked for it
+- **Drag and drop from the OS** — drop folders or files on the window to open them, or on a terminal to paste their paths
 - **File browser** — recursive directory tree with `.gitignore` support; click any file to open it, `.md` files open in the markdown previewer
 - **Git integration** — staged/unstaged diff viewer with colored hunks, inline/side-by-side modes, stage/unstage/commit/push from the UI
 - **Command palette** — `Ctrl+Shift+P` for quick access to 50+ actions
@@ -165,14 +166,23 @@ Terminal key sequences (`Ctrl+L`, `Ctrl+D`, `Ctrl+C`, etc.) pass through directl
 - Click **+** in the tab bar to open a new terminal pane.
 - Use `Ctrl+Shift+\` / `Ctrl+Shift+-` to split the active pane.
 - Drag the divider between split panes to resize.
+- Drag a row in the session list to reorder the list (the tabs above each split keep their order).
 - Close a pane with its **×** button or `Ctrl+Shift+W`.
 
 ### Workspaces
 
 1. Click **+ Workspace** in the left sidebar.
 2. Enter a name and select the root directory.
-3. An accent color is assigned automatically (pick from the preset palette to override).
+3. An accent color is assigned automatically, chosen to stand apart from the colors already in use (pick another to override).
 4. Whenever a terminal's CWD falls under a workspace path, that workspace activates and its color tints the UI.
+
+**+ New → Open Folder…** lets you pick several folders at once (⌘/Ctrl-click in the picker). Each opens in its own terminal and is saved as a workspace with its own name and color, ready to go — press Enter, or adjust any of them first. Dragging folders onto the window from Finder or Explorer does the same.
+
+### Drag and drop from the OS
+
+- Drop on a **terminal**: the paths are pasted there, shell-quoted.
+- Drop **anywhere else** (session list, tab bar, an editor, the side panels): folders open as with Open Folder, files open in the editor (in the split you dropped them on).
+- While you drag, the spot the drop would land in is highlighted and tells you which of the two it will do. Binary files and files over 16 MB are not opened.
 
 ### File browser and editor
 
