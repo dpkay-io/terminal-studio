@@ -13,6 +13,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenUnit {
     /// Logical points (macOS): physical pixels divided by the display scale.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Points,
     /// Physical pixels (Windows, X11).
     #[cfg_attr(target_os = "macos", allow(dead_code))]
