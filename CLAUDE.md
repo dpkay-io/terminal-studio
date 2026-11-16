@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1073 tests)
+cargo test               # all unit tests (1075 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -399,14 +399,14 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
 | `src/app/state.rs` | 10 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
-| `src/app/ui/pane_renderer.rs` | 3 | drop-preview geometry: join covers the leaf, each edge covers the matching half |
+| `src/app/ui/pane_renderer.rs` | 5 | drop-preview geometry: join covers the leaf, each edge covers the matching half; the active text box id is read and written without taking egui's context lock twice (no deadlock, also while another thread asks for repaints) |
 | `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
 | `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
 | `src/app/macos_menu.rs` | 10 | every titlebar toggle in the menu once, Mac placement and wording (Show/Hide titles, checkmarks, Settings… stays open), shortcut → key equivalent, exact-chord match (Shift not applied), menu state |
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1073 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1075 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
