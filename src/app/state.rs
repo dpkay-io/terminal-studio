@@ -1304,34 +1304,24 @@ impl App {
         let cols = record.cols;
         let rows = record.rows;
 
+        // How to bring back its Claude conversation, worked out first: the
+        // terminal has to start in the folder that conversation began in.
+        let claude_resume = record.claude_session_id.as_deref().and_then(|claude_id| {
+            let cwd_key =
+                super::claude_session::normalize_cwd_for_match(&record.cwd.to_string_lossy());
+            let other_claude_sessions_here = self.session_state.sessions.iter().any(|e| {
+                e.claude_session_id.is_some()
+                    && super::claude_session::normalize_cwd_for_match(
+                        &e.session.read().cwd.to_string_lossy(),
+                    ) == cwd_key
+            });
+            super::claude_session::resume_plan(claude_id, &record.cwd, !other_claude_sessions_here)
+        });
+        let cwd = claude_resume.as_ref().and_then(|r| r.start_dir()).or(cwd);
+
         if let Some(sid) =
             self.spawn_session_with_scrollback(&shell, cols, rows, cwd, scrollback.as_deref())
         {
-            // Compute whether --continue fallback is safe before mutably borrowing the session.
-            let continue_fallback = record.claude_session_id.as_ref().and_then(|claude_id| {
-                let cmd = super::claude_session::claude_resume_command(claude_id, &record.cwd);
-                if cmd.is_some() {
-                    return cmd;
-                }
-                let cwd_key =
-                    super::claude_session::normalize_cwd_for_match(&record.cwd.to_string_lossy());
-                let active_claude_count = self
-                    .session_state
-                    .sessions
-                    .iter()
-                    .filter(|e| {
-                        e.claude_session_id.is_some()
-                            && super::claude_session::normalize_cwd_for_match(
-                                &e.session.read().cwd.to_string_lossy(),
-                            ) == cwd_key
-                    })
-                    .count();
-                if active_claude_count == 0 {
-                    Some("claude --continue".to_string())
-                } else {
-                    None
-                }
-            });
             if let Some(entry) = self.session_state.find_mut(sid) {
                 if record.title_pinned {
                     entry.session.read().pin_title(Some(record.title.clone()));
@@ -1339,7 +1329,7 @@ impl App {
                     entry.restore_title = Some(record.title.clone());
                 }
                 if let Some(ref claude_id) = record.claude_session_id {
-                    entry.pending_command = continue_fallback;
+                    entry.pending_command = claude_resume.map(|r| r.command);
                     entry.claude_session_id = Some(claude_id.clone());
                 }
             }
@@ -1685,15 +1675,23 @@ impl App {
             let key = super::claude_session::normalize_cwd_for_match(&cwd.to_string_lossy());
             claude_sessions_per_cwd.get(&key).copied().unwrap_or(0) <= 1
         };
+        // How to bring back a saved session's Claude conversation, and the
+        // folder it has to start in.
+        let claude_resume_for = |claude_id: &str, cwd: &Path| {
+            super::claude_session::resume_plan(claude_id, cwd, is_single_claude_session(cwd))
+        };
 
         let mut eagerly_spawned: HashMap<usize, u32> = HashMap::new();
         if let Some(active_idx) = active_session_idx {
             if let Some(s) = state.sessions.get(active_idx) {
-                let cwd = if s.cwd.as_os_str().is_empty() {
-                    None
-                } else {
-                    Some(s.cwd.clone())
-                };
+                let claude_resume = s
+                    .claude_session_id
+                    .as_deref()
+                    .and_then(|claude_id| claude_resume_for(claude_id, &s.cwd));
+                let cwd = claude_resume
+                    .as_ref()
+                    .and_then(|r| r.start_dir())
+                    .or_else(|| (!s.cwd.as_os_str().is_empty()).then(|| s.cwd.clone()));
                 let scrollback = s
                     .scrollback_file
                     .as_deref()
@@ -1723,15 +1721,7 @@ impl App {
                             entry.restore_title = title;
                         }
                         if let Some(ref claude_id) = s.claude_session_id {
-                            entry.pending_command =
-                                super::claude_session::claude_resume_command(claude_id, &s.cwd)
-                                    .or_else(|| {
-                                        if is_single_claude_session(&s.cwd) {
-                                            Some("claude --continue".to_string())
-                                        } else {
-                                            None
-                                        }
-                                    });
+                            entry.pending_command = claude_resume.map(|r| r.command);
                             entry.claude_session_id = Some(claude_id.clone());
                         }
                     }
@@ -1766,17 +1756,12 @@ impl App {
                         let title_pinned = saved.is_some_and(|s| s.title_pinned);
                         let scrollback_file = saved.and_then(|s| s.scrollback_file.clone());
                         let claude_session_id = saved.and_then(|s| s.claude_session_id.clone());
-                        let pending_command = if let Some(ref cid) = claude_session_id {
-                            let session_cwd = cwd.as_deref().unwrap_or(Path::new(""));
-                            super::claude_session::claude_resume_command(cid, session_cwd).or_else(
-                                || {
-                                    if is_single_claude_session(session_cwd) {
-                                        Some("claude --continue".to_string())
-                                    } else {
-                                        None
-                                    }
-                                },
-                            )
+                        let claude_resume = claude_session_id.as_deref().and_then(|cid| {
+                            claude_resume_for(cid, cwd.as_deref().unwrap_or(Path::new("")))
+                        });
+                        let cwd = claude_resume.as_ref().and_then(|r| r.start_dir()).or(cwd);
+                        let pending_command = if claude_session_id.is_some() {
+                            claude_resume.map(|r| r.command)
                         } else if scrollback_file.is_some() {
                             None
                         } else {

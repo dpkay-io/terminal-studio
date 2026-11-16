@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -12,6 +12,44 @@ use super::foreground::{detect_child, find_descendant_pids, ForegroundProcess};
 use crate::app::claude_session::{
     is_claude_process, lookup_claude_session_id, lookup_claude_session_id_by_cwd,
 };
+
+/// How a terminal's Claude conversation was found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ClaudeSessionFound {
+    /// From the session file of the Claude process the terminal runs: certain.
+    ByPid(String),
+    /// The newest conversation in the terminal's folder no other terminal
+    /// holds: a guess, used while the process's own file can't be read.
+    ByFolder(String),
+}
+
+/// The conversations terminals other than `sid` hold.
+fn held_by_others(map: &HashMap<u32, String>, sid: u32) -> HashSet<String> {
+    map.iter()
+        .filter(|(other, _)| **other != sid)
+        .map(|(_, id)| id.clone())
+        .collect()
+}
+
+/// Records `sid`'s conversation. A certain match takes the id from any
+/// other terminal that had guessed it; a guess never takes one from
+/// another terminal (two Claude sessions in one folder would otherwise
+/// trade ids on every poll and could lose theirs at close).
+fn record_claude_session(map: &mut HashMap<u32, String>, sid: u32, found: ClaudeSessionFound) {
+    let id = match found {
+        ClaudeSessionFound::ByPid(id) => {
+            map.retain(|other, held| *other == sid || *held != id);
+            id
+        }
+        ClaudeSessionFound::ByFolder(id) => {
+            if map.iter().any(|(other, held)| *other != sid && *held == id) {
+                return;
+            }
+            id
+        }
+    };
+    map.insert(sid, id);
+}
 
 /// Background thread that polls foreground-process detection every 500 ms for
 /// all registered sessions.  The UI thread reads from the shared cache without
@@ -56,28 +94,23 @@ impl ForegroundWorker {
                         if let Some(ref proc) = result {
                             if is_claude_process(&proc.name, &proc.cmdline) {
                                 if let Some(pid) = proc.pid {
-                                    let session_id = lookup_claude_session_id(pid)
+                                    let found = lookup_claude_session_id(pid)
                                         .or_else(|| {
-                                            for desc_pid in find_descendant_pids(pid) {
-                                                if let Some(sid) =
-                                                    lookup_claude_session_id(desc_pid)
-                                                {
-                                                    return Some(sid);
-                                                }
-                                            }
-                                            None
+                                            find_descendant_pids(pid)
+                                                .into_iter()
+                                                .find_map(lookup_claude_session_id)
                                         })
+                                        .map(ClaudeSessionFound::ByPid)
                                         .or_else(|| {
-                                            if !cwd.is_empty() {
-                                                lookup_claude_session_id_by_cwd(&cwd)
-                                            } else {
-                                                None
+                                            if cwd.is_empty() {
+                                                return None;
                                             }
+                                            let held = held_by_others(&claude_bg.lock(), sid);
+                                            lookup_claude_session_id_by_cwd(&cwd, &held)
+                                                .map(ClaudeSessionFound::ByFolder)
                                         });
-                                    if let Some(session_id) = session_id {
-                                        let mut guard = claude_bg.lock();
-                                        guard.retain(|_, v| v != &session_id);
-                                        guard.insert(sid, session_id);
+                                    if let Some(found) = found {
+                                        record_claude_session(&mut claude_bg.lock(), sid, found);
                                     }
                                 }
                             } else {
@@ -189,5 +222,39 @@ mod tests {
             .lock()
             .insert(5, "xyz-789".to_string());
         assert_eq!(worker.get_claude_session_id(5), Some("xyz-789".to_string()));
+    }
+
+    fn map(entries: &[(u32, &str)]) -> HashMap<u32, String> {
+        entries
+            .iter()
+            .map(|(sid, id)| (*sid, id.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn pid_match_takes_the_id_from_a_terminal_that_guessed_it() {
+        let mut m = map(&[(1, "x"), (2, "y")]);
+        record_claude_session(&mut m, 3, ClaudeSessionFound::ByPid("x".into()));
+        assert_eq!(m, map(&[(2, "y"), (3, "x")]));
+    }
+
+    #[test]
+    fn folder_guess_never_takes_another_terminals_id() {
+        let mut m = map(&[(1, "x")]);
+        record_claude_session(&mut m, 2, ClaudeSessionFound::ByFolder("x".into()));
+        assert_eq!(m, map(&[(1, "x")]));
+    }
+
+    #[test]
+    fn folder_guess_recorded_when_free_and_replaces_own() {
+        let mut m = map(&[(1, "x"), (2, "old")]);
+        record_claude_session(&mut m, 2, ClaudeSessionFound::ByFolder("y".into()));
+        assert_eq!(m, map(&[(1, "x"), (2, "y")]));
+    }
+
+    #[test]
+    fn held_by_others_leaves_out_own() {
+        let m = map(&[(1, "x"), (2, "y")]);
+        assert_eq!(held_by_others(&m, 1), ["y".to_string()].into());
     }
 }

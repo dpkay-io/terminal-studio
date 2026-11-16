@@ -1367,6 +1367,18 @@ impl App {
         std::thread::Builder::new()
             .name("closed-session-save".into())
             .spawn(move || {
+                // First, before the capture: the terminal's Claude, closing
+                // with it, deletes its session file as it exits.
+                let claude_session_id = claude_session::pick_claude_session_id(
+                    known_claude_id,
+                    |held| {
+                        claude_session::lookup_claude_session_id_by_cwd_any(
+                            &cwd.to_string_lossy(),
+                            held,
+                        )
+                    },
+                    &taken,
+                );
                 let (ansi_bytes, cols, rows, line_count) = {
                     let session = session_arc.read();
                     let term = &session.term;
@@ -1378,11 +1390,6 @@ impl App {
                     )
                 };
                 drop(session_arc);
-                let claude_session_id = claude_session::pick_claude_session_id(
-                    known_claude_id,
-                    || claude_session::lookup_claude_session_id_by_cwd_any(&cwd.to_string_lossy()),
-                    &taken,
-                );
                 closed_sessions::save_closed_session(
                     ansi_bytes,
                     cwd,
