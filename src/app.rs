@@ -61,6 +61,7 @@ mod session_state;
 pub(crate) mod settings;
 mod spawn_guard;
 mod state;
+mod term_context_menu;
 mod title;
 mod ui;
 mod view_toggles;
@@ -3482,18 +3483,8 @@ impl App {
                         // to clipboard; otherwise send SIGINT (^C) to the PTY.
                         egui::Event::Copy => {
                             if let Some(sid) = active_session_id {
-                                if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
-                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                        let text = self.extract_selected_text(idx);
-                                        if !text.is_empty() {
-                                            ctx.output_mut(|o| o.copied_text = text);
-                                            if let Some(pid) = self.pane_state.active_pane_id {
-                                                self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                            }
-                                        }
-                                    }
-                                    self.term_selection = None;
-                                    self.term_selection_sid = None;
+                                if self.copy_terminal_selection(ctx, sid) {
+                                    // Copied; the selection is cleared.
                                 } else if input::COPY_KEY_INTERRUPTS {
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
@@ -3507,16 +3498,7 @@ impl App {
                         // Wrap in bracketed-paste sequences only if the app opted in (?2004h).
                         egui::Event::Paste(text) => {
                             if let Some(sid) = active_session_id {
-                                self.scroll_accum.remove(&sid);
-                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                    self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                    let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
-                                    let data = input::paste_bytes(text, bp);
-                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
-                                    if let Some(pid) = self.pane_state.active_pane_id {
-                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                    }
-                                }
+                                self.paste_into_terminal(sid, text);
                             }
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
@@ -3556,9 +3538,7 @@ impl App {
                                     } else if *button == egui::PointerButton::Secondary && *pressed && !has_mouse {
                                         if let Some(geo) = &self.active_term_geo {
                                             if geo.rect.contains(*pos) {
-                                                self.context_menu_pos = Some(*pos);
-                                                let popup_id = self.vp_id("term_context_menu");
-                                                ui.memory_mut(|m| m.open_popup(popup_id));
+                                                self.open_terminal_context_menu(ctx, *pos);
                                             }
                                         }
                                     } else if *button == egui::PointerButton::Primary {
@@ -3828,100 +3808,10 @@ impl App {
                     }
                 }
 
-                // ── Terminal right-click context menu ─────────────────────
-                {
-                    let popup_id = self.vp_id("term_context_menu");
-                    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
-                    if !popup_open {
-                        self.context_menu_pos = None;
-                    }
-                    let mut close_context_menu = false;
-                    if popup_open {
-                        if let Some(pos) = self.context_menu_pos {
-                            let anchor_w = 160.0;
-                            let dummy_resp = ui.interact(
-                                egui::Rect::from_min_size(pos, egui::vec2(anchor_w, 1.0)),
-                                popup_id.with("anchor"),
-                                egui::Sense::hover(),
-                            );
-                            egui::containers::popup::popup_below_widget(
-                                ui,
-                                popup_id,
-                                &dummy_resp,
-                                egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(140.0);
-                                    let has_selection = self.term_selection.is_some();
-
-                                    if ui.add_enabled(has_selection, egui::Button::new("Copy").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(sid) = active_session_id {
-                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                                let text = self.extract_selected_text(idx);
-                                                if !text.is_empty() {
-                                                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                        let _ = cb.set_text(&text);
-                                                    }
-                                                    if let Some(pid) = self.pane_state.active_pane_id {
-                                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        self.term_selection = None;
-                                        self.term_selection_sid = None;
-                                        close_context_menu = true;
-                                    }
-                                    if ui.add(egui::Button::new("Paste").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(sid) = active_session_id {
-                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                    if let Ok(text) = cb.get_text() {
-                                                        let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
-                                                        let data = input::paste_bytes(&text, bp);
-                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        close_context_menu = true;
-                                    }
-                                    ui.separator();
-                                    if ui.add(egui::Button::new(self.shortcut_tooltip("Search", AppAction::SearchTerminal)).min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        self.term_search.active = true;
-                                        close_context_menu = true;
-                                    }
-                                    if ui.add(egui::Button::new("Select All").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(geo) = &self.active_term_geo {
-                                            if let Some(sid) = active_session_id {
-                                                if let Some(entry) = self.session_state.find(sid) {
-                                                    let session = entry.session.read();
-                                                    let visible_rows = (geo.rect.height() / geo.cell_h) as u16;
-                                                    let cols = session.term.columns() as u16;
-                                                    let sel_offset = session.term.grid().display_offset();
-                                                    drop(session);
-                                                    self.term_selection = Some(TermSelection {
-                                                        start_col: 0,
-                                                        start_row: 0,
-                                                        end_col: cols.saturating_sub(1),
-                                                        end_row: visible_rows.saturating_sub(1),
-                                                        display_offset: sel_offset,
-                                                    });
-                                                    self.term_selection_sid = Some(sid);
-                                                }
-                                            }
-                                        }
-                                        close_context_menu = true;
-                                    }
-                                },
-                            );
-                        }
-                    }
-                    if close_context_menu {
-                        ui.memory_mut(|m| m.close_popup());
-                        self.context_menu_pos = None;
-                    }
-                }
             }
+            // Drawn every frame, outside the input handling above, which
+            // stands down while a floating layer (this menu) is open.
+            self.show_terminal_context_menu(ui, active_session_id);
             } // end else (nv > 0)
         });
 

@@ -690,7 +690,16 @@ fn resolve_color(color: Color, is_fg: bool, t: &Theme) -> egui::Color32 {
 fn resolve_named(named: NamedColor, is_fg: bool, t: &Theme) -> egui::Color32 {
     match named {
         NamedColor::Foreground => t.text,
-        NamedColor::Background => egui::Color32::TRANSPARENT,
+        // As a cell background, the default shows the terminal's own (painted
+        // once, behind every cell). As a text colour (reverse video swaps it
+        // in) it must be that colour itself, or the text is invisible.
+        NamedColor::Background => {
+            if is_fg {
+                t.bg_term
+            } else {
+                egui::Color32::TRANSPARENT
+            }
+        }
         NamedColor::Black => t.ansi[0],
         NamedColor::Red => t.ansi[1],
         NamedColor::Green => t.ansi[2],
@@ -780,6 +789,35 @@ mod tests {
         let mut processor: Processor<StdSyncHandler> = Processor::new();
         processor.advance(&mut session.term, text.as_bytes());
         Arc::new(RwLock::new(session))
+    }
+
+    /// Reverse video swaps the default background into the text colour: the
+    /// text must still be drawn opaque, in a colour unlike its background.
+    #[test]
+    fn reverse_video_text_on_default_colours_is_visible() {
+        let session = session_showing("\x1b[7mINV\x1b[0m");
+        let snapshot = Mutex::new(TerminalSnapshot::default());
+        let _ = draw(&session, &snapshot);
+        let snap = snapshot.lock();
+        let cell = snap.cells[0];
+        assert_eq!(cell.ch, 'I');
+        assert_eq!(cell.fg.a(), u8::MAX, "text colour is opaque");
+        assert_eq!(
+            cell.bg,
+            theme::active().text,
+            "background is the text colour"
+        );
+        assert_ne!(cell.fg, cell.bg, "text differs from its background");
+    }
+
+    #[test]
+    fn background_as_text_colour_is_the_terminal_background() {
+        let t = theme::active();
+        assert_eq!(resolve_named(NamedColor::Background, true, t), t.bg_term);
+        assert_eq!(
+            resolve_named(NamedColor::Background, false, t),
+            egui::Color32::TRANSPARENT
+        );
     }
 
     #[test]
