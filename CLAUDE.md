@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1124 tests)
+cargo test               # all unit tests (1148 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -41,7 +41,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/pty/reader.rs` | Dedicated reader thread per PTY: tee-parses OSC 7 with `vte 0.13`, feeds rest to alacritty `Processor` in 4KB chunks (`advance_chunk`: feed, keep a scrolled-up view in place, bump the content generation) under the session's output gate; each chunk's write lock is released with `unlock_fair` so a waiting frame gets it |
 | `src/pty/shell_integration.rs` | Shell prompt integration helpers; OSC 7 injection for bash/zsh/fish |
 | `src/pty/foreground.rs` | Platform-specific foreground process detection (Windows toolhelp / Linux /proc) |
-| `src/pty/foreground_worker.rs` | `ForegroundWorker`: background thread polling foreground detection every 500ms; UI reads from cache |
+| `src/pty/foreground_worker.rs` | `ForegroundWorker`: background thread polling foreground detection every 500ms; UI reads from cache. Each terminal's Claude conversation: by the Claude process's `~/.claude/sessions/<pid>.json` (certain; takes the id from a terminal that guessed it), else the newest one in its folder no other terminal holds (a guess never takes another terminal's id) |
 | `src/renderer/mod.rs` | Re-export of `terminal_pass` |
 | `src/renderer/terminal_pass.rs` | `TerminalView`, `TerminalGeometry`, `SelectionRange`, `TerminalSnapshot` — cell rendering using `alacritty_terminal` grid API. Each session keeps the snapshot it was last drawn from (`SessionEntry.render_snapshot`); a frame waits at most `LOCK_WAIT_BUDGET` (2 ms) for the lock, else paints that snapshot — never a blank terminal |
 
@@ -73,6 +73,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/worker_manager.rs` | Thread lifecycle management; cleanup helpers |
 | `src/app/scrollback_saver.rs` | `ScrollbackSaver`: saves running sessions' scrollback in the background and does every write of `session.json` (the UI thread only builds the JSON). A changed session is captured once its output is quiet for `SETTLE` (10 s) or changing for `MAX_STALE` (60 s), read in slices of at most `SLICE_BUDGET` (1 ms) per read lock while output waits on the session's output gate; a capture a resize tore is dropped. After each session write it prunes the scrollback folder to the files the JSON names plus each session's latest. `adopt()` keeps a restored session's file as its latest; `capture_all_now()` + `flush()` back `App::save_session_final()` (quit, restart). Sessions are tracked by a `SaverTracking` guard on `SessionEntry` |
 | `src/app/scrollback_capture.rs` | `extract_grid_as_ansi()`, `AnsiCapture` (the same capture a few lines at a time; lines are independent, so any step size gives the same bytes) |
+| `src/app/claude_session.rs` | Claude Code conversations: id lookup (`sessions/<pid>.json`, or by folder skipping ids other sessions hold), `claude_project_dir_name()` (Claude's own rule: every non-alphanumeric UTF-16 unit → `-`, names over 200 chars can't be derived), `resume_plan()` / `ClaudeResume` — the one place restore, reopen and deferred start decide `claude --resume "<id>"` (transcript found in its folder, else in any project folder, run in the folder the transcript says it began in) or `claude --continue` (only when no other Claude session shares the folder), else nothing (logged) |
+| `src/app/term_context_menu.rs` | The terminal's right-click menu (Copy, Paste, Search, Select All), drawn every frame it is open — outside the terminal's input handling, which stands down while any floating layer (the menu itself) is open; `copy_terminal_selection()` / `paste_into_terminal()`, shared with ⌘C / ⌘V |
 | `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box; extra windows hold it in `hold_extra_window_keys()` and park the keyboard for that frame (egui has already read the Tab as a focus move), then `restore_parked_focus()` gives it back |
 | `src/app/nav_order_sync.rs` | `refresh_nav_order()`: feeds the window's `NavOrder` once per window frame (also while the left panel is hidden); `numbered_tab_targets()`: what ⌘1–9 open — the focused split's rows in left nav order (the whole list without splits), filtered like the list |
 | `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the view's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet, and the tab bar, which has no titlebar button) — the single path for titlebar buttons, shortcuts, command palette, the macOS menu bar and the Settings checkbox |
@@ -189,7 +191,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
   - `FileSearchWorker`: file path fuzzy search
   - `UpdateChecker`: GitHub releases polling (24h interval)
   - `ScrollbackSaver`: scrollback captures and `session.json` writes (1 s tick)
-- Closing a tab: `closed-session-save` thread captures the session's scrollback and looks up its Claude conversation (`claude_session::pick_claude_session_id`)
+- Closing a tab: `closed-session-save` thread looks up its Claude conversation first (`claude_session::pick_claude_session_id` — the closing Claude deletes its session file as it exits), then captures the session's scrollback
   - `SysMonitor`: CPU/RAM/network stats
 
 **Pane tree (in-tab splits):**
@@ -371,7 +373,10 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/watcher.rs` | 16 | file system watch, git refresh debounce, directory caching |
 | `src/terminal/tests.rs` | 14 | session dims, resize (bumps the content generation only when the size changes), content preservation, OSC title, a user-given (pinned) title outlasting the shell's, cursor, bracketed paste, mouse SGR |
 | `src/search.rs` | 11 | text search, match finding, index navigation |
-| `src/renderer/terminal_pass.rs` | 15 | terminal geometry, cell rendering, scrollbar hit-testing, selection, a busy lock paints the last snapshot (background only before the first draw) |
+| `src/renderer/terminal_pass.rs` | 17 | terminal geometry, cell rendering, scrollbar hit-testing, selection, a busy lock paints the last snapshot (background only before the first draw), reverse-video text on default colours stays visible |
+| `src/app/claude_session.rs` | 54 | Claude process detection, session id by pid / scan / folder (ids held elsewhere skipped), project folder names (`_` `.` spaces, non-ASCII per UTF-16 unit, Mac folders Claude wrote, too long), unsafe ids, resume found in its folder / any folder / for a long path, resumes in the folder the conversation began in, `--continue` only when allowed, resume command round trip |
+| `src/pty/foreground_worker.rs` | 8 | Claude id cache, pruning, a pid match takes a guessed id, a folder guess never takes another terminal's |
+| `src/app/term_context_menu.rs` | 6 | drawn every frame the layer stays visible (every other frame it doesn't — the see-through-menu bug), Copy click with a selection, Copy disabled without one, closed menu draws nothing |
 | `src/pty/reader.rs` | 11 | OSC 7 CWD tracking, OSC 52 clipboard, byte streaming, a fed chunk bumps the generation and keeps a scrolled-up view in place |
 | `src/app/scrollback_capture.rs` | 17 | ANSI capture: colours, attributes, wide chars, trailing blanks, max lines, round trips; a capture in steps of any size equals one read |
 | `src/app/scrollback_saver.rs` | 18 | save timing (settle, stale under constant output, saved), sliced capture (equals one read, the time budget decides how much one lock covers, dropped when resized, completes under constant output), passes write only changed sessions and ask for a session save, empty and dropped sessions, final capture writes only changed ones, saving off, adopt (and off), prune keeps referenced + latest, names never reused, flush, tracking guard |
@@ -421,7 +426,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1124 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1148 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
