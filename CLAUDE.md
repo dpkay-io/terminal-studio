@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1153 tests)
+cargo test               # all unit tests (1160 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -23,7 +23,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, decorations=false; calls `SingleInstanceGuard::try_acquire()`; tries renderers in order (wgpu, then glow) |
 | `src/renderer_choice.rs` | Renderer order, `--renderer=` override, and `another_renderer_may_help()`: no glow retry when the window system or app creation failed (that would mask the real error with winit's "EventLoop can't be recreated") |
 | `src/app.rs` | `App` struct; implements `eframe::App`: `logic()` (quit request, close confirmation, restart into an update, the saver's session saves — eframe also runs it while every window is minimized or hidden, when `ui()` is skipped) and `ui()` (everything else; draws the main window into its root `Ui`, then each extra window's viewport via `render_window_body(ui)`); render dispatch to UI submodules |
-| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6, `f32`) with `margin_same/xy/sides()` (egui margins are `i8`), radii (R_NONE–R_LG, `u8` like egui's `CornerRadius`), `frameless_text_edit()` (no frame, padding kept), `scroll_style()` (egui's edge fade, coasting and rubber band off), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
+| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6, `f32`) with `margin_same/xy/sides()` (egui margins are `i8`), radii (R_NONE–R_LG, `u8` like egui's `CornerRadius`), `frameless_text_edit()` (no frame, padding kept), `scroll_style()` (egui's edge fade, coasting and rubber band off), `apply_widget_metrics()` (button padding, widget height, default text sizes, animation time, panel grab: egui 0.28's values, pinned), `rgba_unmultiplied()` / `with_alpha()` (every translucent colour; egui 0.28's linear-space premultiply), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
 | `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
 | `src/logging.rs` | `LogLevel` enum, `LogGuard`; non-blocking daily-rotated file logging via tracing-appender; 7-day retention cleanup; `load_configured_level()` partial settings parse |
@@ -130,10 +130,10 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | File | Responsibility |
 |------|---------------|
 | `src/ui_kit/buttons.rs` | `IconButton`, `ActionButton`, `IconButtonStyle`, `ActionButtonStyle`; themed button wrappers |
-| `src/ui_kit/containers.rs` | `dialog()`, `DialogConfig`, `DialogResponse`, `DialogAnchor`, `DialogWidth`; flex-box layouts |
+| `src/ui_kit/containers.rs` | `dialog()`, `DialogConfig`, `DialogResponse`, `DialogAnchor`, `DialogWidth`; flex-box layouts; `popup_below()` (a popup list under a widget, items filling its width — every dropdown and the terminal menu) |
 | `src/ui_kit/layout.rs` | Grid/flex helpers; responsive layout utilities |
 | `src/ui_kit/lists.rs` | Scrollable list rendering with selection tracking |
-| `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling; `one_line_elided()` (one line ending in …) and `full_hover_text()` (a tooltip that never wraps, so it grows when its text does) |
+| `src/ui_kit/text.rs` | Rich text formatting, emphasis, code inline styling; `one_line_elided()` (one line ending in …) and `full_hover_text()` (a tooltip that never wraps, so it grows when its text does); `TextEditFontHint::font_with_hint()` (a text box's font and its placeholder in that same font) |
 
 ### Utilities & Infrastructure
 
@@ -301,7 +301,7 @@ Color32::from_rgb(30, 30, 46)
 
 **Design language tokens (all in `theme.rs`):**
 - Spacing: `SP_0` (0) through `SP_6` (16) — use these, never hardcode pixel values
-- Radii: `R_NONE` (0), `R_SM` (2), `R_MD` (4), `R_LG` (6)
+- Radii: `R_NONE` (0), `R_SM` (3), `R_MD` (6), `R_LG` (8)
 - Typography: `FONT_HEADING_1` (22), `FONT_HEADING_2` (18), `FONT_STATUS` (16), `FONT_TERM` (14), `FONT_UI_LG` (13), `FONT_UI_MD` (12), `FONT_UI_SM` (11), `FONT_UI_XS` (10)
 - Alpha: `ALPHA_CURSOR`, `ALPHA_SELECTION`, `ALPHA_OVERLAY_DIM`, `ALPHA_SCROLLBAR_*`, `ALPHA_FLASH`
 - Blend factors: `BLEND_SUBTLE` (0.15), `BLEND_LIGHT` (0.30), `BLEND_MEDIUM` (0.50), `BLEND_STRONG` (0.75)
@@ -348,7 +348,7 @@ Color32::from_rgb(30, 30, 46)
 
 | File | Tests | Coverage |
 |------|-------|---------|
-| `src/theme.rs` | 29 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast |
+| `src/theme.rs` | 31 | color roundtrip, tinted, short_path, header_bg, text contrast, all-theme validation, sRGB LUT, ensure_term_contrast, translucent colours equal egui 0.28's (every alpha), opaque/clear pass through |
 | `src/app/input.rs` | 33 | keyboard→PTY byte translation for all keys and modifier combinations, Ctrl+Tab detection and holding it back from text boxes, bracketed paste bytes |
 | `src/app/layout_shortcuts.rs` | 8 | layout keys from an editor apply only from its own text box, the notes box or no focus — never a rename or filter field; parked focus is seen where it was and given back unless something took it |
 | `src/app/pane_state.rs` | 86 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs), each pane's left nav section (a split missing from the layout gives none; one split holds every pane) |
@@ -420,7 +420,9 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
-| `src/app/state.rs` | 13 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; a discard request runs the frame's UI once (egui would run it twice); egui's style follows the app theme, not the OS |
+| `src/app/state.rs` | 14 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; a discard request runs the frame's UI once (egui would run it twice); egui's style follows the app theme, not the OS; the style keeps the app's widget metrics and placeholder colour |
+| `src/ui_kit/containers.rs` | 1 | popup list items fill a list at least as wide as its anchor |
+| `src/ui_kit/text.rs` | 2 | a placeholder is drawn in its text box's font (font id and text style) |
 | `src/app/ui/pane_renderer.rs` | 5 | drop-preview geometry: join covers the leaf, each edge covers the matching half; the active text box id is read and written without taking egui's context lock twice (no deadlock, also while another thread asks for repaints) |
 | `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
 | `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
@@ -428,7 +430,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1153 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1160 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
@@ -443,6 +445,10 @@ Color32::from_rgb(30, 30, 46)
 - egui runs **one UI pass per frame** here (`state::limit_ui_passes`, `max_passes = 1`): UI code writes key presses to PTYs and spawns/closes sessions as it draws, so egui's re-run after `request_discard` would do it twice. A widget that asks for a discard shows with a one-frame-late layout instead, as in egui 0.28
 - egui's dark/light style choice is pinned to the app theme (`state::apply_theme_visuals` → `ctx.set_theme`), so the OS switching theme can't swap in egui's unstyled default
 - Menus close on any click inside them (egui 0.32+). A menu item that must leave it open (Labels: tick several) uses `egui::menu::SubMenuButton` with `PopupCloseBehavior::CloseOnClickOutside`. Popups go through `egui::Popup` (`Popup::is_id_open/open_id/close_id`); egui's memory popup methods are private
+- Translucent colours: always `theme::rgba_unmultiplied()` / `theme::with_alpha()`, never `Color32::from_rgba_unmultiplied` (clippy.toml disallows it): egui 0.32+ premultiplies in gamma space, which made every low-alpha fill 3–4× fainter than the design
+- egui's spacing, default text sizes and animation time are pinned in `theme::apply_widget_metrics()` (egui 0.29+ changed the defaults: wider button padding, 20 px widgets, 13 pt text); a new egui default the UI depends on belongs there
+- A popup list under a widget goes through `ui_kit::popup_below()` (items fill its width, as 0.28's `popup_below_widget` did); a text box with both a font and a placeholder uses `.font_with_hint()` (egui 0.32+ draws `hint_text` in the body font). Placeholders are drawn in the text colour (`weak_text_color` = `override_text_color`, as in 0.28)
+- egui 0.37 caps a checkbox's corner radius (at 30 % of its size), so checkboxes are rounded squares, not the near-circles of 0.28; only egui's experimental theme API could change that
 - `TextEdit::frame` takes a `Frame`: use `theme::frameless_text_edit()` for a borderless box (`Frame::NONE` would also drop its padding)
 - In unit tests, drive egui frames with `crate::egui_test_frames::run_ui/run_pass`, not `ctx.run_ui` directly (a dropped frame output with unapplied textures panics in debug)
 - In tests, use `Session::new_for_test(id, cols, rows)` (3 args, no Context/pty_tx) — available only under `#[cfg(test)]`

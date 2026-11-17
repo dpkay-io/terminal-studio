@@ -463,10 +463,8 @@ impl<'a> TerminalView<'a> {
                 let cursor_origin =
                     rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
                 if is_focused {
-                    let color = egui::Color32::from_rgba_unmultiplied(
-                        t.cursor_color.r(),
-                        t.cursor_color.g(),
-                        t.cursor_color.b(),
+                    let color = crate::theme::with_alpha(
+                        t.cursor_color,
                         (t.cursor_color.a() as f32 * cursor_alpha) as u8,
                     );
                     match cursor_style {
@@ -621,26 +619,11 @@ impl<'a> TerminalView<'a> {
             }
 
             let bar_color = if is_dragging {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_DRAG,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_DRAG)
             } else if pointer_in_hit {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_HOVER,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_HOVER)
             } else {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_IDLE,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_IDLE)
             };
 
             if scrollbar_hovered {
@@ -648,12 +631,7 @@ impl<'a> TerminalView<'a> {
                     egui::pos2(sb_right - bar_w_wide, outer_rect.min.y),
                     egui::pos2(sb_right, outer_rect.max.y),
                 );
-                let track_color = egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    30,
-                );
+                let track_color = crate::theme::with_alpha(t.scrollbar_color, 30);
                 painter.rect_filled(track_rect, bar_w_wide * 0.5, track_color);
             }
 

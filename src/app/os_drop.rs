@@ -310,12 +310,7 @@ fn paint_drop_zone(ctx: &egui::Context, zone: &DropZone, count: usize) {
     painter.rect_filled(
         rect,
         theme::R_MD,
-        egui::Color32::from_rgba_unmultiplied(
-            t.surface0.r(),
-            t.surface0.g(),
-            t.surface0.b(),
-            theme::ALPHA_SURFACE_OVERLAY,
-        ),
+        crate::theme::with_alpha(t.surface0, theme::ALPHA_SURFACE_OVERLAY),
     );
     painter.rect_stroke(
         rect.shrink(theme::SP_1),

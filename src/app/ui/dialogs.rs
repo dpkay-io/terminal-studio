@@ -5,6 +5,7 @@ use crate::pane_tree::PaneNode;
 use crate::shortcuts::{AppAction, Shortcut};
 use crate::theme;
 use crate::ui_kit;
+use crate::ui_kit::TextEditFontHint as _;
 use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -281,8 +282,10 @@ impl App {
                                 egui::TextEdit::singleline(&mut self.quick_switcher_query)
                                     .id(search_id)
                                     .desired_width(dialog_w - 40.0)
-                                    .hint_text("Type to search sessions...")
-                                    .font(egui::TextStyle::Body),
+                                    .font_with_hint(
+                                        egui::TextStyle::Body,
+                                        "Type to search sessions...",
+                                    ),
                             );
                             if !search_resp.has_focus() {
                                 search_resp.request_focus();
@@ -1486,8 +1489,7 @@ impl App {
                     .id(msg_id)
                     .desired_width(f32::INFINITY)
                     .desired_rows(2)
-                    .hint_text("Commit message...")
-                    .font(egui::TextStyle::Monospace),
+                    .font_with_hint(egui::TextStyle::Monospace, "Commit message..."),
             );
             if !self.commit_dialog_focus_requested {
                 msg_resp.request_focus();

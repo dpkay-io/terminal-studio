@@ -264,20 +264,20 @@ impl ThemeDef {
         let danger_fg = blend(self.red, self.text, BLEND_LIGHT);
 
         let cursor_color = if self.is_light {
-            Color32::from_rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR)
+            rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR)
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR)
+            rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR)
         };
         let cursor_dim_color = if self.is_light {
-            Color32::from_rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR_DIM)
+            rgba_unmultiplied(40, 40, 40, ALPHA_CURSOR_DIM)
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR_DIM)
+            rgba_unmultiplied(255, 255, 255, ALPHA_CURSOR_DIM)
         };
         let selection_bg_rgb = blend(self.base, self.blue, 0.55);
         let scrollbar_color = if self.is_light {
-            Color32::from_rgba_unmultiplied(80, 80, 80, ALPHA_SCROLLBAR_IDLE)
+            rgba_unmultiplied(80, 80, 80, ALPHA_SCROLLBAR_IDLE)
         } else {
-            Color32::from_rgba_unmultiplied(180, 180, 180, ALPHA_SCROLLBAR_IDLE)
+            rgba_unmultiplied(180, 180, 180, ALPHA_SCROLLBAR_IDLE)
         };
 
         let ansi_c32: [Color32; 16] = std::array::from_fn(|i| c(self.ansi[i]));
@@ -387,7 +387,7 @@ impl ThemeDef {
             ansi: ansi_c32,
             cursor_color,
             cursor_dim_color,
-            selection_bg: Color32::from_rgba_unmultiplied(
+            selection_bg: rgba_unmultiplied(
                 selection_bg_rgb[0],
                 selection_bg_rgb[1],
                 selection_bg_rgb[2],
@@ -402,20 +402,20 @@ impl ThemeDef {
 
             border_panel: c(self.surface0),
             border_subtle: c(border_subtle_rgb),
-            border_focus: Color32::from_rgba_unmultiplied(
+            border_focus: rgba_unmultiplied(
                 self.blue[0],
                 self.blue[1],
                 self.blue[2],
                 ALPHA_BORDER_FOCUS,
             ),
 
-            shadow_sm: Color32::from_rgba_unmultiplied(
+            shadow_sm: rgba_unmultiplied(
                 self.crust[0],
                 self.crust[1],
                 self.crust[2],
                 ALPHA_SHADOW_SM,
             ),
-            shadow_md: Color32::from_rgba_unmultiplied(
+            shadow_md: rgba_unmultiplied(
                 self.crust[0],
                 self.crust[1],
                 self.crust[2],
@@ -594,6 +594,54 @@ pub const SCROLL_KINETIC_DECAY_S: f32 = 0.0;
 /// No overscroll bounce at the ends of a scroll area.
 pub const SCROLL_RUBBER_BAND: bool = false;
 
+// ── egui widget metrics ─────────────────────────────────────────────────────
+// The app's layout was designed on egui 0.28's defaults, which later egui
+// versions changed (wider button padding, taller widgets, 13 pt text,
+// slower animations, centred text, a thinner panel-resize grab). They are
+// pinned here so an egui upgrade never quietly resizes the UI.
+
+/// Space around a button's text (egui 0.29+ default: 8 × 2).
+pub const BUTTON_PAD: egui::Vec2 = egui::vec2(SP_2, 1.0);
+/// Minimum size of an interactive widget (egui 0.29+ default height: 20).
+pub const WIDGET_MIN_SIZE: egui::Vec2 = egui::vec2(40.0, 18.0);
+/// egui's default body and button text, where a widget names no size.
+pub const FONT_EGUI_BODY: f32 = 12.5;
+/// egui's default monospace text, where a widget names no size.
+pub const FONT_EGUI_MONO: f32 = 12.0;
+/// Length of egui's own animations (collapsing headers, toggles).
+pub const EGUI_ANIMATION_S: f32 = 1.0 / 12.0;
+/// How far from a panel's edge its resize handle can be grabbed.
+pub const PANEL_RESIZE_GRAB: f32 = 5.0;
+
+/// Pins egui's spacing, default text sizes and timing to the app's design.
+pub fn apply_widget_metrics(style: &mut egui::Style) {
+    use egui::{FontFamily, FontId, TextStyle};
+    style.spacing.button_padding = BUTTON_PAD;
+    style.spacing.interact_size = WIDGET_MIN_SIZE;
+    style.spacing.scroll = scroll_style();
+    for (text_style, font) in [
+        (
+            TextStyle::Body,
+            FontId::new(FONT_EGUI_BODY, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Button,
+            FontId::new(FONT_EGUI_BODY, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(FONT_EGUI_MONO, FontFamily::Monospace),
+        ),
+    ] {
+        style.text_styles.insert(text_style, font);
+    }
+    // Text sits where its layout puts it, not centred on the line.
+    style.override_text_valign = None;
+    style.animation_time = EGUI_ANIMATION_S;
+    style.interaction.resize_grab_radius_side = PANEL_RESIZE_GRAB;
+    style.visuals.handle_shape = egui::style::HandleShape::Circle;
+}
+
 // ── Stroke widths ───────────────────────────────────────────────────────────
 
 pub const STROKE_THIN: f32 = 1.0;
@@ -706,6 +754,30 @@ pub fn from_rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
 }
 
+/// A colour from straight (unmultiplied) alpha, premultiplied in linear
+/// space as egui 0.28 did. egui 0.32+ `Color32::from_rgba_unmultiplied`
+/// multiplies the gamma bytes instead, which makes a low alpha far fainter
+/// (red 243 at alpha 20 gives 75 here, 19 there), so every translucent
+/// colour in the app is made here (clippy.toml disallows egui's).
+pub fn rgba_unmultiplied(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+    match a {
+        0 => Color32::TRANSPARENT,
+        u8::MAX => Color32::from_rgb(r, g, b),
+        _ => {
+            let lut = srgb_lut();
+            let a_lin = f32::from(a) / f32::from(u8::MAX);
+            let premultiply =
+                |c: u8| egui::ecolor::gamma_u8_from_linear_f32(lut[usize::from(c)] * a_lin);
+            Color32::from_rgba_premultiplied(premultiply(r), premultiply(g), premultiply(b), a)
+        }
+    }
+}
+
+/// `c`'s red, green and blue at `alpha` (see [`rgba_unmultiplied`]).
+pub fn with_alpha(c: Color32, alpha: u8) -> Color32 {
+    rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+}
+
 pub fn tinted(c: [u8; 3], factor: f32) -> [u8; 3] {
     let base = active().base_rgb;
     [
@@ -717,17 +789,11 @@ pub fn tinted(c: [u8; 3], factor: f32) -> [u8; 3] {
 
 static SRGB_LUT: OnceLock<[f32; 256]> = OnceLock::new();
 
+/// sRGB byte → linear light, by egui's own conversion so colours made here
+/// match the ones egui makes bit for bit.
 fn srgb_lut() -> &'static [f32; 256] {
-    SRGB_LUT.get_or_init(|| {
-        std::array::from_fn(|i| {
-            let f = i as f32 / 255.0;
-            if f <= 0.04045 {
-                f / 12.92
-            } else {
-                ((f + 0.055) / 1.055).powf(2.4)
-            }
-        })
-    })
+    SRGB_LUT
+        .get_or_init(|| std::array::from_fn(|i| egui::ecolor::linear_f32_from_gamma_u8(i as u8)))
 }
 
 fn relative_luminance(c: [u8; 3]) -> f32 {
@@ -1518,7 +1584,7 @@ fn all_defs() -> Vec<ThemeDef> {
 
 pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
-    Color32::from_rgba_unmultiplied(
+    rgba_unmultiplied(
         (a.r() as f32 + (b.r() as f32 - a.r() as f32) * t) as u8,
         (a.g() as f32 + (b.g() as f32 - a.g() as f32) * t) as u8,
         (a.b() as f32 + (b.b() as f32 - a.b() as f32) * t) as u8,
@@ -1786,6 +1852,48 @@ mod tests {
             "ensure_readable on light bg should reach 4.5:1, got {r}"
         );
         set_theme(ThemeId::CatppuccinMocha);
+    }
+
+    /// egui 0.28's `Color32::from_rgba_unmultiplied`, which the app's
+    /// translucent colours were designed with.
+    fn egui_0_28_unmultiplied(r: u8, g: u8, b: u8, a: u8) -> Color32 {
+        use egui::ecolor::{gamma_u8_from_linear_f32, linear_f32_from_gamma_u8};
+        let a_lin = f32::from(a) / 255.0;
+        let premultiply = |c: u8| gamma_u8_from_linear_f32(linear_f32_from_gamma_u8(c) * a_lin);
+        Color32::from_rgba_premultiplied(premultiply(r), premultiply(g), premultiply(b), a)
+    }
+
+    #[test]
+    fn translucent_colours_match_egui_0_28() {
+        for a in 1..=254u8 {
+            for c in (0..=255u8).step_by(3) {
+                let (r, g, b) = (c, c.wrapping_mul(7), 255 - c);
+                assert_eq!(
+                    rgba_unmultiplied(r, g, b, a),
+                    egui_0_28_unmultiplied(r, g, b, a),
+                    "rgb ({r}, {g}, {b}) at alpha {a}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn translucent_colours_are_not_gamma_premultiplied() {
+        // The case that showed it: an idle close button's red at alpha 20.
+        let c = rgba_unmultiplied(243, 139, 168, ALPHA_BTN_IDLE);
+        assert_eq!(c.r(), 75);
+        assert_ne!(
+            c,
+            Color32::from_rgba_premultiplied(19, 11, 13, ALPHA_BTN_IDLE)
+        );
+    }
+
+    #[test]
+    fn opaque_and_clear_colours_pass_through() {
+        assert_eq!(rgba_unmultiplied(1, 2, 3, 255), Color32::from_rgb(1, 2, 3));
+        assert_eq!(rgba_unmultiplied(1, 2, 3, 0), Color32::TRANSPARENT);
+        let accent = Color32::from_rgb(137, 180, 250);
+        assert_eq!(with_alpha(accent, 40), rgba_unmultiplied(137, 180, 250, 40));
     }
 
     #[test]

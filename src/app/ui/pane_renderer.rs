@@ -1,3 +1,4 @@
+use crate::ui_kit::TextEditFontHint as _;
 use std::sync::Arc;
 
 use super::super::feedback;
@@ -234,9 +235,9 @@ fn paint_search_highlights(
         let x0 = text_origin.x + col_start as f32 * char_w;
         let x1 = text_origin.x + col_end as f32 * char_w;
         let color = if Some(i) == current_idx {
-            egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
+            crate::theme::rgba_unmultiplied(255, 165, 0, 100)
         } else {
-            egui::Color32::from_rgba_unmultiplied(255, 255, 0, 50)
+            crate::theme::rgba_unmultiplied(255, 255, 0, 50)
         };
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + line_h)),
@@ -292,8 +293,7 @@ fn render_text_search_bar(
         input_rect,
         egui::TextEdit::singleline(&mut search.query)
             .desired_width(input_rect.width())
-            .font(egui::FontId::monospace(theme::FONT_UI_MD))
-            .hint_text("Search\u{2026}"),
+            .font_with_hint(egui::FontId::monospace(theme::FONT_UI_MD), "Search\u{2026}"),
     );
     if resp.changed() {
         search.search(content);
@@ -722,9 +722,11 @@ fn render_note_editor_leaf(
                     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
                     let te_resp = ui.add(
                         egui::TextEdit::multiline(text)
-                            .font(egui::TextStyle::Monospace)
+                            .font_with_hint(
+                                egui::TextStyle::Monospace,
+                                "Notes for this workspace\u{2026}",
+                            )
                             .desired_width(f32::INFINITY)
-                            .hint_text("Notes for this workspace\u{2026}")
                             .frame(crate::theme::frameless_text_edit())
                             .lock_focus(true)
                             .interactive(!rctx.modal_open),

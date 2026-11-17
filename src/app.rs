@@ -1,3 +1,4 @@
+use crate::ui_kit::TextEditFontHint as _;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -1978,11 +1979,12 @@ impl App {
                                                     {
                                                         let screen_h = ui.ctx().content_rect().height();
                                                         let popup_max_h = (screen_h * 0.5).max(120.0);
-                                                        egui::Popup::from_response(&resp)
-                                                            .id(popup_id)
-                                                            .open_memory(resp.clicked().then_some(egui::SetOpenCommand::Toggle))
-                                                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-                                                            .show(|ui: &mut egui::Ui| {
+                                                        crate::ui_kit::popup_below(
+                                                            &resp,
+                                                            popup_id,
+                                                            resp.clicked().then_some(egui::SetOpenCommand::Toggle),
+                                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                                            |ui: &mut egui::Ui| {
                                                                 ui.set_min_width(200.0);
                                                                 egui::ScrollArea::vertical()
                                                                     .max_height(popup_max_h)
@@ -2019,7 +2021,8 @@ impl App {
                                                                 ).clicked() {
                                                                     close_all_md = true;
                                                                 }
-                                                            });
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -2505,9 +2508,8 @@ impl App {
                                     ui.add(
                                         egui::TextEdit::multiline(&mut note_text)
                                             .id(self.notes_text_id())
-                                            .font(egui::TextStyle::Monospace)
+                                            .font_with_hint(egui::TextStyle::Monospace, "Notes for this workspace…")
                                             .desired_width(f32::INFINITY)
-                                            .hint_text("Notes for this workspace…")
                                             .frame(crate::theme::frameless_text_edit()),
                                     );
                                 });
@@ -2978,9 +2980,9 @@ impl App {
                             let x0 = geo.rect.min.x + m.start_col as f32 * geo.cell_w;
                             let x1 = geo.rect.min.x + m.end_col as f32 * geo.cell_w;
                             let color = if Some(i) == self.term_search.current_index {
-                                egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
+                                crate::theme::rgba_unmultiplied(255, 165, 0, 100)
                             } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 0, 50)
+                                crate::theme::rgba_unmultiplied(255, 255, 0, 50)
                             };
                             painter.rect_filled(
                                 egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + geo.cell_h)),
@@ -3010,8 +3012,7 @@ impl App {
                             input_rect,
                             egui::TextEdit::singleline(&mut self.term_search.query)
                                 .desired_width(input_rect.width())
-                                .font(egui::FontId::monospace(theme::FONT_UI_MD))
-                                .hint_text("Search\u{2026}"),
+                                .font_with_hint(egui::FontId::monospace(theme::FONT_UI_MD), "Search\u{2026}"),
                         );
                         if resp.changed() {
                             self.term_search.search(&entry.session);

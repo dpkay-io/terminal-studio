@@ -1,4 +1,5 @@
 use crate::theme;
+use crate::ui_kit::TextEditFontHint as _;
 
 /// Outcome returned by [`search_bar`] so the caller can react to user actions.
 pub(crate) struct SearchBarResponse {
@@ -73,8 +74,7 @@ fn search_bar_inner(
             );
             let te = egui::TextEdit::singleline(query)
                 .desired_width(ui.available_width())
-                .hint_text(hint)
-                .font(egui::FontId::proportional(theme::FONT_UI_SM))
+                .font_with_hint(egui::FontId::proportional(theme::FONT_UI_SM), hint)
                 .frame(crate::theme::frameless_text_edit())
                 .id(id);
             let r = ui.add(te);

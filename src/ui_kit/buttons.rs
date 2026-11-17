@@ -32,29 +32,14 @@ pub fn icon_button(
         }
         IconButtonStyle::Toggle { active } => {
             if active {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.accent.r(),
-                    t.accent.g(),
-                    t.accent.b(),
-                    theme::ALPHA_BTN_FILL,
-                )
+                crate::theme::with_alpha(t.accent, theme::ALPHA_BTN_FILL)
             } else {
                 theme::lerp_color(egui::Color32::TRANSPARENT, t.surface1, hover_t)
             }
         }
         IconButtonStyle::Danger => {
-            let idle = egui::Color32::from_rgba_unmultiplied(
-                t.error.r(),
-                t.error.g(),
-                t.error.b(),
-                theme::ALPHA_BTN_IDLE,
-            );
-            let hovered = egui::Color32::from_rgba_unmultiplied(
-                t.error.r(),
-                t.error.g(),
-                t.error.b(),
-                theme::ALPHA_BTN_HOVER,
-            );
+            let idle = crate::theme::with_alpha(t.error, theme::ALPHA_BTN_IDLE);
+            let hovered = crate::theme::with_alpha(t.error, theme::ALPHA_BTN_HOVER);
             theme::lerp_color(idle, hovered, hover_t)
         }
     };
@@ -95,38 +80,18 @@ pub fn action_button(
     let btn = match style {
         ActionButtonStyle::Primary => {
             egui::Button::new(egui::RichText::new(label).color(t.accent_strong))
-                .fill(egui::Color32::from_rgba_unmultiplied(
-                    t.accent.r(),
-                    t.accent.g(),
-                    t.accent.b(),
-                    theme::ALPHA_BTN_FILL,
-                ))
+                .fill(crate::theme::with_alpha(t.accent, theme::ALPHA_BTN_FILL))
                 .stroke(egui::Stroke::new(
                     theme::STROKE_THIN,
-                    egui::Color32::from_rgba_unmultiplied(
-                        t.accent.r(),
-                        t.accent.g(),
-                        t.accent.b(),
-                        theme::ALPHA_BTN_STROKE,
-                    ),
+                    crate::theme::with_alpha(t.accent, theme::ALPHA_BTN_STROKE),
                 ))
                 .corner_radius(theme::R_MD)
         }
         ActionButtonStyle::Danger => egui::Button::new(egui::RichText::new(label).color(t.error))
-            .fill(egui::Color32::from_rgba_unmultiplied(
-                t.error.r(),
-                t.error.g(),
-                t.error.b(),
-                theme::ALPHA_BTN_FILL,
-            ))
+            .fill(crate::theme::with_alpha(t.error, theme::ALPHA_BTN_FILL))
             .stroke(egui::Stroke::new(
                 theme::STROKE_THIN,
-                egui::Color32::from_rgba_unmultiplied(
-                    t.error.r(),
-                    t.error.g(),
-                    t.error.b(),
-                    theme::ALPHA_BTN_STROKE,
-                ),
+                crate::theme::with_alpha(t.error, theme::ALPHA_BTN_STROKE),
             ))
             .corner_radius(theme::R_MD),
         ActionButtonStyle::Cancel => {

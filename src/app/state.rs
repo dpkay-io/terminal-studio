@@ -118,10 +118,14 @@ pub(super) fn apply_theme_visuals(ctx: &egui::Context) {
         state.corner_radius = CornerRadius::same(theme::R_MD);
     }
     vis.override_text_color = Some(t.text);
+    // A text box's placeholder is drawn in egui's weak text colour, and
+    // egui 0.28 drew placeholders in the text colour (`override_text_color`
+    // reached them); 0.29+ dims them. The app shows no other weak text.
+    vis.weak_text_color = vis.override_text_color;
     ctx.set_visuals(vis);
 
     let mut style = (*ctx.global_style()).clone();
-    style.spacing.scroll = theme::scroll_style();
+    theme::apply_widget_metrics(&mut style);
     style.always_scroll_the_only_direction = true;
     ctx.set_global_style(style);
 }
@@ -2817,6 +2821,35 @@ mod tests {
         assert_eq!(
             ctx.global_style().visuals.panel_fill,
             crate::theme::active().bg_panel_fill
+        );
+    }
+
+    #[test]
+    fn egui_style_keeps_the_app_widget_metrics() {
+        use crate::theme;
+        let ctx = egui::Context::default();
+        super::apply_theme_visuals(&ctx);
+        let style = ctx.global_style();
+        assert_eq!(style.spacing.button_padding, theme::BUTTON_PAD);
+        assert_eq!(style.spacing.interact_size, theme::WIDGET_MIN_SIZE);
+        assert_eq!(
+            egui::TextStyle::Button.resolve(&style).size,
+            theme::FONT_EGUI_BODY
+        );
+        assert_eq!(
+            egui::TextStyle::Monospace.resolve(&style).size,
+            theme::FONT_EGUI_MONO
+        );
+        assert_eq!(style.override_text_valign, None);
+        assert_eq!(style.visuals.weak_text_color(), theme::active().text);
+        assert_eq!(style.animation_time, theme::EGUI_ANIMATION_S);
+        assert_eq!(
+            style.interaction.resize_grab_radius_side,
+            theme::PANEL_RESIZE_GRAB
+        );
+        assert_eq!(
+            style.spacing.scroll.bar_width,
+            theme::scroll_style().bar_width
         );
     }
     use crate::workspace::{Workspace, WorkspaceStore};

@@ -1,6 +1,7 @@
 use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
 use crate::ui_kit;
+use crate::ui_kit::TextEditFontHint as _;
 
 use super::super::pane::PaneContent;
 use super::super::App;
@@ -102,8 +103,7 @@ impl App {
                             egui::TextEdit::singleline(&mut self.palette_query)
                                 .id(search_id)
                                 .desired_width(dialog_w - theme::SP_4 * 2.0 - theme::SP_6)
-                                .hint_text(placeholder)
-                                .font(egui::FontId::monospace(theme::FONT_UI_MD)),
+                                .font_with_hint(egui::FontId::monospace(theme::FONT_UI_MD), placeholder),
                         );
                         if resp.changed() {
                             self.palette_selected = 0;

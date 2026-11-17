@@ -92,3 +92,75 @@ pub fn shortcut_badge(ui: &mut egui::Ui, label: &str) -> egui::Response {
         })
         .inner
 }
+
+/// A text box's font together with its placeholder in that same font.
+/// egui 0.32+ draws `hint_text` in the body font whatever `TextEdit::font`
+/// says (0.28 used the box's font), so a box that names a font and shows a
+/// placeholder sets both here.
+pub trait TextEditFontHint {
+    fn font_with_hint(self, font: impl Into<egui::FontSelection>, hint: impl Into<String>) -> Self;
+}
+
+impl TextEditFontHint for egui::TextEdit<'_> {
+    fn font_with_hint(self, font: impl Into<egui::FontSelection>, hint: impl Into<String>) -> Self {
+        let font = font.into();
+        let hint = egui::RichText::new(hint);
+        let hint = match &font {
+            egui::FontSelection::FontId(id) => hint.font(id.clone()),
+            egui::FontSelection::Style(style) => hint.text_style(style.clone()),
+            egui::FontSelection::Default => hint,
+        };
+        self.font(font).hint_text(hint)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextEditFontHint as _;
+    use crate::egui_test_frames::run_ui;
+
+    /// Font sizes of every text shape a frame painted.
+    fn painted_font_sizes(output: &egui::FullOutput) -> Vec<f32> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => text.galley.job.sections.first(),
+                _ => None,
+            })
+            .map(|section| section.format.font_id.size)
+            .collect()
+    }
+
+    #[test]
+    fn a_placeholder_is_drawn_in_its_text_box_font() {
+        const BOX_FONT: f32 = 21.0;
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let output = run_ui(&ctx, egui::RawInput::default(), |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .font_with_hint(egui::FontId::monospace(BOX_FONT), "Search"),
+            );
+        });
+        let sizes = painted_font_sizes(&output);
+        assert!(!sizes.is_empty(), "the placeholder was painted");
+        assert!(sizes.iter().all(|s| *s == BOX_FONT), "{sizes:?}");
+    }
+
+    #[test]
+    fn a_placeholder_follows_a_text_style_font() {
+        let ctx = egui::Context::default();
+        let mono = egui::TextStyle::Monospace.resolve(&ctx.global_style()).size;
+        let mut text = String::new();
+        let output = run_ui(&ctx, egui::RawInput::default(), |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut text)
+                    .font_with_hint(egui::TextStyle::Monospace, "Notes"),
+            );
+        });
+        let sizes = painted_font_sizes(&output);
+        assert!(!sizes.is_empty(), "the placeholder was painted");
+        assert!(sizes.iter().all(|s| *s == mono), "{sizes:?}");
+    }
+}

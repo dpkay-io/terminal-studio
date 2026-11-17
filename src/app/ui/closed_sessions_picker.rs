@@ -1,5 +1,6 @@
 use crate::app::closed_sessions::ClosedSessionManifest;
 use crate::theme;
+use crate::ui_kit::TextEditFontHint as _;
 
 use super::super::App;
 
@@ -86,9 +87,8 @@ impl App {
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.closed_sessions_query)
                                 .id(search_id)
-                                .hint_text("Search closed sessions...")
                                 .desired_width(f32::INFINITY)
-                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                .font_with_hint(egui::FontId::proportional(theme::FONT_UI_MD), "Search closed sessions...")
                                 .text_color(t.text),
                         );
                         if !resp.has_focus() {

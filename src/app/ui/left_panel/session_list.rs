@@ -7,6 +7,7 @@ use crate::pty::foreground::ForegroundProcess;
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
+use crate::ui_kit::TextEditFontHint as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
@@ -1436,8 +1437,7 @@ impl App {
                 egui::TextEdit::singleline(&mut buf)
                     .id(edit_id)
                     .desired_width(edit_rect.width())
-                    .font(egui::FontId::proportional(theme::FONT_UI_MD))
-                    .hint_text(RENAME_HINT)
+                    .font_with_hint(egui::FontId::proportional(theme::FONT_UI_MD), RENAME_HINT)
                     .text_color(text_color),
             );
         self.rename_text = buf;
@@ -1605,12 +1605,14 @@ fn show_filter_dropdown(
     field_w: f32,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::Popup::from_response(field)
-        .id(popup_id)
-        .open_memory(field.clicked().then_some(egui::SetOpenCommand::Toggle))
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-        .show(|ui| {
+    crate::ui_kit::popup_below(
+        field,
+        popup_id,
+        field.clicked().then_some(egui::SetOpenCommand::Toggle),
+        egui::PopupCloseBehavior::CloseOnClick,
+        |ui| {
             ui.set_min_width((field_w - 2.0 * theme::SP_3).max(0.0));
             add_contents(ui);
-        });
+        },
+    );
 }

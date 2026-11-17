@@ -75,14 +75,16 @@ pub(super) fn show_menu_popup(
         popup_id.with("anchor"),
         egui::Sense::hover(),
     );
-    egui::Popup::from_response(&anchor)
-        .id(popup_id)
-        // Open/closed stays in egui's memory: `open_terminal_context_menu`
-        // opens it, a pick or a click outside closes it.
-        .open_memory(None)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .show(|ui| menu_items(ui, has_selection, search_label))
-        .and_then(|r| r.inner)
+    // Open/closed stays in egui's memory: `open_terminal_context_menu`
+    // opens it, a pick or a click outside closes it.
+    crate::ui_kit::popup_below(
+        &anchor,
+        popup_id,
+        None,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| menu_items(ui, has_selection, search_label),
+    )
+    .flatten()
 }
 
 impl App {
