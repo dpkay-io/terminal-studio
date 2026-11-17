@@ -34,7 +34,7 @@ pub fn drag_divider(
 
 // ── Active bar ─────────────────────────────────────────────────────────────
 
-pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::Rounding) {
+pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::CornerRadius) {
     let bar = egui::Rect::from_min_size(rect.min, egui::vec2(theme::CARD_BAR_W, rect.height()));
     painter.rect_filled(bar, rounding, theme::active().green);
 }

@@ -11,7 +11,7 @@ impl App {
             return;
         }
 
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         let t = theme::active();
 
         // Dim background
@@ -51,17 +51,17 @@ impl App {
             .fixed_pos(dialog_pos)
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(t.bg_term)
-                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .corner_radius(egui::CornerRadius::same(theme::R_LG))
                     .stroke(egui::Stroke::new(theme::STROKE_THIN, t.surface2))
                     .shadow(egui::epaint::Shadow {
-                        offset: egui::vec2(0.0, 4.0),
-                        blur: 16.0,
-                        spread: 4.0,
+                        offset: [0, 4],
+                        blur: 16,
+                        spread: 4,
                         color: t.shadow_md,
                     })
-                    .inner_margin(egui::Margin::same(theme::SP_4))
+                    .inner_margin(theme::margin_same(theme::SP_4))
                     .show(ui, |ui| {
                         let inner_w = (dialog_w - theme::SP_4 * 2.0).max(0.0);
                         ui.set_min_width(inner_w);
@@ -162,7 +162,7 @@ impl App {
                                 }
 
                                 egui::ScrollArea::vertical()
-                                    .id_source(self.vp_id("cmd_palette_scroll"))
+                                    .id_salt(self.vp_id("cmd_palette_scroll"))
                                     .auto_shrink([false; 2])
                                     .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
                                     .show(ui, |ui| {
@@ -172,7 +172,7 @@ impl App {
 
                                             let resp = ui_kit::list_item(
                                                 ui,
-                                                egui::Id::new(("cmd_item", entry.action)),
+                                                egui::Id::unique(("cmd_item", entry.action)),
                                                 item_w,
                                                 is_selected,
                                                 |painter, row_rect| {
@@ -238,7 +238,7 @@ impl App {
                                         self.recent_files.clone();
 
                                     egui::ScrollArea::vertical()
-                                        .id_source(self.vp_id("cmd_palette_scroll"))
+                                        .id_salt(self.vp_id("cmd_palette_scroll"))
                                         .auto_shrink([false; 2])
                                         .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
                                         .show(ui, |ui| {
@@ -325,7 +325,7 @@ impl App {
                                     }
 
                                     egui::ScrollArea::vertical()
-                                        .id_source(self.vp_id("cmd_palette_scroll"))
+                                        .id_salt(self.vp_id("cmd_palette_scroll"))
                                         .auto_shrink([false; 2])
                                         .max_height(dialog_h - theme::DIALOG_TOP_OFFSET)
                                         .show(ui, |ui| {
@@ -644,7 +644,7 @@ fn render_file_row(
 
     ui_kit::list_item(
         ui,
-        egui::Id::new(("file_item", path.to_string_lossy().as_ref())),
+        egui::Id::unique(("file_item", path.to_string_lossy().as_ref())),
         width,
         is_selected,
         |painter, row_rect| {

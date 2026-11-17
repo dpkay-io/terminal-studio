@@ -30,7 +30,7 @@ pub(in crate::app) fn color_choices(
     ui: &mut egui::Ui,
     choice: &mut ColorChoice,
 ) -> Option<ColorEdit> {
-    let open_id = ui.id().with("custom_color_open");
+    let open_id = ui.scope_id().with("custom_color_open");
     let mut picker_open = ui.data(|d| d.get_temp::<bool>(open_id).unwrap_or(false));
     let mut edit = None;
     ui.horizontal_wrapped(|ui| {
@@ -94,9 +94,9 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
+        let _ = crate::egui_test_frames::run_pass(ctx, input, |ctx| {
             // On the dialogs' layer, as in the app.
-            egui::Area::new(egui::Id::new("dialog"))
+            egui::Area::new(egui::Id::unique("dialog"))
                 .order(egui::Order::Tooltip)
                 .fixed_pos(egui::pos2(10.0, 10.0))
                 .show(ctx, |ui| {
@@ -145,7 +145,7 @@ mod tests {
         let mut choice = ColorChoice::new(PRESET_COLORS[0]);
         warm_up(&ctx, &mut choice);
         let height = |ctx: &egui::Context| {
-            ctx.memory(|m| m.area_rect(egui::Id::new("dialog")).map(|r| r.height()))
+            ctx.memory(|m| m.area_rect(egui::Id::unique("dialog")).map(|r| r.height()))
         };
         let closed = height(&ctx).unwrap();
         // The custom swatch follows the presets on the same row.
@@ -162,7 +162,7 @@ mod tests {
             "picker drawn in the dialog: {closed} -> {open}"
         );
         assert!(
-            ctx.memory(|m| !m.any_popup_open()),
+            !egui::Popup::is_any_open(&ctx),
             "nothing opens on a layer behind the dialog"
         );
     }

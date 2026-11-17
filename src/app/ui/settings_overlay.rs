@@ -18,7 +18,7 @@ impl App {
         if self.show_settings {
             let mut settings_changed = false;
             let mut close_settings = false;
-            let dialog_h = (ctx.screen_rect().height() * 0.85).clamp(300.0, 520.0);
+            let dialog_h = (ctx.content_rect().height() * 0.85).clamp(300.0, 520.0);
 
             let dialog_resp = ui_kit::dialog(
                 ctx,
@@ -48,7 +48,7 @@ impl App {
                     }
 
                     egui::ScrollArea::vertical()
-                        .id_source("settings_main_scroll")
+                        .id_salt("settings_main_scroll")
                         .max_height(dialog_h - 60.0)
                         .show(ui, |ui| {
                             ui.add_space(theme::SP_4);
@@ -216,7 +216,7 @@ impl App {
                             ui.add_space(theme::SP_2);
                             let current = self.settings.theme_id;
                             egui::ScrollArea::vertical()
-                                .id_source("settings_theme_scroll")
+                                .id_salt("settings_theme_scroll")
                                 .max_height(160.0)
                                 .show(ui, |ui| {
                                     let swatch_outer_w = 52.0 + theme::SP_2 * 2.0;
@@ -250,7 +250,7 @@ impl App {
                                                     ui.painter().rect_stroke(
                                                         outer_rect,
                                                         theme::R_MD,
-                                                        egui::Stroke::new(theme::STROKE_THIN, t_cur.accent),
+                                                        egui::Stroke::new(theme::STROKE_THIN, t_cur.accent), egui::StrokeKind::Middle,
                                                     );
                                                 }
 
@@ -274,21 +274,21 @@ impl App {
                                                         egui::vec2(sw, swatch_color_h),
                                                     );
                                                     let rounding = if i == 0 {
-                                                        egui::Rounding {
+                                                        egui::CornerRadius {
                                                             nw: theme::R_SM,
                                                             sw: theme::R_SM,
-                                                            ne: 0.0,
-                                                            se: 0.0,
+                                                            ne: theme::R_NONE,
+                                                            se: theme::R_NONE,
                                                         }
                                                     } else if i == 3 {
-                                                        egui::Rounding {
-                                                            nw: 0.0,
-                                                            sw: 0.0,
+                                                        egui::CornerRadius {
+                                                            nw: theme::R_NONE,
+                                                            sw: theme::R_NONE,
                                                             ne: theme::R_SM,
                                                             se: theme::R_SM,
                                                         }
                                                     } else {
-                                                        egui::Rounding::ZERO
+                                                        egui::CornerRadius::ZERO
                                                     };
                                                     ui.painter().rect_filled(seg, rounding, color);
                                                 }
@@ -443,7 +443,7 @@ impl App {
                                     .collect();
                                 ui.horizontal(|ui| {
                                     ui.label("Default shell:");
-                                    egui::ComboBox::from_id_source(self.vp_id("settings_shell"))
+                                    egui::ComboBox::from_id_salt(self.vp_id("settings_shell"))
                                         .selected_text(&shell_display)
                                         .show_ui(ui, |ui| {
                                             if ui
@@ -487,7 +487,7 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.label("Log level:");
                                 let current_level = self.settings.log_level;
-                                egui::ComboBox::from_id_source(self.vp_id("settings_log_level"))
+                                egui::ComboBox::from_id_salt(self.vp_id("settings_log_level"))
                                     .selected_text(current_level.name())
                                     .show_ui(ui, |ui| {
                                         for &level in crate::logging::LogLevel::ALL {
@@ -628,7 +628,7 @@ impl App {
             if settings_changed {
                 self.settings.save();
                 self.settings_saved_at = Some(std::time::Instant::now());
-                self.apply_theme_visuals(ctx);
+                crate::app::state::apply_theme_visuals(ctx);
                 self.cached_cell_size = None;
             }
             if close_settings {
@@ -639,7 +639,7 @@ impl App {
         // ── Shortcut help overlay ──────────────────────────────────────────
         if self.show_shortcut_help {
             let mut close_help = false;
-            let dialog_h = (ctx.screen_rect().height() * 0.72).clamp(300.0, 560.0);
+            let dialog_h = (ctx.content_rect().height() * 0.72).clamp(300.0, 560.0);
 
             let help_resp = ui_kit::dialog(
                 ctx,
@@ -661,7 +661,7 @@ impl App {
                     ui.add_space(theme::SP_2);
 
                     egui::ScrollArea::vertical()
-                        .id_source("shortcuts_scroll")
+                        .id_salt("shortcuts_scroll")
                         .max_height(dialog_h - 60.0)
                         .show(ui, |ui| {
                             let t = theme::active();

@@ -160,8 +160,8 @@ impl<'a> TerminalView<'a> {
         painter.rect_filled(outer_rect, 0.0, t.bg_term);
 
         let font_id = FontId::monospace(font_size);
-        let cell_height = ui.fonts(|f| f.row_height(&font_id));
-        let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
+        let cell_height = ui.fonts_mut(|f| f.row_height(&font_id));
+        let cell_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'M'));
 
         let rect = Rect::from_min_max(
             egui::pos2(
@@ -495,6 +495,7 @@ impl<'a> TerminalView<'a> {
                         cursor_rect,
                         0.0,
                         egui::Stroke::new(1.5_f32, t.cursor_dim_color),
+                        egui::StrokeKind::Middle,
                     );
                 }
             }
@@ -567,7 +568,7 @@ impl<'a> TerminalView<'a> {
 
             // Register with egui so the divider's interact_radius (5px)
             // doesn't steal drags that belong to the scrollbar.
-            let sb_widget_id = ui.id().with("term_sb_widget");
+            let sb_widget_id = ui.scope_id().with("term_sb_widget");
             ui.interact(hit_rect, sb_widget_id, Sense::drag());
 
             let (pointer_pos, primary_pressed, any_down) = ui.input(|i| {
@@ -580,7 +581,7 @@ impl<'a> TerminalView<'a> {
 
             let pointer_in_hit = pointer_pos.map(|p| hit_rect.contains(p)).unwrap_or(false);
 
-            let sb_mem_id = ui.id().with("term_sb_dragging");
+            let sb_mem_id = ui.scope_id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
             let other_widget_dragging = ui.ctx().dragged_id().is_some_and(|id| id != sb_widget_id);
             let is_dragging = (was_dragging && any_down)
@@ -761,8 +762,8 @@ mod tests {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
             ..Default::default()
         };
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::egui_test_frames::run_ui(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 TerminalView::new(Arc::clone(session), snapshot).show(
                     ui,
                     true,

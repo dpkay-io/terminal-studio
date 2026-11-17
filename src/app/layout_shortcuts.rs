@@ -184,7 +184,7 @@ impl App {
 const PARKED_FOCUS_SLOT: &str = "ctrl_tab_parked_focus";
 
 fn parked_focus_id() -> egui::Id {
-    egui::Id::new(PARKED_FOCUS_SLOT)
+    egui::Id::unique(PARKED_FOCUS_SLOT)
 }
 
 /// The focus the user sees: `parked` (the focus before parking) while the
@@ -233,7 +233,7 @@ mod tests {
     use super::*;
 
     fn id(name: &str) -> egui::Id {
-        egui::Id::new(name)
+        egui::Id::unique(name)
     }
 
     #[test]

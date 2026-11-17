@@ -25,17 +25,17 @@ pub(in crate::app) const LEFT_PANEL_WIDTH_RANGE: RangeInclusive<f32> = 80.0..=40
 /// 30 minutes, and on a version change). Keeping the inner width instead
 /// made the panel 12 px narrower each time.
 fn show_sessions_panel(
-    ctx: &egui::Context,
+    root_ui: &mut egui::Ui,
     id: egui::Id,
     width: f32,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> f32 {
-    egui::SidePanel::left(id)
-        .default_width(width)
-        .width_range(LEFT_PANEL_WIDTH_RANGE)
+    egui::Panel::left(id)
+        .default_size(width)
+        .size_range(LEFT_PANEL_WIDTH_RANGE)
         .resizable(true)
-        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_0)))
-        .show(ctx, add_contents)
+        .frame(egui::Frame::NONE.inner_margin(theme::margin_xy(theme::SP_3, theme::SP_0)))
+        .show(root_ui, add_contents)
         .response
         .rect
         .width()
@@ -73,7 +73,8 @@ pub(in crate::app) struct WorkspaceSectionActions {
 }
 
 impl App {
-    pub(in crate::app) fn render_left_panel(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn render_left_panel(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // ── Foreground process detection (background worker, 500 ms poll) ────
         // Update the worker's session list so it polls the right PIDs, then
         // read instantly from the shared cache — never blocks the UI thread.
@@ -115,7 +116,7 @@ impl App {
 
         if self.show_left_panel {
             let panel_id = self.vp_id("sessions");
-            let shown_width = show_sessions_panel(ctx, panel_id, self.left_panel_width, |ui| {
+            let shown_width = show_sessions_panel(root_ui, panel_id, self.left_panel_width, |ui| {
                 let panel_rect = ui.max_rect();
                 let panel_w = panel_rect.width();
                 let total_h = panel_rect.height();
@@ -138,7 +139,7 @@ impl App {
                 // ── Sessions section ───────────────────────────────────────
                 let sess_rect =
                     egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, sess_h));
-                ui.allocate_ui_at_rect(sess_rect, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(sess_rect), |ui| {
                     self.render_session_section(ctx, ui, &active_fg, &mut sess_actions);
                 });
 
@@ -166,7 +167,7 @@ impl App {
                     egui::pos2(panel_rect.left(), ws_top),
                     egui::vec2(panel_w, ws_h),
                 );
-                ui.allocate_ui_at_rect(ws_rect, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(ws_rect), |ui| {
                     self.render_workspace_section(ui, ws_rect, &mut ws_actions);
                 });
             });
@@ -212,8 +213,8 @@ mod width_tests {
             ..Default::default()
         };
         let mut shown = f32::NAN;
-        let _ = ctx.run(input, |ctx| {
-            shown = show_sessions_panel(ctx, egui::Id::new("sessions"), width, |ui| {
+        let _ = crate::egui_test_frames::run_ui(ctx, input, |ui| {
+            shown = show_sessions_panel(ui, egui::Id::unique("sessions"), width, |ui| {
                 // Like the real panel: its sections fill the whole panel.
                 ui.allocate_rect(ui.max_rect(), egui::Sense::hover());
             });

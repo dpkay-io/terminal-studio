@@ -460,12 +460,52 @@ pub const SP_4: f32 = 8.0;
 pub const SP_5: f32 = 12.0;
 pub const SP_6: f32 = 16.0;
 
-// ── Corner radii ────────────────────────────────────────────────────────────
+/// egui margins are whole points (`i8`); spacing tokens are `f32` because
+/// layout code adds them to positions and sizes. These turn tokens (or sums
+/// of them) into a margin, rounding like egui's own `From<f32> for Margin`.
+fn margin_px(px: f32) -> i8 {
+    px.round() as i8
+}
 
-pub const R_NONE: f32 = 0.0;
-pub const R_SM: f32 = 3.0;
-pub const R_MD: f32 = 6.0;
-pub const R_LG: f32 = 8.0;
+/// The same margin on every side.
+pub fn margin_same(px: f32) -> egui::Margin {
+    egui::Margin::same(margin_px(px))
+}
+
+/// `x` left and right, `y` top and bottom.
+pub fn margin_xy(x: f32, y: f32) -> egui::Margin {
+    egui::Margin::symmetric(margin_px(x), margin_px(y))
+}
+
+/// Each side on its own.
+pub fn margin_sides(left: f32, right: f32, top: f32, bottom: f32) -> egui::Margin {
+    egui::Margin {
+        left: margin_px(left),
+        right: margin_px(right),
+        top: margin_px(top),
+        bottom: margin_px(bottom),
+    }
+}
+
+/// Padding inside a text box, as egui 0.28 had it by default (and still
+/// applies when a text box is drawn without its frame).
+pub const TEXT_EDIT_PAD_X: f32 = SP_2;
+pub const TEXT_EDIT_PAD_Y: f32 = SP_1;
+
+/// A text box drawn without its frame: no fill or stroke, padding kept, so
+/// the text sits where a framed one's would. egui's `Frame::NONE` would drop
+/// the padding as well.
+pub fn frameless_text_edit() -> egui::Frame {
+    egui::Frame::NONE.inner_margin(margin_xy(TEXT_EDIT_PAD_X, TEXT_EDIT_PAD_Y))
+}
+
+// ── Corner radii ────────────────────────────────────────────────────────────
+// Whole points: egui's `CornerRadius` is `u8`.
+
+pub const R_NONE: u8 = 0;
+pub const R_SM: u8 = 3;
+pub const R_MD: u8 = 6;
+pub const R_LG: u8 = 8;
 
 // ── Layout dimensions ──────────────────────────────────────────────────────
 
@@ -532,8 +572,27 @@ pub fn scroll_style() -> egui::style::ScrollStyle {
         dormant_handle_opacity: 0.0,
         active_handle_opacity: ALPHA_SCROLLBAR_HOVER as f32 / 255.0,
         interact_handle_opacity: ALPHA_SCROLLBAR_DRAG as f32 / 255.0,
+        content_margin: egui::Margin::ZERO,
+        fade: egui::style::ScrollFadeStyle {
+            strength: SCROLL_EDGE_FADE_STRENGTH,
+            ..Default::default()
+        },
+        kinetic: egui::style::KineticScrollStyle {
+            decay_time: SCROLL_KINETIC_DECAY_S,
+            rubber_band: SCROLL_RUBBER_BAND,
+            ..Default::default()
+        },
     }
 }
+
+/// egui (0.34+) fades every scroll area's edges; the app marks overflow
+/// itself where it matters (the tab strip's ‹ › fades), so none here.
+pub const SCROLL_EDGE_FADE_STRENGTH: f32 = 0.0;
+/// No coasting after a drag-to-scroll lets go (0 turns egui's off); trackpad
+/// momentum still comes from the OS.
+pub const SCROLL_KINETIC_DECAY_S: f32 = 0.0;
+/// No overscroll bounce at the ends of a scroll area.
+pub const SCROLL_RUBBER_BAND: bool = false;
 
 // ── Stroke widths ───────────────────────────────────────────────────────────
 

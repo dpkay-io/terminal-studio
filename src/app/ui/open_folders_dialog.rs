@@ -117,7 +117,7 @@ fn single_folder_form(
         let open_instead = egui::Button::new(
             egui::RichText::new(format!("Open \"{parent_name}\" instead")).size(theme::FONT_UI_SM),
         )
-        .rounding(theme::R_SM);
+        .corner_radius(theme::R_SM);
         if ui.add(open_instead).clicked() {
             open_parent = Some(parent_id);
         }
@@ -167,7 +167,7 @@ fn folder_rows(ui: &mut egui::Ui, dialog: &mut OpenFolderDialog, checks: &[Entry
 
 fn folder_row(ui: &mut egui::Ui, entry: &mut FolderEntry, check: &EntryCheck, focus: bool) {
     let t = theme::active();
-    let colors_open_id = ui.id().with("colors_open");
+    let colors_open_id = ui.scope_id().with("colors_open");
     ui.horizontal(|ui| {
         ui.checkbox(&mut entry.save_as_workspace, "")
             .on_hover_text(SAVE_TOOLTIP);
@@ -316,8 +316,8 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::egui_test_frames::run_ui(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let checks = dialog.checks(&store);
                     if dialog.entries.len() > 1 {
                         folder_rows(ui, dialog, &checks);

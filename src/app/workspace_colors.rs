@@ -83,7 +83,7 @@ fn most_distinct(taken: &[Lab], taken_rgb: &[[u8; 3]]) -> [u8; 3] {
         };
         // Strictly greater: on a tie the earlier candidate (presets first,
         // then the wheel in order) keeps its place, so picks are stable.
-        if best.map_or(true, |(_, s)| score > s) {
+        if best.is_none_or(|(_, s)| score > s) {
             best = Some((candidate.rgb, score));
         }
     }

@@ -36,7 +36,7 @@ mod tests {
             ..Default::default()
         };
         input.viewports.insert(viewport, Default::default());
-        let out = ctx.run(input, close_main_window);
+        let out = crate::egui_test_frames::run_pass(&ctx, input, close_main_window);
         targets
             .iter()
             .map(|id| {

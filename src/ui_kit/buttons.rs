@@ -110,7 +110,7 @@ pub fn action_button(
                         theme::ALPHA_BTN_STROKE,
                     ),
                 ))
-                .rounding(theme::R_MD)
+                .corner_radius(theme::R_MD)
         }
         ActionButtonStyle::Danger => egui::Button::new(egui::RichText::new(label).color(t.error))
             .fill(egui::Color32::from_rgba_unmultiplied(
@@ -128,12 +128,12 @@ pub fn action_button(
                     theme::ALPHA_BTN_STROKE,
                 ),
             ))
-            .rounding(theme::R_MD),
+            .corner_radius(theme::R_MD),
         ActionButtonStyle::Cancel => {
             egui::Button::new(egui::RichText::new(label).color(t.fg_muted))
                 .fill(egui::Color32::TRANSPARENT)
                 .stroke(egui::Stroke::new(theme::STROKE_THIN, t.border_subtle))
-                .rounding(theme::R_MD)
+                .corner_radius(theme::R_MD)
         }
     };
     let resp = ui.add_enabled(enabled, btn);
@@ -158,7 +158,7 @@ pub fn toggle_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Resp
     } else {
         egui::Stroke::new(theme::STROKE_THIN, t.border_subtle)
     })
-    .rounding(theme::R_MD)
+    .corner_radius(theme::R_MD)
     .min_size(egui::vec2(0.0, theme::BTN_H_ACTION));
     let resp = ui.add(btn);
     if resp.hovered() {
@@ -213,7 +213,7 @@ pub fn color_swatch(ui: &mut egui::Ui, color: [u8; 3], selected: bool) -> egui::
             egui::Stroke::new(theme::STROKE_THIN, t.overlay0)
         })
         .min_size(egui::vec2(theme::BTN_W, theme::BTN_W))
-        .rounding(theme::R_MD);
+        .corner_radius(theme::R_MD);
     let resp = ui.add(swatch);
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

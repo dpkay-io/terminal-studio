@@ -124,9 +124,10 @@ fn map_font(path: &std::path::Path) -> Option<&'static [u8]> {
 pub(super) fn definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     for (name, bytes) in loaded_fallbacks() {
-        fonts
-            .font_data
-            .insert((*name).to_owned(), FontData::from_static(bytes));
+        fonts.font_data.insert(
+            (*name).to_owned(),
+            std::sync::Arc::new(FontData::from_static(bytes)),
+        );
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             fonts
                 .families
@@ -196,14 +197,14 @@ mod tests {
         fn context_with_app_fonts() -> egui::Context {
             let ctx = egui::Context::default();
             ctx.set_fonts(definitions());
-            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            let _ = crate::egui_test_frames::run_pass(&ctx, egui::RawInput::default(), |_| {});
             ctx
         }
 
         /// The characters of `text` (whitespace aside) no font in `family` has.
         fn missing_glyphs(ctx: &egui::Context, family: &FontFamily, text: &str) -> Vec<char> {
             let id = egui::FontId::new(PROBE_SIZE, family.clone());
-            ctx.fonts(|f| {
+            ctx.fonts_mut(|f| {
                 text.chars()
                     .filter(|c| !c.is_whitespace() && !f.has_glyph(&id, *c))
                     .collect()

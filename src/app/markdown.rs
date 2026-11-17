@@ -580,13 +580,13 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         bold: false,
     };
 
-    egui::Frame::none()
-        .inner_margin(egui::Margin {
-            left: side,
-            right: side,
-            top: theme::SP_4,
-            bottom: theme::SP_6 * 2.0,
-        })
+    egui::Frame::NONE
+        .inner_margin(theme::margin_sides(
+            side,
+            side,
+            theme::SP_4,
+            theme::SP_6 * 2.0,
+        ))
         .show(ui, |ui| {
             ui.set_max_width(doc_w);
             ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -599,7 +599,7 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
 fn cached_parse(ui: &egui::Ui, content: &str) -> Arc<Vec<Block>> {
     type Slot = (u64, Arc<Vec<Block>>);
     let hash = egui::util::hash(content);
-    let id = ui.id().with("md_parse_cache");
+    let id = ui.scope_id().with("md_parse_cache");
     if let Some((h, blocks)) = ui.ctx().data(|d| d.get_temp::<Slot>(id)) {
         if h == hash {
             return blocks;
@@ -808,7 +808,7 @@ fn inline_job(spans: &Inline, style: &InlineStyle) -> (LayoutJob, Vec<(usize, us
 fn inline_label(ui: &mut egui::Ui, spans: &Inline, style: &InlineStyle) {
     let (mut job, links) = inline_job(spans, style);
     job.wrap.max_width = ui.available_width().max(1.0);
-    let galley = ui.fonts(|f| f.layout_job(job));
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
     let resp = ui.add(egui::Label::new(galley.clone()));
 
     if links.is_empty() {
@@ -817,7 +817,7 @@ fn inline_label(ui: &mut egui::Ui, spans: &Inline, style: &InlineStyle) {
     let Some(pos) = resp.hover_pos() else {
         return;
     };
-    let idx = galley.cursor_from_pos(pos - resp.rect.min).ccursor.index;
+    let idx = galley.cursor_from_pos(pos - resp.rect.min).index.0;
     let Some((_, _, url)) = links.iter().find(|(s, e, _)| idx >= *s && idx < *e) else {
         return;
     };
@@ -874,11 +874,11 @@ fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
     }
     job.wrap.max_width = f32::INFINITY;
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(th.md_code_bg)
         .stroke(Stroke::new(theme::STROKE_THIN, th.md_code_border))
-        .inner_margin(egui::Margin::symmetric(theme::SP_5, theme::SP_4))
-        .rounding(egui::Rounding::same(theme::R_MD))
+        .inner_margin(theme::margin_xy(theme::SP_5, theme::SP_4))
+        .corner_radius(egui::CornerRadius::same(theme::R_MD))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if !lang.is_empty() {
@@ -891,9 +891,9 @@ fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
             }
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             egui::ScrollArea::horizontal()
-                .id_source(("md_code_scroll", id))
+                .id_salt(("md_code_scroll", id))
                 .show(ui, |ui| {
-                    let galley = ui.fonts(|f| f.layout_job(job));
+                    let galley = ui.fonts_mut(|f| f.layout_job(job));
                     ui.add(egui::Label::new(galley).wrap_mode(egui::TextWrapMode::Extend));
                 });
         });
@@ -936,7 +936,7 @@ fn render_list(
                 (_, Some(checked)) => paint_checkbox(painter, rect, checked, rc.body),
                 (Some(s), None) => {
                     let n = s + i as u64;
-                    let galley = ui.fonts(|f| {
+                    let galley = ui.fonts_mut(|f| {
                         f.layout_no_wrap(
                             format!("{n}."),
                             FontId::proportional(rc.body),
@@ -1015,6 +1015,7 @@ fn paint_checkbox(painter: &egui::Painter, rect: egui::Rect, checked: bool, body
             b,
             theme::R_SM,
             Stroke::new(theme::STROKE_MEDIUM, th.overlay0),
+            egui::StrokeKind::Middle,
         );
     }
 }
@@ -1043,20 +1044,20 @@ fn render_quote(
         ..tone
     };
 
-    let resp = egui::Frame::none()
+    let resp = egui::Frame::NONE
         .fill(th.md_blockquote_bg)
-        .rounding(egui::Rounding {
-            nw: 0.0,
-            sw: 0.0,
+        .corner_radius(egui::CornerRadius {
+            nw: theme::R_NONE,
+            sw: theme::R_NONE,
             ne: theme::R_MD,
             se: theme::R_MD,
         })
-        .inner_margin(egui::Margin {
-            left: bar_w + theme::SP_5,
-            right: theme::SP_5,
-            top: theme::SP_4,
-            bottom: theme::SP_4,
-        })
+        .inner_margin(theme::margin_sides(
+            bar_w + theme::SP_5,
+            theme::SP_5,
+            theme::SP_4,
+            theme::SP_4,
+        ))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if let Some(title) = title {
@@ -1121,7 +1122,11 @@ fn fit_columns(natural: &[f32], min: &[f32], avail: f32) -> Vec<f32> {
 }
 
 /// (natural width, longest-word width) of a cell, measured glyph by glyph.
-fn measure_cell(fonts: &egui::text::Fonts, spans: &Inline, style: &InlineStyle) -> (f32, f32) {
+fn measure_cell(
+    fonts: &mut egui::epaint::text::FontsView<'_>,
+    spans: &Inline,
+    style: &InlineStyle,
+) -> (f32, f32) {
     let mut natural = 0.0f32;
     let mut line = 0.0f32;
     let mut longest_word = 0.0f32;
@@ -1190,7 +1195,7 @@ fn render_table(
     // Measure.
     let mut natural = vec![0.0f32; ncols];
     let mut min = vec![0.0f32; ncols];
-    ui.fonts(|f| {
+    ui.fonts_mut(|f| {
         let all = std::iter::once((header, &head_style))
             .chain(rows.iter().map(|r| (r.as_slice(), &body_style)));
         for (row, style) in all {
@@ -1243,8 +1248,8 @@ fn render_table(
                         Layout::top_down(align),
                         |ui| {
                             ui.set_width(w + pad_x * 2.0);
-                            egui::Frame::none()
-                                .inner_margin(egui::Margin::symmetric(pad_x, pad_y))
+                            egui::Frame::NONE
+                                .inner_margin(theme::margin_xy(pad_x, pad_y))
                                 .show(ui, |ui| {
                                     ui.set_max_width(w);
                                     inline_label(ui, cell, style);
@@ -1262,11 +1267,19 @@ fn render_table(
             } else {
                 Color32::TRANSPARENT
             };
-            let rounding = egui::Rounding {
-                nw: if r == 0 { theme::R_MD } else { 0.0 },
-                ne: if r == 0 { theme::R_MD } else { 0.0 },
-                sw: if r == n_rows - 1 { theme::R_MD } else { 0.0 },
-                se: if r == n_rows - 1 { theme::R_MD } else { 0.0 },
+            let rounding = egui::CornerRadius {
+                nw: if r == 0 { theme::R_MD } else { theme::R_NONE },
+                ne: if r == 0 { theme::R_MD } else { theme::R_NONE },
+                sw: if r == n_rows - 1 {
+                    theme::R_MD
+                } else {
+                    theme::R_NONE
+                },
+                se: if r == n_rows - 1 {
+                    theme::R_MD
+                } else {
+                    theme::R_NONE
+                },
             };
             ui.painter()
                 .set(bg_idx, egui::Shape::rect_filled(rect, rounding, fill));
@@ -1287,14 +1300,18 @@ fn render_table(
         for x in col_x.iter().skip(1) {
             ui.painter().vline(*x, outer.y_range(), sep);
         }
-        ui.painter()
-            .rect_stroke(outer, theme::R_MD, Stroke::new(border, th.md_table_border));
+        ui.painter().rect_stroke(
+            outer,
+            theme::R_MD,
+            Stroke::new(border, th.md_table_border),
+            egui::StrokeKind::Middle,
+        );
     };
 
     if table_w > avail + 0.5 {
         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         egui::ScrollArea::horizontal()
-            .id_source(("md_table_scroll", id))
+            .id_salt(("md_table_scroll", id))
             .show(ui, |ui| {
                 draw(ui);
                 ui.add_space(theme::SP_4);

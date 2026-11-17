@@ -1,7 +1,7 @@
 //! Where the mouse pointer is on screen, asked of the OS directly.
 //!
 //! Needed while files are dragged in from another app: the OS drag session
-//! owns the pointer then, so the window gets no mouse moves and winit (0.29)
+//! owns the pointer then, so the window gets no mouse moves and winit (0.30)
 //! reports the hovered and dropped files without a position. Reading the
 //! pointer from the OS tells which part of the window a drop is over.
 //!

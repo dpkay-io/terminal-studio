@@ -56,7 +56,7 @@ pub(in crate::app) fn render_conflict_resolver(
                         .color(fg),
                 )
                 .fill(bg)
-                .rounding(theme::R_SM),
+                .corner_radius(theme::R_SM),
             );
             if btn.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -76,7 +76,7 @@ pub(in crate::app) fn render_conflict_resolver(
                                 .size(theme::FONT_UI_SM)
                                 .color(t.error),
                         )
-                        .rounding(theme::R_SM),
+                        .corner_radius(theme::R_SM),
                     )
                     .clicked()
                 {
@@ -90,7 +90,7 @@ pub(in crate::app) fn render_conflict_resolver(
                                 .size(theme::FONT_UI_SM)
                                 .color(t.success),
                         )
-                        .rounding(theme::R_SM),
+                        .corner_radius(theme::R_SM),
                     )
                     .clicked()
                 {
@@ -119,7 +119,7 @@ pub(in crate::app) fn render_conflict_resolver(
 
     // ── Scrollable content ──
     egui::ScrollArea::both()
-        .id_source(("conflict_scroll", state.path.display().to_string()))
+        .id_salt(("conflict_scroll", state.path.display().to_string()))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
             let mut line_number: usize = 1;
@@ -231,9 +231,9 @@ fn render_resolved_block(
     };
     let resolved_bg = theme::blend_colors(t.surface0, t.overlay0, 0.08);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(resolved_bg)
-        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .inner_margin(theme::margin_xy(0.0, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(theme::SP_2);
@@ -277,9 +277,9 @@ fn render_resolved_block_sbs(
     };
     let resolved_bg = theme::blend_colors(t.surface0, t.overlay0, 0.08);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(resolved_bg)
-        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .inner_margin(theme::margin_xy(0.0, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(theme::SP_2);
@@ -376,15 +376,15 @@ fn render_conflict_block_sbs(
     let theirs_bg = theme::blend_colors(t.surface0, t.error, theme::BLEND_SUBTLE);
 
     // Action bar
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(t.surface1)
-        .rounding(egui::Rounding {
+        .corner_radius(egui::CornerRadius {
             nw: theme::R_SM,
             ne: theme::R_SM,
-            sw: 0.0,
-            se: 0.0,
+            sw: theme::R_NONE,
+            se: theme::R_NONE,
         })
-        .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_1))
+        .inner_margin(theme::margin_xy(theme::SP_3, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -406,7 +406,7 @@ fn render_conflict_block_sbs(
                                     .color(t.base),
                             )
                             .fill(t.accent)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -424,7 +424,7 @@ fn render_conflict_block_sbs(
                                     .color(t.base),
                             )
                             .fill(t.error)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -442,7 +442,7 @@ fn render_conflict_block_sbs(
                                     .color(t.base),
                             )
                             .fill(t.success)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -461,9 +461,9 @@ fn render_conflict_block_sbs(
 
     ui.horizontal(|ui| {
         // Left column — OURS
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(ours_bg)
-            .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+            .inner_margin(theme::margin_xy(0.0, theme::SP_1))
             .show(ui, |ui| {
                 ui.set_width(col_width);
                 ui.horizontal(|ui| {
@@ -509,9 +509,9 @@ fn render_conflict_block_sbs(
         ui.painter().rect_filled(sep_rect, 0.0, t.overlay0);
 
         // Right column — THEIRS
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theirs_bg)
-            .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+            .inner_margin(theme::margin_xy(0.0, theme::SP_1))
             .show(ui, |ui| {
                 ui.set_width(col_width);
                 ui.horizontal(|ui| {
@@ -570,15 +570,15 @@ fn render_conflict_block(
     let theirs_bg = theme::blend_colors(t.surface0, t.error, theme::BLEND_SUBTLE);
 
     // Floating action bar
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(t.surface1)
-        .rounding(egui::Rounding {
+        .corner_radius(egui::CornerRadius {
             nw: theme::R_SM,
             ne: theme::R_SM,
-            sw: 0.0,
-            se: 0.0,
+            sw: theme::R_NONE,
+            se: theme::R_NONE,
         })
-        .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_1))
+        .inner_margin(theme::margin_xy(theme::SP_3, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
@@ -600,7 +600,7 @@ fn render_conflict_block(
                                     .color(t.base),
                             )
                             .fill(t.accent)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -618,7 +618,7 @@ fn render_conflict_block(
                                     .color(t.base),
                             )
                             .fill(t.error)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -636,7 +636,7 @@ fn render_conflict_block(
                                     .color(t.base),
                             )
                             .fill(t.success)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .clicked()
                     {
@@ -650,9 +650,9 @@ fn render_conflict_block(
         });
 
     // Ours section
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(ours_bg)
-        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .inner_margin(theme::margin_xy(0.0, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(theme::SP_2);
@@ -693,9 +693,9 @@ fn render_conflict_block(
     });
 
     // Theirs section
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theirs_bg)
-        .inner_margin(egui::Margin::symmetric(0.0, theme::SP_1))
+        .inner_margin(theme::margin_xy(0.0, theme::SP_1))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(theme::SP_2);

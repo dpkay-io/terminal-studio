@@ -193,7 +193,10 @@ impl App {
                 .raw
                 .dropped_files
                 .iter()
-                .filter_map(|f| f.path.clone())
+                .map(|f| f.path())
+                // Only the web gives a drop no path; a native one always has it.
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(std::path::Path::to_path_buf)
                 .collect();
             (i.raw.hovered_files.len(), dropped)
         });
@@ -236,7 +239,7 @@ impl App {
             .pane_state
             .active_pane_id
             .and_then(|id| panes.iter().find(|p| p.pane_id == id));
-        zone_at(pointer_in_window(ctx), &panes, ctx.screen_rect(), focused)
+        zone_at(pointer_in_window(ctx), &panes, ctx.content_rect(), focused)
     }
 
     /// Pastes `paths`, shell-quoted and space-separated, into the terminal
@@ -302,7 +305,7 @@ fn paint_drop_zone(ctx: &egui::Context, zone: &DropZone, count: usize) {
     let rect = zone.rect();
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("os_drop_zone"),
+        egui::Id::unique("os_drop_zone"),
     ));
     painter.rect_filled(
         rect,
@@ -318,6 +321,7 @@ fn paint_drop_zone(ctx: &egui::Context, zone: &DropZone, count: usize) {
         rect.shrink(theme::SP_1),
         theme::R_MD,
         egui::Stroke::new(theme::STROKE_BOLD, t.accent),
+        egui::StrokeKind::Middle,
     );
     let (title, detail) = match zone {
         DropZone::Paste { .. } => (paste_title(count), PASTE_DETAIL),
@@ -489,9 +493,10 @@ mod tests {
             },
         ];
         for zone in zones {
-            let output = ctx.run(egui::RawInput::default(), |ctx| {
-                paint_drop_zone(ctx, &zone, 2);
-            });
+            let output =
+                crate::egui_test_frames::run_pass(&ctx, egui::RawInput::default(), |ctx| {
+                    paint_drop_zone(ctx, &zone, 2);
+                });
             assert!(!output.shapes.is_empty(), "{zone:?} drew nothing");
         }
     }

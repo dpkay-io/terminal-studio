@@ -458,14 +458,35 @@ impl eframe::App for App {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        theme::clear_contrast_cache();
-
+    /// Work that must go on while every window is minimized or hidden, when
+    /// eframe runs this alone (it also runs right before each `ui`): quitting,
+    /// the close request's confirmation (a close that came in while hidden
+    /// would otherwise end the app unasked), restarting into an installed
+    /// update and the saver's session saves. Draws nothing.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         if macos_quit::take_request() {
             // Asks first (the close request below), unlike `quit_app`.
             quit::close_main_window(ctx);
         }
+
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
+            if self.pane_state.panes.is_empty() {
+                self.quit_confirmed = true;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.show_quit_confirm = true;
+            }
+        }
+
+        self.restart_if_due();
+        self.save_session_if_saver_asked();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // A handle of its own, so `ui` stays free for the panels below.
+        let ctx = &ui.ctx().clone();
+        theme::clear_contrast_cache();
 
         // ── Enforce minimum window size (decorations(false) means the OS won't) ──
         {
@@ -488,18 +509,6 @@ impl eframe::App for App {
             }
             self.first_frame = false;
         }
-
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed {
-            if self.pane_state.panes.is_empty() {
-                self.quit_confirmed = true;
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.show_quit_confirm = true;
-            }
-        }
-
-        self.restart_if_due();
-        self.save_session_if_saver_asked();
 
         // Auto-close panes whose shell process has exited, then reap any
         // remaining orphan sessions (no pane references them).
@@ -546,7 +555,7 @@ impl eframe::App for App {
             if self.last_egui_gc.elapsed() >= EGUI_GC_INTERVAL {
                 self.last_egui_gc = Instant::now();
                 ctx.memory_mut(|mem| mem.data.clear());
-                let version_key = egui::Id::new("__ts_version");
+                let version_key = egui::Id::unique("__ts_version");
                 ctx.data_mut(|d| {
                     d.insert_persisted(version_key, env!("CARGO_PKG_VERSION").to_string())
                 });
@@ -1117,7 +1126,7 @@ impl eframe::App for App {
         // App's per-window fields. For the main window that's already correct;
         // for each extra window we swap its `WindowView` in/out around the
         // render call.
-        self.render_window_body(ctx);
+        self.render_window_body(ui);
         self.harvest_drag_input(None, ctx);
 
         // ── Render each extra window via an immediate viewport ────────────
@@ -1137,9 +1146,10 @@ impl eframe::App for App {
                 .with_inner_size(inner_size)
                 .with_min_inner_size([theme::MIN_WINDOW_W, theme::MIN_WINDOW_H])
                 .with_decorations(false);
-            ctx.show_viewport_immediate(viewport_id, builder, |vp_ctx, _class| {
+            ctx.show_viewport_immediate(viewport_id, builder, |vp_ui, _class| {
+                let vp_ctx = &vp_ui.ctx().clone();
                 self.with_window_view(idx, |app| {
-                    app.render_window_body(vp_ctx);
+                    app.render_window_body(vp_ui);
                     app.harvest_drag_input(Some(idx), vp_ctx);
                     app.restore_parked_focus(vp_ctx);
                 });
@@ -1256,7 +1266,7 @@ impl eframe::App for App {
 }
 impl App {
     pub(crate) fn vp_id(&self, base: &str) -> egui::Id {
-        let id = egui::Id::new(base);
+        let id = egui::Id::unique(base);
         match &self.current_window_id {
             Some(w) => id.with(w.0),
             None => id,
@@ -1504,7 +1514,7 @@ impl App {
             None => return,
         };
 
-        let rect = ctx.screen_rect();
+        let rect = ctx.content_rect();
         if !rect.contains(hover_pos) {
             return;
         }
@@ -1540,7 +1550,10 @@ impl App {
         }
     }
 
-    fn render_window_body(&mut self, ctx: &egui::Context) {
+    /// One window's contents, drawn into its root `ui` (the main window's or
+    /// an extra window's viewport).
+    fn render_window_body(&mut self, ui: &mut egui::Ui) {
+        let ctx = &ui.ctx().clone();
         if ctx.input(|i| window_state::is_minimized(i.viewport())) {
             return;
         }
@@ -1567,9 +1580,9 @@ impl App {
             self.deferred_spawn = Some(self.configured_shell());
         }
 
-        self.render_titlebar(ctx);
+        self.render_titlebar(ui);
 
-        self.render_left_panel(ctx);
+        self.render_left_panel(ui);
 
         // ── Snapshot right-panel data before closures capture self ──────────
         // Use pane-aware CWD so the right panel stays in sync with
@@ -1717,12 +1730,12 @@ impl App {
 
         // ── Right panel ──────────────────────────────────────────────────────
         if self.show_right_panel {
-            egui::SidePanel::right(self.vp_id("right_panel"))
-                .default_width(self.right_panel_width)
-                .width_range(80.0..=800.0)
+            egui::Panel::right(self.vp_id("right_panel"))
+                .default_size(self.right_panel_width)
+                .size_range(80.0..=800.0)
                 .resizable(true)
-                .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
-                .show(ctx, |ui| {
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::ZERO))
+                .show(ui, |ui| {
                     let panel_rect = ui.max_rect();
                     let panel_w = panel_rect.width();
                     self.right_panel_width = panel_w;
@@ -1744,8 +1757,8 @@ impl App {
                     // ── Top: directory / git / markdown tabs ─────────────────────
                     let content_rect =
                         egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, content_h));
-                    ui.allocate_ui_at_rect(content_rect, |ui| {
-                        egui::Frame::none()
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                        egui::Frame::NONE
                             .fill(theme::active().surface0)
                             .inner_margin(egui::Margin::ZERO)
                             .show(ui, |ui| {
@@ -1755,7 +1768,7 @@ impl App {
                                 ui.style_mut().spacing.scroll.bar_inner_margin = 1.0;
                                 ui.style_mut().spacing.scroll.floating_allocated_width = 0.0;
                                 let scroll_output = egui::ScrollArea::horizontal()
-                                    .id_source(self.vp_id("right_tab_bar"))
+                                    .id_salt(self.vp_id("right_tab_bar"))
                                     .max_height(theme::HEADER_H)
                                     .show(ui, |ui| {
                                         ui.set_min_height(theme::HEADER_H);
@@ -1813,7 +1826,7 @@ impl App {
                                                         );
                                                     ui.painter().rect_filled(
                                                         underline_rect,
-                                                        egui::Rounding::same(1.0),
+                                                        egui::CornerRadius::same(1),
                                                         t.accent,
                                                     );
                                                 }
@@ -1878,7 +1891,7 @@ impl App {
                                                         );
                                                     ui.painter().rect_filled(
                                                         underline_rect,
-                                                        egui::Rounding::same(1.0),
+                                                        egui::CornerRadius::same(1),
                                                         t.accent,
                                                     );
                                                 }
@@ -1924,7 +1937,7 @@ impl App {
                                                             egui::pos2(resp.rect.min.x + theme::SP_2, resp.rect.max.y - 2.0),
                                                             egui::vec2(resp.rect.width() - theme::SP_2 * 2.0, 2.0),
                                                         );
-                                                        ui.painter().rect_filled(underline_rect, egui::Rounding::same(1.0), t.accent);
+                                                        ui.painter().rect_filled(underline_rect, egui::CornerRadius::same(1), t.accent);
                                                     }
                                                     ui.add_space(theme::SP_1);
                                                     if ui.add(
@@ -1937,7 +1950,7 @@ impl App {
                                                 } else {
                                                     // Multiple MD files: consolidated tab with dropdown
                                                     let popup_id = self.vp_id("md_tabs_popup");
-                                                    let is_popup_open = ui.memory(|m| m.is_popup_open(popup_id));
+                                                    let is_popup_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
                                                     let label = format!("{} ({})", active_md_name, md_count);
                                                     let resp = ui.selectable_label(
                                                         is_any_md_active || is_popup_open,
@@ -1948,15 +1961,12 @@ impl App {
                                                     let _ = crate::app::ui::animation::animated_hover(
                                                         ui.ctx(), md_tab_id, resp.hovered(),
                                                     );
-                                                    if resp.clicked() {
-                                                        ui.memory_mut(|m| m.toggle_popup(popup_id));
-                                                    }
                                                     if is_any_md_active {
                                                         let underline_rect = egui::Rect::from_min_size(
                                                             egui::pos2(resp.rect.min.x + theme::SP_2, resp.rect.max.y - 2.0),
                                                             egui::vec2(resp.rect.width() - theme::SP_2 * 2.0, 2.0),
                                                         );
-                                                        ui.painter().rect_filled(underline_rect, egui::Rounding::same(1.0), t.accent);
+                                                        ui.painter().rect_filled(underline_rect, egui::CornerRadius::same(1), t.accent);
                                                     }
                                                     // Chevron
                                                     ui.label(
@@ -1965,15 +1975,14 @@ impl App {
                                                             .color(t.overlay1),
                                                     );
 
-                                                    if is_popup_open {
-                                                        let screen_h = ui.ctx().screen_rect().height();
+                                                    {
+                                                        let screen_h = ui.ctx().content_rect().height();
                                                         let popup_max_h = (screen_h * 0.5).max(120.0);
-                                                        egui::popup::popup_below_widget(
-                                                            ui,
-                                                            popup_id,
-                                                            &resp,
-                                                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                                                            |ui: &mut egui::Ui| {
+                                                        egui::Popup::from_response(&resp)
+                                                            .id(popup_id)
+                                                            .open_memory(resp.clicked().then_some(egui::SetOpenCommand::Toggle))
+                                                            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                                                            .show(|ui: &mut egui::Ui| {
                                                                 ui.set_min_width(200.0);
                                                                 egui::ScrollArea::vertical()
                                                                     .max_height(popup_max_h)
@@ -2010,8 +2019,7 @@ impl App {
                                                                 ).clicked() {
                                                                     close_all_md = true;
                                                                 }
-                                                            },
-                                                        );
+                                                            });
                                                     }
                                                 }
                                             }
@@ -2020,7 +2028,7 @@ impl App {
                                 ui.style_mut().spacing.scroll = prev_scroll;
                                 {
                                     let inner = scroll_output.inner_rect;
-                                    let offset_x = scroll_output.state.offset.x;
+                                    let offset_x = scroll_output.state.clamped_offset().x;
                                     let content_w = scroll_output.content_size.x;
                                     if offset_x > 1.0 {
                                         let fade = egui::Rect::from_min_size(inner.left_top(), egui::vec2(14.0, inner.height()));
@@ -2054,10 +2062,10 @@ impl App {
 
                         let right_content_w = ui.available_width();
                         egui::ScrollArea::both()
-                            .id_source(self.vp_id("right_content"))
+                            .id_salt(self.vp_id("right_content"))
                             .show(ui, |ui| {
-                                let margin = egui::Margin::symmetric(theme::SP_3, 0.0);
-                                egui::Frame::none().inner_margin(margin).show(ui, |ui| {
+                                let margin = theme::margin_xy(theme::SP_3, 0.0);
+                                egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
                                     let w = (right_content_w - margin.sum().x).max(0.0);
                                     ui.set_min_width(0.0);
                                     ui.set_max_width(w);
@@ -2114,7 +2122,7 @@ impl App {
                                                                 .size(theme::FONT_UI_SM)
                                                                 .color(theme::active().accent_strong),
                                                         )
-                                                        .rounding(theme::R_MD),
+                                                        .corner_radius(theme::R_MD),
                                                     );
                                                     if save_btn.on_hover_text("Save as workspace").clicked() {
                                                         open_ws_dialog = Some(cwd.clone());
@@ -2295,7 +2303,7 @@ impl App {
                                                         egui::RichText::new("\u{2B1C} Open in Pane")
                                                             .size(theme::FONT_UI_SM),
                                                     )
-                                                    .rounding(theme::R_SM),
+                                                    .corner_radius(theme::R_SM),
                                                 )
                                                 .on_hover_text("Open this file in the main editor area")
                                                 .clicked()
@@ -2382,7 +2390,7 @@ impl App {
                         egui::pos2(panel_rect.left(), notes_top),
                         egui::vec2(panel_w, notes_h),
                     );
-                    ui.allocate_ui_at_rect(notes_rect, |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(notes_rect), |ui| {
                         let header_rect = egui::Rect::from_min_size(
                             notes_rect.min,
                             egui::vec2(notes_rect.width(), theme::HEADER_H),
@@ -2491,7 +2499,7 @@ impl App {
 
                         if !self.notes_panel_collapsed {
                             egui::ScrollArea::both()
-                                .id_source(self.vp_id("notes_scroll"))
+                                .id_salt(self.vp_id("notes_scroll"))
                                 .auto_shrink([false; 2])
                                 .show(ui, |ui| {
                                     ui.add(
@@ -2500,7 +2508,7 @@ impl App {
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(f32::INFINITY)
                                             .hint_text("Notes for this workspace…")
-                                            .frame(false),
+                                            .frame(crate::theme::frameless_text_edit()),
                                     );
                                 });
                         }
@@ -2746,15 +2754,15 @@ impl App {
 
         // ── Central panel ──────────────────────────────────────────────────
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(egui::Margin::ZERO))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin::ZERO))
+            .show(ui, |ui| {
             let panel_rect = ui.max_rect();
             let font_id    = FontId::monospace(self.settings.font_size);
             let (cw, ch) = match self.cached_cell_size {
                 Some((fs, w, h)) if fs == self.settings.font_size => (w, h),
                 _ => {
-                    let w = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
-                    let h = ui.fonts(|f| f.row_height(&font_id));
+                    let w = ui.fonts_mut(|f| f.glyph_width(&font_id, 'M'));
+                    let h = ui.fonts_mut(|f| f.row_height(&font_id));
                     self.cached_cell_size = Some((self.settings.font_size, w, h));
                     (w, h)
                 }
@@ -2991,7 +2999,7 @@ impl App {
                             egui::vec2(bar_w, bar_h),
                         );
                         ui.painter().rect_filled(bar_rect, theme::R_MD, t.surface0);
-                        ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0));
+                        ui.painter().rect_stroke(bar_rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0), egui::StrokeKind::Middle);
 
                         let controls_w = 110.0_f32;
                         let input_rect = egui::Rect::from_min_max(
@@ -3029,7 +3037,7 @@ impl App {
                             egui::pos2(prev_rect.max.x + 2.0, btn_y),
                             egui::vec2(btn_size, btn_size),
                         );
-                        let bar_id = ui.id().with("term_search_bar");
+                        let bar_id = ui.scope_id().with("term_search_bar");
                         let prev_clicked = crate::ui_kit::icon_button(
                             ui, bar_id.with("prev"), prev_rect, "\u{25B2}",
                             theme::FONT_UI_XS, t.subtext0, crate::ui_kit::IconButtonStyle::Default,
@@ -3312,7 +3320,7 @@ impl App {
                                                 if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
                                                     let text = self.extract_selected_text(idx);
                                                     if !text.is_empty() {
-                                                        ctx.output_mut(|o| o.copied_text = text);
+                                                        ctx.copy_text(text);
                                                     }
                                                 }
                                                 self.term_selection = None;
@@ -4223,7 +4231,7 @@ impl App {
                         }
                         if let Some(path) = dlg.save_file() {
                             ctx_clone.data_mut(|d| {
-                                d.insert_temp(egui::Id::new("pending_save_as"), (pane_id, path));
+                                d.insert_temp(egui::Id::unique("pending_save_as"), (pane_id, path));
                             });
                             ctx_clone.request_repaint();
                         }
@@ -4238,7 +4246,7 @@ impl App {
 
         // 7b. Apply a completed Save-As dialog result (from an untitled buffer).
         if let Some((pane_id, path)) = ctx.data_mut(|d| {
-            d.remove_temp::<(u32, std::path::PathBuf)>(egui::Id::new("pending_save_as"))
+            d.remove_temp::<(u32, std::path::PathBuf)>(egui::Id::unique("pending_save_as"))
         }) {
             let md_pref = self.md_prefer_preview;
             let mut saved_ok = false;

@@ -259,7 +259,7 @@ impl DragState {
         let t = theme::active();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Tooltip,
-            egui::Id::new("drag_overlay"),
+            egui::Id::unique("drag_overlay"),
         ));
 
         let font = egui::FontId::proportional(theme::FONT_UI_SM);
@@ -270,14 +270,19 @@ impl DragState {
         let rect = egui::Rect::from_min_size(pos + offset, text_size + padding * 2.0);
 
         let shadow = egui::epaint::Shadow {
-            offset: egui::vec2(0.0, 2.0),
-            blur: 6.0,
-            spread: 0.0,
+            offset: [0, 2],
+            blur: 6,
+            spread: 0,
             color: egui::Color32::from_black_alpha(60),
         };
-        painter.add(shadow.as_shape(rect, egui::Rounding::same(theme::R_MD)));
+        painter.add(shadow.as_shape(rect, egui::CornerRadius::same(theme::R_MD)));
         painter.rect_filled(rect, theme::R_MD, t.surface1);
-        painter.rect_stroke(rect, theme::R_MD, egui::Stroke::new(1.0_f32, t.overlay0));
+        painter.rect_stroke(
+            rect,
+            theme::R_MD,
+            egui::Stroke::new(1.0_f32, t.overlay0),
+            egui::StrokeKind::Middle,
+        );
         painter.galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
     }
 }

@@ -125,10 +125,10 @@ pub(super) fn render_git_diff(
     if *merge_operation != super::git_worker::MergeOperation::None {
         let t = theme::active();
         let banner_bg = theme::blend_colors(t.surface0, t.warning, theme::BLEND_SUBTLE);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(banner_bg)
-            .rounding(theme::R_MD)
-            .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_2))
+            .corner_radius(theme::R_MD)
+            .inner_margin(theme::margin_xy(theme::SP_3, theme::SP_2))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -170,7 +170,7 @@ pub(super) fn render_git_diff(
                                     .color(t.text),
                             )
                             .fill(t.error)
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         );
                         if abort_btn.clicked() {
                             merge_abort = true;
@@ -184,7 +184,7 @@ pub(super) fn render_git_diff(
                                     .color(if has_conflicts { t.overlay0 } else { t.text }),
                             )
                             .fill(if has_conflicts { t.surface1 } else { t.success })
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         );
                         if has_conflicts {
                             continue_btn.on_hover_text("Resolve all conflicts first");
@@ -321,7 +321,7 @@ pub(super) fn render_git_diff(
                                     .size(theme::FONT_UI_SM)
                                     .color(t.accent_strong),
                             )
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .on_hover_text("Push to remote")
                         .clicked()
@@ -358,10 +358,10 @@ pub(super) fn render_git_diff(
         // ── Push error display ─────────────────────────────────────
         if let Some(err) = push_error {
             let t = theme::active();
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(t.error.gamma_multiply(0.15))
-                .rounding(theme::R_MD)
-                .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_2))
+                .corner_radius(theme::R_MD)
+                .inner_margin(theme::margin_xy(theme::SP_3, theme::SP_2))
                 .show(ui, |ui| {
                     ui.set_max_width(panel_width);
                     ui.label(
@@ -416,7 +416,7 @@ pub(super) fn render_git_diff(
                                     .size(theme::FONT_UI_SM)
                                     .color(t.accent_strong),
                             )
-                            .rounding(theme::R_SM),
+                            .corner_radius(theme::R_SM),
                         )
                         .on_hover_text("Commit staged changes")
                         .clicked()
@@ -717,11 +717,11 @@ fn file_context_menu(
 ) {
     if kind != FileChangeKind::Untracked && ui.button("View diff").clicked() {
         *out.open_diff_file = Some(path.to_string());
-        ui.close_menu();
+        ui.close();
     }
     if ui.button("Open file").clicked() {
         *out.open_file = Some(path.to_string());
-        ui.close_menu();
+        ui.close();
     }
     if ui.button("Copy path").clicked() {
         let copy_text = match root_dir {
@@ -733,7 +733,7 @@ fn file_context_menu(
                 let _ = clip.set_text(copy_text);
             }
         });
-        ui.close_menu();
+        ui.close();
     }
     if ui
         .button(crate::util::REVEAL_IN_FILE_MANAGER_LABEL)
@@ -744,37 +744,37 @@ fn file_context_menu(
             None => std::path::PathBuf::from(path),
         };
         crate::util::reveal_in_file_manager(&full);
-        ui.close_menu();
+        ui.close();
     }
     ui.separator();
     if is_staged {
         if ui.button("Unstage").clicked() {
             *out.action = Some(GitStageAction::Unstage(path.to_string()));
-            ui.close_menu();
+            ui.close();
         }
     } else if ui.button("Stage").clicked() {
         *out.action = Some(GitStageAction::Stage(path.to_string()));
-        ui.close_menu();
+        ui.close();
     }
     if kind != FileChangeKind::Untracked {
         ui.separator();
         let revert_label = egui::RichText::new("Revert changes").color(theme::active().error);
         if ui.button(revert_label).clicked() {
             *out.revert_file = Some(path.to_string());
-            ui.close_menu();
+            ui.close();
         }
     } else {
         ui.separator();
         let delete_label = egui::RichText::new("Delete file").color(theme::active().error);
         if ui.button(delete_label).clicked() {
             *out.delete_file = Some(path.to_string());
-            ui.close_menu();
+            ui.close();
         }
     }
     ui.separator();
     if ui.button("Add to .gitignore").clicked() {
         *out.gitignore_pattern = Some(path.to_string());
-        ui.close_menu();
+        ui.close();
     }
 }
 
@@ -815,7 +815,7 @@ pub(super) fn render_diff_toolbar(
                         .color(fg),
                 )
                 .fill(bg)
-                .rounding(theme::R_SM),
+                .corner_radius(theme::R_SM),
             );
             if btn.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -912,7 +912,7 @@ fn paint_highlighted_line(
             let fg = theme::ensure_readable([raw_color.r(), raw_color.g(), raw_color.b()], bg_rgb);
             job.append(text, 0.0, egui::TextFormat::simple(font.clone(), fg));
         }
-        let galley = ui.fonts(|f| f.layout_job(job));
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
         let y = rect.center().y - galley.size().y / 2.0;
         painter.galley(egui::pos2(rect.min.x + 4.0, y), galley, t.text);
     } else {

@@ -154,7 +154,7 @@ fn lookup_claude_session_id_by_scan(dir: &Path) -> Option<String> {
         let session_id = value.get("sessionId").and_then(|v| v.as_str());
         let updated_at = value.get("updatedAt").and_then(|v| v.as_u64()).unwrap_or(0);
         if let Some(sid) = session_id {
-            if best.as_ref().map_or(true, |b| updated_at > b.1) {
+            if best.as_ref().is_none_or(|b| updated_at > b.1) {
                 best = Some((sid.to_owned(), updated_at));
             }
         }
@@ -211,7 +211,7 @@ fn lookup_claude_session_id_by_cwd_in(
             .filter(|sid| !exclude.contains(*sid));
         let updated_at = value.get("updatedAt").and_then(|v| v.as_u64()).unwrap_or(0);
         if let Some(sid) = session_id {
-            if best.as_ref().map_or(true, |b| updated_at > b.1) {
+            if best.as_ref().is_none_or(|b| updated_at > b.1) {
                 best = Some((sid.to_owned(), updated_at));
             }
         }

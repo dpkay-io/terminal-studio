@@ -75,14 +75,14 @@ pub(super) fn show_menu_popup(
         popup_id.with("anchor"),
         egui::Sense::hover(),
     );
-    egui::containers::popup::popup_below_widget(
-        ui,
-        popup_id,
-        &anchor,
-        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| menu_items(ui, has_selection, search_label),
-    )
-    .flatten()
+    egui::Popup::from_response(&anchor)
+        .id(popup_id)
+        // Open/closed stays in egui's memory: `open_terminal_context_menu`
+        // opens it, a pick or a click outside closes it.
+        .open_memory(None)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| menu_items(ui, has_selection, search_label))
+        .and_then(|r| r.inner)
 }
 
 impl App {
@@ -94,7 +94,7 @@ impl App {
     pub(super) fn open_terminal_context_menu(&mut self, ctx: &egui::Context, pos: egui::Pos2) {
         self.context_menu_pos = Some(pos);
         let popup_id = self.term_menu_popup_id();
-        ctx.memory_mut(|m| m.open_popup(popup_id));
+        egui::Popup::open_id(ctx, popup_id);
     }
 
     /// Draws the menu while it is open and runs what is clicked. Runs every
@@ -105,7 +105,7 @@ impl App {
         active_session_id: Option<u32>,
     ) {
         let popup_id = self.term_menu_popup_id();
-        if !ui.memory(|m| m.is_popup_open(popup_id)) {
+        if !egui::Popup::is_id_open(ui.ctx(), popup_id) {
             self.context_menu_pos = None;
             return;
         }
@@ -130,7 +130,7 @@ impl App {
             (TermMenuAction::SelectAll, Some(sid)) => self.select_all_visible(sid),
             (_, None) => {}
         }
-        ui.memory_mut(|m| m.close_popup());
+        egui::Popup::close_id(ui.ctx(), popup_id);
         self.context_menu_pos = None;
     }
 
@@ -149,7 +149,7 @@ impl App {
         if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
             let text = self.extract_selected_text(idx);
             if !text.is_empty() {
-                ctx.output_mut(|o| o.copied_text = text);
+                ctx.copy_text(text);
                 self.flash_active_pane();
             }
         }
@@ -234,8 +234,8 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| run(ui));
+        let _ = crate::egui_test_frames::run_ui(ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| run(ui));
         });
     }
 
@@ -248,8 +248,8 @@ mod tests {
     #[test]
     fn menu_drawn_every_frame_stays_visible() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("menu_test");
-        ctx.memory_mut(|m| m.open_popup(id));
+        let id = egui::Id::unique("menu_test");
+        egui::Popup::open_id(&ctx, id);
         for i in 0..5 {
             frame(&ctx, i as f64 * 0.1, |ui| {
                 show_menu_popup(ui, id, POS, true, "Search");
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn menu_skipped_on_alternate_frames_is_not_visible_after_a_skip() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("menu_test");
-        ctx.memory_mut(|m| m.open_popup(id));
+        let id = egui::Id::unique("menu_test");
+        egui::Popup::open_id(&ctx, id);
         frame(&ctx, 0.0, |ui| {
             show_menu_popup(ui, id, POS, true, "Search");
         });
@@ -278,8 +278,8 @@ mod tests {
     #[test]
     fn nothing_clicked_gives_no_action() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("menu_test");
-        ctx.memory_mut(|m| m.open_popup(id));
+        let id = egui::Id::unique("menu_test");
+        egui::Popup::open_id(&ctx, id);
         let mut action = Some(TermMenuAction::Paste);
         frame(&ctx, 0.0, |ui| {
             action = show_menu_popup(ui, id, POS, false, "Search");
@@ -306,8 +306,8 @@ mod tests {
             events,
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = crate::egui_test_frames::run_ui(ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let top = ui.cursor().min;
                 action = menu_items(ui, has_selection, "Search");
                 copy_rect = egui::Rect::from_min_size(top, egui::vec2(MENU_MIN_WIDTH, ITEM_HEIGHT));
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn closed_menu_draws_nothing() {
         let ctx = egui::Context::default();
-        let id = egui::Id::new("menu_test");
+        let id = egui::Id::unique("menu_test");
         frame(&ctx, 0.0, |ui| {
             show_menu_popup(ui, id, POS, true, "Search");
         });

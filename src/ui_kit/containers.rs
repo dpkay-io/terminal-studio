@@ -41,11 +41,11 @@ pub fn dialog(
     config: DialogConfig,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> DialogResponse {
-    let screen_rect = ctx.screen_rect();
+    let screen_rect = ctx.content_rect();
     let mut dismissed = false;
 
     let open_t = ctx.animate_bool_with_time(
-        egui::Id::new(("dialog_fade", id_base)),
+        egui::Id::unique(("dialog_fade", id_base)),
         true,
         theme::ANIM_NORMAL,
     );
@@ -89,20 +89,20 @@ pub fn dialog(
             (255.0 * open_t) as u8,
         );
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(frame_fill)
-            .rounding(egui::Rounding::same(theme::R_LG))
+            .corner_radius(egui::CornerRadius::same(theme::R_LG))
             .stroke(egui::Stroke::new(
                 theme::STROKE_THIN,
                 theme::active().surface2,
             ))
             .shadow(egui::epaint::Shadow {
-                offset: egui::vec2(0.0, 2.0),
-                blur: 12.0,
-                spread: 4.0,
+                offset: [0, 2],
+                blur: 12,
+                spread: 4,
                 color: theme::active().shadow_md,
             })
-            .inner_margin(egui::Margin::same(config.margin))
+            .inner_margin(theme::margin_same(config.margin))
             .show(ui, |ui| {
                 ui.set_min_width(dialog_w);
                 ui.set_max_height(config.max_height);
@@ -140,7 +140,7 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
                         .size(theme::FONT_UI_LG)
                         .color(theme::active().fg_muted),
                 )
-                .rounding(theme::R_MD)
+                .corner_radius(theme::R_MD)
                 .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
             );
             if resp.hovered() {

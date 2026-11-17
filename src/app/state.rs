@@ -67,6 +67,65 @@ pub(super) fn read_active_scrollback(file: &str) -> Option<Vec<u8>> {
     zstd::decode_all(compressed.as_slice()).ok()
 }
 
+/// UI passes egui may run for one frame. egui (0.29+) runs a frame's UI
+/// again when a widget asks to discard the first pass (`request_discard`),
+/// but this app's UI code acts as it draws (key presses go to the PTY,
+/// clicks spawn and close sessions), and that must happen once per frame.
+const UI_PASSES_PER_FRAME: std::num::NonZeroUsize = std::num::NonZeroUsize::MIN;
+
+/// Holds egui to `UI_PASSES_PER_FRAME`.
+pub(super) fn limit_ui_passes(ctx: &egui::Context) {
+    ctx.options_mut(|o| o.max_passes = UI_PASSES_PER_FRAME);
+}
+
+/// Styles egui after the active app theme: widget colours and radii, the
+/// scroll bars, and which of egui's two styles (dark, light) is in use. That
+/// choice follows the app theme rather than the OS, so the OS switching
+/// between dark and light can't swap in egui's unstyled default.
+pub(super) fn apply_theme_visuals(ctx: &egui::Context) {
+    use egui::{CornerRadius, Shadow, Stroke, Visuals};
+    let t = theme::active();
+    // First, so the visuals and style below go to the style in use.
+    ctx.set_theme(if t.is_light {
+        egui::Theme::Light
+    } else {
+        egui::Theme::Dark
+    });
+    let mut vis = if t.is_light {
+        Visuals::light()
+    } else {
+        Visuals::dark()
+    };
+    vis.panel_fill = t.bg_panel_fill;
+    vis.window_fill = t.bg_term;
+    vis.window_corner_radius = CornerRadius::same(theme::R_LG);
+    vis.window_shadow = Shadow::NONE;
+    vis.popup_shadow = Shadow::NONE;
+    vis.widgets.noninteractive.bg_fill = t.surface0;
+    vis.widgets.inactive.bg_fill = t.surface0;
+    vis.widgets.hovered.bg_fill = t.surface1;
+    vis.widgets.active.bg_fill = t.surface2;
+    vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
+    vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
+    vis.selection.bg_fill = t.selection_bg;
+    for state in [
+        &mut vis.widgets.noninteractive,
+        &mut vis.widgets.inactive,
+        &mut vis.widgets.hovered,
+        &mut vis.widgets.active,
+        &mut vis.widgets.open,
+    ] {
+        state.corner_radius = CornerRadius::same(theme::R_MD);
+    }
+    vis.override_text_color = Some(t.text);
+    ctx.set_visuals(vis);
+
+    let mut style = (*ctx.global_style()).clone();
+    style.spacing.scroll = theme::scroll_style();
+    style.always_scroll_the_only_direction = true;
+    ctx.set_global_style(style);
+}
+
 impl App {
     pub fn new(cc: &eframe::CreationContext) -> Self {
         let ctx = cc.egui_ctx.clone();
@@ -81,7 +140,7 @@ impl App {
         // Reset egui's persisted widget data if the app version changed.
         // This prevents corrupted state from old crashed sessions.
         {
-            let version_key = egui::Id::new("__ts_version");
+            let version_key = egui::Id::unique("__ts_version");
             let stored: Option<String> = cc.egui_ctx.data_mut(|d| d.get_persisted(version_key));
             let current = env!("CARGO_PKG_VERSION").to_string();
             if stored.as_deref() != Some(&current) {
@@ -91,43 +150,8 @@ impl App {
             }
         }
 
-        {
-            use egui::{Rounding, Shadow, Stroke, Visuals};
-            let t = theme::active();
-            let mut vis = if t.is_light {
-                Visuals::light()
-            } else {
-                Visuals::dark()
-            };
-            vis.panel_fill = t.bg_panel_fill;
-            vis.window_fill = t.bg_term;
-            vis.window_rounding = Rounding::same(theme::R_LG);
-            vis.window_shadow = Shadow::NONE;
-            vis.popup_shadow = Shadow::NONE;
-            vis.widgets.noninteractive.bg_fill = t.surface0;
-            vis.widgets.inactive.bg_fill = t.surface0;
-            vis.widgets.hovered.bg_fill = t.surface1;
-            vis.widgets.active.bg_fill = t.surface2;
-            vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
-            vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
-            vis.selection.bg_fill = t.selection_bg;
-            for state in [
-                &mut vis.widgets.noninteractive,
-                &mut vis.widgets.inactive,
-                &mut vis.widgets.hovered,
-                &mut vis.widgets.active,
-                &mut vis.widgets.open,
-            ] {
-                state.rounding = Rounding::same(theme::R_MD);
-            }
-            vis.override_text_color = Some(t.text);
-            cc.egui_ctx.set_visuals(vis);
-
-            let mut style = (*cc.egui_ctx.style()).clone();
-            style.spacing.scroll = theme::scroll_style();
-            style.always_scroll_the_only_direction = true;
-            cc.egui_ctx.set_style(style);
-        }
+        limit_ui_passes(&cc.egui_ctx);
+        apply_theme_visuals(&cc.egui_ctx);
 
         cc.egui_ctx.set_fonts(super::fonts::definitions());
 
@@ -2024,44 +2048,6 @@ impl App {
         }
     }
 
-    pub(super) fn apply_theme_visuals(&self, ctx: &egui::Context) {
-        use egui::{Rounding, Shadow, Stroke, Visuals};
-        let t = theme::active();
-        let mut vis = if t.is_light {
-            Visuals::light()
-        } else {
-            Visuals::dark()
-        };
-        vis.panel_fill = t.bg_panel_fill;
-        vis.window_fill = t.bg_term;
-        vis.window_rounding = Rounding::same(theme::R_LG);
-        vis.window_shadow = Shadow::NONE;
-        vis.popup_shadow = Shadow::NONE;
-        vis.widgets.noninteractive.bg_fill = t.surface0;
-        vis.widgets.inactive.bg_fill = t.surface0;
-        vis.widgets.hovered.bg_fill = t.surface1;
-        vis.widgets.active.bg_fill = t.surface2;
-        vis.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, t.subtext0);
-        vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, t.overlay0);
-        vis.selection.bg_fill = t.selection_bg;
-        for state in [
-            &mut vis.widgets.noninteractive,
-            &mut vis.widgets.inactive,
-            &mut vis.widgets.hovered,
-            &mut vis.widgets.active,
-            &mut vis.widgets.open,
-        ] {
-            state.rounding = Rounding::same(theme::R_MD);
-        }
-        vis.override_text_color = Some(t.text);
-        ctx.set_visuals(vis);
-
-        let mut style = (*ctx.style()).clone();
-        style.spacing.scroll = theme::scroll_style();
-        style.always_scroll_the_only_direction = true;
-        ctx.set_style(style);
-    }
-
     pub(super) fn extract_selected_text(&self, session_idx: usize) -> String {
         let sel = match &self.term_selection {
             Some(s) => s,
@@ -2785,6 +2771,54 @@ impl App {
 mod tests {
     use super::super::pane::{PaneContent, PaneEntry, SessionEntry};
     use super::App;
+
+    /// A widget asking egui to discard the pass (as a `Grid` does when first
+    /// shown) still gets its frame's UI run once, so nothing it does — a key
+    /// press written to a terminal — happens twice.
+    #[test]
+    fn a_discard_request_does_not_run_the_ui_twice() {
+        let ctx = egui::Context::default();
+        super::limit_ui_passes(&ctx);
+        let mut passes = 0;
+        let _ = crate::egui_test_frames::run_ui(&ctx, egui::RawInput::default(), |ui| {
+            passes += 1;
+            ui.ctx().request_discard("test");
+        });
+        assert_eq!(passes, 1);
+    }
+
+    /// Without the limit egui would run it again: the test above guards it.
+    #[test]
+    fn egui_reruns_a_discarded_pass_by_default() {
+        let ctx = egui::Context::default();
+        let mut passes = 0;
+        let _ = crate::egui_test_frames::run_ui(&ctx, egui::RawInput::default(), |ui| {
+            passes += 1;
+            ui.ctx().request_discard("test");
+        });
+        assert!(passes > 1, "egui ran {passes} pass(es)");
+    }
+
+    /// The OS theme can't change egui's styling: egui's style choice is
+    /// pinned to the app theme's (dark or light) and carries its visuals.
+    #[test]
+    fn egui_style_follows_the_app_theme_not_the_os() {
+        let ctx = egui::Context::default();
+        super::apply_theme_visuals(&ctx);
+        let expected = if crate::theme::active().is_light {
+            egui::Theme::Light
+        } else {
+            egui::Theme::Dark
+        };
+        assert_eq!(
+            ctx.options(|o| o.theme_preference),
+            egui::ThemePreference::from(expected)
+        );
+        assert_eq!(
+            ctx.global_style().visuals.panel_fill,
+            crate::theme::active().bg_panel_fill
+        );
+    }
     use crate::workspace::{Workspace, WorkspaceStore};
 
     const STALE_WS: u64 = 1;

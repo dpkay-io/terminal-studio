@@ -179,7 +179,7 @@ impl App {
         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         ui.spacing_mut().scroll.floating_width = 0.0;
         egui::ScrollArea::vertical()
-            .id_source(self.vp_id("ws_panel_scroll"))
+            .id_salt(self.vp_id("ws_panel_scroll"))
             .show(ui, |ui| {
                 let outer_w = outer_w.max(0.0);
                 ui.set_min_width(outer_w);
@@ -236,7 +236,7 @@ impl App {
         );
         let name_resp = ui.interact(
             name_rect,
-            egui::Id::new(("ws_name", data.id)),
+            egui::Id::unique(("ws_name", data.id)),
             egui::Sense::click_and_drag(),
         );
         if name_resp.hovered() {
@@ -244,7 +244,7 @@ impl App {
         }
         let gear_resp = ui.interact(
             gear_rect,
-            egui::Id::new(("ws_gear", data.id)),
+            egui::Id::unique(("ws_gear", data.id)),
             egui::Sense::click(),
         );
         if gear_resp.hovered() {
@@ -252,7 +252,7 @@ impl App {
         }
 
         // Animated hover tint: brighten card background when hovered
-        let card_hover_id = egui::Id::new(("ws_card_hover", data.id));
+        let card_hover_id = egui::Id::unique(("ws_card_hover", data.id));
         let card_hovered = name_resp.hovered() || gear_resp.hovered();
         let hover_t =
             crate::app::ui::animation::animated_hover(ui.ctx(), card_hover_id, card_hovered);
@@ -262,24 +262,25 @@ impl App {
         let fg = theme::text_on(theme::tinted(data.color, effective_tint));
 
         if ui.is_rect_visible(full_rect) {
-            let rounding = egui::Rounding::same(theme::R_MD);
+            let rounding = egui::CornerRadius::same(theme::R_MD);
             ui.painter().rect_filled(full_rect, rounding, fill);
-            ui.painter().rect_stroke(full_rect, rounding, stroke_val);
+            ui.painter()
+                .rect_stroke(full_rect, rounding, stroke_val, egui::StrokeKind::Middle);
 
             // Active session indicator: colored bar on left edge
             if data.has_active_session {
-                let left_rounding = egui::Rounding {
+                let left_rounding = egui::CornerRadius {
                     nw: theme::R_MD,
                     sw: theme::R_MD,
-                    ne: 0.0,
-                    se: 0.0,
+                    ne: theme::R_NONE,
+                    se: theme::R_NONE,
                 };
                 ui_kit::active_bar(ui.painter(), full_rect, left_rounding);
             }
 
             // Name text
             let name_str = data.name.clone();
-            let name_galley = ui.fonts(|f| {
+            let name_galley = ui.fonts_mut(|f| {
                 f.layout_no_wrap(name_str, egui::FontId::proportional(theme::FONT_UI_MD), fg)
             });
             let name_h = name_galley.size().y;
@@ -297,7 +298,7 @@ impl App {
 
             // Note icon (interactive — supports drag to open as pane)
             if data.has_note {
-                let note_galley = ui.fonts(|f| {
+                let note_galley = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
                         egui::FontId::proportional(theme::FONT_UI_MD),
@@ -312,7 +313,7 @@ impl App {
                     .galley(egui::pos2(note_x, note_y), note_galley, fg);
                 let note_resp = ui.interact(
                     note_rect,
-                    egui::Id::new(("ws_note", data.id)),
+                    egui::Id::unique(("ws_note", data.id)),
                     egui::Sense::click_and_drag(),
                 );
                 if note_resp.drag_started() {
@@ -382,7 +383,7 @@ impl App {
                         },
                     );
                 }
-                let git_galley = ui.fonts(|f| f.layout_job(git_job));
+                let git_galley = ui.fonts_mut(|f| f.layout_job(git_job));
                 let git_y = full_rect.min.y + theme::HEADER_H - 2.0;
                 ui.painter().with_clip_rect(full_rect).galley(
                     egui::pos2(full_rect.left() + theme::SP_4 + theme::CARD_BAR_W, git_y),
@@ -415,26 +416,26 @@ impl App {
             if let Some(vp) = data.other_window_viewport {
                 if ui.button("Focus window").clicked() {
                     actions.focus_extra_window_viewport = Some(vp);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Open here").clicked() {
                     actions.reclaim_workspace_id = Some(data.id);
-                    ui.close_menu();
+                    ui.close();
                 }
             } else {
                 if ui.button("Open workspace").clicked() {
                     actions.open_workspace_id = Some(data.id);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Open in new window").clicked() {
                     actions.new_window_workspace_id = Some(data.id);
-                    ui.close_menu();
+                    ui.close();
                 }
             }
             ui.separator();
             if ui.button("Edit workspace\u{2026}").clicked() {
                 actions.edit_workspace_id = Some(data.id);
-                ui.close_menu();
+                ui.close();
             }
             if data.has_active_session
                 && ui
@@ -444,7 +445,7 @@ impl App {
                     .clicked()
             {
                 actions.close_all_workspace_id = Some(Some(data.id));
-                ui.close_menu();
+                ui.close();
             }
         });
     }
@@ -481,16 +482,17 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
         if ui.is_rect_visible(other_rect) {
-            let rounding = egui::Rounding::same(theme::R_MD);
+            let rounding = egui::CornerRadius::same(theme::R_MD);
             ui.painter().rect_filled(other_rect, rounding, other_fill);
-            ui.painter().rect_stroke(other_rect, rounding, other_stroke);
+            ui.painter()
+                .rect_stroke(other_rect, rounding, other_stroke, egui::StrokeKind::Middle);
 
             if has_active_session {
-                let left_rounding = egui::Rounding {
+                let left_rounding = egui::CornerRadius {
                     nw: theme::R_MD,
                     sw: theme::R_MD,
-                    ne: 0.0,
-                    se: 0.0,
+                    ne: theme::R_NONE,
+                    se: theme::R_NONE,
                 };
                 ui_kit::active_bar(ui.painter(), other_rect, left_rounding);
             }
@@ -500,7 +502,7 @@ impl App {
             } else {
                 "Other".to_string()
             };
-            let other_galley = ui.fonts(|f| {
+            let other_galley = ui.fonts_mut(|f| {
                 f.layout_no_wrap(
                     other_name,
                     egui::FontId::proportional(theme::FONT_UI_LG),
@@ -515,7 +517,7 @@ impl App {
             );
 
             if other_has_note {
-                let note_galley = ui.fonts(|f| {
+                let note_galley = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         "\u{1f4dd}".to_string(),
                         egui::FontId::proportional(theme::FONT_UI_MD),
@@ -539,7 +541,7 @@ impl App {
                     .clicked()
                 {
                     actions.close_all_workspace_id = Some(None);
-                    ui.close_menu();
+                    ui.close();
                 }
             });
         }

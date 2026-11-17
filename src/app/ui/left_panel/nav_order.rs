@@ -130,7 +130,7 @@ impl NavOrder {
         self.order
             .iter()
             .copied()
-            .filter(|&id| section.map_or(true, |key| self.section_of(id) == Some(key)))
+            .filter(|&id| section.is_none_or(|key| self.section_of(id) == Some(key)))
             .filter(|&id| shown(id))
             .take(NUMBERED_TAB_COUNT)
             .collect()

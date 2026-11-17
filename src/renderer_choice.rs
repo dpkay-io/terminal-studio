@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn a_renderer_failure_falls_back() {
-        let err = eframe::Error::Wgpu(eframe::egui_wgpu::WgpuError::NoSuitableAdapterFound);
+        let err = eframe::Error::Wgpu(eframe::egui_wgpu::WgpuError::NoSurfaceFormatsAvailable);
         assert!(another_renderer_may_help(&err));
     }
 

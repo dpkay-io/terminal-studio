@@ -8,11 +8,11 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1150 tests)
+cargo test               # all unit tests (1153 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
-The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and release builds all use it. Rust 1.100.0 can't compile `objc2 0.4.1` (macOS, via eframe 0.28 → winit 0.29). Move the pin in its own PR once build + clippy pass on the new version.
+The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and release builds all use it. Rust 1.100.0 couldn't compile `objc2 0.4.1`, which eframe 0.28 pulled in on macOS; eframe 0.37 no longer does. Move the pin in its own PR once build + clippy pass on the new version.
 
 ## Module Map
 
@@ -22,14 +22,15 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 |------|---------------|
 | `src/main.rs` | Entry point; eframe setup, 1280×800 viewport, decorations=false; calls `SingleInstanceGuard::try_acquire()`; tries renderers in order (wgpu, then glow) |
 | `src/renderer_choice.rs` | Renderer order, `--renderer=` override, and `another_renderer_may_help()`: no glow retry when the window system or app creation failed (that would mask the real error with winit's "EventLoop can't be recreated") |
-| `src/app.rs` | `App` struct; implements `eframe::App`; render dispatch to UI submodules |
-| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6), radii (R_NONE–R_LG), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
+| `src/app.rs` | `App` struct; implements `eframe::App`: `logic()` (quit request, close confirmation, restart into an update, the saver's session saves — eframe also runs it while every window is minimized or hidden, when `ui()` is skipped) and `ui()` (everything else; draws the main window into its root `Ui`, then each extra window's viewport via `render_window_body(ui)`); render dispatch to UI submodules |
+| `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6, `f32`) with `margin_same/xy/sides()` (egui margins are `i8`), radii (R_NONE–R_LG, `u8` like egui's `CornerRadius`), `frameless_text_edit()` (no frame, padding kept), `scroll_style()` (egui's edge fade, coasting and rubber band off), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
 | `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
 | `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
 | `src/logging.rs` | `LogLevel` enum, `LogGuard`; non-blocking daily-rotated file logging via tracing-appender; 7-day retention cleanup; `load_configured_level()` partial settings parse |
 | `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
 | `src/util.rs` | `safe_json_load()`, `atomic_write()`, directory expansion, panic handler |
-| `src/os_cursor.rs` | The pointer's screen position asked of the OS (CoreGraphics / `GetCursorPos` / X11 `XQueryPointer` via runtime-loaded libX11), and `to_window_points()`. Needed while files are dragged in from another app: winit 0.29 gives hovered/dropped files no position and the window gets no mouse moves then |
+| `src/egui_test_frames.rs` | Tests only: `run_ui()` / `run_pass()` run one headless egui frame and clear its texture uploads (epaint asserts they are never dropped unapplied) |
+| `src/os_cursor.rs` | The pointer's screen position asked of the OS (CoreGraphics / `GetCursorPos` / X11 `XQueryPointer` via runtime-loaded libX11), and `to_window_points()`. Needed while files are dragged in from another app: winit 0.30 gives hovered/dropped files no position and the window gets no mouse moves then |
 
 ### Terminal & PTY
 
@@ -202,7 +203,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 - Keyboard shortcuts: `Ctrl+Shift+\` (horizontal split), `Ctrl+Shift+-` (vertical split), `Ctrl+Shift+W` (close pane), `Alt+Arrow` (focus movement), `Ctrl+Shift+[` / `Ctrl+Shift+]` (⇧⌘[ / ⇧⌘] on macOS: previous/next pane **within the focused split only**), ⌘1–9 (Ctrl+Shift+1–9: the focused split's rows in left nav order), `Ctrl+Tab` (every platform: switch to the last session, in any split). These work from a file editor too (`layout_shortcuts.rs`)
 - Each split has an optional tab bar (`tab_bar.rs`, on by default) above its info bar. The left nav session list shows every tab either way — it groups rows into split sections and marks which panes are on screen. Rename / close / copy-path / reveal / labels are the same in both (`pane_menu`, `render_rename_field`, `process_tab_actions`)
 - Drag-and-drop: dropping on the middle of a split joins that split; dropping in the outer third of any edge splits it (`edge_zone()` in `src/app/drag.rs`); dropping on a left-nav section header joins that split; dropping between left-nav rows of the same section reorders the list only
-- OS drag-and-drop (`os_drop.rs`): files from Finder/Explorer pasted as paths over a terminal, opened anywhere else; the pointer comes from `os_cursor` (winit 0.29 Wayland reports no file drops at all)
+- OS drag-and-drop (`os_drop.rs`): files from Finder/Explorer pasted as paths over a terminal, opened anywhere else; the pointer comes from `os_cursor` (winit 0.30 Wayland reports no file drops at all)
 - **Note:** `pane_trees` is not persisted to disk — splits reset on restart
 
 **Multi-window (multi-viewport):**
@@ -237,8 +238,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 
 ```toml
 # UI framework
-eframe = "0.28"              # wgpu, default_fonts, persistence
-egui = "0.28"
+eframe = "0.37"              # wgpu + glow, default_fonts, clipboard, links, persistence (no accesskit)
+egui = "0.37"                # + monochrome_emoji_fonts (the emoji fonts 0.28 bundled)
 serde + serde_json = "1"
 
 # Terminal emulation
@@ -317,7 +318,7 @@ Color32::from_rgb(30, 30, 46)
 
 **Add a new UI panel/section:**
 - Create a new file in `src/app/ui/` and wire it from `src/app/ui/mod.rs`
-- Render calls dispatch from `app.rs` → `update()`
+- Render calls dispatch from `app.rs` → `App::ui()` → `render_window_body(ui)`; panels are added to the window's root `Ui` (`egui::Panel::left/right/top(..).show(ui, ..)`), never to a `Context`
 
 **Add a new theme color:**
 1. Add constant to `theme.rs`
@@ -419,7 +420,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
-| `src/app/state.rs` | 10 | pane workspace follows the folder, falls back to the opening workspace, none when deleted |
+| `src/app/state.rs` | 13 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; a discard request runs the frame's UI once (egui would run it twice); egui's style follows the app theme, not the OS |
 | `src/app/ui/pane_renderer.rs` | 5 | drop-preview geometry: join covers the leaf, each edge covers the matching half; the active text box id is read and written without taking egui's context lock twice (no deadlock, also while another thread asks for repaints) |
 | `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
 | `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
@@ -427,7 +428,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1150 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1153 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
@@ -439,6 +440,11 @@ Color32::from_rgb(30, 30, 46)
 
 ## Known Quirks & Gotchas
 
+- egui runs **one UI pass per frame** here (`state::limit_ui_passes`, `max_passes = 1`): UI code writes key presses to PTYs and spawns/closes sessions as it draws, so egui's re-run after `request_discard` would do it twice. A widget that asks for a discard shows with a one-frame-late layout instead, as in egui 0.28
+- egui's dark/light style choice is pinned to the app theme (`state::apply_theme_visuals` → `ctx.set_theme`), so the OS switching theme can't swap in egui's unstyled default
+- Menus close on any click inside them (egui 0.32+). A menu item that must leave it open (Labels: tick several) uses `egui::menu::SubMenuButton` with `PopupCloseBehavior::CloseOnClickOutside`. Popups go through `egui::Popup` (`Popup::is_id_open/open_id/close_id`); egui's memory popup methods are private
+- `TextEdit::frame` takes a `Frame`: use `theme::frameless_text_edit()` for a borderless box (`Frame::NONE` would also drop its padding)
+- In unit tests, drive egui frames with `crate::egui_test_frames::run_ui/run_pass`, not `ctx.run_ui` directly (a dropped frame output with unapplied textures panics in debug)
 - In tests, use `Session::new_for_test(id, cols, rows)` (3 args, no Context/pty_tx) — available only under `#[cfg(test)]`
 - In production, `Session::new` takes 6 args: `(id, cols, rows, cwd, ctx, pty_tx)`
 - Mouse SGR coordinates are 1-based (not 0-based like grid internals)
