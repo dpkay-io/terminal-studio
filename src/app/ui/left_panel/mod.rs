@@ -10,8 +10,36 @@ use crate::pty::foreground::ForegroundProcess;
 use crate::pty::ShellKind;
 use crate::theme;
 use crate::ui_kit;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+
+/// How narrow or wide the left panel may be dragged (and a saved width is
+/// clamped to on restore).
+pub(in crate::app) const LEFT_PANEL_WIDTH_RANGE: RangeInclusive<f32> = 80.0..=400.0;
+
+/// Shows the left panel `width` wide and returns the width it was shown at.
+/// Both are its OUTER width (margins included), which is what egui's
+/// `default_width` takes: egui falls back to it whenever it has no panel
+/// state of its own — at launch, and after `App` clears egui's memory (every
+/// 30 minutes, and on a version change). Keeping the inner width instead
+/// made the panel 12 px narrower each time.
+fn show_sessions_panel(
+    ctx: &egui::Context,
+    id: egui::Id,
+    width: f32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) -> f32 {
+    egui::SidePanel::left(id)
+        .default_width(width)
+        .width_range(LEFT_PANEL_WIDTH_RANGE)
+        .resizable(true)
+        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_0)))
+        .show(ctx, add_contents)
+        .response
+        .rect
+        .width()
+}
 
 /// Deferred actions collected while rendering the session list section.
 #[derive(Default)]
@@ -86,71 +114,63 @@ impl App {
         };
 
         if self.show_left_panel {
-            egui::SidePanel::left(self.vp_id("sessions"))
-                .default_width(self.left_panel_width)
-                .width_range(80.0..=400.0)
-                .resizable(true)
-                .frame(
-                    egui::Frame::none()
-                        .inner_margin(egui::Margin::symmetric(theme::SP_3, theme::SP_0)),
-                )
-                .show(ctx, |ui| {
-                    let panel_rect = ui.max_rect();
-                    let panel_w = panel_rect.width();
-                    self.left_panel_width = panel_w;
-                    let total_h = panel_rect.height();
+            let panel_id = self.vp_id("sessions");
+            let shown_width = show_sessions_panel(ctx, panel_id, self.left_panel_width, |ui| {
+                let panel_rect = ui.max_rect();
+                let panel_w = panel_rect.width();
+                let total_h = panel_rect.height();
 
-                    const COLLAPSED_H: f32 = theme::HEADER_H;
+                const COLLAPSED_H: f32 = theme::HEADER_H;
 
-                    // ── Height allocation ──────────────────────────────────────
-                    let (sess_h, ws_h) = if self.workspace_panel_collapsed {
-                        (total_h - COLLAPSED_H - theme::PANEL_DIV_H, COLLAPSED_H)
-                    } else {
-                        let wh = (total_h * self.workspace_panel_ratio).max(60.0);
-                        let sh = (total_h - wh - theme::PANEL_DIV_H).max(60.0);
-                        (sh, wh)
-                    };
+                // ── Height allocation ──────────────────────────────────────
+                let (sess_h, ws_h) = if self.workspace_panel_collapsed {
+                    (total_h - COLLAPSED_H - theme::PANEL_DIV_H, COLLAPSED_H)
+                } else {
+                    let wh = (total_h * self.workspace_panel_ratio).max(60.0);
+                    let sh = (total_h - wh - theme::PANEL_DIV_H).max(60.0);
+                    (sh, wh)
+                };
 
-                    // Claim the full panel rect so egui's layout system doesn't
-                    // re-use this space for anything else.
-                    ui.allocate_rect(panel_rect, egui::Sense::hover());
+                // Claim the full panel rect so egui's layout system doesn't
+                // re-use this space for anything else.
+                ui.allocate_rect(panel_rect, egui::Sense::hover());
 
-                    // ── Sessions section ───────────────────────────────────────
-                    let sess_rect =
-                        egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, sess_h));
-                    ui.allocate_ui_at_rect(sess_rect, |ui| {
-                        self.render_session_section(ctx, ui, &active_fg, &mut sess_actions);
-                    });
-
-                    // ── Draggable divider ──────────────────────────────────────
-                    let div_top = panel_rect.min.y + sess_h;
-                    let div_rect = egui::Rect::from_min_size(
-                        egui::pos2(panel_rect.left(), div_top),
-                        egui::vec2(panel_w, theme::PANEL_DIV_H),
-                    );
-                    let delta = ui_kit::drag_divider(
-                        ui,
-                        self.vp_id("ws_panel_divider"),
-                        div_rect,
-                        theme::active().border_subtle,
-                        theme::active().border_focus,
-                    );
-                    if !self.workspace_panel_collapsed && delta != 0.0 {
-                        let new_ws_h =
-                            (ws_h - delta).clamp(60.0, total_h - 60.0 - theme::PANEL_DIV_H);
-                        self.workspace_panel_ratio = new_ws_h / total_h;
-                    }
-
-                    // ── Workspaces section ─────────────────────────────────────
-                    let ws_top = div_top + theme::PANEL_DIV_H;
-                    let ws_rect = egui::Rect::from_min_size(
-                        egui::pos2(panel_rect.left(), ws_top),
-                        egui::vec2(panel_w, ws_h),
-                    );
-                    ui.allocate_ui_at_rect(ws_rect, |ui| {
-                        self.render_workspace_section(ui, ws_rect, &mut ws_actions);
-                    });
+                // ── Sessions section ───────────────────────────────────────
+                let sess_rect =
+                    egui::Rect::from_min_size(panel_rect.min, egui::vec2(panel_w, sess_h));
+                ui.allocate_ui_at_rect(sess_rect, |ui| {
+                    self.render_session_section(ctx, ui, &active_fg, &mut sess_actions);
                 });
+
+                // ── Draggable divider ──────────────────────────────────────
+                let div_top = panel_rect.min.y + sess_h;
+                let div_rect = egui::Rect::from_min_size(
+                    egui::pos2(panel_rect.left(), div_top),
+                    egui::vec2(panel_w, theme::PANEL_DIV_H),
+                );
+                let delta = ui_kit::drag_divider(
+                    ui,
+                    self.vp_id("ws_panel_divider"),
+                    div_rect,
+                    theme::active().border_subtle,
+                    theme::active().border_focus,
+                );
+                if !self.workspace_panel_collapsed && delta != 0.0 {
+                    let new_ws_h = (ws_h - delta).clamp(60.0, total_h - 60.0 - theme::PANEL_DIV_H);
+                    self.workspace_panel_ratio = new_ws_h / total_h;
+                }
+
+                // ── Workspaces section ─────────────────────────────────────
+                let ws_top = div_top + theme::PANEL_DIV_H;
+                let ws_rect = egui::Rect::from_min_size(
+                    egui::pos2(panel_rect.left(), ws_top),
+                    egui::vec2(panel_w, ws_h),
+                );
+                ui.allocate_ui_at_rect(ws_rect, |ui| {
+                    self.render_workspace_section(ui, ws_rect, &mut ws_actions);
+                });
+            });
+            self.left_panel_width = shown_width;
         } // end if self.show_left_panel
 
         // Workspace drag → NewWindow default target (overridden if pointer is
@@ -176,5 +196,52 @@ impl App {
 
         // ── Process deferred actions ──────────────────────────────────────────
         self.process_left_panel_actions(ctx, sess_actions, ws_actions, active_fg);
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    fn frame(ctx: &egui::Context, width: f32) -> f32 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1200.0, 800.0),
+            )),
+            ..Default::default()
+        };
+        let mut shown = f32::NAN;
+        let _ = ctx.run(input, |ctx| {
+            shown = show_sessions_panel(ctx, egui::Id::new("sessions"), width, |ui| {
+                // Like the real panel: its sections fill the whole panel.
+                ui.allocate_rect(ui.max_rect(), egui::Sense::hover());
+            });
+        });
+        shown
+    }
+
+    #[test]
+    fn width_survives_egui_forgetting_the_panel() {
+        let ctx = egui::Context::default();
+        let first = frame(&ctx, 168.0);
+        assert_eq!(first, 168.0);
+        // What App's periodic egui memory trim and version reset do.
+        ctx.memory_mut(|mem| mem.data.clear());
+        let after_clear = frame(&ctx, first);
+        assert_eq!(
+            after_clear, first,
+            "the panel must not shrink by its margins"
+        );
+        // And again, so a drift could not hide in one step.
+        ctx.memory_mut(|mem| mem.data.clear());
+        assert_eq!(frame(&ctx, after_clear), first);
+    }
+
+    #[test]
+    fn width_kept_while_egui_remembers_the_panel() {
+        let ctx = egui::Context::default();
+        let first = frame(&ctx, 200.0);
+        assert_eq!(frame(&ctx, first), 200.0);
     }
 }

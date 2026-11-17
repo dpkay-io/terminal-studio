@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1148 tests)
+cargo test               # all unit tests (1150 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -353,6 +353,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/pane_state.rs` | 86 | each split's shown tab, previous active pane (last session), pane CRUD, tree operations (split/nested-split), remove, ratio mutation, size updates, group detach/erase/collapse, orphaned-layout pruning, Ctrl+Tab cycling within a group, per-split info bar position, moving one sets the default for new splits (others keep theirs), each pane's left nav section (a split missing from the layout gives none; one split holds every pane) |
 | `src/app/drag.rs` | 78 | drag payload/target resolution, left nav row placement (tabs only), edge-zone geometry, split-edge drops, tab-bar drops (reorder, move to a gap in another split, open new things there), one-pane-per-session and per-file delegation, per-frame cross-window drop harvesting |
 | `src/editor_group.rs` | 54 | group layout tree: split (either side), remove, collapse, group id ordering |
+| `src/app/ui/left_panel/mod.rs` | 2 | the left panel keeps its outer width, so clearing egui's memory (every 30 minutes, and on a version change) never narrows it by its margins |
 | `src/app/ui/left_panel/sections.rs` | 9 | split-section labels, three-state row prominence |
 | `src/app/ui/left_panel/nav_order.rs` | 32 | dragged rows placed above/below (no-op spots, same section only, rule applies after, while held), stable top rows, pull to row 1 from below, new rows (room / full), close, hold then apply oldest first, 0 = recency sort, per-section counting, section moves (with and without activation, keeping their order, landing at once while held), restore (saved order, duplicates, unknown ids, unlisted by recency), ⌘1–9 targets |
 | `src/app/nav_order_sync.rs` | 2 | ⌘1–9 count the whole list without splits, the focused split with them |
@@ -426,7 +427,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1148 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1150 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 
