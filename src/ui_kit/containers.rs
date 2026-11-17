@@ -41,11 +41,11 @@ pub fn dialog(
     config: DialogConfig,
     add_contents: impl FnOnce(&mut egui::Ui),
 ) -> DialogResponse {
-    let screen_rect = ctx.screen_rect();
+    let screen_rect = ctx.content_rect();
     let mut dismissed = false;
 
     let open_t = ctx.animate_bool_with_time(
-        egui::Id::new(("dialog_fade", id_base)),
+        egui::Id::unique(("dialog_fade", id_base)),
         true,
         theme::ANIM_NORMAL,
     );
@@ -82,27 +82,22 @@ pub fn dialog(
 
     area.show(ctx, |ui| {
         let base = theme::active().bg_term;
-        let frame_fill = egui::Color32::from_rgba_unmultiplied(
-            base.r(),
-            base.g(),
-            base.b(),
-            (255.0 * open_t) as u8,
-        );
+        let frame_fill = crate::theme::with_alpha(base, (255.0 * open_t) as u8);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(frame_fill)
-            .rounding(egui::Rounding::same(theme::R_LG))
+            .corner_radius(egui::CornerRadius::same(theme::R_LG))
             .stroke(egui::Stroke::new(
                 theme::STROKE_THIN,
                 theme::active().surface2,
             ))
             .shadow(egui::epaint::Shadow {
-                offset: egui::vec2(0.0, 2.0),
-                blur: 12.0,
-                spread: 4.0,
+                offset: [0, 2],
+                blur: 12,
+                spread: 4,
                 color: theme::active().shadow_md,
             })
-            .inner_margin(egui::Margin::same(config.margin))
+            .inner_margin(theme::margin_same(config.margin))
             .show(ui, |ui| {
                 ui.set_min_width(dialog_w);
                 ui.set_max_height(config.max_height);
@@ -140,7 +135,7 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
                         .size(theme::FONT_UI_LG)
                         .color(theme::active().fg_muted),
                 )
-                .rounding(theme::R_MD)
+                .corner_radius(theme::R_MD)
                 .min_size(egui::vec2(theme::BTN_W, theme::BTN_W)),
             );
             if resp.hovered() {
@@ -163,4 +158,72 @@ pub fn dialog_header_with_close(ui: &mut egui::Ui, title: &str) -> bool {
 pub fn dialog_footer(ui: &mut egui::Ui, add_buttons: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(theme::SP_4);
     ui.horizontal(add_buttons);
+}
+
+/// A popup list under `anchor`, laid out as egui 0.28's `popup_below_widget`
+/// was (egui 0.37's `Popup` sizes each item to its text instead): items fill
+/// the list's width, which is at least the anchor's. `open` opens, closes or
+/// toggles it (`None` leaves egui's memory as it is); returns what
+/// `add_contents` returned while it is open.
+pub fn popup_below<R>(
+    anchor: &egui::Response,
+    id: egui::Id,
+    open: Option<egui::SetOpenCommand>,
+    close: egui::PopupCloseBehavior,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let frame_margin = egui::Frame::popup(&anchor.ctx.global_style()).total_margin();
+    let inner_width = (anchor.rect.width() - frame_margin.sum().x).max(0.0);
+    egui::Popup::from_response(anchor)
+        .id(id)
+        .open_memory(open)
+        .close_behavior(close)
+        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+        .width(inner_width)
+        .show(|ui| {
+            ui.set_min_width(inner_width);
+            add_contents(ui)
+        })
+        .map(|r| r.inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::egui_test_frames::run_ui;
+
+    #[test]
+    fn popup_items_fill_the_list_at_least_as_wide_as_its_anchor() {
+        const ANCHOR_W: f32 = 240.0;
+        let ctx = egui::Context::default();
+        let popup_id = egui::Id::unique("popup_below_test");
+        egui::Popup::open_id(&ctx, popup_id);
+        let mut item_widths = Vec::new();
+        // A popup's first frame open is egui's invisible sizing pass; the
+        // second is the one shown.
+        for _ in 0..2 {
+            item_widths.clear();
+            let _ = run_ui(&ctx, egui::RawInput::default(), |ui| {
+                let anchor = ui.allocate_response(egui::vec2(ANCHOR_W, 20.0), egui::Sense::click());
+                super::popup_below(
+                    &anchor,
+                    popup_id,
+                    None,
+                    egui::PopupCloseBehavior::CloseOnClickOutside,
+                    |ui| {
+                        for label in ["A", "Longer item"] {
+                            item_widths.push(ui.button(label).rect.width());
+                        }
+                    },
+                );
+            });
+        }
+        let margin = egui::Frame::popup(&ctx.global_style())
+            .total_margin()
+            .sum()
+            .x;
+        assert_eq!(item_widths.len(), 2, "the open popup drew its items");
+        for w in item_widths {
+            assert!(w >= ANCHOR_W - margin - 0.5, "item width {w}");
+        }
+    }
 }

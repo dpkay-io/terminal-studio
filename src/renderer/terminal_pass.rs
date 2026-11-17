@@ -160,8 +160,8 @@ impl<'a> TerminalView<'a> {
         painter.rect_filled(outer_rect, 0.0, t.bg_term);
 
         let font_id = FontId::monospace(font_size);
-        let cell_height = ui.fonts(|f| f.row_height(&font_id));
-        let cell_width = ui.fonts(|f| f.glyph_width(&font_id, 'M'));
+        let cell_height = ui.fonts_mut(|f| f.row_height(&font_id));
+        let cell_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'M'));
 
         let rect = Rect::from_min_max(
             egui::pos2(
@@ -463,10 +463,8 @@ impl<'a> TerminalView<'a> {
                 let cursor_origin =
                     rect.min + vec2(cx as f32 * cell_width, cy as f32 * cell_height);
                 if is_focused {
-                    let color = egui::Color32::from_rgba_unmultiplied(
-                        t.cursor_color.r(),
-                        t.cursor_color.g(),
-                        t.cursor_color.b(),
+                    let color = crate::theme::with_alpha(
+                        t.cursor_color,
                         (t.cursor_color.a() as f32 * cursor_alpha) as u8,
                     );
                     match cursor_style {
@@ -495,6 +493,7 @@ impl<'a> TerminalView<'a> {
                         cursor_rect,
                         0.0,
                         egui::Stroke::new(1.5_f32, t.cursor_dim_color),
+                        egui::StrokeKind::Middle,
                     );
                 }
             }
@@ -567,7 +566,7 @@ impl<'a> TerminalView<'a> {
 
             // Register with egui so the divider's interact_radius (5px)
             // doesn't steal drags that belong to the scrollbar.
-            let sb_widget_id = ui.id().with("term_sb_widget");
+            let sb_widget_id = ui.scope_id().with("term_sb_widget");
             ui.interact(hit_rect, sb_widget_id, Sense::drag());
 
             let (pointer_pos, primary_pressed, any_down) = ui.input(|i| {
@@ -580,7 +579,7 @@ impl<'a> TerminalView<'a> {
 
             let pointer_in_hit = pointer_pos.map(|p| hit_rect.contains(p)).unwrap_or(false);
 
-            let sb_mem_id = ui.id().with("term_sb_dragging");
+            let sb_mem_id = ui.scope_id().with("term_sb_dragging");
             let was_dragging = ui.data_mut(|d| *d.get_temp_mut_or_default::<bool>(sb_mem_id));
             let other_widget_dragging = ui.ctx().dragged_id().is_some_and(|id| id != sb_widget_id);
             let is_dragging = (was_dragging && any_down)
@@ -620,26 +619,11 @@ impl<'a> TerminalView<'a> {
             }
 
             let bar_color = if is_dragging {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_DRAG,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_DRAG)
             } else if pointer_in_hit {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_HOVER,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_HOVER)
             } else {
-                egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    theme::ALPHA_SCROLLBAR_IDLE,
-                )
+                crate::theme::with_alpha(t.scrollbar_color, theme::ALPHA_SCROLLBAR_IDLE)
             };
 
             if scrollbar_hovered {
@@ -647,12 +631,7 @@ impl<'a> TerminalView<'a> {
                     egui::pos2(sb_right - bar_w_wide, outer_rect.min.y),
                     egui::pos2(sb_right, outer_rect.max.y),
                 );
-                let track_color = egui::Color32::from_rgba_unmultiplied(
-                    t.scrollbar_color.r(),
-                    t.scrollbar_color.g(),
-                    t.scrollbar_color.b(),
-                    30,
-                );
+                let track_color = crate::theme::with_alpha(t.scrollbar_color, 30);
                 painter.rect_filled(track_rect, bar_w_wide * 0.5, track_color);
             }
 
@@ -761,8 +740,8 @@ mod tests {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
             ..Default::default()
         };
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = crate::egui_test_frames::run_ui(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 TerminalView::new(Arc::clone(session), snapshot).show(
                     ui,
                     true,

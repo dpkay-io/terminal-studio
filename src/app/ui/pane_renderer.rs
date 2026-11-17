@@ -1,3 +1,4 @@
+use crate::ui_kit::TextEditFontHint as _;
 use std::sync::Arc;
 
 use super::super::feedback;
@@ -95,7 +96,7 @@ const ACTIVE_TEXT_BOX_SLOT: &str = "active_text_box";
 /// deadlock at once under `data_mut`, and under `data` whenever another
 /// thread is waiting to write, as a PTY reader asking for a repaint does).
 fn active_text_box_key(ctx: &egui::Context) -> egui::Id {
-    egui::Id::new(ACTIVE_TEXT_BOX_SLOT).with(ctx.viewport_id())
+    egui::Id::unique(ACTIVE_TEXT_BOX_SLOT).with(ctx.viewport_id())
 }
 
 /// The text box of the active pane (file or note editor) in this viewport,
@@ -194,7 +195,7 @@ fn render_terminal_leaf(
         }
     }
     if is_focused {
-        let this_id = ui.id();
+        let this_id = ui.scope_id();
         *rctx.active_term_ui_id = Some(this_id);
         if !rctx.modal_open {
             let clicked = ui.input(|i| i.pointer.any_pressed())
@@ -234,9 +235,9 @@ fn paint_search_highlights(
         let x0 = text_origin.x + col_start as f32 * char_w;
         let x1 = text_origin.x + col_end as f32 * char_w;
         let color = if Some(i) == current_idx {
-            egui::Color32::from_rgba_unmultiplied(255, 165, 0, 100)
+            crate::theme::rgba_unmultiplied(255, 165, 0, 100)
         } else {
-            egui::Color32::from_rgba_unmultiplied(255, 255, 0, 50)
+            crate::theme::rgba_unmultiplied(255, 255, 0, 50)
         };
         painter.rect_filled(
             egui::Rect::from_min_max(egui::pos2(x0, y), egui::pos2(x1, y + line_h)),
@@ -280,6 +281,7 @@ fn render_text_search_bar(
         bar_rect,
         theme::R_MD,
         egui::Stroke::new(1.0_f32, t.overlay0),
+        egui::StrokeKind::Middle,
     );
 
     let controls_w = 110.0_f32;
@@ -291,8 +293,7 @@ fn render_text_search_bar(
         input_rect,
         egui::TextEdit::singleline(&mut search.query)
             .desired_width(input_rect.width())
-            .font(egui::FontId::monospace(theme::FONT_UI_MD))
-            .hint_text("Search\u{2026}"),
+            .font_with_hint(egui::FontId::monospace(theme::FONT_UI_MD), "Search\u{2026}"),
     );
     if resp.changed() {
         search.search(content);
@@ -318,7 +319,7 @@ fn render_text_search_bar(
         egui::pos2(prev_rect.max.x + 2.0, btn_y),
         egui::vec2(btn_size, btn_size),
     );
-    let bar_id = ui.id().with("text_search_bar");
+    let bar_id = ui.scope_id().with("text_search_bar");
     let prev_clicked = crate::ui_kit::icon_button(
         ui,
         bar_id.with("prev"),
@@ -430,7 +431,7 @@ fn render_file_editor_leaf(
                             .color(raw_color),
                     )
                     .fill(raw_bg)
-                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .corner_radius(egui::CornerRadius::same(theme::R_MD))
                     .min_size(egui::vec2(56.0, 20.0)),
                 );
                 if raw_resp.hovered() {
@@ -447,7 +448,7 @@ fn render_file_editor_leaf(
                             .color(preview_color),
                     )
                     .fill(preview_bg)
-                    .rounding(egui::Rounding::same(theme::R_MD))
+                    .corner_radius(egui::CornerRadius::same(theme::R_MD))
                     .min_size(egui::vec2(56.0, 20.0)),
                 );
                 if preview_resp.hovered() {
@@ -485,7 +486,7 @@ fn render_file_editor_leaf(
             if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
                 if let Some(ref text) = et.1 {
                     egui::ScrollArea::vertical()
-                        .id_source(("editor_preview_scroll", pane_id))
+                        .id_salt(("editor_preview_scroll", pane_id))
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             render_markdown(ui, text);
@@ -497,7 +498,7 @@ fn render_file_editor_leaf(
                 let maybe_syntax = syntax::find_syntax_for_file(&ed.path);
 
                 egui::ScrollArea::both()
-                    .id_source(("editor_scroll", pane_id))
+                    .id_salt(("editor_scroll", pane_id))
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         let line_count = if text.ends_with('\n') {
@@ -558,37 +559,40 @@ fn render_file_editor_leaf(
                             ui.add_space(theme::SP_2);
 
                             let te_resp = if let Some(syn) = maybe_syntax {
-                                let cache_id = egui::Id::new(("syn_galley_cache", pane_id));
-                                let mut layouter = |ui: &egui::Ui, s: &str, wrap_width: f32| {
-                                    let hash = text_fingerprint(s);
-                                    let current_theme = theme::active().id;
-                                    let cached: Option<SyntaxGalleyCache> =
-                                        ui.ctx().data(|d| d.get_temp(cache_id));
-                                    if let Some(c) = cached {
-                                        if c.text_hash == hash && c.theme_id == current_theme {
-                                            return c.galley;
+                                let cache_id = egui::Id::unique(("syn_galley_cache", pane_id));
+                                let mut layouter =
+                                    |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                                        let s = buf.as_str();
+                                        let hash = text_fingerprint(s);
+                                        let current_theme = theme::active().id;
+                                        let cached: Option<SyntaxGalleyCache> =
+                                            ui.ctx().data(|d| d.get_temp(cache_id));
+                                        if let Some(c) = cached {
+                                            if c.text_hash == hash && c.theme_id == current_theme {
+                                                return c.galley;
+                                            }
                                         }
-                                    }
-                                    let job = syntax::highlight_layout_job(ui, s, syn, wrap_width);
-                                    let galley = ui.fonts(|f| f.layout_job(job));
-                                    ui.ctx().data_mut(|d| {
-                                        d.insert_temp(
-                                            cache_id,
-                                            SyntaxGalleyCache {
-                                                text_hash: hash,
-                                                theme_id: current_theme,
-                                                galley: galley.clone(),
-                                            },
-                                        )
-                                    });
-                                    galley
-                                };
+                                        let job =
+                                            syntax::highlight_layout_job(ui, s, syn, wrap_width);
+                                        let galley = ui.fonts_mut(|f| f.layout_job(job));
+                                        ui.ctx().data_mut(|d| {
+                                            d.insert_temp(
+                                                cache_id,
+                                                SyntaxGalleyCache {
+                                                    text_hash: hash,
+                                                    theme_id: current_theme,
+                                                    galley: galley.clone(),
+                                                },
+                                            )
+                                        });
+                                        galley
+                                    };
                                 ui.add(
                                     egui::TextEdit::multiline(text)
-                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
+                                        .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
-                                        .frame(false)
+                                        .frame(crate::theme::frameless_text_edit())
                                         .lock_focus(true)
                                         .interactive(!modal_open)
                                         .layouter(&mut layouter),
@@ -596,10 +600,10 @@ fn render_file_editor_leaf(
                             } else {
                                 ui.add(
                                     egui::TextEdit::multiline(text)
-                                        .id_source((FILE_EDITOR_TEXT_ID, pane_id))
+                                        .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
-                                        .frame(false)
+                                        .frame(crate::theme::frameless_text_edit())
                                         .lock_focus(true)
                                         .interactive(!modal_open),
                                 )
@@ -609,7 +613,7 @@ fn render_file_editor_leaf(
                             if !search_highlights.is_empty() {
                                 let mono_id =
                                     ui.style().text_styles[&egui::TextStyle::Monospace].clone();
-                                let cw = ui.fonts(|f| {
+                                let cw = ui.fonts_mut(|f| {
                                     f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
                                         .rect
                                         .width()
@@ -712,23 +716,25 @@ fn render_note_editor_leaf(
             };
 
             egui::ScrollArea::both()
-                .id_source(("note_editor_scroll", pane_id))
+                .id_salt(("note_editor_scroll", pane_id))
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
                     let te_resp = ui.add(
                         egui::TextEdit::multiline(text)
-                            .font(egui::TextStyle::Monospace)
+                            .font_with_hint(
+                                egui::TextStyle::Monospace,
+                                "Notes for this workspace\u{2026}",
+                            )
                             .desired_width(f32::INFINITY)
-                            .hint_text("Notes for this workspace\u{2026}")
-                            .frame(false)
+                            .frame(crate::theme::frameless_text_edit())
                             .lock_focus(true)
                             .interactive(!rctx.modal_open),
                     );
                     route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
                     if !search_highlights.is_empty() {
                         let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
-                        let cw = ui.fonts(|f| {
+                        let cw = ui.fonts_mut(|f| {
                             f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
                                 .rect
                                 .width()
@@ -803,7 +809,7 @@ fn render_file_diff_leaf(
     };
 
     egui::ScrollArea::both()
-        .id_source(("diff_scroll", pane_id))
+        .id_salt(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
             match d.diff_mode {
@@ -899,7 +905,7 @@ fn render_leaf_content(
     // past the right edge or under the info bar.
     rctx.pane_rects_snap.push((pane_id, rect));
 
-    ui.allocate_ui_at_rect(rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.push_id(pane_id, |ui| match &pane.content {
             PaneContent::Terminal(sid) => {
                 render_terminal_leaf(ui, *sid, pane_id, is_focused, rctx);
@@ -1006,6 +1012,7 @@ fn paint_drop_preview(ui: &egui::Ui, rect: egui::Rect, edge: Option<(SplitDir, b
         area,
         theme::R_MD,
         egui::Stroke::new(theme::STROKE_THIN, t.accent),
+        egui::StrokeKind::Middle,
     );
 }
 
@@ -1135,15 +1142,20 @@ fn render_group_node(
             // Scope all leaf rendering under a group_id-keyed child UI so that
             // auto-generated widget IDs are unique across sibling groups in a
             // split.  Without this, two leaves share the parent `ui` and
-            // `allocate_ui_at_rect` children get the same base `id`, leading to
+            // `scope_builder` children get the same base `id`, leading to
             // egui "duplicate widget ID" warnings for interactive widgets.
-            let mut leaf_ui = ui.child_ui_with_id_source(rect, *ui.layout(), group_id, None);
+            let mut leaf_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(*ui.layout())
+                    .id_salt(group_id),
+            );
 
             let Some(group) = group else {
                 leaf_ui
                     .painter()
                     .rect_filled(rect, 0.0, theme::active().bg_term);
-                leaf_ui.allocate_ui_at_rect(rect, |ui| {
+                leaf_ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                     ui.centered_and_justified(|ui| {
                         ui.label(
                             egui::RichText::new("Empty group")
@@ -1249,7 +1261,7 @@ fn render_group_node(
                 apply_info_bar_action(app, info_bar_action, &ctx);
                 let t = theme::active();
                 leaf_ui.painter().rect_filled(content_rect, 0.0, t.bg_term);
-                leaf_ui.allocate_ui_at_rect(content_rect, |ui| {
+                leaf_ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
                     ui.centered_and_justified(|ui| {
                         ui.label(
                             egui::RichText::new("No sessions match the current filter")
@@ -1467,7 +1479,7 @@ fn render_group_node(
             );
 
             // Draw divider — reuse existing divider rendering
-            let div_id = egui::Id::new(("group_split_div", *split_id));
+            let div_id = egui::Id::unique(("group_split_div", *split_id));
             let div_resp = ui.interact(div_rect, div_id, egui::Sense::drag());
             let is_active = div_resp.dragged() || div_resp.hovered();
             let anim_t =
@@ -1637,7 +1649,7 @@ mod tests {
     fn active_text_box_round_trip_never_locks_the_context_twice() {
         assert!(returns(|| {
             let ctx = egui::Context::default();
-            let id = egui::Id::new("text box");
+            let id = egui::Id::unique("text box");
             remember_active_text_box(&ctx, id);
             assert_eq!(active_text_box_id(&ctx), Some(id));
         }));

@@ -2,6 +2,8 @@
 
 mod app;
 mod editor_group;
+#[cfg(test)]
+mod egui_test_frames;
 mod file_search_worker;
 mod git;
 mod keybindings;

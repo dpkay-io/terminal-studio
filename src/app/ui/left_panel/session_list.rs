@@ -7,6 +7,7 @@ use crate::pty::foreground::ForegroundProcess;
 use crate::shortcuts::AppAction;
 use crate::theme;
 use crate::ui_kit;
+use crate::ui_kit::TextEditFontHint as _;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
@@ -49,7 +50,7 @@ fn session_header_title(count: usize) -> String {
 /// Width of a header text at the header's font, plus the gap after it.
 fn header_text_width(ui: &egui::Ui, text: &str) -> f32 {
     let font = egui::FontId::proportional(theme::FONT_UI_MD);
-    let w = ui.fonts(|f| {
+    let w = ui.fonts_mut(|f| {
         f.layout_no_wrap(text.to_string(), font, egui::Color32::PLACEHOLDER)
             .size()
             .x
@@ -251,8 +252,8 @@ impl App {
         // ── New custom label dialog ──────────────────────────────
         if let Some(target_pane_id) = self.show_new_label_dialog {
             // Use egui::Id-keyed booleans to communicate button results out of the closure.
-            let create_id = egui::Id::new("new_label_dialog_create");
-            let cancel_id = egui::Id::new("new_label_dialog_cancel");
+            let create_id = egui::Id::unique("new_label_dialog_create");
+            let cancel_id = egui::Id::unique("new_label_dialog_cancel");
 
             egui::Window::new("New Label")
                 .collapsible(false)
@@ -372,7 +373,7 @@ impl App {
                             };
                             if ui.button(label).clicked() {
                                 actions.spawn_new_session = Some(default_shell.clone());
-                                ui.close_menu();
+                                ui.close();
                             }
                             let others: Vec<_> =
                                 shells.iter().filter(|s| *s != &default_shell).collect();
@@ -381,14 +382,14 @@ impl App {
                                 for shell in others {
                                     if ui.button(shell.display_name()).clicked() {
                                         actions.spawn_new_session = Some(shell.clone());
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             }
                             ui.separator();
                             if ui.button(new_file_label).clicked() {
                                 actions.new_file = true;
-                                ui.close_menu();
+                                ui.close();
                             }
                             ui.separator();
                             if ui
@@ -397,7 +398,7 @@ impl App {
                                 .clicked()
                             {
                                 self.pick_folders_async(ui.ctx());
-                                ui.close_menu();
+                                ui.close();
                             }
                         },
                     )
@@ -433,7 +434,7 @@ impl App {
                                         ui.button(extra.label()).on_hover_text(extra.tooltip(self));
                                     if resp.clicked() {
                                         self.run_session_header_extra(extra, actions);
-                                        ui.close_menu();
+                                        ui.close();
                                     }
                                 }
                             },
@@ -486,7 +487,7 @@ impl App {
         let t = theme::active();
         let full_w = width;
         let popup_id = self.vp_id("ws_filter_popup");
-        let is_open = ui.memory(|m| m.is_popup_open(popup_id));
+        let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
 
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(full_w, theme::SEARCH_BAR_H),
@@ -494,9 +495,6 @@ impl App {
         );
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if resp.clicked() {
-            ui.memory_mut(|m| m.toggle_popup(popup_id));
         }
 
         let border_color = if is_open {
@@ -509,11 +507,12 @@ impl App {
             rect,
             theme::R_SM,
             egui::Stroke::new(theme::STROKE_THIN, border_color),
+            egui::StrokeKind::Middle,
         );
 
         let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
         let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
-        let chevron_galley = ui.fonts(|f| {
+        let chevron_galley = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
                 egui::FontId::proportional(theme::FONT_UI_XS),
@@ -528,7 +527,7 @@ impl App {
 
         let text_clip =
             egui::Rect::from_min_max(inner.min, egui::pos2(chevron_x - theme::SP_2, inner.max.y));
-        let text_galley = ui.fonts(|f| {
+        let text_galley = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 selected_label,
                 egui::FontId::proportional(theme::FONT_UI_MD),
@@ -542,23 +541,14 @@ impl App {
             t.text,
         );
 
-        if is_open {
-            egui::popup::popup_below_widget(
-                ui,
-                popup_id,
-                &resp,
-                egui::PopupCloseBehavior::CloseOnClick,
-                |ui: &mut egui::Ui| {
-                    ui.set_min_width((full_w - 2.0 * theme::SP_3).max(0.0));
-                    for (val, name) in &ws_names {
-                        let is_selected = self.session_workspace_filter == *val;
-                        if ui.selectable_label(is_selected, name).clicked() {
-                            self.session_workspace_filter = *val;
-                        }
-                    }
-                },
-            );
-        }
+        show_filter_dropdown(&resp, popup_id, full_w, |ui| {
+            for (val, name) in &ws_names {
+                let is_selected = self.session_workspace_filter == *val;
+                if ui.selectable_label(is_selected, name).clicked() {
+                    self.session_workspace_filter = *val;
+                }
+            }
+        });
         self.ensure_active_pane_visible();
     }
 
@@ -585,7 +575,7 @@ impl App {
         let t = theme::active();
         let full_w = width;
         let popup_id = self.vp_id("label_filter_popup");
-        let is_open = ui.memory(|m| m.is_popup_open(popup_id));
+        let is_open = egui::Popup::is_id_open(ui.ctx(), popup_id);
 
         let (rect, resp) = ui.allocate_exact_size(
             egui::vec2(full_w, theme::SEARCH_BAR_H),
@@ -593,9 +583,6 @@ impl App {
         );
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-        if resp.clicked() {
-            ui.memory_mut(|m| m.toggle_popup(popup_id));
         }
 
         let border_color = if is_open {
@@ -608,11 +595,12 @@ impl App {
             rect,
             theme::R_SM,
             egui::Stroke::new(theme::STROKE_THIN, border_color),
+            egui::StrokeKind::Middle,
         );
 
         let inner = rect.shrink2(egui::vec2(theme::SP_3, theme::SP_0));
         let chevron = if is_open { "\u{25b4}" } else { "\u{25be}" };
-        let chevron_galley = ui.fonts(|f| {
+        let chevron_galley = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 chevron.to_string(),
                 egui::FontId::proportional(theme::FONT_UI_XS),
@@ -627,7 +615,7 @@ impl App {
 
         let text_clip =
             egui::Rect::from_min_max(inner.min, egui::pos2(chevron_x - theme::SP_2, inner.max.y));
-        let text_galley = ui.fonts(|f| {
+        let text_galley = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 selected_label_text,
                 egui::FontId::proportional(theme::FONT_UI_MD),
@@ -641,39 +629,30 @@ impl App {
             t.text,
         );
 
-        if is_open {
-            egui::popup::popup_below_widget(
-                ui,
-                popup_id,
-                &resp,
-                egui::PopupCloseBehavior::CloseOnClick,
-                |ui: &mut egui::Ui| {
-                    ui.set_min_width((full_w - 2.0 * theme::SP_3).max(0.0));
-                    let is_all = self.session_label_filter.is_none();
-                    if ui.selectable_label(is_all, "All Labels").clicked() {
-                        self.session_label_filter = None;
-                    }
-                    let popup_bg = t.base_rgb;
-                    for ldef in self.label_registry.all() {
-                        if !assigned.contains(&ldef.id) {
-                            continue;
-                        }
-                        let is_selected = self.session_label_filter == Some(ldef.id);
-                        let color = theme::ensure_readable(
-                            [ldef.color().r(), ldef.color().g(), ldef.color().b()],
-                            popup_bg,
-                        );
-                        let text = format!("{} {}", ldef.icon, ldef.name);
-                        if ui
-                            .selectable_label(is_selected, egui::RichText::new(text).color(color))
-                            .clicked()
-                        {
-                            self.session_label_filter = Some(ldef.id);
-                        }
-                    }
-                },
-            );
-        }
+        show_filter_dropdown(&resp, popup_id, full_w, |ui| {
+            let is_all = self.session_label_filter.is_none();
+            if ui.selectable_label(is_all, "All Labels").clicked() {
+                self.session_label_filter = None;
+            }
+            let popup_bg = t.base_rgb;
+            for ldef in self.label_registry.all() {
+                if !assigned.contains(&ldef.id) {
+                    continue;
+                }
+                let is_selected = self.session_label_filter == Some(ldef.id);
+                let color = theme::ensure_readable(
+                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                    popup_bg,
+                );
+                let text = format!("{} {}", ldef.icon, ldef.name);
+                if ui
+                    .selectable_label(is_selected, egui::RichText::new(text).color(color))
+                    .clicked()
+                {
+                    self.session_label_filter = Some(ldef.id);
+                }
+            }
+        });
         self.ensure_active_pane_visible();
     }
 
@@ -721,7 +700,7 @@ impl App {
         }
 
         egui::ScrollArea::vertical()
-            .id_source(self.vp_id("global_search_scroll"))
+            .id_salt(self.vp_id("global_search_scroll"))
             .show(ui, |ui| {
                 let t = theme::active();
                 let mut current_session: Option<u32> = None;
@@ -822,7 +801,7 @@ impl App {
         let list_rect = ui.available_rect_before_wrap();
         let pointer_inside = ui.rect_contains_pointer(list_rect);
         egui::ScrollArea::vertical()
-            .id_source(self.vp_id("sessions_scroll"))
+            .id_salt(self.vp_id("sessions_scroll"))
             .show(ui, |ui| {
                 let outer_w = outer_w.max(0.0);
                 ui.set_min_width(outer_w);
@@ -1088,7 +1067,7 @@ impl App {
 
         // Paint background — animated hover transition
         let row_hovered = resp.hovered();
-        let hover_id = egui::Id::new(("sess_row_hover", pane.id));
+        let hover_id = egui::Id::unique(("sess_row_hover", pane.id));
         let hover_t = crate::app::ui::animation::animated_hover(ui.ctx(), hover_id, row_hovered);
         let t = theme::active();
         let bg = match state {
@@ -1118,11 +1097,11 @@ impl App {
                 egui::pos2(row_rect.min.x, row_rect.min.y),
                 egui::vec2(theme::WS_BORDER_W - 1.0, row_rect.height()),
             );
-            let left_rounding = egui::Rounding {
+            let left_rounding = egui::CornerRadius {
                 nw: theme::R_MD,
                 sw: theme::R_MD,
-                ne: 0.0,
-                se: 0.0,
+                ne: theme::R_NONE,
+                se: theme::R_NONE,
             };
             painter.rect_filled(bar_rect, left_rounding, theme::from_rgb(c));
         }
@@ -1147,7 +1126,7 @@ impl App {
         let show_close = is_active || row_hovered;
         let close_anim_t = crate::app::ui::animation::animated_hover(
             ui.ctx(),
-            egui::Id::new(("sess_close_anim", pane.id)),
+            egui::Id::unique(("sess_close_anim", pane.id)),
             show_close,
         );
         let quit_resp = if close_anim_t > 0.01 {
@@ -1158,7 +1137,7 @@ impl App {
             let close_color = t.danger_fg.gamma_multiply(close_anim_t);
             let result = ui_kit::icon_button(
                 ui,
-                egui::Id::new(("pane_quit", pane.id)),
+                egui::Id::unique(("pane_quit", pane.id)),
                 quit_rect,
                 "\u{00d7}",
                 theme::FONT_TERM,
@@ -1246,10 +1225,9 @@ impl App {
                         egui::vec2(label_icon_size + label_gap, row_rect.height()),
                     );
                     if ui.rect_contains_pointer(icon_rect) {
-                        egui::show_tooltip_at_pointer(
-                            ui.ctx(),
-                            ui.layer_id(),
-                            egui::Id::new(("label_tip", pane.id, lid)),
+                        crate::ui_kit::tooltip_at_pointer(
+                            ui,
+                            egui::Id::unique(("label_tip", pane.id, lid)),
                             |ui| {
                                 ui.label(&ldef.name);
                             },
@@ -1277,10 +1255,9 @@ impl App {
                         .filter_map(|&lid| self.label_registry.get(lid))
                         .map(|l| format!("{} {}", l.icon, l.name))
                         .collect();
-                    egui::show_tooltip_at_pointer(
-                        ui.ctx(),
-                        ui.layer_id(),
-                        egui::Id::new(("label_overflow_tip", pane.id)),
+                    crate::ui_kit::tooltip_at_pointer(
+                        ui,
+                        egui::Id::unique(("label_overflow_tip", pane.id)),
                         |ui| {
                             ui.label(remaining.join("\n"));
                         },
@@ -1416,7 +1393,8 @@ impl App {
         let y = if after { rect.max.y } else { rect.min.y };
         // Above the rows, which would otherwise paint over half the line at
         // the gap they share; the painter's clip keeps it inside the list.
-        let line_layer = egui::LayerId::new(egui::Order::Foreground, ui.id().with("nav_drop_line"));
+        let line_layer =
+            egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("nav_drop_line"));
         painter.clone().with_layer_id(line_layer).hline(
             rect.x_range(),
             y,
@@ -1442,22 +1420,26 @@ impl App {
         actions: &mut SessionListActions,
     ) {
         let t = theme::active();
-        let edit_id = egui::Id::new(("sess_rename_edit", pane_id));
+        let edit_id = egui::Id::unique(("sess_rename_edit", pane_id));
         ui.painter().rect_filled(edit_rect, theme::R_SM, t.surface1);
         // The buffer lives on `self`, which the closure below cannot also
         // borrow mutably — edit a local and write it straight back.
         let mut buf = std::mem::take(&mut self.rename_text);
         // A child that takes no room in `ui`'s layout: in the tab bar's row,
         // allocating the box would move every later tab onto it.
-        let r = ui.child_ui(edit_rect, *ui.layout(), None).add(
-            egui::TextEdit::singleline(&mut buf)
-                .id(edit_id)
-                .desired_width(edit_rect.width())
-                .font(egui::FontId::proportional(theme::FONT_UI_MD))
-                .frame(true)
-                .hint_text(RENAME_HINT)
-                .text_color(text_color),
-        );
+        let r = ui
+            .new_child(
+                egui::UiBuilder::new()
+                    .max_rect(edit_rect)
+                    .layout(*ui.layout()),
+            )
+            .add(
+                egui::TextEdit::singleline(&mut buf)
+                    .id(edit_id)
+                    .desired_width(edit_rect.width())
+                    .font_with_hint(egui::FontId::proportional(theme::FONT_UI_MD), RENAME_HINT)
+                    .text_color(text_color),
+            );
         self.rename_text = buf;
         // Consumed, not just read: the box closes this frame, and the
         // terminal reads keys after the sidebar, so an unconsumed Enter
@@ -1518,11 +1500,11 @@ impl App {
         if self.can_rename_pane(pane_idx) && ui.button("Rename").clicked() {
             actions.start_rename_pane_id = Some(pane_id);
             actions.rename_in_tab_bar = in_tab_bar;
-            ui.close_menu();
+            ui.close();
         }
         if ui.button("Duplicate").clicked() {
             actions.duplicate_session = true;
-            ui.close_menu();
+            ui.close();
         }
         // Built here rather than hoisted: the menu is open on at most one
         // row, and this takes a session read lock plus a PathBuf clone.
@@ -1530,70 +1512,77 @@ impl App {
             ui.separator();
             if ui.button("Copy path").clicked() {
                 actions.copy_path_pane_id = Some(pane_id);
-                ui.close_menu();
+                ui.close();
             }
             if ui
                 .button(crate::util::REVEAL_IN_FILE_MANAGER_LABEL)
                 .clicked()
             {
                 actions.open_in_explorer_pane_id = Some(pane_id);
-                ui.close_menu();
+                ui.close();
             }
         }
         ui.separator();
 
-        ui.menu_button("Labels", |ui| {
-            ui.set_min_width(160.0);
-            let mut current_cat: Option<crate::app::labels::LabelCategory> = None;
-            for ldef in self.label_registry.all() {
-                if current_cat.as_ref() != Some(&ldef.category) {
-                    if current_cat.is_some() {
-                        ui.separator();
+        // Ticking labels keeps the list open, so several can be set in one
+        // go; a click outside closes it, and "+ New label…" closes the menu.
+        egui::menu::SubMenuButton::new("Labels")
+            .config(
+                egui::menu::MenuConfig::new()
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside),
+            )
+            .ui(ui, |ui| {
+                ui.set_min_width(160.0);
+                let mut current_cat: Option<crate::app::labels::LabelCategory> = None;
+                for ldef in self.label_registry.all() {
+                    if current_cat.as_ref() != Some(&ldef.category) {
+                        if current_cat.is_some() {
+                            ui.separator();
+                        }
+                        let header = match &ldef.category {
+                            crate::app::labels::LabelCategory::Status => "Status",
+                            crate::app::labels::LabelCategory::Intent => "Intent",
+                            crate::app::labels::LabelCategory::Priority => "Priority",
+                            crate::app::labels::LabelCategory::Custom => "Custom",
+                        };
+                        ui.label(
+                            egui::RichText::new(header)
+                                .size(theme::FONT_UI_XS)
+                                .strong()
+                                .color(theme::active().subtext0),
+                        );
+                        current_cat = Some(ldef.category.clone());
                     }
-                    let header = match &ldef.category {
-                        crate::app::labels::LabelCategory::Status => "Status",
-                        crate::app::labels::LabelCategory::Intent => "Intent",
-                        crate::app::labels::LabelCategory::Priority => "Priority",
-                        crate::app::labels::LabelCategory::Custom => "Custom",
-                    };
-                    ui.label(
-                        egui::RichText::new(header)
-                            .size(theme::FONT_UI_XS)
-                            .strong()
-                            .color(theme::active().subtext0),
+                    let is_set = pane.labels.contains(&ldef.id);
+                    let check = if is_set { "\u{2713} " } else { "    " };
+                    let menu_bg = theme::active().base_rgb;
+                    let color = theme::ensure_readable(
+                        [ldef.color().r(), ldef.color().g(), ldef.color().b()],
+                        menu_bg,
                     );
-                    current_cat = Some(ldef.category.clone());
+                    let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
+                    let btn = ui.button(
+                        egui::RichText::new(label_text)
+                            .size(theme::FONT_UI_MD)
+                            .color(color),
+                    );
+                    if btn.clicked() {
+                        actions.toggle_label = Some((pane_id, ldef.id));
+                    }
                 }
-                let is_set = pane.labels.contains(&ldef.id);
-                let check = if is_set { "\u{2713} " } else { "    " };
-                let menu_bg = theme::active().base_rgb;
-                let color = theme::ensure_readable(
-                    [ldef.color().r(), ldef.color().g(), ldef.color().b()],
-                    menu_bg,
-                );
-                let label_text = format!("{}{} {}", check, ldef.icon, ldef.name);
-                let btn = ui.button(
-                    egui::RichText::new(label_text)
-                        .size(theme::FONT_UI_MD)
-                        .color(color),
-                );
-                if btn.clicked() {
-                    actions.toggle_label = Some((pane_id, ldef.id));
+                ui.separator();
+                if ui
+                    .button(
+                        egui::RichText::new("+ New label\u{2026}")
+                            .size(theme::FONT_UI_MD)
+                            .color(theme::active().accent),
+                    )
+                    .clicked()
+                {
+                    actions.show_new_label_for_pane = Some(pane_id);
+                    ui.close();
                 }
-            }
-            ui.separator();
-            if ui
-                .button(
-                    egui::RichText::new("+ New label\u{2026}")
-                        .size(theme::FONT_UI_MD)
-                        .color(theme::active().accent),
-                )
-                .clicked()
-            {
-                actions.show_new_label_for_pane = Some(pane_id);
-                ui.close_menu();
-            }
-        });
+            });
 
         ui.separator();
         if ui
@@ -1601,7 +1590,29 @@ impl App {
             .clicked()
         {
             actions.quit_pane_id = Some(pane_id);
-            ui.close_menu();
+            ui.close();
         }
     }
+}
+
+/// The open list of a filter dropdown (workspace, label) under its field:
+/// a click on the field opens or closes it, a pick or a click elsewhere
+/// closes it. `field_w` is the field's width; the list is at least as wide
+/// as the field's text area.
+fn show_filter_dropdown(
+    field: &egui::Response,
+    popup_id: egui::Id,
+    field_w: f32,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
+    crate::ui_kit::popup_below(
+        field,
+        popup_id,
+        field.clicked().then_some(egui::SetOpenCommand::Toggle),
+        egui::PopupCloseBehavior::CloseOnClick,
+        |ui| {
+            ui.set_min_width((field_w - 2.0 * theme::SP_3).max(0.0));
+            add_contents(ui);
+        },
+    );
 }

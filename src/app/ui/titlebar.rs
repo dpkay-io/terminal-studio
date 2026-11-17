@@ -36,53 +36,57 @@ fn paint_titlebar_title(
     match (session_title, ws_name) {
         (Some(session), Some(ws)) => {
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
+                ui.fonts_mut(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
                 bright,
             ));
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
+                ui.fonts_mut(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
                 dim,
             ));
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), dim)),
+                ui.fonts_mut(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), dim)),
                 dim,
             ));
             if let Some(ref bt) = branch_text {
                 segments.push((
-                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
+                    ui.fonts_mut(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
                     extra_dim,
                 ));
             }
         }
         (Some(session), None) => {
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
+                ui.fonts_mut(|f| f.layout_no_wrap(session.clone(), title_font.clone(), bright)),
                 bright,
             ));
         }
         (None, Some(ws)) => {
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
+                ui.fonts_mut(|f| {
+                    f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)
+                }),
                 dim,
             ));
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
+                ui.fonts_mut(|f| f.layout_no_wrap(" \u{00b7} ".into(), title_font.clone(), dim)),
                 dim,
             ));
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), bright)),
+                ui.fonts_mut(|f| f.layout_no_wrap(ws.clone(), title_font.clone(), bright)),
                 bright,
             ));
             if let Some(ref bt) = branch_text {
                 segments.push((
-                    ui.fonts(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
+                    ui.fonts_mut(|f| f.layout_no_wrap(bt.clone(), branch_font.clone(), extra_dim)),
                     extra_dim,
                 ));
             }
         }
         (None, None) => {
             segments.push((
-                ui.fonts(|f| f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)),
+                ui.fonts_mut(|f| {
+                    f.layout_no_wrap("Terminal Studio".into(), title_font.clone(), dim)
+                }),
                 dim,
             ));
         }
@@ -114,7 +118,8 @@ impl App {
             None => desc.to_string(),
         }
     }
-    pub(in crate::app) fn render_titlebar(&mut self, ctx: &egui::Context) {
+    pub(in crate::app) fn render_titlebar(&mut self, root_ui: &mut egui::Ui) {
+        let ctx = &root_ui.ctx().clone();
         // Request an extra repaint the frame after the window gains focus so that
         // any stale wgpu surface frames (visible as a distorted first frame after
         // restoring from the taskbar) are immediately replaced with a correct one.
@@ -205,10 +210,10 @@ impl App {
             .map(theme::text_on)
             .unwrap_or(theme::active().subtext1);
 
-        egui::TopBottomPanel::top(self.vp_id("titlebar"))
-            .exact_height(theme::TITLEBAR_H)
-            .frame(egui::Frame::none().fill(tb_bg))
-            .show(ctx, |ui| {
+        egui::Panel::top(self.vp_id("titlebar"))
+            .exact_size(theme::TITLEBAR_H)
+            .frame(egui::Frame::NONE.fill(tb_bg))
+            .show(root_ui, |ui| {
                 let r = ui.max_rect();
                 let painter = ui.painter().clone();
 

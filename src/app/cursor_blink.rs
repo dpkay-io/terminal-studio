@@ -82,7 +82,7 @@ impl CursorBlink {
         }
         let phase_nanos = BLINK_PHASE.as_nanos();
         let phase_index = elapsed.as_nanos() / phase_nanos;
-        let shown = phase_index % 2 == 0;
+        let shown = phase_index.is_multiple_of(2);
         let next_switch = Duration::from_nanos(
             u64::try_from(phase_nanos - elapsed.as_nanos() % phase_nanos).unwrap_or(u64::MAX),
         );

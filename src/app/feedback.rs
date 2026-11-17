@@ -70,7 +70,7 @@ impl FlashManager {
             FlashKind::Success => t.flash_success_bg,
             FlashKind::Error => t.flash_error_bg,
         };
-        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+        crate::theme::with_alpha(base, alpha)
     }
 
     pub fn has_active(&self) -> bool {

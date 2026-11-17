@@ -1,0 +1,3 @@
+disallowed-methods = [
+    { path = "egui::Color32::from_rgba_unmultiplied", reason = "use theme::rgba_unmultiplied / theme::with_alpha: egui 0.32+ premultiplies in gamma space, which makes translucent colours far fainter than the app's design" },
+]

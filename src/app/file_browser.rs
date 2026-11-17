@@ -435,14 +435,14 @@ fn dir_entry_context_menu(ui: &mut egui::Ui, path: &Path) {
                 let _ = clip.set_text(text);
             }
         });
-        ui.close_menu();
+        ui.close();
     }
     if ui
         .button(crate::util::REVEAL_IN_FILE_MANAGER_LABEL)
         .clicked()
     {
         crate::util::reveal_in_file_manager(path);
-        ui.close_menu();
+        ui.close();
     }
 }
 

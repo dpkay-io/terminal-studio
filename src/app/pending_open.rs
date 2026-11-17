@@ -55,7 +55,7 @@ impl OpenQueue {
     pub(super) fn forget_windows_except(&self, open: &[WindowId]) {
         self.0
             .lock()
-            .retain(|r| r.window.as_ref().map_or(true, |w| open.contains(w)));
+            .retain(|r| r.window.as_ref().is_none_or(|w| open.contains(w)));
     }
 }
 

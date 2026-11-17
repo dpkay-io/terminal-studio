@@ -98,11 +98,15 @@ impl App {
         let mut actions = std::mem::take(&mut self.tab_bar_actions);
         let mut tab_rects: Vec<(usize, egui::Rect)> = Vec::with_capacity(tabs.len());
 
-        let mut bar_ui = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center), None);
+        let mut bar_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
         bar_ui.set_clip_rect(rect.intersect(ui.clip_rect()));
         bar_ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         egui::ScrollArea::horizontal()
-            .id_source(self.vp_id(&format!("tab_bar_scroll_{group_id}")))
+            .id_salt(self.vp_id(&format!("tab_bar_scroll_{group_id}")))
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(&mut bar_ui, |ui| {
@@ -158,12 +162,7 @@ impl App {
             egui::Sense::click_and_drag(),
         );
         resp.widget_info(|| {
-            egui::WidgetInfo::selected(
-                egui::WidgetType::SelectableLabel,
-                true,
-                is_active,
-                &tab.label,
-            )
+            egui::WidgetInfo::selected(egui::Role::Tab, true, is_active, &tab.label)
         });
         let renaming = self.rename_pane_id == Some(pane_id) && self.renaming_in_tab_bar();
         if resp.hovered() && !renaming {
@@ -176,7 +175,7 @@ impl App {
         );
 
         let painter = ui.painter_at(tab_rect);
-        let top_rounding = egui::Rounding {
+        let top_rounding = egui::CornerRadius {
             nw: theme::R_MD,
             ne: theme::R_MD,
             sw: theme::R_NONE,
@@ -188,6 +187,7 @@ impl App {
                 tab_rect,
                 top_rounding,
                 egui::Stroke::new(theme::STROKE_THIN, t.border_subtle),
+                egui::StrokeKind::Middle,
             );
         } else if hover_t > 0.0 {
             painter.rect_filled(

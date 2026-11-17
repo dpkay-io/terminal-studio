@@ -62,7 +62,7 @@ impl SpawnGuard {
         self.last_refusal = Some(now);
         let new_strike = self
             .last_strike
-            .map_or(true, |t| elapsed_since(t) >= SPAWN_RATE_WINDOW);
+            .is_none_or(|t| elapsed_since(t) >= SPAWN_RATE_WINDOW);
         if new_strike {
             self.strikes += 1;
             self.last_strike = Some(now);

@@ -210,7 +210,7 @@ impl App {
             .iter()
             .map(|(text, font, color)| {
                 (
-                    ui.fonts(|f| f.layout_no_wrap(text.clone(), (*font).clone(), *color)),
+                    ui.fonts_mut(|f| f.layout_no_wrap(text.clone(), (*font).clone(), *color)),
                     *color,
                 )
             })
@@ -236,7 +236,7 @@ impl App {
             let full_text: String = parts.iter().map(|(text, _, _)| text.as_str()).collect();
             ui.interact(
                 text_rect,
-                ui.id().with(("info_bar_text", group_id)),
+                ui.scope_id().with(("info_bar_text", group_id)),
                 egui::Sense::hover(),
             )
             .on_hover_text(full_text);
@@ -266,7 +266,7 @@ impl App {
         // Widget ids carry `group_id`: sibling splits render two info bars per frame.
         if icon_button(
             ui,
-            ui.id().with(("info_bar_split_h", group_id)),
+            ui.scope_id().with(("info_bar_split_h", group_id)),
             layout.split_h,
             "⊞",
             theme::ICON_SM,
@@ -281,7 +281,7 @@ impl App {
 
         if icon_button(
             ui,
-            ui.id().with(("info_bar_split_v", group_id)),
+            ui.scope_id().with(("info_bar_split_v", group_id)),
             layout.split_v,
             "⊟",
             theme::ICON_SM,
@@ -296,7 +296,7 @@ impl App {
 
         let close_resp = icon_button(
             ui,
-            ui.id().with(("info_bar_close", group_id)),
+            ui.scope_id().with(("info_bar_close", group_id)),
             layout.close,
             "✖",
             theme::ICON_SM,
@@ -315,13 +315,13 @@ impl App {
         close_resp.context_menu(|ui| {
             if ui.button(CLOSE_ALL_LABEL).clicked() {
                 action = InfoBarAction::CloseAllInGroup(group_id);
-                ui.close_menu();
+                ui.close();
             }
         });
 
         let toggle_resp = icon_button(
             ui,
-            ui.id().with("info_bar_toggle"),
+            ui.scope_id().with("info_bar_toggle"),
             layout.toggle,
             toggle_icon,
             theme::ICON_SM,
@@ -340,7 +340,7 @@ impl App {
 
         let hide_resp = icon_button(
             ui,
-            ui.id().with("info_bar_hide"),
+            ui.scope_id().with("info_bar_hide"),
             layout.hide,
             "−",
             theme::ICON_SM,
@@ -373,7 +373,7 @@ impl App {
             .rect_filled(btn_rect.expand(theme::ICON_PAD), theme::R_MD, t.surface0);
         icon_button(
             ui,
-            ui.id().with("info_bar_show"),
+            ui.scope_id().with("info_bar_show"),
             btn_rect,
             "ℹ",
             theme::ICON_SM,

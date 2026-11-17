@@ -5,6 +5,7 @@ use crate::pane_tree::PaneNode;
 use crate::shortcuts::{AppAction, Shortcut};
 use crate::theme;
 use crate::ui_kit;
+use crate::ui_kit::TextEditFontHint as _;
 use crate::workspace::Workspace;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -91,7 +92,7 @@ impl App {
         let mut close_switcher = false;
         let mut switch_to_workspace: Option<u64> = None;
         let mut switch_to_pane: Option<u32> = None;
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         let t = theme::active();
 
         // Dim background
@@ -125,8 +126,8 @@ impl App {
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
-                egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::same(theme::SP_6))
+                egui::Frame::window(&ctx.global_style())
+                    .inner_margin(theme::margin_same(theme::SP_6))
                     .show(ui, |ui| {
                         ui.set_min_width(dialog_w);
                         ui.set_min_height(dialog_h);
@@ -281,8 +282,10 @@ impl App {
                                 egui::TextEdit::singleline(&mut self.quick_switcher_query)
                                     .id(search_id)
                                     .desired_width(dialog_w - 40.0)
-                                    .hint_text("Type to search sessions...")
-                                    .font(egui::TextStyle::Body),
+                                    .font_with_hint(
+                                        egui::TextStyle::Body,
+                                        "Type to search sessions...",
+                                    ),
                             );
                             if !search_resp.has_focus() {
                                 search_resp.request_focus();
@@ -481,7 +484,7 @@ impl App {
                         let scroll_h = (dialog_h - 120.0).max(60.0);
                         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
                         egui::ScrollArea::horizontal()
-                            .id_source("quick_switcher_scroll")
+                            .id_salt("quick_switcher_scroll")
                             .min_scrolled_height(scroll_h)
                             .max_height(scroll_h)
                             .show(ui, |ui| {
@@ -520,10 +523,10 @@ impl App {
                                             );
                                             let header_fg = theme::text_on(header_bg_rgb);
 
-                                            let hdr_resp = egui::Frame::none()
+                                            let hdr_resp = egui::Frame::NONE
                                                 .fill(theme::from_rgb(header_bg_rgb))
-                                                .rounding(theme::R_MD)
-                                                .inner_margin(egui::Margin::symmetric(
+                                                .corner_radius(theme::R_MD)
+                                                .inner_margin(theme::margin_xy(
                                                     theme::SP_3,
                                                     theme::SP_2,
                                                 ))
@@ -579,10 +582,10 @@ impl App {
                                                     t.surface0
                                                 };
 
-                                                let resp = egui::Frame::none()
+                                                let resp = egui::Frame::NONE
                                                     .fill(fill)
-                                                    .rounding(theme::R_MD)
-                                                    .inner_margin(egui::Margin::symmetric(
+                                                    .corner_radius(theme::R_MD)
+                                                    .inner_margin(theme::margin_xy(
                                                         theme::SP_3,
                                                         theme::SP_2,
                                                     ))
@@ -1486,8 +1489,7 @@ impl App {
                     .id(msg_id)
                     .desired_width(f32::INFINITY)
                     .desired_rows(2)
-                    .hint_text("Commit message...")
-                    .font(egui::TextStyle::Monospace),
+                    .font_with_hint(egui::TextStyle::Monospace, "Commit message..."),
             );
             if !self.commit_dialog_focus_requested {
                 msg_resp.request_focus();

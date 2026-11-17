@@ -8,15 +8,17 @@ repository = "https://github.com/dpkay-io/terminal-studio"
 keywords = ["terminal", "multiplexer", "egui", "tui", "wgpu"]
 categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
-rust-version = "1.75"
+rust-version = "1.95"
 
 [dependencies]
 # UI framework (wgpu primary, glow fallback for machines with limited GPU drivers)
 # default-features=false drops accesskit (crashes on corporate Windows with accessibility tools)
-eframe = { version = "0.28", default-features = false, features = ["wgpu", "glow", "default_fonts", "persistence", "wayland", "x11"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "glow", "default_fonts", "clipboard", "links", "persistence", "wayland", "x11"] }
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-egui = "0.28"
+# monochrome_emoji_fonts: the emoji fonts egui bundled by default before 0.37
+# (NotoEmoji, emoji-icon-font), which file icons like 📝 come from.
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 # Maps system fallback fonts (Arial Unicode, CJK fonts: tens of MB) instead of
 # reading them into memory. Already in the tree via the font stack.
 memmap2 = "0.9"
@@ -107,7 +109,7 @@ tempfile = "3"
 # Builds the event-loop errors eframe reports, for the renderer-fallback
 # tests. Same version eframe uses; no features, so test builds enable none
 # eframe does not already.
-winit = { version = "0.29", default-features = false }
+winit = { version = "0.30", default-features = false }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
@@ -119,13 +121,3 @@ codegen-units = 1
 
 [profile.dev]
 opt-level = 1
-
-# Debug builds crashed at launch on macOS 27: winit 0.29 iterates
-# `NSScreen.screens`, now a Swift array whose fast enumeration returns `Q`
-# (NSUInteger) where objc2 0.4's debug-only signature check expects `q`. Both
-# are the same 64-bit return, so the check is a false alarm (objc2#566; fixed
-# upstream from objc2 0.5.2 as `relax-sign-encoding`, which 0.4 lacks). Release
-# builds never run the check. Remove this once eframe/winit no longer pull in
-# objc2 0.4 — cargo then warns that the spec matches nothing.
-[profile.dev.package."objc2@0.4.1"]
-debug-assertions = false

@@ -1,5 +1,6 @@
 use crate::app::closed_sessions::ClosedSessionManifest;
 use crate::theme;
+use crate::ui_kit::TextEditFontHint as _;
 
 use super::super::App;
 
@@ -13,7 +14,7 @@ impl App {
             self.closed_sessions_cache = Some(ClosedSessionManifest::load());
         }
 
-        let screen_rect = ctx.screen_rect();
+        let screen_rect = ctx.content_rect();
         let t = theme::active();
 
         // Dim background
@@ -52,9 +53,9 @@ impl App {
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style())
                     .fill(t.bg_term)
-                    .rounding(egui::Rounding::same(theme::R_LG))
+                    .corner_radius(egui::CornerRadius::same(theme::R_LG))
                     .stroke(egui::Stroke::new(theme::STROKE_THIN, t.surface2))
-                    .inner_margin(egui::Margin::same(theme::SP_4))
+                    .inner_margin(theme::margin_same(theme::SP_4))
                     .show(ui, |ui| {
                         let inner_w = (dialog_w - theme::SP_4 * 2.0).max(0.0);
                         ui.set_min_width(inner_w);
@@ -86,9 +87,8 @@ impl App {
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut self.closed_sessions_query)
                                 .id(search_id)
-                                .hint_text("Search closed sessions...")
                                 .desired_width(f32::INFINITY)
-                                .font(egui::FontId::proportional(theme::FONT_UI_MD))
+                                .font_with_hint(egui::FontId::proportional(theme::FONT_UI_MD), "Search closed sessions...")
                                 .text_color(t.text),
                         );
                         if !resp.has_focus() {
@@ -161,7 +161,7 @@ impl App {
                             );
                         } else {
                             egui::ScrollArea::vertical()
-                                .id_source("closed_sessions_scroll")
+                                .id_salt("closed_sessions_scroll")
                                 .max_height(dialog_h - 60.0)
                                 .show(ui, |ui| {
                                     for (list_idx, &record_idx) in filtered.iter().enumerate() {
@@ -177,10 +177,10 @@ impl App {
                                                     egui::Color32::TRANSPARENT
                                                 };
 
-                                                let frame = egui::Frame::none()
+                                                let frame = egui::Frame::NONE
                                                     .fill(bg)
-                                                    .rounding(egui::Rounding::same(theme::R_SM))
-                                                    .inner_margin(egui::Margin::symmetric(
+                                                    .corner_radius(egui::CornerRadius::same(theme::R_SM))
+                                                    .inner_margin(theme::margin_xy(
                                                         theme::SP_3,
                                                         theme::SP_2,
                                                     ));
@@ -281,7 +281,7 @@ impl App {
 
                                         let row_resp = ui.interact(
                                             row_rect,
-                                            egui::Id::new(("closed_sess_row", record.id)),
+                                            egui::Id::unique(("closed_sess_row", record.id)),
                                             egui::Sense::click(),
                                         );
 
@@ -292,11 +292,11 @@ impl App {
                                         row_resp.context_menu(|ui| {
                                             if ui.button("Restore").clicked() {
                                                 restore_id = Some(record.id);
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                             if ui.button("Delete from history").clicked() {
                                                 delete_id = Some(record.id);
-                                                ui.close_menu();
+                                                ui.close();
                                             }
                                         });
                                     }

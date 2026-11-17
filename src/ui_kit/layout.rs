@@ -34,7 +34,7 @@ pub fn drag_divider(
 
 // ── Active bar ─────────────────────────────────────────────────────────────
 
-pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::Rounding) {
+pub fn active_bar(painter: &egui::Painter, rect: egui::Rect, rounding: egui::CornerRadius) {
     let bar = egui::Rect::from_min_size(rect.min, egui::vec2(theme::CARD_BAR_W, rect.height()));
     painter.rect_filled(bar, rounding, theme::active().green);
 }
@@ -50,7 +50,7 @@ pub fn gradient_separator(painter: &egui::Painter, rect: egui::Rect) {
     for i in 0..steps {
         let t = (i + 1) as f32 / steps as f32;
         let alpha = (color.a() as f32 * t).min(255.0) as u8;
-        let c = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha);
+        let c = crate::theme::with_alpha(color, alpha);
 
         // Left half (fade in)
         let x0 = rect.min.x + (i as f32) * step_w;
