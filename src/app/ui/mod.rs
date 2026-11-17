@@ -1,11 +1,13 @@
 pub(crate) mod animation;
 mod closed_sessions_picker;
+mod color_choice;
 mod command_palette;
 pub(super) mod conflict_resolver;
 pub(crate) mod debounce;
 mod dialogs;
 mod info_bar;
 pub(in crate::app) mod left_panel;
+mod open_folders_dialog;
 mod pane_labels;
 mod pane_renderer;
 pub(super) use pane_renderer::{active_text_box_id, PaneContextAction};

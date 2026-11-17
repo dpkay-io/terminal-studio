@@ -5,6 +5,9 @@ use crate::theme;
 use crate::ui_kit;
 use crate::updater::UpdateStatus;
 
+const TITLEBAR_COLOR_LABEL: &str = "Show workspace color on the title bar";
+const TITLEBAR_COLOR_HINT: &str = "Tints the title bar with the active workspace's color. \
+     Tabs and the session list show each workspace's color either way.";
 const NAV_STABLE_ROWS_LABEL: &str = "Session list rows that stay in place:";
 const NAV_STABLE_ROWS_HINT: &str =
     "The top rows of each section in the session list never move on their own. \
@@ -74,6 +77,7 @@ impl App {
                                     .changed()
                                 {
                                     self.settings.save_scrollback_on_exit = save_exit;
+                                    self.workers.scrollback_saver.set_enabled(save_exit);
                                     settings_changed = true;
                                 }
                                 ui.add_space(theme::SP_2);
@@ -135,6 +139,20 @@ impl App {
                                 {
                                     self.toggle_view(AppAction::ToggleTabBar);
                                 }
+                            }
+
+                            ui.add_space(theme::SP_4);
+
+                            // The title bar in the active workspace's colour.
+                            if ui
+                                .checkbox(
+                                    &mut self.settings.workspace_color_on_titlebar,
+                                    TITLEBAR_COLOR_LABEL,
+                                )
+                                .on_hover_text(TITLEBAR_COLOR_HINT)
+                                .changed()
+                            {
+                                settings_changed = true;
                             }
 
                             ui.add_space(theme::SP_4);

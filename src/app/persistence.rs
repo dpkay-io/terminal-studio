@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -175,6 +175,24 @@ pub(super) fn saved_nav_indices(
         .collect()
 }
 
+impl AppSession {
+    /// Every scrollback file this state names: running sessions' and
+    /// those kept for restored sessions not started yet.
+    pub(super) fn scrollback_files(&self) -> HashSet<String> {
+        let running = self
+            .sessions
+            .iter()
+            .filter_map(|s| s.scrollback_file.clone());
+        let restored = self.panes.iter().filter_map(|p| match &p.content {
+            SavedPaneContent::DeferredTerminal {
+                scrollback_file, ..
+            } => scrollback_file.clone(),
+            _ => None,
+        });
+        running.chain(restored).collect()
+    }
+}
+
 /// The pane id each saved pane got on restore, by its index in
 /// `AppSession::panes`. A saved pane that can't be restored keeps its slot
 /// (empty), so every later saved index still names its own pane.
@@ -258,6 +276,41 @@ pub(crate) fn push_recent_file(recents: &mut Vec<PathBuf>, path: &PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scrollback_files_lists_running_and_restored_sessions_files() {
+        let saved = |file: Option<&str>| SavedSession {
+            cwd: PathBuf::new(),
+            command: None,
+            title: None,
+            title_pinned: false,
+            scrollback_file: file.map(String::from),
+            claude_session_id: None,
+        };
+        let pane = |content| SavedPane {
+            content,
+            manual_width: None,
+            labels: vec![],
+            last_active_at: 0,
+            workspace_id: None,
+        };
+        let state = AppSession {
+            sessions: vec![saved(Some("10-1.zst")), saved(None)],
+            panes: vec![
+                pane(SavedPaneContent::Terminal { session_index: 0 }),
+                pane(SavedPaneContent::DeferredTerminal {
+                    cwd: PathBuf::new(),
+                    command: None,
+                    title: None,
+                    title_pinned: false,
+                    scrollback_file: Some("5-0.zst".into()),
+                }),
+            ],
+            ..AppSession::default()
+        };
+        let expected: HashSet<String> = ["10-1.zst".to_string(), "5-0.zst".to_string()].into();
+        assert_eq!(state.scrollback_files(), expected);
+    }
 
     #[test]
     fn test_saved_session_roundtrip() {

@@ -46,23 +46,29 @@ mod macos_quit;
 mod markdown;
 mod multi_window;
 mod nav_order_sync;
+mod open_paths;
+mod os_drop;
 mod pane;
 mod pane_state;
+mod pending_open;
 mod persistence;
 mod quit;
 mod restart;
 pub(crate) mod scrollback_capture;
 pub(crate) mod scrollback_inject;
+mod scrollback_saver;
 mod session_state;
 pub(crate) mod settings;
 mod spawn_guard;
 mod state;
+mod term_context_menu;
 mod title;
 mod ui;
 mod view_toggles;
 mod watcher;
 mod window_state;
 mod worker_manager;
+mod workspace_colors;
 mod workspace_git_worker;
 mod workspace_ui;
 
@@ -75,8 +81,8 @@ use labels::LabelRegistry;
 use markdown::render_markdown;
 use multi_window::{ExtraWindow, PendingWindowFocus};
 use pane::{
-    ConflictResolverState, FileDiffState, FileEditorState, NoteEditorState, PaneContent, PaneEntry,
-    RightTab, TermSelection,
+    ConflictResolverState, FileDiffState, NoteEditorState, PaneContent, PaneEntry, RightTab,
+    TermSelection,
 };
 use pane_state::PaneState;
 use session_state::SessionState;
@@ -112,6 +118,10 @@ pub struct App {
     workspace_dialog: Option<WorkspaceDialog>,
     workspace_edit_dialog: Option<WorkspaceEditDialog>,
     open_folder_dialog: Option<OpenFolderDialog>,
+    /// Folders and files to open, from the folder picker and OS drops.
+    open_queue: pending_open::OpenQueue,
+    /// Each pane's content rect from this window's last frame, for OS drops.
+    drop_pane_rects: Vec<(u32, egui::Rect)>,
 
     workspace_panel_ratio: f32,
     workspace_panel_collapsed: bool,
@@ -439,7 +449,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.save_session();
+        self.save_session_final();
         self.save_windows();
         for entry in &self.session_state.sessions {
             entry
@@ -489,6 +499,7 @@ impl eframe::App for App {
         }
 
         self.restart_if_due();
+        self.save_session_if_saver_asked();
 
         // Auto-close panes whose shell process has exited, then reap any
         // remaining orphan sessions (no pane references them).
@@ -1237,6 +1248,9 @@ impl eframe::App for App {
             }
             self.workspace_store.save();
             self.save_windows();
+            let open: Vec<crate::workspace::WindowId> =
+                self.extra_windows.iter().map(|w| w.id.clone()).collect();
+            self.open_queue.forget_windows_except(&open);
         }
     }
 }
@@ -1309,56 +1323,74 @@ impl App {
         self.save_session();
     }
 
+    /// Record a running session that is closing for Recently Closed. Only
+    /// cheap reads happen here; the scrollback capture and the Claude
+    /// session lookup (which reads files) run on the save thread, which
+    /// holds the session until it is done.
     fn capture_closed_session(&self, sid: u32) {
         let Some(entry) = self.session_state.find(sid) else {
             return;
         };
-        let session = entry.session.read();
-
-        let ansi_bytes = scrollback_capture::extract_grid_as_ansi(&session.term, None);
-        let cwd = session.cwd.clone();
-        let title = session.title();
-        let title_pinned = session.is_title_pinned();
+        let session_arc = Arc::clone(&entry.session);
+        let (cwd, title, title_pinned) = {
+            let session = entry.session.read();
+            (
+                session.cwd.clone(),
+                session.title(),
+                session.is_title_pinned(),
+            )
+        };
         let shell = entry.shell.name().to_string();
-        let cols = session.term.columns() as u16;
-        let rows = session.term.screen_lines() as u16;
-        let line_count = session.term.grid().history_size() + session.term.screen_lines();
-        let workspace_id = self.workspace_store.find_for_cwd(&cwd).map(|w| w.id);
-        let workspace_name = self
-            .workspace_store
-            .find_for_cwd(&cwd)
-            .map(|w| w.name.clone());
+        let workspace = self.workspace_store.find_for_cwd(&cwd);
+        let workspace_id = workspace.map(|w| w.id);
+        let workspace_name = workspace.map(|w| w.name.clone());
         let max_sessions = self.settings.max_closed_sessions;
-        let claude_session_id = self
-            .workers
-            .foreground_worker
+        let foreground = &self.workers.foreground_worker;
+        let known_claude_id = foreground
             .get_claude_session_id(sid)
-            .or_else(|| entry.claude_session_id.clone())
-            .or_else(|| {
-                let scanned =
-                    claude_session::lookup_claude_session_id_by_cwd_any(&cwd.to_string_lossy())?;
-                let already_taken = self.session_state.sessions.iter().any(|other| {
-                    other.id != sid
-                        && (other.claude_session_id.as_deref() == Some(scanned.as_str())
-                            || self
-                                .workers
-                                .foreground_worker
-                                .get_claude_session_id(other.id)
-                                .as_deref()
-                                == Some(scanned.as_str()))
-                });
-                if already_taken {
-                    None
-                } else {
-                    Some(scanned)
-                }
-            });
-
-        drop(session);
+            .or_else(|| entry.claude_session_id.clone());
+        // Conversations other open sessions hold, so a folder scan never
+        // gives this one theirs.
+        let taken: std::collections::HashSet<String> = self
+            .session_state
+            .sessions
+            .iter()
+            .filter(|other| other.id != sid)
+            .flat_map(|other| {
+                [
+                    other.claude_session_id.clone(),
+                    foreground.get_claude_session_id(other.id),
+                ]
+            })
+            .flatten()
+            .collect();
 
         std::thread::Builder::new()
             .name("closed-session-save".into())
             .spawn(move || {
+                // First, before the capture: the terminal's Claude, closing
+                // with it, deletes its session file as it exits.
+                let claude_session_id = claude_session::pick_claude_session_id(
+                    known_claude_id,
+                    |held| {
+                        claude_session::lookup_claude_session_id_by_cwd_any(
+                            &cwd.to_string_lossy(),
+                            held,
+                        )
+                    },
+                    &taken,
+                );
+                let (ansi_bytes, cols, rows, line_count) = {
+                    let session = session_arc.read();
+                    let term = &session.term;
+                    (
+                        scrollback_capture::extract_grid_as_ansi(term, None),
+                        term.columns() as u16,
+                        term.screen_lines() as u16,
+                        term.grid().history_size() + term.screen_lines(),
+                    )
+                };
+                drop(session_arc);
                 closed_sessions::save_closed_session(
                     ansi_bytes,
                     cwd,
@@ -1374,6 +1406,7 @@ impl App {
                     claude_session_id,
                 );
             })
+            .map_err(|e| log::warn!("failed to start the closed-session save: {e}"))
             .ok();
     }
 
@@ -1518,6 +1551,7 @@ impl App {
         // the session list).
         self.refresh_nav_order();
         self.hold_extra_window_keys(ctx);
+        self.process_open_requests(ctx);
 
         #[cfg(target_os = "macos")]
         self.sync_macos_menu(ctx);
@@ -2516,7 +2550,7 @@ impl App {
         // Open workspace dialog
         if let Some(path) = open_ws_dialog {
             if self.workspace_dialog.is_none() {
-                self.workspace_dialog = Some(WorkspaceDialog::new(path));
+                self.workspace_dialog = Some(WorkspaceDialog::new(path, &self.workspace_store));
             }
         }
 
@@ -3449,18 +3483,8 @@ impl App {
                         // to clipboard; otherwise send SIGINT (^C) to the PTY.
                         egui::Event::Copy => {
                             if let Some(sid) = active_session_id {
-                                if self.term_selection.is_some() && self.term_selection_sid == Some(sid) {
-                                    if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                        let text = self.extract_selected_text(idx);
-                                        if !text.is_empty() {
-                                            ctx.output_mut(|o| o.copied_text = text);
-                                            if let Some(pid) = self.pane_state.active_pane_id {
-                                                self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                            }
-                                        }
-                                    }
-                                    self.term_selection = None;
-                                    self.term_selection_sid = None;
+                                if self.copy_terminal_selection(ctx, sid) {
+                                    // Copied; the selection is cleared.
                                 } else if input::COPY_KEY_INTERRUPTS {
                                     self.scroll_accum.remove(&sid);
                                     if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
@@ -3474,23 +3498,7 @@ impl App {
                         // Wrap in bracketed-paste sequences only if the app opted in (?2004h).
                         egui::Event::Paste(text) => {
                             if let Some(sid) = active_session_id {
-                                self.scroll_accum.remove(&sid);
-                                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                    self.session_state.sessions[idx].session.write().term.scroll_display(Scroll::Bottom);
-                                    let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
-                                    let data = if bp {
-                                        let mut v = b"\x1b[200~".to_vec();
-                                        v.extend_from_slice(text.as_bytes());
-                                        v.extend_from_slice(b"\x1b[201~");
-                                        v
-                                    } else {
-                                        text.as_bytes().to_vec()
-                                    };
-                                    let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
-                                    if let Some(pid) = self.pane_state.active_pane_id {
-                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                    }
-                                }
+                                self.paste_into_terminal(sid, text);
                             }
                         }
                         // Mouse events forwarded when the application has enabled mouse reporting.
@@ -3530,9 +3538,7 @@ impl App {
                                     } else if *button == egui::PointerButton::Secondary && *pressed && !has_mouse {
                                         if let Some(geo) = &self.active_term_geo {
                                             if geo.rect.contains(*pos) {
-                                                self.context_menu_pos = Some(*pos);
-                                                let popup_id = self.vp_id("term_context_menu");
-                                                ui.memory_mut(|m| m.open_popup(popup_id));
+                                                self.open_terminal_context_menu(ctx, *pos);
                                             }
                                         }
                                     } else if *button == egui::PointerButton::Primary {
@@ -3802,146 +3808,10 @@ impl App {
                     }
                 }
 
-                // ── Terminal right-click context menu ─────────────────────
-                {
-                    let popup_id = self.vp_id("term_context_menu");
-                    let popup_open = ui.memory(|m| m.is_popup_open(popup_id));
-                    if !popup_open {
-                        self.context_menu_pos = None;
-                    }
-                    let mut close_context_menu = false;
-                    if popup_open {
-                        if let Some(pos) = self.context_menu_pos {
-                            let anchor_w = 160.0;
-                            let dummy_resp = ui.interact(
-                                egui::Rect::from_min_size(pos, egui::vec2(anchor_w, 1.0)),
-                                popup_id.with("anchor"),
-                                egui::Sense::hover(),
-                            );
-                            egui::containers::popup::popup_below_widget(
-                                ui,
-                                popup_id,
-                                &dummy_resp,
-                                egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(140.0);
-                                    let has_selection = self.term_selection.is_some();
-
-                                    if ui.add_enabled(has_selection, egui::Button::new("Copy").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(sid) = active_session_id {
-                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                                let text = self.extract_selected_text(idx);
-                                                if !text.is_empty() {
-                                                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                        let _ = cb.set_text(&text);
-                                                    }
-                                                    if let Some(pid) = self.pane_state.active_pane_id {
-                                                        self.flash.trigger(feedback::FlashTarget::Pane(pid), feedback::FlashKind::Neutral);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        self.term_selection = None;
-                                        self.term_selection_sid = None;
-                                        close_context_menu = true;
-                                    }
-                                    if ui.add(egui::Button::new("Paste").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(sid) = active_session_id {
-                                            if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                                    if let Ok(text) = cb.get_text() {
-                                                        let bp = self.session_state.sessions[idx].session.read().term.mode().contains(TermMode::BRACKETED_PASTE);
-                                                        let data = if bp {
-                                                            let mut v = b"\x1b[200~".to_vec();
-                                                            v.extend_from_slice(text.as_bytes());
-                                                            v.extend_from_slice(b"\x1b[201~");
-                                                            v
-                                                        } else {
-                                                            text.into_bytes()
-                                                        };
-                                                        let _ = self.session_state.sessions[idx].pty_tx.try_send(data);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        close_context_menu = true;
-                                    }
-                                    ui.separator();
-                                    if ui.add(egui::Button::new(self.shortcut_tooltip("Search", AppAction::SearchTerminal)).min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        self.term_search.active = true;
-                                        close_context_menu = true;
-                                    }
-                                    if ui.add(egui::Button::new("Select All").min_size(egui::vec2(0.0, 22.0))).clicked() {
-                                        if let Some(geo) = &self.active_term_geo {
-                                            if let Some(sid) = active_session_id {
-                                                if let Some(entry) = self.session_state.find(sid) {
-                                                    let session = entry.session.read();
-                                                    let visible_rows = (geo.rect.height() / geo.cell_h) as u16;
-                                                    let cols = session.term.columns() as u16;
-                                                    let sel_offset = session.term.grid().display_offset();
-                                                    drop(session);
-                                                    self.term_selection = Some(TermSelection {
-                                                        start_col: 0,
-                                                        start_row: 0,
-                                                        end_col: cols.saturating_sub(1),
-                                                        end_row: visible_rows.saturating_sub(1),
-                                                        display_offset: sel_offset,
-                                                    });
-                                                    self.term_selection_sid = Some(sid);
-                                                }
-                                            }
-                                        }
-                                        close_context_menu = true;
-                                    }
-                                },
-                            );
-                        }
-                    }
-                    if close_context_menu {
-                        ui.memory_mut(|m| m.close_popup());
-                        self.context_menu_pos = None;
-                    }
-                }
-
-                // ── File drag-and-drop → paste shell-quoted paths ──────────
-                let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-                if !dropped.is_empty() {
-                    if let Some(sid) = active_session_id {
-                        if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                            let paths: Vec<String> = dropped
-                                .iter()
-                                .filter_map(|f| f.path.as_ref())
-                                .map(|p| input::shell_quote_path(p))
-                                .collect();
-                            if !paths.is_empty() {
-                                let text = paths.join(" ");
-                                self.session_state.sessions[idx]
-                                    .session
-                                    .write()
-                                    .term
-                                    .scroll_display(Scroll::Bottom);
-                                let bp = self.session_state.sessions[idx]
-                                    .session
-                                    .read()
-                                    .term
-                                    .mode()
-                                    .contains(TermMode::BRACKETED_PASTE);
-                                let data = if bp {
-                                    let mut v = b"\x1b[200~".to_vec();
-                                    v.extend_from_slice(text.as_bytes());
-                                    v.extend_from_slice(b"\x1b[201~");
-                                    v
-                                } else {
-                                    text.as_bytes().to_vec()
-                                };
-                                let _ = self.session_state.sessions[idx]
-                                    .pty_tx
-                                    .try_send(data);
-                            }
-                        }
-                    }
-                }
             }
+            // Drawn every frame, outside the input handling above, which
+            // stands down while a floating layer (this menu) is open.
+            self.show_terminal_context_menu(ui, active_session_id);
             } // end else (nv > 0)
         });
 
@@ -4416,6 +4286,8 @@ impl App {
         // after the size has been stable for 150 ms. This prevents ConPTY from
         // issuing a clear-screen sequence on every drag frame, which would leave
         // the terminal blank for as long as the running app takes to redraw.
+        self.drop_pane_rects.clear();
+        self.drop_pane_rects.extend_from_slice(&pane_rects_snap);
         for (pane_id, content_rect) in pane_rects_snap {
             if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
                 if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
@@ -4481,171 +4353,21 @@ impl App {
         if let Some(path) = pending_open_editor {
             crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
             crate::app::persistence::save_recent_files(&self.recent_files);
-            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
-            if let Some(pid) = existing_id {
-                self.activate_and_scroll_to_pane(pid);
-            } else {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-                self.pane_state.panes.push(PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::FileEditor(FileEditorState {
-                        path: path.clone(),
-                        content: String::new(),
-                        dirty: false,
-                        save_error: false,
-                        workspace_id: self.active_group,
-                        show_preview: is_md && self.md_prefer_preview,
-                        stale: false,
-                        loading: true,
-                        untitled: false,
-                        saved_text_hash: None,
-                    }),
-                    manual_width: None,
-                    last_size: (0, 0),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                });
-                self.pane_state.pane_trees.insert(
-                    pane_id,
-                    PaneNode::Leaf {
-                        pane_id,
-                        last_size: (0, 0),
-                    },
-                );
-                self.pane_state
-                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
-                self.activate_and_scroll_to_pane(pane_id);
-                {
-                    let results = Arc::clone(&self.file_load_results);
-                    let ctx_clone = ctx.clone();
-                    std::thread::spawn(move || {
-                        let content = match std::fs::read(&path) {
-                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
-                                String::from_utf8_lossy(e.as_bytes()).into_owned()
-                            }),
-                            Err(_) => String::new(),
-                        };
-                        results.lock().push((pane_id, content));
-                        ctx_clone.request_repaint();
-                    });
-                }
-            }
+            let preview = self.default_editor_preview(&path);
+            self.open_file_in_editor(path, preview, ctx);
         }
 
         // 9a. Markdown "Open in Editor" or Ctrl+Click from terminal
         if let Some(path) = open_md_in_editor {
             crate::app::persistence::push_recent_file(&mut self.recent_files, &path);
             crate::app::persistence::save_recent_files(&self.recent_files);
-            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
-            if let Some(pid) = existing_id {
-                self.activate_and_scroll_to_pane(pid);
-            } else {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                self.pane_state.panes.push(PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::FileEditor(FileEditorState {
-                        path: path.clone(),
-                        content: String::new(),
-                        dirty: false,
-                        save_error: false,
-                        workspace_id: self.active_group,
-                        show_preview: true,
-                        stale: false,
-                        loading: true,
-                        untitled: false,
-                        saved_text_hash: None,
-                    }),
-                    manual_width: None,
-                    last_size: (0, 0),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                });
-                self.pane_state.pane_trees.insert(
-                    pane_id,
-                    PaneNode::Leaf {
-                        pane_id,
-                        last_size: (0, 0),
-                    },
-                );
-                self.pane_state
-                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
-                self.activate_and_scroll_to_pane(pane_id);
-                {
-                    let results = Arc::clone(&self.file_load_results);
-                    let ctx_clone = ctx.clone();
-                    std::thread::spawn(move || {
-                        let content = match std::fs::read(&path) {
-                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
-                                String::from_utf8_lossy(e.as_bytes()).into_owned()
-                            }),
-                            Err(_) => String::new(),
-                        };
-                        results.lock().push((pane_id, content));
-                        ctx_clone.request_repaint();
-                    });
-                }
-            }
+            self.open_file_in_editor(path, true, ctx);
         }
 
         // 9b. File opened from palette
         if let Some(path) = self.pending_palette_open_file.take() {
-            let existing_id = self.pane_state.find_file_editor(&path, self.active_group);
-            if let Some(pid) = existing_id {
-                self.activate_and_scroll_to_pane(pid);
-            } else {
-                let pane_id = self.pane_state.next_pane_id;
-                self.pane_state.next_pane_id += 1;
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
-                self.pane_state.panes.push(PaneEntry {
-                    id: pane_id,
-                    content: PaneContent::FileEditor(FileEditorState {
-                        path: path.clone(),
-                        content: String::new(),
-                        dirty: false,
-                        save_error: false,
-                        workspace_id: self.active_group,
-                        show_preview: is_md && self.md_prefer_preview,
-                        stale: false,
-                        loading: true,
-                        untitled: false,
-                        saved_text_hash: None,
-                    }),
-                    manual_width: None,
-                    last_size: (0, 0),
-                    labels: vec![],
-                    last_active_at: crate::util::now_millis(),
-                    workspace_id: self.active_group,
-                });
-                self.pane_state.pane_trees.insert(
-                    pane_id,
-                    PaneNode::Leaf {
-                        pane_id,
-                        last_size: (0, 0),
-                    },
-                );
-                self.pane_state
-                    .add_pane_to_group(self.pane_state.focused_group_id, pane_id, None);
-                self.activate_and_scroll_to_pane(pane_id);
-                {
-                    let results = Arc::clone(&self.file_load_results);
-                    let ctx_clone = ctx.clone();
-                    std::thread::spawn(move || {
-                        let content = match std::fs::read(&path) {
-                            Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
-                                String::from_utf8_lossy(e.as_bytes()).into_owned()
-                            }),
-                            Err(_) => String::new(),
-                        };
-                        results.lock().push((pane_id, content));
-                        ctx_clone.request_repaint();
-                    });
-                }
-            }
+            let preview = self.default_editor_preview(&path);
+            self.open_file_in_editor(path, preview, ctx);
         }
 
         // 9a2. Open notes in a pane
@@ -4833,63 +4555,8 @@ impl App {
             }
             if let Some(cwd) = self.active_pane_cwd() {
                 let full_path = cwd.join(&rel_path);
-                let existing_id = self
-                    .pane_state
-                    .find_file_editor(&full_path, self.active_group);
-                if let Some(pid) = existing_id {
-                    self.activate_and_scroll_to_pane(pid);
-                } else {
-                    let pane_id = self.pane_state.next_pane_id;
-                    self.pane_state.next_pane_id += 1;
-                    let is_md = full_path.extension().and_then(|e| e.to_str()) == Some("md");
-                    self.pane_state.panes.push(PaneEntry {
-                        id: pane_id,
-                        content: PaneContent::FileEditor(FileEditorState {
-                            path: full_path.clone(),
-                            content: String::new(),
-                            dirty: false,
-                            save_error: false,
-                            workspace_id: self.active_group,
-                            show_preview: is_md && self.md_prefer_preview,
-                            stale: false,
-                            loading: true,
-                            untitled: false,
-                            saved_text_hash: None,
-                        }),
-                        manual_width: None,
-                        last_size: (0, 0),
-                        labels: vec![],
-                        last_active_at: crate::util::now_millis(),
-                        workspace_id: self.active_group,
-                    });
-                    self.pane_state.pane_trees.insert(
-                        pane_id,
-                        PaneNode::Leaf {
-                            pane_id,
-                            last_size: (0, 0),
-                        },
-                    );
-                    self.pane_state.add_pane_to_group(
-                        self.pane_state.focused_group_id,
-                        pane_id,
-                        None,
-                    );
-                    self.activate_and_scroll_to_pane(pane_id);
-                    {
-                        let results = Arc::clone(&self.file_load_results);
-                        let ctx_clone = ctx.clone();
-                        std::thread::spawn(move || {
-                            let content = match std::fs::read(&full_path) {
-                                Ok(bytes) => String::from_utf8(bytes).unwrap_or_else(|e| {
-                                    String::from_utf8_lossy(e.as_bytes()).into_owned()
-                                }),
-                                Err(_) => String::new(),
-                            };
-                            results.lock().push((pane_id, content));
-                            ctx_clone.request_repaint();
-                        });
-                    }
-                }
+                let preview = self.default_editor_preview(&full_path);
+                self.open_file_in_editor(full_path, preview, ctx);
             }
         }
 
@@ -4929,6 +4596,7 @@ impl App {
         // `update()` harvests each window's result and resolves once, after
         // every window has had its turn. See `DragState::harvest`.
         self.drag_state.paint_overlay(ctx);
+        self.handle_os_drop(ctx);
 
         self.render_settings_overlay(ctx);
 

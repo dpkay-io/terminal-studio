@@ -11,6 +11,7 @@ mod macos_hotkeys;
 #[cfg(target_os = "macos")]
 mod macos_objc;
 mod md_detector;
+mod os_cursor;
 mod pane_tree;
 mod pty;
 mod renderer;

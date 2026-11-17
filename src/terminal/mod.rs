@@ -1,7 +1,7 @@
 mod tests;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use alacritty_terminal::{
@@ -105,6 +105,16 @@ pub struct Session {
     pinned_title: Mutex<Option<String>>,
     pub bell: Arc<AtomicBool>,
     pub pending_clipboard: Option<String>,
+    /// Bumped on every change to the grid's content (output, resize,
+    /// restored output), always while the write lock is held, so a reader
+    /// that sees the same value under two read locks saw the same content.
+    /// Scrolling the view changes nothing and doesn't bump it.
+    content_generation: Arc<AtomicU64>,
+    /// Held by the PTY reader while it feeds output, and by the scrollback
+    /// saver while it captures in slices, so output waits (in the OS
+    /// buffer) instead of moving the lines mid-capture. The UI never takes
+    /// it. Lock order: this gate, then the session lock.
+    output_gate: Arc<Mutex<()>>,
 }
 
 impl Session {
@@ -140,6 +150,8 @@ impl Session {
             pinned_title: Mutex::new(None),
             bell,
             pending_clipboard: None,
+            content_generation: Arc::new(AtomicU64::new(0)),
+            output_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -172,6 +184,8 @@ impl Session {
             pinned_title: Mutex::new(None),
             bell,
             pending_clipboard: None,
+            content_generation: Arc::new(AtomicU64::new(0)),
+            output_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -206,8 +220,26 @@ impl Session {
         self.title.lock().clone()
     }
 
+    /// A handle to the content generation, readable without the lock.
+    pub fn content_generation(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.content_generation)
+    }
+
+    /// A handle to the output gate (see the field).
+    pub fn output_gate(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.output_gate)
+    }
+
+    /// Record a change to the grid's content. Takes `&mut self` so it can
+    /// only be called under the write lock.
+    pub fn mark_content_changed(&mut self) {
+        self.content_generation.fetch_add(1, Ordering::Release);
+    }
+
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        if cols == 0 || rows == 0 {
+        let unchanged =
+            self.term.columns() == cols as usize && self.term.screen_lines() == rows as usize;
+        if cols == 0 || rows == 0 || unchanged {
             return;
         }
         let size = TermSize {
@@ -215,5 +247,6 @@ impl Session {
             lines: rows as usize,
         };
         self.term.resize(size);
+        self.mark_content_changed();
     }
 }

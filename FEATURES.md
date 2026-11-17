@@ -80,8 +80,10 @@ Workspaces let you color-code and organize sessions by project or context.
 
 - Create named workspaces with a chosen accent color
 - Eight preset colors plus a full custom color picker
+- New workspaces get a color picked automatically to stand apart from every color already in use (measured perceptually, in OKLab), so they can be told apart at a glance; change it any time
+- **Open Folder** takes one or more folders at once: each opens in its own terminal and is saved as a workspace (name and color filled in, unique among themselves and existing workspaces), or opens without one when unticked
 - Workspaces are automatically activated when a terminal navigates to a directory that belongs to that workspace (via CWD prefix matching)
-- The titlebar dynamically adopts the active workspace's color
+- The titlebar dynamically adopts the active workspace's color (Settings → *Show workspace color on the title bar* turns this off; tabs and the session list keep showing workspace colors)
 - Color-coded session indicators in the left panel show which workspace each session belongs to
 - Set a default workspace for new sessions
 - Per-workspace notes panel with auto-saving plain-text notes
@@ -95,6 +97,7 @@ Workspaces let you color-code and organize sessions by project or context.
 - Duplicate any session; the new session opens in the same working directory, with the foreground process identified in the name
 - Sessions are automatically named from the shell title or current directory
 - Session list displayed in a collapsible left panel with badge labels (P1, P2, …)
+- Drag a row up or down to reorder the session list; only the list's order changes, never a split's tab order
 - Each session independently tracks whether its underlying process is alive or has exited
 
 ---
@@ -222,7 +225,8 @@ A polished, distraction-free environment built for daily use.
 - macOS: native-style traffic-light controls (close / minimize / maximize) with a centered title
 - Windows / Linux: right-aligned window controls with panel toggle buttons in the titlebar
 - Drag anywhere on the titlebar to move the window
-- Titlebar accent color reflects the active workspace
+- Titlebar accent color reflects the active workspace (can be turned off in Settings)
+- Drag files and folders in from Finder, Explorer or a file manager: dropped on a terminal, their paths are pasted there; dropped anywhere else, folders open (as with Open Folder) and files open in the editor, in the split they were dropped on. While dragging, the spot they would land in is highlighted and says which
 
 **Panels**
 - Collapsible left panel containing the session list and workspace list, with a draggable divider

@@ -182,6 +182,24 @@ pub(super) fn key_to_pty_bytes(key: &egui::Key, modifiers: &egui::Modifiers) -> 
     })
 }
 
+/// Bracketed-paste start and end markers (`?2004h` mode).
+const PASTE_START: &[u8] = b"\x1b[200~";
+const PASTE_END: &[u8] = b"\x1b[201~";
+
+/// The bytes that paste `text` into a terminal: wrapped in bracketed-paste
+/// markers when the program running there turned that mode on, so it can
+/// tell pasted text from typing.
+pub(super) fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    if !bracketed {
+        return text.as_bytes().to_vec();
+    }
+    let mut bytes = Vec::with_capacity(PASTE_START.len() + text.len() + PASTE_END.len());
+    bytes.extend_from_slice(PASTE_START);
+    bytes.extend_from_slice(text.as_bytes());
+    bytes.extend_from_slice(PASTE_END);
+    bytes
+}
+
 pub(super) fn shell_quote_path(path: &std::path::Path) -> String {
     let s = path.to_string_lossy();
 
@@ -273,6 +291,13 @@ pub(super) fn mouse_event_bytes(btn: u8, col: u16, row: u16, pressed: bool, sgr:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paste_is_bracketed_only_when_the_program_asked() {
+        assert_eq!(paste_bytes("a b", false), b"a b");
+        assert_eq!(paste_bytes("a b", true), b"\x1b[200~a b\x1b[201~");
+        assert_eq!(paste_bytes("", true), b"\x1b[200~\x1b[201~");
+    }
 
     #[test]
     fn only_ctrl_tab_counts_as_ctrl_tab() {

@@ -40,7 +40,7 @@ impl App {
             return;
         }
         self.restart_attempted = true;
-        self.save_session();
+        self.save_session_final();
         crate::updater::restart_app();
     }
 }

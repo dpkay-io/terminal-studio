@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alacritty_terminal::{
     grid::Dimensions,
@@ -8,7 +8,7 @@ use alacritty_terminal::{
     vte::ansi::{Color, NamedColor, Rgb},
 };
 use egui::{vec2, FontId, Pos2, Rect, Sense};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::app::settings::CursorStyle;
 use crate::terminal::Session;
@@ -110,20 +110,37 @@ impl CellInfo {
     };
 }
 
-thread_local! {
-    /// Reusable per-frame cell buffer for terminal rendering. UI runs on a
-    /// single thread, so a thread-local is safe and avoids re-allocating a
-    /// ~150 KB Vec every paint.
-    static RENDER_BUF: RefCell<Vec<CellInfo>> = const { RefCell::new(Vec::new()) };
+/// Longest a frame waits for the session lock before painting the last
+/// snapshot instead. The PTY reader holds it ≈0.6 ms per chunk and hands it
+/// over fairly, so this is rarely reached.
+const LOCK_WAIT_BUDGET: Duration = Duration::from_millis(2);
+
+/// How soon to try again after painting a snapshot the lock kept from
+/// being refreshed.
+const BUSY_REPAINT_AFTER: Duration = Duration::from_millis(8);
+
+/// What a terminal showed when it was last drawn: its cells, resolved for
+/// painting, plus scroll and cursor state. Each session keeps its own, so a
+/// frame that can't get the lock paints this instead of a blank terminal.
+#[derive(Default)]
+pub struct TerminalSnapshot {
+    cells: Vec<CellInfo>,
+    cols: usize,
+    display_offset: usize,
+    history: usize,
+    cursor: Option<(usize, usize)>,
+    /// False until the first successful read.
+    drawn: bool,
 }
 
-pub struct TerminalView {
+pub struct TerminalView<'a> {
     session: Arc<RwLock<Session>>,
+    snapshot: &'a Mutex<TerminalSnapshot>,
 }
 
-impl TerminalView {
-    pub fn new(session: Arc<RwLock<Session>>) -> Self {
-        Self { session }
+impl<'a> TerminalView<'a> {
+    pub fn new(session: Arc<RwLock<Session>>, snapshot: &'a Mutex<TerminalSnapshot>) -> Self {
+        Self { session, snapshot }
     }
 
     /// Render the terminal. `cursor_alpha` controls blink fade (0.0–1.0).
@@ -176,131 +193,134 @@ impl TerminalView {
         // ── Snapshot phase: copy out everything we need from the Term under
         //    the read lock, then drop the lock before painting. This keeps
         //    the PTY reader thread (which takes the write lock) from being
-        //    blocked for the full paint duration.
-        //    Uses try_read() to avoid blocking: if the PTY reader thread
-        //    holds the write lock, we skip this frame and repaint soon.
-        let session_guard = self.session.try_read();
-        if session_guard.is_none() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(8));
-            ui.allocate_rect(outer_rect, Sense::hover());
-            return TerminalGeometry {
-                rect,
-                cell_w: cell_width,
-                cell_h: cell_height,
-                scrollbar_drag_offset: None,
-                scrollbar_hovered: false,
-                session_id: None,
-            };
-        }
-        let snapshot = RENDER_BUF.with(|buf| {
-            let mut buf = buf.borrow_mut();
-            buf.clear();
+        //    blocked for the full paint duration. If the lock stays busy
+        //    past `LOCK_WAIT_BUDGET`, the last snapshot is painted instead.
+        let mut snap = self.snapshot.lock();
+        match self.session.try_read_for(LOCK_WAIT_BUDGET) {
+            Some(session) => {
+                let term = &session.term;
+                let grid = term.grid();
+                let term_cols = term.columns();
+                let term_rows = term.screen_lines();
+                let cols = term_cols.min(visible_cols);
+                let display_offset = grid.display_offset();
+                let history = grid.history_size();
+                let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
+                snap.cells.clear();
+                snap.cells.reserve(visible_rows.saturating_mul(cols));
 
-            let session = session_guard.unwrap();
-            let term = &session.term;
-            let grid = term.grid();
-            let term_cols = term.columns();
-            let term_rows = term.screen_lines();
-            let cols = term_cols.min(visible_cols);
-            let display_offset = grid.display_offset();
-            let history = grid.history_size();
-            let show_cursor = term.mode().contains(TermMode::SHOW_CURSOR);
-            buf.reserve(visible_rows.saturating_mul(cols));
-
-            let min_line = -(history as i32);
-            let max_line = term_rows as i32 - 1;
-            for screen_row in 0..visible_rows {
-                let grid_line = screen_row as i32 - display_offset as i32;
-                if grid_line < min_line || grid_line > max_line {
-                    for _ in 0..cols {
-                        buf.push(CellInfo::EMPTY);
+                let min_line = -(history as i32);
+                let max_line = term_rows as i32 - 1;
+                for screen_row in 0..visible_rows {
+                    let grid_line = screen_row as i32 - display_offset as i32;
+                    if grid_line < min_line || grid_line > max_line {
+                        for _ in 0..cols {
+                            snap.cells.push(CellInfo::EMPTY);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                for col in 0..cols {
-                    let cell = &grid[Line(grid_line)][Column(col)];
-                    let inv = cell.flags.contains(Flags::INVERSE);
-                    let eff_fg = if inv { cell.bg } else { cell.fg };
-                    let eff_bg = if inv { cell.fg } else { cell.bg };
-                    let hidden = cell.flags.contains(Flags::HIDDEN);
-                    let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
-                    let ch = if hidden || spacer { ' ' } else { cell.c };
+                    for col in 0..cols {
+                        let cell = &grid[Line(grid_line)][Column(col)];
+                        let inv = cell.flags.contains(Flags::INVERSE);
+                        let eff_fg = if inv { cell.bg } else { cell.fg };
+                        let eff_bg = if inv { cell.fg } else { cell.bg };
+                        let hidden = cell.flags.contains(Flags::HIDDEN);
+                        let spacer = cell.flags.contains(Flags::WIDE_CHAR_SPACER);
+                        let ch = if hidden || spacer { ' ' } else { cell.c };
 
-                    let resolved_bg = resolve_color(eff_bg, false, t);
-                    let visible_bg = if resolved_bg == egui::Color32::TRANSPARENT {
-                        t.bg_term
-                    } else {
-                        resolved_bg
-                    };
-
-                    let mut fg = resolve_color(eff_fg, true, t);
-                    if cell.flags.contains(Flags::BOLD) {
-                        fg = match eff_fg {
-                            Color::Named(NamedColor::Black) => t.ansi[8],
-                            Color::Named(NamedColor::Red) => t.ansi[9],
-                            Color::Named(NamedColor::Green) => t.ansi[10],
-                            Color::Named(NamedColor::Yellow) => t.ansi[11],
-                            Color::Named(NamedColor::Blue) => t.ansi[12],
-                            Color::Named(NamedColor::Magenta) => t.ansi[13],
-                            Color::Named(NamedColor::Cyan) => t.ansi[14],
-                            Color::Named(NamedColor::White) => t.ansi[15],
-                            _ => fg,
+                        let resolved_bg = resolve_color(eff_bg, false, t);
+                        let visible_bg = if resolved_bg == egui::Color32::TRANSPARENT {
+                            t.bg_term
+                        } else {
+                            resolved_bg
                         };
-                    }
-                    if cell.flags.contains(Flags::DIM) {
-                        let [fr, fgc, fb, _] = fg.to_array();
-                        let [br, bgc, bb, _] = visible_bg.to_array();
-                        fg = egui::Color32::from_rgb(
-                            ((fr as u16 + br as u16) / 2) as u8,
-                            ((fgc as u16 + bgc as u16) / 2) as u8,
-                            ((fb as u16 + bb as u16) / 2) as u8,
-                        );
-                    }
-                    fg = theme::ensure_term_contrast(fg, visible_bg);
 
-                    buf.push(CellInfo {
-                        ch,
-                        fg,
-                        bg: resolved_bg,
-                        bold: cell.flags.contains(Flags::BOLD),
-                        underline: cell.flags.contains(Flags::UNDERLINE),
-                        strike: cell.flags.contains(Flags::STRIKEOUT),
-                        wide: cell.flags.contains(Flags::WIDE_CHAR),
-                    });
+                        let mut fg = resolve_color(eff_fg, true, t);
+                        if cell.flags.contains(Flags::BOLD) {
+                            fg = match eff_fg {
+                                Color::Named(NamedColor::Black) => t.ansi[8],
+                                Color::Named(NamedColor::Red) => t.ansi[9],
+                                Color::Named(NamedColor::Green) => t.ansi[10],
+                                Color::Named(NamedColor::Yellow) => t.ansi[11],
+                                Color::Named(NamedColor::Blue) => t.ansi[12],
+                                Color::Named(NamedColor::Magenta) => t.ansi[13],
+                                Color::Named(NamedColor::Cyan) => t.ansi[14],
+                                Color::Named(NamedColor::White) => t.ansi[15],
+                                _ => fg,
+                            };
+                        }
+                        if cell.flags.contains(Flags::DIM) {
+                            let [fr, fgc, fb, _] = fg.to_array();
+                            let [br, bgc, bb, _] = visible_bg.to_array();
+                            fg = egui::Color32::from_rgb(
+                                ((fr as u16 + br as u16) / 2) as u8,
+                                ((fgc as u16 + bgc as u16) / 2) as u8,
+                                ((fb as u16 + bb as u16) / 2) as u8,
+                            );
+                        }
+                        fg = theme::ensure_term_contrast(fg, visible_bg);
+
+                        snap.cells.push(CellInfo {
+                            ch,
+                            fg,
+                            bg: resolved_bg,
+                            bold: cell.flags.contains(Flags::BOLD),
+                            underline: cell.flags.contains(Flags::UNDERLINE),
+                            strike: cell.flags.contains(Flags::STRIKEOUT),
+                            wide: cell.flags.contains(Flags::WIDE_CHAR),
+                        });
+                    }
                 }
-            }
 
-            let cursor = if show_cursor && display_offset == 0 {
-                let pt = grid.cursor.point;
-                let cx = pt.column.0;
-                let cy = pt.line.0;
-                if cy >= 0 && cx < cols && (cy as usize) < term_rows {
-                    Some((cx, cy as usize))
+                let cursor = if show_cursor && display_offset == 0 {
+                    let pt = grid.cursor.point;
+                    let cx = pt.column.0;
+                    let cy = pt.line.0;
+                    if cy >= 0 && cx < cols && (cy as usize) < term_rows {
+                        Some((cx, cy as usize))
+                    } else {
+                        None
+                    }
                 } else {
                     None
-                }
-            } else {
-                None
-            };
+                };
 
-            // Drop the read lock by leaving the closure body.
-            drop(session);
+                drop(session);
+                snap.cols = cols;
+                snap.display_offset = display_offset;
+                snap.history = history;
+                snap.cursor = cursor;
+                snap.drawn = true;
+            }
+            None if snap.drawn => {
+                ui.ctx().request_repaint_after(BUSY_REPAINT_AFTER);
+            }
+            None => {
+                ui.ctx().request_repaint_after(BUSY_REPAINT_AFTER);
+                ui.allocate_rect(outer_rect, Sense::hover());
+                return TerminalGeometry {
+                    rect,
+                    cell_w: cell_width,
+                    cell_h: cell_height,
+                    scrollbar_drag_offset: None,
+                    scrollbar_hovered: false,
+                    session_id: None,
+                };
+            }
+        }
+        let snap = &*snap;
+        let (cols, display_offset, history, cursor) =
+            (snap.cols, snap.display_offset, snap.history, snap.cursor);
 
-            (cols, display_offset, history, cursor)
-        });
-
-        let (cols, display_offset, history, cursor) = snapshot;
-
-        // ── Paint phase: no lock held. Reads from the thread-local buffer. ─
+        // ── Paint phase: no lock held. Reads from the session's snapshot. ─
         //
         // Each character is rendered at its exact grid position
         // (col * cell_width) to prevent cumulative glyph-advance drift
         // that occurs when rendering multi-character strings.
         let base_font = FontId::monospace(font_size);
 
-        RENDER_BUF.with(|buf| {
-            let buf = buf.borrow();
+        {
+            let buf = &snap.cells;
             for screen_row in 0..visible_rows {
                 let y = rect.min.y + screen_row as f32 * cell_height;
 
@@ -431,7 +451,7 @@ impl TerminalView {
                     }
                 }
             }
-        });
+        }
 
         // ── Cursor ─────────────────────────────────────────────────────────────
         // Only draw cursor in live view (display_offset == 0) and when cursor
@@ -488,8 +508,8 @@ impl TerminalView {
             let offset_delta = display_offset as i32 - sel.display_offset as i32;
             let sr = (sr_raw as i32 + offset_delta).max(0) as u16;
             let er = (er_raw as i32 + offset_delta).max(0) as u16;
-            let (sc, ec) = RENDER_BUF.with(|buf| {
-                let buf = buf.borrow();
+            let (sc, ec) = {
+                let buf = &snap.cells;
                 let snap_start = |col: u16, row: u16| -> u16 {
                     if col > 0 && (row as usize) < visible_rows {
                         let prev_idx = row as usize * cols + (col as usize - 1);
@@ -509,7 +529,7 @@ impl TerminalView {
                     col
                 };
                 (snap_start(sc, sr), snap_end(ec, er))
-            });
+            };
             for screen_row in sr..=er.min(visible_rows.saturating_sub(1) as u16) {
                 let y = rect.min.y + screen_row as f32 * cell_height;
                 let start_col = if screen_row == sr { sc } else { 0 };
@@ -670,7 +690,16 @@ fn resolve_color(color: Color, is_fg: bool, t: &Theme) -> egui::Color32 {
 fn resolve_named(named: NamedColor, is_fg: bool, t: &Theme) -> egui::Color32 {
     match named {
         NamedColor::Foreground => t.text,
-        NamedColor::Background => egui::Color32::TRANSPARENT,
+        // As a cell background, the default shows the terminal's own (painted
+        // once, behind every cell). As a text colour (reverse video swaps it
+        // in) it must be that colour itself, or the text is invisible.
+        NamedColor::Background => {
+            if is_fg {
+                t.bg_term
+            } else {
+                egui::Color32::TRANSPARENT
+            }
+        }
         NamedColor::Black => t.ansi[0],
         NamedColor::Red => t.ansi[1],
         NamedColor::Green => t.ansi[2],
@@ -723,6 +752,92 @@ fn ansi_indexed(index: u8, t: &Theme) -> (u8, u8, u8) {
 mod tests {
     use super::*;
     use egui::{pos2, vec2, Rect};
+
+    // ── Drawing while the session lock is busy ─────────────────────────────
+
+    fn draw(session: &Arc<RwLock<Session>>, snapshot: &Mutex<TerminalSnapshot>) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                TerminalView::new(Arc::clone(session), snapshot).show(
+                    ui,
+                    true,
+                    1.0,
+                    None,
+                    theme::FONT_TERM,
+                    CursorStyle::Block,
+                );
+            });
+        });
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|clipped| match clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn session_showing(text: &str) -> Arc<RwLock<Session>> {
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+        let mut session = Session::new_for_test(1, 80, 24);
+        let mut processor: Processor<StdSyncHandler> = Processor::new();
+        processor.advance(&mut session.term, text.as_bytes());
+        Arc::new(RwLock::new(session))
+    }
+
+    /// Reverse video swaps the default background into the text colour: the
+    /// text must still be drawn opaque, in a colour unlike its background.
+    #[test]
+    fn reverse_video_text_on_default_colours_is_visible() {
+        let session = session_showing("\x1b[7mINV\x1b[0m");
+        let snapshot = Mutex::new(TerminalSnapshot::default());
+        let _ = draw(&session, &snapshot);
+        let snap = snapshot.lock();
+        let cell = snap.cells[0];
+        assert_eq!(cell.ch, 'I');
+        assert_eq!(cell.fg.a(), u8::MAX, "text colour is opaque");
+        assert_eq!(
+            cell.bg,
+            theme::active().text,
+            "background is the text colour"
+        );
+        assert_ne!(cell.fg, cell.bg, "text differs from its background");
+    }
+
+    #[test]
+    fn background_as_text_colour_is_the_terminal_background() {
+        let t = theme::active();
+        assert_eq!(resolve_named(NamedColor::Background, true, t), t.bg_term);
+        assert_eq!(
+            resolve_named(NamedColor::Background, false, t),
+            egui::Color32::TRANSPARENT
+        );
+    }
+
+    #[test]
+    fn busy_lock_paints_last_snapshot() {
+        let session = session_showing("Q");
+        let snapshot = Mutex::new(TerminalSnapshot::default());
+        assert!(draw(&session, &snapshot).iter().any(|t| t == "Q"));
+
+        let _writer = session.write();
+        let texts = draw(&session, &snapshot);
+        assert!(texts.iter().any(|t| t == "Q"), "painted from the snapshot");
+    }
+
+    #[test]
+    fn busy_lock_before_first_draw_paints_background_only() {
+        let session = session_showing("Q");
+        let snapshot = Mutex::new(TerminalSnapshot::default());
+        let _writer = session.write();
+        assert!(draw(&session, &snapshot).is_empty());
+    }
 
     // ── SelectionRange::ordered ────────────────────────────────────────────
 

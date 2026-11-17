@@ -52,6 +52,10 @@ pub(super) struct AppSettings {
     /// A row of tabs above each split, one per tab it holds. The session
     /// list shows every tab either way.
     pub(super) show_tab_bar: bool,
+    /// The title bar takes the active workspace's colour. The tab bar and
+    /// the session list mark each tab's workspace colour either way, so this
+    /// can be turned off when they are enough.
+    pub(super) workspace_color_on_titlebar: bool,
     /// The top rows of each left nav section that stay in place; a session
     /// used from below them moves to the top (`NavOrder`).
     pub(super) nav_stable_rows: usize,
@@ -80,6 +84,7 @@ impl Default for AppSettings {
             log_level: LogLevel::default(),
             info_bar_position: InfoBarPosition::default(),
             show_tab_bar: true,
+            workspace_color_on_titlebar: true,
             nav_stable_rows: NAV_STABLE_ROWS_DEFAULT,
         }
     }
@@ -155,6 +160,16 @@ mod tests {
     fn old_settings_file_gets_default_stable_rows() {
         let s: AppSettings = serde_json::from_str(r#"{"font_size":14.0}"#).unwrap();
         assert_eq!(s.nav_stable_rows, 7);
+    }
+
+    #[test]
+    fn titlebar_shows_workspace_colour_by_default_and_in_old_files() {
+        assert!(AppSettings::default().workspace_color_on_titlebar);
+        let s: AppSettings = serde_json::from_str(r#"{"font_size":14.0}"#).unwrap();
+        assert!(s.workspace_color_on_titlebar);
+        let off: AppSettings =
+            serde_json::from_str(r#"{"workspace_color_on_titlebar":false}"#).unwrap();
+        assert!(!off.workspace_color_on_titlebar);
     }
 
     #[test]

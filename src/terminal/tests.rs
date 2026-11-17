@@ -20,6 +20,31 @@ mod terminal_tests {
     }
 
     #[test]
+    fn resize_bumps_content_generation() {
+        let mut s = make_session(80, 24);
+        let generation = s.content_generation();
+        let before = generation.load(std::sync::atomic::Ordering::Acquire);
+        s.resize(40, 12);
+        assert_eq!(
+            generation.load(std::sync::atomic::Ordering::Acquire),
+            before + 1
+        );
+    }
+
+    #[test]
+    fn same_size_resize_does_not_bump() {
+        let mut s = make_session(80, 24);
+        let generation = s.content_generation();
+        let before = generation.load(std::sync::atomic::Ordering::Acquire);
+        s.resize(80, 24);
+        s.resize(0, 12);
+        assert_eq!(
+            generation.load(std::sync::atomic::Ordering::Acquire),
+            before
+        );
+    }
+
+    #[test]
     fn test_session_resize() {
         let mut s = make_session(80, 24);
         s.resize(40, 12);

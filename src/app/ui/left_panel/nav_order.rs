@@ -136,6 +136,43 @@ impl NavOrder {
             .collect()
     }
 
+    /// Moves row `id` next to `anchor` — just above it, or just below with
+    /// `after` — where the user dropped it. Only the left nav order changes,
+    /// never a split's tab order. Both rows must be in the same section (a
+    /// move to another split goes through that split's header instead).
+    /// Returns whether the order changed.
+    pub(in crate::app) fn place(&mut self, id: u32, anchor: u32, after: bool) -> bool {
+        let Some(order) = self.placed(id, anchor, after) else {
+            return false;
+        };
+        self.order = order;
+        true
+    }
+
+    /// Whether dropping `id` next to `anchor` would move it: the line that
+    /// shows where it lands is only drawn where it does.
+    pub(in crate::app) fn would_move(&self, id: u32, anchor: u32, after: bool) -> bool {
+        self.placed(id, anchor, after).is_some()
+    }
+
+    /// The order with `id` placed next to `anchor`, or None when that is no
+    /// change or not allowed.
+    fn placed(&self, id: u32, anchor: u32, after: bool) -> Option<Vec<u32>> {
+        if id == anchor {
+            return None;
+        }
+        let section = self.section_of(id)?;
+        if self.section_of(anchor) != Some(section) {
+            return None;
+        }
+        let mut order = self.order.clone();
+        let from = order.iter().position(|&other| other == id)?;
+        order.remove(from);
+        let at = order.iter().position(|&other| other == anchor)? + usize::from(after);
+        order.insert(at, id);
+        (order != self.order).then_some(order)
+    }
+
     /// Drop closed panes, append new ones.
     fn sync_membership(&mut self, panes: &[NavPane]) {
         let unchanged =
@@ -582,5 +619,60 @@ mod tests {
         let mut o = NavOrder::default();
         o.refresh(&[], 7, false);
         assert!(o.order().is_empty());
+    }
+
+    #[test]
+    fn a_dropped_row_lands_above_or_below_its_anchor() {
+        let (_, mut o) = seeded(4);
+        assert!(o.place(4, 2, false));
+        assert_eq!(o.order(), [1, 4, 2, 3]);
+        assert!(o.place(1, 3, true));
+        assert_eq!(o.order(), [4, 2, 3, 1]);
+    }
+
+    #[test]
+    fn dropping_a_row_where_it_already_is_changes_nothing() {
+        let (_, mut o) = seeded(3);
+        assert!(!o.would_move(2, 2, false), "on itself");
+        assert!(!o.would_move(2, 1, true), "just below the row above it");
+        assert!(!o.would_move(2, 3, false), "just above the row below it");
+        assert!(!o.place(2, 3, false));
+        assert_eq!(o.order(), [1, 2, 3]);
+        assert!(o.would_move(2, 3, true));
+    }
+
+    #[test]
+    fn rows_only_move_within_their_section() {
+        let panes = [p(1, A, 0), p(2, A, 0), p(3, B, 0)];
+        let mut o = NavOrder::restore(&[1, 2, 3], &panes);
+        assert!(!o.would_move(1, 3, true));
+        assert!(!o.place(1, 3, true));
+        assert_eq!(o.order(), [1, 2, 3]);
+        assert!(!o.place(9, 1, false), "unknown row");
+        assert!(!o.place(1, 9, false), "unknown anchor");
+    }
+
+    #[test]
+    fn a_placed_row_follows_the_usual_rule_afterwards() {
+        // Dropped below the stable rows, it stays there until used, then
+        // moves to row 1 like any other row from below.
+        let (mut panes, mut o) = seeded(4);
+        assert!(o.place(1, 4, true));
+        o.refresh(&panes, 2, false);
+        assert_eq!(o.order(), [2, 3, 4, 1], "nothing else moves it");
+        bump(&mut panes, 1, 10);
+        o.refresh(&panes, 2, false);
+        assert_eq!(o.order(), [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_row_can_be_placed_while_the_list_is_held() {
+        let (mut panes, mut o) = seeded(3);
+        bump(&mut panes, 3, 10);
+        o.refresh(&panes, 1, true);
+        assert!(o.place(1, 3, true));
+        assert_eq!(o.order(), [2, 3, 1]);
+        o.refresh(&panes, 1, false);
+        assert_eq!(o.order(), [3, 2, 1], "the held activation applies after");
     }
 }

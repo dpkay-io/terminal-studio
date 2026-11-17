@@ -90,6 +90,10 @@ const FILE_EDITOR_TEXT_ID: &str = "file_editor_text";
 const ACTIVE_TEXT_BOX_SLOT: &str = "active_text_box";
 
 /// Where this viewport's active pane's text box id is kept for the frame.
+/// Take it before `ctx.data` / `ctx.data_mut`: those hold the context's
+/// lock while their closure runs, and `viewport_id()` takes it again (a
+/// deadlock at once under `data_mut`, and under `data` whenever another
+/// thread is waiting to write, as a PTY reader asking for a repaint does).
 fn active_text_box_key(ctx: &egui::Context) -> egui::Id {
     egui::Id::new(ACTIVE_TEXT_BOX_SLOT).with(ctx.viewport_id())
 }
@@ -97,7 +101,14 @@ fn active_text_box_key(ctx: &egui::Context) -> egui::Id {
 /// The text box of the active pane (file or note editor) in this viewport,
 /// as last drawn. Layout shortcuts typed into it belong to the layout.
 pub(in crate::app) fn active_text_box_id(ctx: &egui::Context) -> Option<egui::Id> {
-    ctx.data(|d| d.get_temp(active_text_box_key(ctx)))
+    let key = active_text_box_key(ctx);
+    ctx.data(|d| d.get_temp(key))
+}
+
+/// Note `id` as this viewport's active pane's text box for the frame.
+fn remember_active_text_box(ctx: &egui::Context, id: egui::Id) {
+    let key = active_text_box_key(ctx);
+    ctx.data_mut(|d| d.insert_temp(key, id));
 }
 
 /// Keyboard rule for a pane's text box. The active pane's box takes the
@@ -107,8 +118,7 @@ pub(in crate::app) fn active_text_box_id(ctx: &egui::Context) -> Option<egui::Id
 /// shortcut) must not keep taking their keys.
 fn route_text_focus(ui: &egui::Ui, text_box: &egui::Response, is_active: bool, modal_open: bool) {
     if is_active {
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(active_text_box_key(ui.ctx()), text_box.id));
+        remember_active_text_box(ui.ctx(), text_box.id);
     }
     if !is_active {
         if text_box.has_focus() {
@@ -143,7 +153,11 @@ fn render_terminal_leaf(
         } else {
             None
         };
-        let mut geo = crate::renderer::terminal_pass::TerminalView::new(Arc::clone(&session)).show(
+        let mut geo = crate::renderer::terminal_pass::TerminalView::new(
+            Arc::clone(&session),
+            &rctx.sessions[idx].render_snapshot,
+        )
+        .show(
             ui,
             is_focused,
             rctx.cursor_alpha,
@@ -1060,8 +1074,7 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
     match action {
         InfoBarAction::None => {}
         InfoBarAction::SetPosition(gid, pos) => {
-            // No save_session() here: with scrollback saving on it writes
-            // every terminal's history. The next natural save (pane changes,
+            // No save_session() here: the next natural save (pane changes,
             // quit) records the split's position; the default for new splits
             // is in settings and saved at once.
             app.choose_info_bar_position(gid, pos);
@@ -1593,41 +1606,66 @@ impl App {
         // Global flash overlay (rare — PTY spawn errors)
         self.flash
             .render_on_rect(ui.painter(), content_rect, feedback::FlashTarget::Global);
-
-        // ── File drag hover overlay ────────────────────────────────────────
-        let hovering_files = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
-        if hovering_files {
-            let t = theme::active();
-            let painter = ui.painter();
-            painter.rect_filled(
-                content_rect,
-                theme::R_MD,
-                egui::Color32::from_rgba_unmultiplied(
-                    t.surface0.r(),
-                    t.surface0.g(),
-                    t.surface0.b(),
-                    180,
-                ),
-            );
-            painter.rect_stroke(
-                content_rect.shrink(theme::SP_1),
-                4.0,
-                egui::Stroke::new(2.0_f32, t.blue),
-            );
-            painter.text(
-                content_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "Drop file(s) to paste path",
-                egui::FontId::proportional(theme::FONT_STATUS),
-                t.text,
-            );
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
+
+    /// Longer than any of these calls takes; still running then means the
+    /// call deadlocked on egui's context lock.
+    const DEADLOCK_LIMIT: Duration = Duration::from_secs(5);
+    /// How long the context-lock race below runs.
+    const RACE_FOR: Duration = Duration::from_millis(500);
+
+    /// Runs `f` on its own thread; false if it hasn't returned within
+    /// `DEADLOCK_LIMIT`.
+    fn returns(f: impl FnOnce() + Send + 'static) -> bool {
+        let (done_tx, done_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(DEADLOCK_LIMIT).is_ok()
+    }
+
+    #[test]
+    fn active_text_box_round_trip_never_locks_the_context_twice() {
+        assert!(returns(|| {
+            let ctx = egui::Context::default();
+            let id = egui::Id::new("text box");
+            remember_active_text_box(&ctx, id);
+            assert_eq!(active_text_box_id(&ctx), Some(id));
+        }));
+    }
+
+    #[test]
+    fn reading_the_active_text_box_survives_a_thread_asking_for_repaints() {
+        // A PTY reader asks for a repaint (the context's write lock) after
+        // every read of shell output, while the UI reads the text box id.
+        assert!(returns(|| {
+            let ctx = egui::Context::default();
+            let stop = Arc::new(AtomicBool::new(false));
+            let repainter = {
+                let (ctx, stop) = (ctx.clone(), Arc::clone(&stop));
+                std::thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        ctx.request_repaint();
+                    }
+                })
+            };
+            let end = Instant::now() + RACE_FOR;
+            while Instant::now() < end {
+                let _ = active_text_box_id(&ctx);
+            }
+            stop.store(true, Ordering::Relaxed);
+            repainter.join().unwrap();
+        }));
+    }
 
     fn r() -> egui::Rect {
         egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(200.0, 100.0))

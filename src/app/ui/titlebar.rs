@@ -98,6 +98,12 @@ fn paint_titlebar_title(
     }
 }
 
+/// The colour the title bar takes: the active workspace's, unless the user
+/// turned that off (`workspace_color_on_titlebar`); None = the theme's.
+fn titlebar_tint(workspace_color: Option<[u8; 3]>, enabled: bool) -> Option<[u8; 3]> {
+    workspace_color.filter(|_| enabled)
+}
+
 impl App {
     pub(in crate::app) fn shortcut_tooltip(&self, desc: &str, action: AppAction) -> String {
         match self.shortcut_registry.label_for(action) {
@@ -179,7 +185,10 @@ impl App {
             (None, Some(ws)) => format!("Terminal Studio — {ws}"),
             (None, None) => "Terminal Studio".to_string(),
         };
-        let active_ws_color: Option<[u8; 3]> = self.active_workspace().map(|w| w.color);
+        let active_ws_color = titlebar_tint(
+            self.active_workspace().map(|w| w.color),
+            self.settings.workspace_color_on_titlebar,
+        );
         // Only send the title command when it changes. Sending every frame
         // produces a SetWindowTextW syscall on Windows for no reason.
         if self.last_title_sent.as_deref() != Some(ws_title.as_str()) {
@@ -951,5 +960,18 @@ impl App {
             }
         }
         Some(x)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::titlebar_tint;
+
+    #[test]
+    fn titlebar_takes_the_workspace_colour_only_when_enabled() {
+        let colour = Some([10, 20, 30]);
+        assert_eq!(titlebar_tint(colour, true), colour);
+        assert_eq!(titlebar_tint(colour, false), None);
+        assert_eq!(titlebar_tint(None, true), None);
     }
 }

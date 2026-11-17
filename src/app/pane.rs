@@ -198,6 +198,12 @@ pub(super) struct SessionEntry {
     pub(super) claude_session_id: Option<String>,
     /// Ends the shell when this entry is dropped (tab closed).
     pub(super) hangup: crate::pty::hangup::ShellHangup,
+    /// What the terminal showed when last drawn, painted when a frame can't
+    /// get the session lock in time.
+    pub(super) render_snapshot:
+        parking_lot::Mutex<crate::renderer::terminal_pass::TerminalSnapshot>,
+    /// Keeps the scrollback saver tracking this session until the entry goes.
+    pub(super) _scrollback_tracking: super::scrollback_saver::SaverTracking,
 }
 
 /// Every way a session leaves the app (closing its tab, Close All, deleting

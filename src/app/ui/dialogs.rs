@@ -1,6 +1,6 @@
 use super::super::pane::{PaneContent, PaneEntry};
-use super::super::workspace_ui::PRESET_COLORS;
 use super::super::{App, CloseAllTarget};
+use super::color_choice::color_choices;
 use crate::pane_tree::PaneNode;
 use crate::shortcuts::{AppAction, Shortcut};
 use crate::theme;
@@ -717,31 +717,7 @@ impl App {
                 ui.add_space(theme::SP_4);
 
                 ui.label("Color");
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(theme::SP_4, theme::SP_4);
-                    for &preset in PRESET_COLORS {
-                        let selected = dlg.selected_color == preset && !dlg.show_custom_picker;
-                        if ui_kit::color_swatch(ui, preset, selected).clicked() {
-                            dlg.selected_color = preset;
-                            dlg.show_custom_picker = false;
-                            dlg.custom_color = [
-                                preset[0] as f32 / 255.0,
-                                preset[1] as f32 / 255.0,
-                                preset[2] as f32 / 255.0,
-                            ];
-                        }
-                    }
-                    let picker_resp =
-                        egui::color_picker::color_edit_button_rgb(ui, &mut dlg.custom_color);
-                    if picker_resp.changed() {
-                        dlg.show_custom_picker = true;
-                        dlg.selected_color = [
-                            (dlg.custom_color[0] * 255.0) as u8,
-                            (dlg.custom_color[1] * 255.0) as u8,
-                            (dlg.custom_color[2] * 255.0) as u8,
-                        ];
-                    }
-                });
+                color_choices(ui, &mut dlg.color);
 
                 let can_save = {
                     let trimmed = dlg.name.trim();
@@ -784,7 +760,7 @@ impl App {
                     id,
                     name: dlg.name.trim().to_string(),
                     path: dlg.path,
-                    color: dlg.selected_color,
+                    color: dlg.color.color(),
                     host_window_id: None,
                     last_activated: 0,
                 });
@@ -845,31 +821,7 @@ impl App {
                 ui.add_space(theme::SP_4);
 
                 ui.label("Color");
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(theme::SP_4, theme::SP_4);
-                    for &preset in PRESET_COLORS {
-                        let selected = dlg.selected_color == preset && !dlg.show_custom_picker;
-                        if ui_kit::color_swatch(ui, preset, selected).clicked() {
-                            dlg.selected_color = preset;
-                            dlg.show_custom_picker = false;
-                            dlg.custom_color = [
-                                preset[0] as f32 / 255.0,
-                                preset[1] as f32 / 255.0,
-                                preset[2] as f32 / 255.0,
-                            ];
-                        }
-                    }
-                    let picker_resp =
-                        egui::color_picker::color_edit_button_rgb(ui, &mut dlg.custom_color);
-                    if picker_resp.changed() {
-                        dlg.show_custom_picker = true;
-                        dlg.selected_color = [
-                            (dlg.custom_color[0] * 255.0) as u8,
-                            (dlg.custom_color[1] * 255.0) as u8,
-                            (dlg.custom_color[2] * 255.0) as u8,
-                        ];
-                    }
-                });
+                color_choices(ui, &mut dlg.color);
 
                 ui.add_space(theme::SP_5);
                 ui.separator();
@@ -984,7 +936,7 @@ impl App {
                     .find(|w| w.id == dlg.workspace_id)
                 {
                     ws.name = new_name.clone();
-                    ws.color = dlg.selected_color;
+                    ws.color = dlg.color.color();
                 }
                 self.workspace_store.save();
                 if let Some(old) = old_name {
@@ -1827,348 +1779,6 @@ impl App {
             self.delete_confirm_file = None;
         } else if resp.dismissed || cancel_clicked {
             self.delete_confirm_file = None;
-        }
-    }
-
-    pub(in crate::app) fn render_open_folder_dialog(&mut self, ctx: &egui::Context) {
-        if self.open_folder_dialog.is_none() {
-            return;
-        }
-
-        let mut open_it = false;
-        let mut navigate_parent: Option<u64> = None;
-        let t = theme::active();
-
-        let title_text = if self
-            .open_folder_dialog
-            .as_ref()
-            .and_then(|d| d.existing_workspace_id)
-            .is_some()
-        {
-            "Open Workspace Folder"
-        } else {
-            "Open Folder"
-        };
-
-        let config = ui_kit::DialogConfig {
-            width: ui_kit::DialogWidth::Responsive {
-                pct: 0.45,
-                min: 360.0,
-                max: 520.0,
-            },
-            max_height: 400.0,
-            ..Default::default()
-        };
-
-        let mut cancel_clicked = false;
-        let resp = ui_kit::dialog(ctx, self.vp_id("open_folder"), config, |ui| {
-            ui_kit::dialog_header(ui, title_text);
-
-            if let Some(dlg) = &mut self.open_folder_dialog {
-                // Path display
-                ui.label(
-                    egui::RichText::new(theme::short_path(&dlg.path))
-                        .monospace()
-                        .size(theme::FONT_UI_SM)
-                        .color(t.fg_path),
-                )
-                .on_hover_text(dlg.path.display().to_string());
-                ui.add_space(theme::SP_4);
-
-                // Subdirectory warning
-                if let Some((parent_id, ref parent_name)) = dlg.parent_workspace {
-                    let warn_text = format!("This folder is inside workspace \"{}\"", parent_name);
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(warn_text)
-                                .size(theme::FONT_UI_SM)
-                                .color(t.warning),
-                        );
-                    });
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(format!("Open \"{}\" instead", parent_name))
-                                    .size(theme::FONT_UI_SM),
-                            )
-                            .rounding(theme::R_SM),
-                        )
-                        .clicked()
-                    {
-                        navigate_parent = Some(parent_id);
-                    }
-                    ui.add_space(theme::SP_4);
-                }
-
-                // Terminal selection
-                ui.label(ui_kit::label_secondary("Terminal"));
-                ui.add_space(theme::SP_1);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(theme::SP_3, theme::SP_3);
-                    for shell in &dlg.available_shells.clone() {
-                        let selected = dlg.selected_shell == *shell;
-                        if ui_kit::toggle_chip(ui, shell.display_name(), selected).clicked() {
-                            dlg.selected_shell = shell.clone();
-                        }
-                    }
-                });
-                ui.add_space(theme::SP_5);
-
-                // Save as Workspace toggle
-                ui.checkbox(
-                    &mut dlg.save_as_workspace,
-                    ui_kit::label("Save as Workspace"),
-                );
-                ui.add_space(theme::SP_3);
-
-                // Workspace name + color (shown only when save is checked)
-                if dlg.save_as_workspace {
-                    ui.label(ui_kit::label_secondary("Name"));
-                    let name_resp = ui.add(
-                        egui::TextEdit::singleline(&mut dlg.workspace_name)
-                            .hint_text("e.g. My Project")
-                            .desired_width(f32::INFINITY),
-                    );
-                    if !dlg.focus_requested {
-                        name_resp.request_focus();
-                        dlg.focus_requested = true;
-                    }
-
-                    let name_trimmed = dlg.workspace_name.trim();
-                    let name_conflict = if !name_trimmed.is_empty() {
-                        self.workspace_store.workspaces.iter().any(|w| {
-                            w.name.eq_ignore_ascii_case(name_trimmed)
-                                && Some(w.id) != dlg.existing_workspace_id
-                        })
-                    } else {
-                        false
-                    };
-                    if name_conflict {
-                        ui.label(
-                            egui::RichText::new("A workspace with this name already exists")
-                                .size(theme::FONT_UI_XS)
-                                .color(t.error),
-                        );
-                    }
-                    ui.add_space(theme::SP_3);
-
-                    ui.label(ui_kit::label_secondary("Color"));
-                    let color_conflict = self.workspace_store.workspaces.iter().any(|w| {
-                        w.color == dlg.workspace_color && Some(w.id) != dlg.existing_workspace_id
-                    });
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(theme::SP_4, theme::SP_4);
-                        for &preset in PRESET_COLORS {
-                            let selected = dlg.workspace_color == preset && !dlg.show_custom_picker;
-                            if ui_kit::color_swatch(ui, preset, selected).clicked() {
-                                dlg.workspace_color = preset;
-                                dlg.show_custom_picker = false;
-                                dlg.custom_color = [
-                                    preset[0] as f32 / 255.0,
-                                    preset[1] as f32 / 255.0,
-                                    preset[2] as f32 / 255.0,
-                                ];
-                            }
-                        }
-                        let picker_resp =
-                            egui::color_picker::color_edit_button_rgb(ui, &mut dlg.custom_color);
-                        if picker_resp.changed() {
-                            dlg.show_custom_picker = true;
-                            dlg.workspace_color = [
-                                (dlg.custom_color[0] * 255.0) as u8,
-                                (dlg.custom_color[1] * 255.0) as u8,
-                                (dlg.custom_color[2] * 255.0) as u8,
-                            ];
-                        }
-                    });
-                    if color_conflict {
-                        ui.label(
-                            egui::RichText::new("This color is already used by another workspace")
-                                .size(theme::FONT_UI_XS)
-                                .color(t.warning),
-                        );
-                    }
-                    ui.add_space(theme::SP_3);
-                }
-
-                // Open / Cancel buttons
-                let can_open = if dlg.save_as_workspace {
-                    let name_trimmed = dlg.workspace_name.trim();
-                    let name_ok = !name_trimmed.is_empty()
-                        && !self.workspace_store.workspaces.iter().any(|w| {
-                            w.name.eq_ignore_ascii_case(name_trimmed)
-                                && Some(w.id) != dlg.existing_workspace_id
-                        });
-                    let color_ok = !self.workspace_store.workspaces.iter().any(|w| {
-                        w.color == dlg.workspace_color && Some(w.id) != dlg.existing_workspace_id
-                    });
-                    name_ok && color_ok
-                } else {
-                    true
-                };
-
-                ui_kit::dialog_footer(ui, |ui| {
-                    if ui_kit::action_button(
-                        ui,
-                        "Open",
-                        can_open,
-                        ui_kit::ActionButtonStyle::Primary,
-                    )
-                    .clicked()
-                    {
-                        open_it = true;
-                    }
-                    if ui_kit::action_button(ui, "Cancel", true, ui_kit::ActionButtonStyle::Cancel)
-                        .clicked()
-                    {
-                        cancel_clicked = true;
-                    }
-                });
-            }
-        });
-
-        // Enter shortcut (outside dialog closure)
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-            let can_open = self.open_folder_dialog.as_ref().is_some_and(|dlg| {
-                if dlg.save_as_workspace {
-                    let name_trimmed = dlg.workspace_name.trim();
-                    let name_ok = !name_trimmed.is_empty()
-                        && !self.workspace_store.workspaces.iter().any(|w| {
-                            w.name.eq_ignore_ascii_case(name_trimmed)
-                                && Some(w.id) != dlg.existing_workspace_id
-                        });
-                    let color_ok = !self.workspace_store.workspaces.iter().any(|w| {
-                        w.color == dlg.workspace_color && Some(w.id) != dlg.existing_workspace_id
-                    });
-                    name_ok && color_ok
-                } else {
-                    true
-                }
-            });
-            if can_open {
-                open_it = true;
-            }
-        }
-
-        if let Some(parent_id) = navigate_parent {
-            self.open_folder_dialog = None;
-            self.navigate_to_workspace(parent_id);
-        } else if open_it {
-            if let Some(dlg) = self.open_folder_dialog.take() {
-                // Only persist shell preference when the user explicitly changed it
-                let current_default = self.settings.default_shell.as_deref();
-                let chosen = dlg.selected_shell.display_name();
-                if current_default.is_some_and(|d| d != chosen) {
-                    self.settings.default_shell = Some(chosen.to_string());
-                    self.settings.save();
-                }
-
-                let ws_id = if dlg.save_as_workspace {
-                    if let Some(existing_id) = dlg.existing_workspace_id {
-                        // Update existing workspace
-                        let new_name = dlg.workspace_name.trim().to_string();
-                        let old_name = self
-                            .workspace_store
-                            .workspaces
-                            .iter()
-                            .find(|w| w.id == existing_id)
-                            .map(|w| w.name.clone());
-                        if let Some(ws) = self
-                            .workspace_store
-                            .workspaces
-                            .iter_mut()
-                            .find(|w| w.id == existing_id)
-                        {
-                            ws.name = new_name.clone();
-                            ws.color = dlg.workspace_color;
-                        }
-                        self.workspace_store.save();
-                        if let Some(old) = old_name {
-                            if old != new_name {
-                                self.note_store.rename_file(existing_id, &old, &new_name);
-                            }
-                        }
-                        Some(existing_id)
-                    } else {
-                        // Create new workspace
-                        let id = self.workspace_store.next_id();
-                        self.workspace_store.workspaces.push(Workspace {
-                            id,
-                            name: dlg.workspace_name.trim().to_string(),
-                            path: dlg.path.clone(),
-                            color: dlg.workspace_color,
-                            host_window_id: None,
-                            last_activated: 0,
-                        });
-                        self.workspace_store.save();
-                        Some(id)
-                    }
-                } else {
-                    None
-                };
-
-                // Spawn terminal session
-                let (cols, rows) = self
-                    .pane_state
-                    .panes
-                    .iter()
-                    .find(|p| Some(p.id) == self.pane_state.active_pane_id)
-                    .map(|p| p.last_size)
-                    .unwrap_or_else(|| {
-                        self.pane_state
-                            .panes
-                            .first()
-                            .map(|p| p.last_size)
-                            .unwrap_or((80, 24))
-                    });
-                if let Some(new_id) =
-                    self.spawn_session(&dlg.selected_shell, cols, rows, Some(dlg.path))
-                {
-                    self.session_state.active_id = Some(new_id);
-                    if !self
-                        .pane_state
-                        .panes
-                        .iter()
-                        .any(|p| matches!(&p.content, PaneContent::Terminal(s) if *s == new_id))
-                    {
-                        let pane_id = self.pane_state.next_pane_id;
-                        self.pane_state.next_pane_id += 1;
-                        self.pane_state.panes.push(PaneEntry {
-                            id: pane_id,
-                            content: PaneContent::Terminal(new_id),
-                            manual_width: None,
-                            last_size: (cols, rows),
-                            labels: vec![],
-                            last_active_at: crate::util::now_millis(),
-                            workspace_id: self.active_group,
-                        });
-                        self.pane_state.pane_trees.insert(
-                            pane_id,
-                            PaneNode::Leaf {
-                                pane_id,
-                                last_size: (cols, rows),
-                            },
-                        );
-                        self.pane_state.add_pane_to_group(
-                            self.pane_state.focused_group_id,
-                            pane_id,
-                            None,
-                        );
-                        self.activate_pane(pane_id);
-                        self.flash.trigger(
-                            crate::app::feedback::FlashTarget::Tab(pane_id),
-                            crate::app::feedback::FlashKind::Success,
-                        );
-                    }
-                }
-
-                // Navigate to workspace if created/updated
-                if let Some(ws_id) = ws_id {
-                    self.navigate_to_workspace(ws_id);
-                }
-            }
-        } else if resp.dismissed || cancel_clicked {
-            self.open_folder_dialog = None;
         }
     }
 }
