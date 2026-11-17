@@ -35,6 +35,7 @@ use super::session_state::SessionState;
 use super::settings::{windows_data_path, AppSettings};
 use super::title::shell_escape_arg;
 use super::ui::left_panel::nav_order::NavOrder;
+use super::ui::left_panel::LEFT_PANEL_WIDTH_RANGE;
 use super::watcher::WatchState;
 use super::{App, CloseAllTarget};
 
@@ -949,7 +950,10 @@ impl App {
                 view.notes_panel_collapsed = v;
             }
             if let Some(v) = s.left_panel_width {
-                view.left_panel_width = v.clamp(80.0, 400.0);
+                view.left_panel_width = v.clamp(
+                    *LEFT_PANEL_WIDTH_RANGE.start(),
+                    *LEFT_PANEL_WIDTH_RANGE.end(),
+                );
             }
             if let Some(v) = s.right_panel_width {
                 view.right_panel_width = v.clamp(80.0, 800.0);
@@ -1970,7 +1974,10 @@ impl App {
         self.notes_panel_ratio = safe_ratio(state.notes_panel_ratio, 0.35);
         self.notes_panel_collapsed = state.notes_panel_collapsed;
         self.left_panel_width = if state.left_panel_width.is_finite() {
-            state.left_panel_width.clamp(80.0, 400.0)
+            state.left_panel_width.clamp(
+                *LEFT_PANEL_WIDTH_RANGE.start(),
+                *LEFT_PANEL_WIDTH_RANGE.end(),
+            )
         } else {
             theme::LEFT_SIDEBAR_W
         };
