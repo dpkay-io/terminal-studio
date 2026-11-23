@@ -8,7 +8,7 @@ GPU-accelerated terminal multiplexer in Rust using egui/eframe (wgpu renderer). 
 cargo build              # dev (opt-level 1)
 cargo run
 cargo build --release    # opt-level 3, LTO=true, codegen-units=1
-cargo test               # all unit tests (1160 tests)
+cargo test               # all unit tests (1191 tests)
 RUST_LOG=debug cargo run # enable debug logging
 ```
 
@@ -24,7 +24,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/renderer_choice.rs` | Renderer order, `--renderer=` override, and `another_renderer_may_help()`: no glow retry when the window system or app creation failed (that would mask the real error with winit's "EventLoop can't be recreated") |
 | `src/app.rs` | `App` struct; implements `eframe::App`: `logic()` (quit request, close confirmation, restart into an update, the saver's session saves — eframe also runs it while every window is minimized or hidden, when `ui()` is skipped) and `ui()` (everything else; draws the main window into its root `Ui`, then each extra window's viewport via `render_window_body(ui)`); render dispatch to UI submodules |
 | `src/theme.rs` | Design language tokens: spacing (SP_0–SP_6, `f32`) with `margin_same/xy/sides()` (egui margins are `i8`), radii (R_NONE–R_LG, `u8` like egui's `CornerRadius`), `frameless_text_edit()` (no frame, padding kept), `scroll_style()` (egui's edge fade, coasting and rubber band off), `apply_widget_metrics()` (button padding, widget height, default text sizes, animation time, panel grab: egui 0.28's values, pinned), `rgba_unmultiplied()` / `with_alpha()` (every translucent colour; egui 0.28's linear-space premultiply), typography (FONT_*), alpha/blend constants, 15-theme palette, semantic colors, WCAG contrast helpers |
-| `src/workspace.rs` | `WorkspaceStore`, `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
+| `src/workspace.rs` | `WorkspaceStore` (`find(id)`, `find_for_cwd()` — most specific folder), `NoteStore`, `Workspace`, `WindowId` — JSON persistence |
 | `src/pane_tree.rs` | `PaneNode` tree (Leaf/Split), `SplitDir`, `split_rect()` — recursive pane splitting within tabs |
 | `src/logging.rs` | `LogLevel` enum, `LogGuard`; non-blocking daily-rotated file logging via tracing-appender; 7-day retention cleanup; `load_configured_level()` partial settings parse |
 | `src/single_instance.rs` | `SingleInstanceGuard`: Windows `CreateMutexW` / Unix `flock`; bypass with `--no-singleton` |
@@ -50,20 +50,21 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 
 | File | Responsibility |
 |------|---------------|
-| `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()`: a pane's workspace by its folder first (single source for tab grouping, sidebar, titlebar, info bar) |
+| `src/app/state.rs` | Core app state initialization; session/pane/workspace restoration from persisted JSON; `pane_group()` / `pane_workspace()` (`pane_group_by()`, pure): a pane's workspace — its folder first, then the workspace recorded on it, then the one it was opened in, never a deleted one; the single source for tab grouping, the workspace filter and every workspace colour (row, tab, split header, title bar). `shown_group()` / `shown_workspace()`: the focused pane's workspace, which the title bar and the highlighted workspace card show |
 | `src/app/fonts.rs` | Font definitions: egui's fonts first, then memory-mapped system fallbacks per OS (symbols, dingbats ✓✕✗, CJK, Hangul) so those don't render as boxes |
 | `src/app/pane_state.rs` | `PaneState`: pane list management, active pane tracking, next ID counters, tree management; `shown_pane_ids()` (the tab each split on screen shows); `pane_sections_into()`: each pane's left nav section, the one map the nav order and the session list's sections both read |
 | `src/app/deferred_terminals.rs` | `start_shown_restored_sessions()`: a restored session waits as `DeferredTerminal` until a split shows it — any split, not only the focused one — then starts with its saved output, name and pending command |
 | `src/app/pane.rs` | `PaneEntry`, `SessionEntry`, `PaneContent` enum, `TermSelection` struct; `FileEditorState::write_to_disk()` (the one save path), `has_unsaved_changes()`, and `apply_edit()` / `apply_file_text()` / `mark_saved()`, which compare the buffer to a hash of the file's text so undoing back to it clears the `*` |
 | `src/app/close_guard.rs` | `request_close_tab()` / `TabClose`: every single-tab close (header ✖, ⇧⌘W, pane menu, session list ✕/middle click/menu) asks "Save changes?" first when the tab has unsaved edits; `has_unsaved_changes()` / `unsaved_count()` |
 | `src/app/session_state.rs` | `SessionState`: session list management, find/add/remove operations |
-| `src/app/settings.rs` | `AppSettings`, `CursorStyle` enum; user settings (theme, fonts, cursor, scrollback, `nav_stable_rows` — left nav rows that stay in place, default 7, 0–100; `workspace_color_on_titlebar`, default on); JSON persistence; `sanitized()` clamps hand-edited values on load |
+| `src/app/settings.rs` | `AppSettings`, `CursorStyle` enum; user settings (theme, fonts, cursor, scrollback, `nav_stable_rows` — left nav rows that stay in place, default 7, 0–100; `workspace_stable_rows` — workspace list rows that stay in place, default 5, 0–100; `workspace_color_on_titlebar`, default on); JSON persistence; `sanitized()` clamps hand-edited values on load |
 | `src/app/input.rs` | `key_to_pty_bytes()`: keyboard→PTY byte translation (Ctrl+A–Z, arrows, function keys, modifiers); `paste_bytes()` (bracketed paste when the program asked), `shell_quote_path()` |
 | `src/app/title.rs` | `effective_title()`: workspace+session title formatting; `session_title()`: a user-given (pinned) name word for word, else `effective_title` — behind `App::session_label()`, the one terminal name for rows, split headers, window title and saved sessions; shell escape helpers |
 | `src/app/feedback.rs` | `FlashManager`, `FlashTarget`, `FlashKind`: subtle UI flash feedback (copy, paste, error) with auto-fade |
 | `src/app/markdown.rs` | `render_markdown()`: headers, bold, code blocks, lists, blockquotes, links |
 | `src/app/persistence.rs` | `AppSession`, `SavedPane`, `SavedPaneContent`, `SavedSession`; JSON serialization; session restore. A restored session that was never opened keeps its scrollback file across saves (`SavedPaneContent::DeferredTerminal.scrollback_file`); running sessions' files are written under a per-save stamp so they never overwrite it |
 | `src/app/multi_window.rs` | `ExtraWindow`, `WindowState`, `WindowView`; egui multi-viewport for workspaces. `DeferredSaves`: a save asked for during an extra window's frame (its view is swapped into `App` by `App::with_window_view`) waits until the view is swapped back, so it never writes one window's state as another's |
+| `src/app/window_state.rs` | OS window state: minimized/fullscreen reads that are right per platform, maximize/fullscreen toggles, `minimize()`. On macOS, minimize and zoom go through AppKit (`macos_objc`): `ViewportCommand::Minimized(true)` sets egui's cached flag, nothing clears it there, and eframe 0.37 then never draws the restored window again |
 | `src/app/quit.rs` | `App::quit_app()` / `close_main_window()`: every quit (the quit dialog, the main window's close button, macOS ⌘Q) closes the main window, which ends the app, from whichever window it is asked in. The quit dialog is drawn in every open window |
 | `src/app/restart.rs` | Restarting into an installed update: the Restart pill / Settings button only ask for it (`request_restart`), and the main window's frame saves and restarts (`restart_if_due`), since a restart exits at once and a save from an extra window's frame would wait |
 | `src/app/workspace_ui.rs` | What the workspace dialogs hold and the checks their buttons follow (pure): `ColorChoice` (preset swatch or custom), `WorkspaceDialog`, `WorkspaceEditDialog`, `OpenFolderDialog` / `FolderEntry` / `EntryCheck` — one or more folders, `add_folders()` (a second pick or drop joins the open dialog), names and colours free of the store and of each other |
@@ -78,6 +79,8 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/term_context_menu.rs` | The terminal's right-click menu (Copy, Paste, Search, Select All), drawn every frame it is open — outside the terminal's input handling, which stands down while any floating layer (the menu itself) is open; `copy_terminal_selection()` / `paste_into_terminal()`, shared with ⌘C / ⌘V |
 | `src/app/layout_shortcuts.rs` | `App::apply_layout_shortcut()` / `AppAction::arranges_layout()`: split, close tab, show/hide side panels, previous/next and numbered tabs, switch to last session (Ctrl+Tab) — the one handler for the terminal key loop and for an active file editor (which otherwise keeps its keys for typing); `run_held_layout_keys()` runs the Ctrl+Tab that `raw_input_hook` keeps away from a focused file editor or notes box; extra windows hold it in `hold_extra_window_keys()` and park the keyboard for that frame (egui has already read the Tab as a focus move), then `restore_parked_focus()` gives it back |
 | `src/app/nav_order_sync.rs` | `refresh_nav_order()`: feeds the window's `NavOrder` once per window frame (also while the left panel is hidden); `numbered_tab_targets()`: what ⌘1–9 open — the focused split's rows in left nav order (the whole list without splits), filtered like the list |
+| `src/app/workspace_order_sync.rs` | `refresh_workspace_order()`: feeds the window's workspace list order (`NavOrder<u64>`) once per window frame — the session list's rule on workspaces: the top `workspace_stable_rows` cards never move on their own, one switched to from below them (`switch_group` stamps `last_activated`) moves to row 1; held while the pointer is over the list. Saved as `AppSession.workspace_order` (extra windows: `SavedWindowNavOrder.workspace_order`); with none saved it starts from the old sort (open tabs first by recency, then by name) |
+| `src/app/pty_resize.rs` | `PendingResizes`: a terminal's grid follows its pane once the pane keeps a new size for `SETTLE` (150 ms; ConPTY clears the screen on every resize). A pane back at its grid's size cancels the wait, so a size it only passed through is never applied (that left the grid wider than the pane, cutting text off on the right). `grid_dim()`. Pure |
 | `src/app/view_toggles.rs` | `VIEW_TOGGLES`, `App::toggle_view()` / `view_is_open()`: the view's show/hide actions (sidebar, explorer, switcher, recently closed, settings, shortcut sheet, and the tab bar, which has no titlebar button) — the single path for titlebar buttons, shortcuts, command palette, the macOS menu bar and the Settings checkbox |
 | `src/app/macos_fullscreen.rs` | macOS only: in native full screen AppKit puts the title bar winit adds for the switch (title + traffic lights) in a child strip window (`NSToolbarFullScreenWindow`) that slides down under the menu bar on hover, over the app's title bar. On every entry (and at launch for a restored window) that strip is emptied and made click-through; window style and the menu bar are left alone |
 | `src/app/macos_menu.rs` | macOS only: adds Settings… to the app menu, a View menu (Hide/Show Sidebar, Hide/Show Explorer, Hide/Show Tab Bar, Switcher, Recently Closed Sessions) and Help → Keyboard Shortcuts, each showing its current shortcut. The menu never claims those keys (an item disables itself while AppKit matches a key press against its own chord), so the app's own key handling stays the only one. Clicks are queued and run by the focused window's frame |
@@ -108,7 +111,7 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 |------|---------------|
 | `src/app/ui/titlebar.rs` | Window title bar with workspace color tint, update pill, toolbar, focus tracking |
 | `src/app/ui/update_pill.rs` | Titlebar update pill: label and click action per `UpdateStatus` (available, downloading, installing, restart) |
-| `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()`, `pane_cwd()`: display text, tooltip, colour and path derivation for a pane — the one source for the session list row, the split header and dialogs, so an edited file reads `* name` (`! name` after a failed save) everywhere. No rendering |
+| `src/app/ui/pane_labels.rs` | `tab_display_text()`, `tab_tooltip_text()`, `ws_color_for_pane()` (the colour of `pane_workspace`), `pane_cwd()`: display text, tooltip, colour and path derivation for a pane — the one source for the session list row, the split header and dialogs, so an edited file reads `* name` (`! name` after a failed save) everywhere. No rendering |
 | `src/app/ui/tab_bar.rs` | The optional row of tabs above each split (`settings.show_tab_bar`, on by default; Settings, View menu, command palette, ⌥⇧⌘T / Ctrl+Alt+Shift+T). One tab per tab the split holds, in its order: click shows it, double-click renames a terminal, ✕ / middle click close it like the split's ✖, right-click gives the session-list row's menu (`App::pane_menu`), drag reorders it, moves it into a gap in another split's tab bar (`DropTarget::GroupTabBar`) or splits it off at an edge. Actions run through the session list's `process_tab_actions`; the info bar below keeps the split buttons |
 | `src/app/ui/info_bar.rs` | The pane header for each split: identity text (ellipsised, full text on hover), position toggle, hide, split ⊞ ⊟, ✖ closes the tab the split shows (right-click: close all tabs in the split, confirmed when more than one); `info_bar_layout()` places the buttons and gives the text the rest. Position/hidden is per split (`EditorGroup.info_bar`, saved with the group layout; unset follows `settings.info_bar_position`, which is the place the user last moved a bar to — hiding one doesn't change it, and a revealed bar goes there). A hidden bar's ℹ reveal button only appears while the pointer is in the pane's top-right corner |
 | `src/app/ui/pane_renderer.rs` | `RenderCtx`, `PaneContextAction`; recursive pane tree renderer; terminal/editor/diff/notes dispatch |
@@ -121,8 +124,9 @@ The Rust version is pinned in `rust-toolchain.toml` (1.99.1); local, CI and rele
 | `src/app/ui/debounce.rs` | `Debouncer<T>`: time-based debouncing for input fields |
 | `src/app/ui/left_panel/session_list.rs` | The single session navigator: split sections, three-state row highlighting, row chrome and interactions, "+New" menu (Open Folder… picks several), fuzzy filter, workspace filter dropdown; dragging a row onto another row of its section places it above/below that row in the left nav only (`DropTarget::NavRow`, a line shows where). Row menu: Rename (pins the name on the session — `Session::pin_title` — so prompt hooks and programs can't replace it; an empty name goes back to the automatic one; a restored session not started yet is renamed too, and the pin applies when it starts; saved with the session and closed-session records), Copy path, Show in Finder/File Explorer (`util::REVEAL_IN_FILE_MANAGER_LABEL`) |
 | `src/app/ui/left_panel/sections.rs` | `section_labels()`, `RowState`: split-section grouping and naming, row prominence. Pure — no `egui::Ui`, so it is unit-testable |
-| `src/app/ui/left_panel/nav_order.rs` | `NavOrder`, `NavPane`, `SectionKey`: the left nav row order. Per split section, the top `nav_stable_rows` rows never move on their own; a session activated from below them (or new once they are full) moves to the section's row 1. Read from each pane's `last_active_at`; activations are held while the pointer is over the list, then applied oldest first; a pane changing section goes to the end of its new one at once (panes moving together keep their order), then follows the rule there if the move activated it. `place()` / `would_move()`: a row dragged next to another of its section. Saved as `AppSession.nav_order` (extra windows: `window_nav_orders`). Pure |
-| `src/app/ui/left_panel/workspace_section.rs` | Workspace cards; collapse toggle; color swatch; git branch/diff badges |
+| `src/app/ui/left_panel/nav_order.rs` | `NavOrder<Id>`, `NavItem<Id>` / `NavPane`, `SectionKey`: the left nav row order (also the workspace list's, by workspace id). Per split section, the top `nav_stable_rows` rows never move on their own; a session activated from below them (or new once they are full) moves to the section's row 1. Read from each pane's `last_active_at`; activations are held while the pointer is over the list, then applied oldest first; a pane changing section goes to the end of its new one at once (panes moving together keep their order), then follows the rule there if the move activated it. `place()` / `would_move()`: a row dragged next to another of its section. Saved as `AppSession.nav_order` (extra windows: `window_nav_orders`). Pure |
+| `src/app/ui/left_panel/workspace_section.rs` | Workspace cards in the window's `workspace_order`; the focused tab's workspace (`shown_group`) highlighted; collapse toggle; color swatch; git branch/diff badges |
+| `src/app/ui/right_panel_size.rs` | `right_panel_width_range()`: the right panel may take up to `RIGHT_PANEL_MAX_SHARE` (80 %) of the space beside the left panel, at least `RIGHT_PANEL_MIN_W`; `restored_right_panel_width()`. Pure |
 | `src/app/ui/left_panel/context_menu.rs` | Right-click context menu: rename, edit color, delete, duplicate, open in new window |
 
 ### UI Kit (`src/ui_kit/`)
@@ -278,7 +282,12 @@ arboard = "3"                # clipboard access
 
 # Windows-only
 windows-sys = "0.52"         # DWM, toolhelp, CreateMutexW, window messages
+
+# [patch.crates-io]
+winit = { git = "https://github.com/rust-windowing/winit", rev = "39c4009c…" }
 ```
+
+winit is patched to one commit on top of v0.30.13 (the open 0.30 backport rust-windowing/winit#4694, which brings in its own `dpi` 0.1.1). Without it, on Windows, dragging the window across monitors with different scaling flips it between the two scales and grows it on every crossing (winit#4041): flicker and a drag that fights the cursor; upstream reports a crash once the window passes the GPU's texture limit. `deny.toml` allows that one git source. Remove the patch and the `allow-git` entry once winit 0.30.14 (or an eframe on winit 0.31) has the fix.
 
 ## Conventions
 
@@ -358,12 +367,15 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/left_panel/sections.rs` | 9 | split-section labels, three-state row prominence |
 | `src/app/ui/left_panel/nav_order.rs` | 32 | dragged rows placed above/below (no-op spots, same section only, rule applies after, while held), stable top rows, pull to row 1 from below, new rows (room / full), close, hold then apply oldest first, 0 = recency sort, per-section counting, section moves (with and without activation, keeping their order, landing at once while held), restore (saved order, duplicates, unknown ids, unlisted by recency), ⌘1–9 targets |
 | `src/app/nav_order_sync.rs` | 2 | ⌘1–9 count the whole list without splits, the focused split with them |
+| `src/app/workspace_order_sync.rs` | 7 | first order matches the old sort (ties never depend on store order), nothing saved seeds on the first refresh, saved order kept, top rows stay / a switch from below moves to the top, held while hovered, new and deleted workspaces |
+| `src/app/pty_resize.rs` | 8 | applied once settled, same size keeps its start, a changing size restarts, back to the grid size cancels (right-edge clipping), grid size starts nothing, sessions independent / closed forgotten, dims never wrap, clock going back |
+| `src/app/ui/right_panel_size.rs` | 5 | up to 80 % beside the left panel, the middle keeps its share, tiny/unknown space stays valid, wide saved width kept, minimum / not-a-number restore |
 | `src/app/ui/info_bar.rs` | 8 | position serde, button layout order/overlap, text never under a button, narrow split, reveal hot zone |
 | `src/app/title.rs` | 21 | title formatting with workspaces, effective title, a pinned name shown as typed (even "zsh"), shell escaping |
 | `src/pane_tree.rs` | 19 | leaf IDs, split/nested-split, remove (all cases), ratio mutation, split_rect geometry |
 | `src/app/diff_parser.rs` | 18 | unified diff parsing, hunk extraction, line kind classification |
 | `src/git/parser.rs` | 17 | git status --porcelain parsing, C-style unquoting, file status kinds |
-| `src/workspace.rs` | 17 | store CRUD, find_for_cwd, find_for_path, unique name, note store |
+| `src/workspace.rs` | 25 | store CRUD, find_for_cwd, find_for_path, unique name, note store, find by id |
 | `src/app/workspace_ui.rs` | 13 | open-folder dialog: Save as Workspace on outside workspaces / off inside one / existing kept, default names and colours free, several folders distinct from each other, duplicates listed once, saved-by-default folders get the first picks, clashes inside the dialog, blank name, adding folders keeps edits; save dialog defaults; colour choice swatch/picker |
 | `src/app/workspace_colors.rs` | 10 | first preset when empty, a batch of 8 clearly different, never a used colour or a repeat, avoids a custom colour near a preset, farthest free candidate, prefers presets, deterministic, past every candidate, OKLab reference values |
 | `src/app/pending_open.rs` | 3 | each window takes its own requests in order, closed windows dropped, shared across threads |
@@ -385,7 +397,7 @@ Color32::from_rgb(30, 30, 46)
 | `src/syntax.rs` | 10 | syntax highlighting, language detection, theme building |
 | `src/app/git_worker.rs` | 10 | git info, stage/unstage, commit, push operations |
 | `src/app/ui/debounce.rs` | 9 | time-based debounce logic |
-| `src/app/persistence.rs` | 35 | session serialization, the scrollback files a saved state names, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order and each extra window's (old files load empty), saved indices stay aligned after a pane that can't be restored |
+| `src/app/persistence.rs` | 37 | session serialization, the scrollback files a saved state names, restore logic, per-split info bar position, pinned session names, untitled buffers (old files load), left nav order and each extra window's (old files load empty), saved indices stay aligned after a pane that can't be restored, workspace list orders (old files load empty) |
 | `src/app/pane.rs` | 15 | pane content enum, terminal selection, editor save (written, untitled never written, failure keeps edits), undoing back to the saved text leaves nothing unsaved |
 | `src/app/ui/tab_bar.rs` | 3 | drop gap from the pointer, hidden tabs keep their place in the order, empty bar |
 | `src/pty/mod.rs` | 8 | shell detection, session manager operations |
@@ -398,10 +410,11 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/file_browser.rs` | 10 | directory listing, file entry sorting, gitignore parsing |
 | `src/shortcuts.rs` | 28 | keybinding parsing, action resolution, layout chords never use a text-editing key, Ctrl+Tab = last session on every platform and not OS-reserved on macOS, each numbered tab action's index |
 | `src/app/multi_window.rs` | 3 | saves outside a window's frame run at once; inside one they wait, per kind, and are taken once |
+| `src/app/window_state.rs` | 10 | minimized read per platform (macOS: no window rect, never egui's cached flag), edge-resize handles only on floating windows, minimize goes through AppKit on macOS (never `ViewportCommand::Minimized`), not in full screen |
 | `src/app/restart.rs` | 3 | an installed update restarts once, a Restart click always (retry after a failure), nothing otherwise |
 | `src/app/quit.rs` | 2 | a quit from an extra window closes the main window (not itself); from the main window, the main window |
 | `src/keybindings.rs` | 6 | keybinding config loading, JSON handling |
-| `src/app/settings.rs` | 11 | settings persistence, JSON config, rows that stay in place (default, old files, clamp), title bar workspace colour (default on, old files) |
+| `src/app/settings.rs` | 12 | settings persistence, JSON config, rows that stay in place (default, old files, clamp), title bar workspace colour (default on, old files), workspace rows that stay in place (default 5, old files, clamp) |
 | `src/search_worker.rs` | 6 | cross-session fuzzy search |
 | `src/pty/shell_integration.rs` | 5 | shell prompt integration helpers |
 | `src/app/ui/command_palette.rs` | 7 | command filtering, action dispatch, unique labels, file finder and New file listed |
@@ -420,17 +433,17 @@ Color32::from_rgb(30, 30, 46)
 | `src/app/ui/update_pill.rs` | 5 | titlebar pill label/action for every update status |
 | `src/app/fonts.rs` | 7 (2 opt-in off macOS) | egui fonts stay first, fallbacks registered once and mapped once, missing/empty files skipped, common symbols + CJK render, every non-ASCII char in source string literals renders, literal scanner |
 | `src/renderer_choice.rs` | 7 | default/forced renderer order, `--renderer=` parsing, fallback only for renderer failures |
-| `src/app/state.rs` | 14 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; a discard request runs the frame's UI once (egui would run it twice); egui's style follows the app theme, not the OS; the style keeps the app's widget metrics and placeholder colour |
+| `src/app/state.rs` | 15 | pane workspace follows the folder, falls back to the opening workspace, none when deleted; a discard request runs the frame's UI once (egui would run it twice); egui's style follows the app theme, not the OS; the style keeps the app's widget metrics and placeholder colour, a pane of a deleted workspace is under Other |
 | `src/ui_kit/containers.rs` | 1 | popup list items fill a list at least as wide as its anchor |
 | `src/ui_kit/text.rs` | 2 | a placeholder is drawn in its text box's font (font id and text style) |
 | `src/app/ui/pane_renderer.rs` | 5 | drop-preview geometry: join covers the leaf, each edge covers the matching half; the active text box id is read and written without taking egui's context lock twice (no deadlock, also while another thread asks for repaints) |
-| `src/app/ui/pane_labels.rs` | 28 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering |
+| `src/app/ui/pane_labels.rs` | 31 | per-content-kind display text, tooltips, pane directory, workspace colour, untitled buffer numbering, the workspace rule (subfolder, outside every workspace, no folder yet, folder over opened-in, files, notes, deleted) |
 | `src/app/ui/dialogs.rs` | 1 | unsaved-changes note wording |
 | `src/app/macos_menu.rs` | 10 | every titlebar toggle in the menu once, Mac placement and wording (Show/Hide titles, checkmarks, Settings… stays open), shortcut → key equivalent, exact-chord match (Shift not applied), menu state |
 | `src/app/view_toggles.rs` | 1 | toggle list has no duplicates |
 | `src/app/macos_fullscreen.rs` | 2 | only full-screen windows are touched, names NUL-terminated |
 | `src/macos_objc.rs` | 4 | names NUL-terminated, nil receivers ignored, NSString round trip, class definition reused |
-| **Total** | **1160 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
+| **Total** | **1191 + 2 ignored (macOS)** | macOS-only updater tests are cfg-gated; Linux/Windows run fewer. DMG tests are serialized (`hdiutil_lock`) and cache images in `target/test-dmg-cache` |
 
 ## Release Workflow
 

@@ -53,6 +53,7 @@ mod pane;
 mod pane_state;
 mod pending_open;
 mod persistence;
+mod pty_resize;
 mod quit;
 mod restart;
 pub(crate) mod scrollback_capture;
@@ -71,6 +72,7 @@ mod window_state;
 mod worker_manager;
 mod workspace_colors;
 mod workspace_git_worker;
+mod workspace_order_sync;
 mod workspace_ui;
 
 // ── Re-imports from submodules ───────────────────────────────────────────────
@@ -163,10 +165,9 @@ pub struct App {
     // Last focused session, for sending focus-in/focus-out events
     last_focused_sid: Option<u32>,
     active_term_ui_id: Option<egui::Id>,
-    // Debounced PTY resize targets: (cols, rows, stable_since). PTY is only
-    // notified after the size has been stable for 150 ms, preventing ConPTY
-    // from clearing the screen on every drag frame.
-    resize_debounce: HashMap<u32, (u16, u16, Instant)>,
+    // PTY sizes waiting to settle (`pty_resize`): a terminal is resized once
+    // its pane keeps a new size for `pty_resize::SETTLE`.
+    resize_debounce: pty_resize::PendingResizes,
     // Fractional scroll accumulator — carries sub-line scrolls across frames.
     scroll_accum: HashMap<u32, f32>,
     // Background workers: foreground detection, git, search, sys monitor, update checker.
@@ -248,6 +249,14 @@ pub struct App {
     nav_list_hovered: bool,
     // Reused every frame by `refresh_nav_order`, so it allocates nothing.
     nav_panes_buf: Vec<crate::app::ui::left_panel::nav_order::NavPane>,
+    // The workspace list's row order for this window (`NavOrder` by
+    // workspace id, `workspace_order_sync`), saved with the session.
+    workspace_order: crate::app::ui::left_panel::nav_order::NavOrder<u64>,
+    // Whether the pointer was over the workspace list when it was last
+    // drawn; holds its order still on the next refresh. Per window.
+    workspace_list_hovered: bool,
+    // Reused every frame by `refresh_workspace_order`.
+    workspace_items_buf: Vec<crate::app::ui::left_panel::nav_order::NavItem<u64>>,
     /// Reused each frame: pane → left nav section (`pane_sections_into`).
     nav_sections_buf: HashMap<u32, crate::editor_group::GroupId>,
 
@@ -1281,7 +1290,7 @@ impl App {
         self.session_state.remove(sid);
         self.command_start_times.remove(&sid);
         self.completed_badges.remove(&sid);
-        self.resize_debounce.remove(&sid);
+        self.resize_debounce.remove(sid);
         self.scroll_accum.remove(&sid);
     }
 
@@ -1564,6 +1573,7 @@ impl App {
         // Before anything reads the left nav order this frame (shortcuts,
         // the session list).
         self.refresh_nav_order();
+        self.refresh_workspace_order();
         self.hold_extra_window_keys(ctx);
         self.process_open_requests(ctx);
 
@@ -1733,7 +1743,11 @@ impl App {
         if self.show_right_panel {
             egui::Panel::right(self.vp_id("right_panel"))
                 .default_size(self.right_panel_width)
-                .size_range(80.0..=800.0)
+                // Beside the left panel, so `available_width` is the space
+                // the right panel shares with the middle panes.
+                .size_range(ui::right_panel_size::right_panel_width_range(
+                    ui.available_width(),
+                ))
                 .resizable(true)
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::ZERO))
                 .show(ui, |ui| {
@@ -4290,72 +4304,47 @@ impl App {
             }
         }
 
-        // 8. PTY resize detection (per-pane) — debounced.
-        // We record the target size when it changes and only send the PTY resize
-        // after the size has been stable for 150 ms. This prevents ConPTY from
-        // issuing a clear-screen sequence on every drag frame, which would leave
-        // the terminal blank for as long as the running app takes to redraw.
+        // 8. PTY resize (per pane): each terminal's grid follows its pane once
+        // the pane keeps a new size (`pty_resize`).
         self.drop_pane_rects.clear();
         self.drop_pane_rects.extend_from_slice(&pane_rects_snap);
+        let now = Instant::now();
         for (pane_id, content_rect) in pane_rects_snap {
-            if let Some(pane_idx) = self.pane_state.panes.iter().position(|p| p.id == pane_id) {
-                if let PaneContent::Terminal(sid) = self.pane_state.panes[pane_idx].content {
-                    // Size the grid from the exact rect the renderer draws into,
-                    // via the shared helper — keeps cols/rows in lockstep with
-                    // visible_cols/visible_rows so no content is clipped.
-                    let (c, r) = crate::renderer::terminal_pass::grid_size_for_rect(
-                        content_rect,
-                        resize_cell_w,
-                        resize_cell_h,
-                    );
-                    let cols = (c as u16).max(1);
-                    let rows = (r as u16).max(1);
-                    let target = (cols, rows);
-                    if target != self.pane_state.panes[pane_idx].last_size {
-                        // Reset debounce timer only if the target itself changed
-                        // (not just re-entering the same pending target each frame).
-                        let need_reset = !matches!(self.resize_debounce.get(&sid), Some(&(dc, dr, _)) if (dc, dr) == target);
-                        if need_reset {
-                            self.resize_debounce
-                                .insert(sid, (cols, rows, Instant::now()));
-                        }
-                    }
-                }
+            let Some(pane) = self.pane_state.panes.iter().find(|p| p.id == pane_id) else {
+                continue;
+            };
+            if let PaneContent::Terminal(sid) = pane.content {
+                // Size the grid from the exact rect the renderer draws into,
+                // via the shared helper — keeps cols/rows in lockstep with
+                // visible_cols/visible_rows so no content is clipped.
+                let (c, r) = crate::renderer::terminal_pass::grid_size_for_rect(
+                    content_rect,
+                    resize_cell_w,
+                    resize_cell_h,
+                );
+                let target = (pty_resize::grid_dim(c), pty_resize::grid_dim(r));
+                self.resize_debounce
+                    .measure(sid, pane.last_size, target, now);
             }
         }
-
-        // Apply debounced resizes that have been stable for ≥150 ms.
-        {
-            const DEBOUNCE: Duration = Duration::from_millis(150);
-            let now = Instant::now();
-            let stable: Vec<(u32, u16, u16)> = self
-                .resize_debounce
-                .iter()
-                .filter(|(_, &(_, _, t))| now.duration_since(t) >= DEBOUNCE)
-                .map(|(&sid, &(c, r, _))| (sid, c, r))
-                .collect();
-            for (sid, cols, rows) in stable {
-                self.resize_debounce.remove(&sid);
-                self.scroll_accum.remove(&sid);
-                // Update pane's recorded size
-                if let Some(pane) = self
-                    .pane_state
-                    .panes
-                    .iter_mut()
-                    .find(|p| matches!(p.content, PaneContent::Terminal(s) if s == sid))
-                {
-                    pane.last_size = (cols, rows);
-                }
-                if let Some(idx) = self.session_state.sessions.iter().position(|e| e.id == sid) {
-                    let entry = &self.session_state.sessions[idx];
-                    SessionManager::resize(&entry.master, cols, rows);
-                    entry.session.write().resize(cols, rows);
-                }
+        for (sid, (cols, rows)) in self.resize_debounce.take_settled(now) {
+            self.scroll_accum.remove(&sid);
+            if let Some(pane) = self
+                .pane_state
+                .panes
+                .iter_mut()
+                .find(|p| matches!(p.content, PaneContent::Terminal(s) if s == sid))
+            {
+                pane.last_size = (cols, rows);
             }
-            // Keep repainting while a resize is pending so the debounce fires promptly.
-            if !self.resize_debounce.is_empty() {
-                ctx.request_repaint_after(Duration::from_millis(160));
+            if let Some(entry) = self.session_state.find(sid) {
+                SessionManager::resize(&entry.master, cols, rows);
+                entry.session.write().resize(cols, rows);
             }
+        }
+        // Keep repainting while a resize waits, so it lands once it settles.
+        if !self.resize_debounce.is_empty() {
+            ctx.request_repaint_after(pty_resize::REPAINT_AFTER);
         }
 
         // 9. File opened from right panel → add FileEditor pane (or focus existing)

@@ -17,6 +17,7 @@ const NS_APPLICATION: &[u8] = b"NSApplication\0";
 const SHARED_APPLICATION: &[u8] = b"sharedApplication\0";
 const KEY_WINDOW: &[u8] = b"keyWindow\0";
 const ZOOM: &[u8] = b"zoom:\0";
+const MINIATURIZE: &[u8] = b"miniaturize:\0";
 const NS_STRING: &[u8] = b"NSString\0";
 const ALLOC: &[u8] = b"alloc\0";
 const INIT: &[u8] = b"init\0";
@@ -230,14 +231,26 @@ pub unsafe fn rust_string(string: Object) -> Option<String> {
 /// window is zoomed, so this stays right even after another app (such as a
 /// window manager) resizes the window.
 pub fn zoom_key_window() {
+    send_to_key_window(ZOOM);
+}
+
+/// Minimizes the key window into the Dock, as its yellow button does.
+pub fn miniaturize_key_window() {
+    send_to_key_window(MINIATURIZE);
+}
+
+/// Sends a window action that takes a sender (`zoom:`, `miniaturize:`) to
+/// the key window. Does nothing without AppKit or a key window.
+fn send_to_key_window(action: &'static [u8]) {
     let Some(app) = shared_application() else {
         return;
     };
-    // SAFETY: `keyWindow` returns an NSWindow or nil, and `zoom:` takes a
-    // sender object, for which nil is allowed. `send_with` skips nil windows.
+    // SAFETY: `keyWindow` returns an NSWindow or nil, and every action sent
+    // here takes a sender object, for which nil is allowed. `send_with`
+    // skips nil windows.
     unsafe {
         let window = send(app, KEY_WINDOW);
-        send_with(window, ZOOM, std::ptr::null_mut());
+        send_with(window, action, std::ptr::null_mut());
     }
 }
 
@@ -252,6 +265,7 @@ mod tests {
             SHARED_APPLICATION,
             KEY_WINDOW,
             ZOOM,
+            MINIATURIZE,
             NS_STRING,
             ALLOC,
             INIT,

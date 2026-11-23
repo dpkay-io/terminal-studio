@@ -1,5 +1,7 @@
 //! The left nav's row order: the top rows of each split section stay where
-//! they are, and a session used from below them moves to row 1.
+//! they are, and a session used from below them moves to row 1. The
+//! workspace list keeps its order with the same rule (`NavOrder<u64>`, one
+//! section; `workspace_order_sync`).
 //!
 //! Each section (one per split, plus "Other" for a pane in no split) keeps
 //! its own order inside one list. When a pane becomes active:
@@ -23,6 +25,7 @@
 use crate::editor_group::GroupId;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 
 /// How many rows the numbered tab shortcuts (⌘1–9) reach.
 pub(in crate::app) const NUMBERED_TAB_COUNT: usize = crate::shortcuts::NUMBERED_TAB_ACTIONS.len();
@@ -35,13 +38,21 @@ pub(in crate::app) enum SectionKey {
     Other,
 }
 
-/// What the order needs to know about one pane, this frame.
+/// What a row is known by: a pane id (`u32`) in the session list, a
+/// workspace id (`u64`) in the workspace list.
+pub(in crate::app) trait NavId: Copy + Eq + Ord + Hash {}
+impl<T: Copy + Eq + Ord + Hash> NavId for T {}
+
+/// What the order needs to know about one row, this frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::app) struct NavPane {
-    pub id: u32,
+pub(in crate::app) struct NavItem<Id = u32> {
+    pub id: Id,
     pub section: SectionKey,
     pub last_active_at: u64,
 }
+
+/// A session list row: one pane.
+pub(in crate::app) type NavPane = NavItem<u32>;
 
 #[derive(Debug, Clone, Copy)]
 struct Seen {
@@ -51,28 +62,38 @@ struct Seen {
     section: SectionKey,
 }
 
-#[derive(Default)]
-pub(in crate::app) struct NavOrder {
-    order: Vec<u32>,
-    seen: HashMap<u32, Seen>,
+pub(in crate::app) struct NavOrder<Id = u32> {
+    order: Vec<Id>,
+    seen: HashMap<Id, Seen>,
     /// The last refresh was held, so activations may be waiting for it.
     held: bool,
 }
 
-impl NavOrder {
+impl<Id> Default for NavOrder<Id> {
+    fn default() -> Self {
+        NavOrder {
+            order: Vec::new(),
+            seen: HashMap::new(),
+            held: false,
+        }
+    }
+}
+
+impl<Id: NavId> NavOrder<Id> {
     /// The saved order first (unknown and repeated ids dropped), then every
     /// pane it does not list, most recent first. Nothing counts as an
     /// activation until a pane's `last_active_at` changes.
-    pub(in crate::app) fn restore(saved: &[u32], panes: &[NavPane]) -> Self {
-        let present: HashSet<u32> = panes.iter().map(|p| p.id).collect();
-        let mut listed: HashSet<u32> = HashSet::with_capacity(saved.len());
-        let mut order: Vec<u32> = Vec::with_capacity(panes.len());
+    pub(in crate::app) fn restore(saved: &[Id], panes: &[NavItem<Id>]) -> Self {
+        let present: HashSet<Id> = panes.iter().map(|p| p.id).collect();
+        let mut listed: HashSet<Id> = HashSet::with_capacity(saved.len());
+        let mut order: Vec<Id> = Vec::with_capacity(panes.len());
         for &id in saved {
             if present.contains(&id) && listed.insert(id) {
                 order.push(id);
             }
         }
-        let mut rest: Vec<&NavPane> = panes.iter().filter(|p| !listed.contains(&p.id)).collect();
+        let mut rest: Vec<&NavItem<Id>> =
+            panes.iter().filter(|p| !listed.contains(&p.id)).collect();
         rest.sort_by_key(|p| (Reverse(p.last_active_at), p.id));
         order.extend(rest.iter().map(|p| p.id));
         let seen = panes
@@ -94,7 +115,12 @@ impl NavOrder {
 
     /// Bring the order up to date with this frame's panes. Allocates only
     /// when something changed.
-    pub(in crate::app) fn refresh(&mut self, panes: &[NavPane], stable_rows: usize, hold: bool) {
+    pub(in crate::app) fn refresh(
+        &mut self,
+        panes: &[NavItem<Id>],
+        stable_rows: usize,
+        hold: bool,
+    ) {
         if self.order.is_empty() && self.seen.is_empty() {
             *self = Self::restore(&[], panes);
             return;
@@ -116,7 +142,7 @@ impl NavOrder {
 
     /// Pane ids, top row first, every section interleaved; bucket by section
     /// to draw.
-    pub(in crate::app) fn order(&self) -> &[u32] {
+    pub(in crate::app) fn order(&self) -> &[Id] {
         &self.order
     }
 
@@ -125,8 +151,8 @@ impl NavOrder {
     pub(in crate::app) fn numbered(
         &self,
         section: Option<SectionKey>,
-        shown: impl Fn(u32) -> bool,
-    ) -> Vec<u32> {
+        shown: impl Fn(Id) -> bool,
+    ) -> Vec<Id> {
         self.order
             .iter()
             .copied()
@@ -141,7 +167,7 @@ impl NavOrder {
     /// never a split's tab order. Both rows must be in the same section (a
     /// move to another split goes through that split's header instead).
     /// Returns whether the order changed.
-    pub(in crate::app) fn place(&mut self, id: u32, anchor: u32, after: bool) -> bool {
+    pub(in crate::app) fn place(&mut self, id: Id, anchor: Id, after: bool) -> bool {
         let Some(order) = self.placed(id, anchor, after) else {
             return false;
         };
@@ -151,13 +177,13 @@ impl NavOrder {
 
     /// Whether dropping `id` next to `anchor` would move it: the line that
     /// shows where it lands is only drawn where it does.
-    pub(in crate::app) fn would_move(&self, id: u32, anchor: u32, after: bool) -> bool {
+    pub(in crate::app) fn would_move(&self, id: Id, anchor: Id, after: bool) -> bool {
         self.placed(id, anchor, after).is_some()
     }
 
     /// The order with `id` placed next to `anchor`, or None when that is no
     /// change or not allowed.
-    fn placed(&self, id: u32, anchor: u32, after: bool) -> Option<Vec<u32>> {
+    fn placed(&self, id: Id, anchor: Id, after: bool) -> Option<Vec<Id>> {
         if id == anchor {
             return None;
         }
@@ -174,13 +200,13 @@ impl NavOrder {
     }
 
     /// Drop closed panes, append new ones.
-    fn sync_membership(&mut self, panes: &[NavPane]) {
+    fn sync_membership(&mut self, panes: &[NavItem<Id>]) {
         let unchanged =
             panes.len() == self.order.len() && panes.iter().all(|p| self.seen.contains_key(&p.id));
         if unchanged {
             return;
         }
-        let present: HashSet<u32> = panes.iter().map(|p| p.id).collect();
+        let present: HashSet<Id> = panes.iter().map(|p| p.id).collect();
         self.order.retain(|id| present.contains(id));
         self.seen.retain(|id, _| present.contains(id));
         for p in panes {
@@ -200,12 +226,12 @@ impl NavOrder {
     /// than when the pointer leaves. Taken in list order, so panes joining a
     /// section together keep the order they had. A pane the move also
     /// activated then follows the rule in its new section.
-    fn apply_section_moves(&mut self, panes: &[NavPane], stable_rows: usize) {
+    fn apply_section_moves(&mut self, panes: &[NavItem<Id>], stable_rows: usize) {
         if !panes.iter().any(|p| self.has_moved(p)) {
             return;
         }
-        let now: HashMap<u32, NavPane> = panes.iter().map(|p| (p.id, *p)).collect();
-        let moved: Vec<NavPane> = self
+        let now: HashMap<Id, NavItem<Id>> = panes.iter().map(|p| (p.id, *p)).collect();
+        let moved: Vec<NavItem<Id>> = self
             .order
             .iter()
             .filter_map(|id| now.get(id).copied())
@@ -220,11 +246,11 @@ impl NavOrder {
     }
 
     /// Apply every activation not applied yet, oldest first.
-    fn apply_activations(&mut self, panes: &[NavPane], stable_rows: usize) {
+    fn apply_activations(&mut self, panes: &[NavItem<Id>], stable_rows: usize) {
         if !panes.iter().any(|p| self.is_activated(p)) {
             return;
         }
-        let mut pending: Vec<NavPane> = panes
+        let mut pending: Vec<NavItem<Id>> = panes
             .iter()
             .filter(|p| self.is_activated(p))
             .copied()
@@ -237,7 +263,7 @@ impl NavOrder {
 
     /// From below the section's stable rows (or new once they are full), to
     /// its row 1; inside them, nowhere.
-    fn apply_activation(&mut self, p: NavPane, stable_rows: usize) {
+    fn apply_activation(&mut self, p: NavItem<Id>, stable_rows: usize) {
         if self.rank_in_section(p.id) >= stable_rows {
             self.move_to_section_front(p.id);
         }
@@ -246,22 +272,22 @@ impl NavOrder {
         }
     }
 
-    fn has_moved(&self, p: &NavPane) -> bool {
+    fn has_moved(&self, p: &NavItem<Id>) -> bool {
         self.section_of(p.id).is_some_and(|s| s != p.section)
     }
 
-    fn is_activated(&self, p: &NavPane) -> bool {
+    fn is_activated(&self, p: &NavItem<Id>) -> bool {
         self.seen
             .get(&p.id)
             .is_some_and(|s| s.stamp != Some(p.last_active_at))
     }
 
-    fn section_of(&self, id: u32) -> Option<SectionKey> {
+    fn section_of(&self, id: Id) -> Option<SectionKey> {
         self.seen.get(&id).map(|s| s.section)
     }
 
     /// Rows above `id` in its own section.
-    fn rank_in_section(&self, id: u32) -> usize {
+    fn rank_in_section(&self, id: Id) -> usize {
         let section = self.section_of(id);
         self.order
             .iter()
@@ -272,7 +298,7 @@ impl NavOrder {
 
     /// Re-place `id` after the last row of `section`, or at the very end
     /// when that section is empty.
-    fn move_to_section_end(&mut self, id: u32, section: SectionKey) {
+    fn move_to_section_end(&mut self, id: Id, section: SectionKey) {
         let Some(from) = self.order.iter().position(|&other| other == id) else {
             return;
         };
@@ -289,7 +315,7 @@ impl NavOrder {
     }
 
     /// Re-place `id` before the first row of its section.
-    fn move_to_section_front(&mut self, id: u32) {
+    fn move_to_section_front(&mut self, id: Id) {
         let Some(from) = self.order.iter().position(|&other| other == id) else {
             return;
         };
@@ -345,7 +371,7 @@ mod tests {
     #[test]
     fn first_refresh_seeds_by_recency() {
         let panes = [p(1, A, 100), p(2, A, 300), p(3, A, 200), p(4, A, 200)];
-        let mut o = NavOrder::default();
+        let mut o: NavOrder = NavOrder::default();
         o.refresh(&panes, 7, false);
         assert_eq!(o.order(), [2, 3, 4, 1]);
     }
@@ -455,7 +481,7 @@ mod tests {
     #[test]
     fn zero_stable_rows_is_the_recency_sort() {
         let mut panes: Vec<NavPane> = (1..=5).map(|id| p(id, A, u64::from(id))).collect();
-        let mut o = NavOrder::default();
+        let mut o: NavOrder = NavOrder::default();
         o.refresh(&panes, 0, false);
         let mut t = 100;
         let script: [(bool, u32); 10] = [
@@ -616,7 +642,7 @@ mod tests {
 
     #[test]
     fn empty_input() {
-        let mut o = NavOrder::default();
+        let mut o: NavOrder = NavOrder::default();
         o.refresh(&[], 7, false);
         assert!(o.order().is_empty());
     }

@@ -14,7 +14,6 @@ struct WorkspaceCardData {
     has_note: bool,
     other_window_viewport: Option<egui::ViewportId>,
     has_active_session: bool,
-    last_activated: u64,
     git_branch: String,
     git_diff_count: usize,
 }
@@ -85,7 +84,8 @@ impl App {
 
     /// Render the scrollable list of workspace cards and the "Other" group.
     fn render_workspace_list(&mut self, ui: &mut egui::Ui, actions: &mut WorkspaceSectionActions) {
-        let active_group_snap = self.active_group;
+        // Highlighted: the focused tab's workspace, as in the title bar.
+        let active_group_snap = self.shown_group();
 
         // Search bar
         let search_id = self.vp_id("workspace_search_input");
@@ -152,7 +152,6 @@ impl App {
                     has_note: !self.note_store.get(Some(w.id)).is_empty(),
                     other_window_viewport: other_vp,
                     has_active_session: active_ws_ids.contains(&w.id),
-                    last_activated: w.last_activated,
                     git_branch: git_info
                         .as_ref()
                         .map(|i| i.branch.clone())
@@ -162,12 +161,18 @@ impl App {
             })
             .collect();
 
-        workspaces.sort_by(|a, b| match (a.has_active_session, b.has_active_session) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            (true, true) => b.last_activated.cmp(&a.last_activated),
-            (false, false) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-        });
+        // The window's workspace order (`workspace_order_sync`): the top
+        // rows stay put, a workspace switched to from below them moves up.
+        // Refreshed at the start of the frame, so every workspace is in it;
+        // one that is not yet sorts last rather than vanishing.
+        let rank: std::collections::HashMap<u64, usize> = self
+            .workspace_order
+            .order()
+            .iter()
+            .enumerate()
+            .map(|(row, &id)| (id, row))
+            .collect();
+        workspaces.sort_by_key(|card| rank.get(&card.id).copied().unwrap_or(usize::MAX));
 
         // Apply search filter
         if !search_filter.is_empty() {
@@ -175,6 +180,15 @@ impl App {
         }
 
         let outer_w = ui.available_width();
+        // Measured on the outer ui, as in the session list: the visible part
+        // of the list, not the scrolled content. Holds the order on the next
+        // refresh, so no card moves under the pointer.
+        let pointer_inside = ui.rect_contains_pointer(ui.available_rect_before_wrap());
+        self.workspace_list_hovered = pointer_inside;
+        if !pointer_inside && self.workspace_order.held() {
+            // The order was held last frame: one more frame applies what waited.
+            ui.ctx().request_repaint();
+        }
         ui.spacing_mut().scroll.bar_width = 0.0;
         ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         ui.spacing_mut().scroll.floating_width = 0.0;

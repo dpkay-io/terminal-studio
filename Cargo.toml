@@ -1,6 +1,6 @@
 [package]
 name = "terminal-studio"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2021"
 description = "GPU-accelerated terminal multiplexer with workspaces, file browser, git integration, and markdown preview"
 license = "Apache-2.0"
@@ -121,3 +121,14 @@ codegen-units = 1
 
 [profile.dev]
 opt-level = 1
+
+# winit 0.30.13 on Windows: dragging the window across monitors with different
+# scaling flips it between the two scales and grows it every crossing (flicker
+# and a drag that fights the cursor; upstream reports a crash once it passes
+# the GPU's texture limit): rust-windowing/winit#4041. The fix is one commit on
+# top of v0.30.13, the open 0.30 backport rust-windowing/winit#4694, which
+# applies the rect Windows suggests during a live drag. Pinned by full SHA;
+# deny.toml allows only this git source. Remove both once winit 0.30.14 (or an
+# eframe on winit 0.31) ships the fix.
+[patch.crates-io]
+winit = { git = "https://github.com/rust-windowing/winit", rev = "39c4009c41e5977d779cf8a365792c8153ca77c5" }

@@ -50,6 +50,9 @@ pub(super) struct WindowView {
     /// move rows the hovered window is trying to hold still.
     pub(super) nav_order: crate::app::ui::left_panel::nav_order::NavOrder,
     pub(super) nav_list_hovered: bool,
+    /// Per window, like `nav_order`: the workspace list's row order.
+    pub(super) workspace_order: crate::app::ui::left_panel::nav_order::NavOrder<u64>,
+    pub(super) workspace_list_hovered: bool,
 }
 
 impl WindowView {
@@ -85,6 +88,8 @@ impl WindowView {
             focused_group_id: None,
             nav_order: Default::default(),
             nav_list_hovered: false,
+            workspace_order: Default::default(),
+            workspace_list_hovered: false,
         }
     }
 }

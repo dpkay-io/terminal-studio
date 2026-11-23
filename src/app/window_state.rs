@@ -67,10 +67,33 @@ pub(super) fn toggle_fullscreen(ctx: &Context) {
 
 /// A fullscreen window cannot be minimized, so the request is ignored there.
 pub(super) fn minimize(ctx: &Context) {
-    if !current(ctx, is_fullscreen) {
+    minimize_on(ctx, IS_MAC, appkit_minimize);
+}
+
+/// On macOS AppKit minimizes the window, never `ViewportCommand::Minimized`:
+/// that command sets egui's cached `minimized` flag, which nothing clears
+/// there (see the module docs), and eframe skips drawing a viewport whose
+/// flag says minimized. After a restore from the Dock the window would stay
+/// frozen on its last frame, taking no input, until the app is quit.
+fn minimize_on(ctx: &Context, is_mac: bool, appkit_minimize: impl FnOnce()) {
+    if current(ctx, is_fullscreen) {
+        return;
+    }
+    if is_mac {
+        appkit_minimize();
+    } else {
         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
     }
 }
+
+#[cfg(target_os = "macos")]
+fn appkit_minimize() {
+    crate::macos_objc::miniaturize_key_window();
+}
+
+/// Never called: `minimize_on` asks for AppKit only on macOS.
+#[cfg(not(target_os = "macos"))]
+fn appkit_minimize() {}
 
 #[cfg(test)]
 mod tests {
@@ -135,6 +158,58 @@ mod tests {
     #[test]
     fn mac_leaves_resizing_to_appkit() {
         assert!(!allows_edge_resize_on(&ViewportInfo::default(), MAC));
+    }
+
+    /// Runs `minimize_on` in one headless frame. Returns whether AppKit was
+    /// asked to minimize, and the viewport commands the frame sent.
+    fn minimize_frame(is_mac: bool, fullscreen: bool) -> (bool, Vec<ViewportCommand>) {
+        let ctx = Context::default();
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(
+            egui::ViewportId::ROOT,
+            ViewportInfo {
+                fullscreen: Some(fullscreen),
+                ..Default::default()
+            },
+        );
+        let mut asked_appkit = false;
+        let output = crate::egui_test_frames::run_pass(&ctx, input, |ctx| {
+            minimize_on(ctx, is_mac, || asked_appkit = true);
+        });
+        let commands = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|viewport| viewport.commands.clone())
+            .unwrap_or_default();
+        (asked_appkit, commands)
+    }
+
+    #[test]
+    fn mac_minimizes_through_appkit_and_leaves_egui_flag_alone() {
+        // `ViewportCommand::Minimized(true)` sets egui's cached flag, which
+        // nothing clears on macOS: eframe then treats the restored window as
+        // hidden and never draws it again (the window freezes).
+        let (asked_appkit, commands) = minimize_frame(MAC, false);
+        assert!(asked_appkit);
+        assert!(!commands
+            .iter()
+            .any(|command| matches!(command, ViewportCommand::Minimized(_))));
+    }
+
+    #[test]
+    fn other_platforms_minimize_through_egui() {
+        let (asked_appkit, commands) = minimize_frame(OTHER, false);
+        assert!(!asked_appkit);
+        assert!(commands.contains(&ViewportCommand::Minimized(true)));
+    }
+
+    #[test]
+    fn fullscreen_windows_are_not_minimized() {
+        for is_mac in [MAC, OTHER] {
+            let (asked_appkit, commands) = minimize_frame(is_mac, true);
+            assert!(!asked_appkit);
+            assert!(!commands.contains(&ViewportCommand::Minimized(true)));
+        }
     }
 
     #[test]
