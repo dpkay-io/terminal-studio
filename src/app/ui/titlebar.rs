@@ -183,7 +183,12 @@ impl App {
                     .map(|n| format!("conflict: {}", n.to_string_lossy())),
                 PaneContent::DeferredTerminal { .. } => None,
             });
-        let ws_name_for_title = self.active_workspace().map(|w| w.name.clone());
+        // The focused tab's workspace, the one its row, tab and split header
+        // show (`App::shown_workspace`); read once for the whole title bar.
+        let shown_ws: Option<(u64, String, [u8; 3])> = self
+            .shown_workspace()
+            .map(|w| (w.id, w.name.clone(), w.color));
+        let ws_name_for_title = shown_ws.as_ref().map(|(_, name, _)| name.clone());
         let ws_title: String = match (&active_session_title, &ws_name_for_title) {
             (Some(session), Some(ws)) => format!("{session} — {ws}"),
             (Some(session), None) => session.clone(),
@@ -191,7 +196,7 @@ impl App {
             (None, None) => "Terminal Studio".to_string(),
         };
         let active_ws_color = titlebar_tint(
-            self.active_workspace().map(|w| w.color),
+            shown_ws.as_ref().map(|&(_, _, color)| color),
             self.settings.workspace_color_on_titlebar,
         );
         // Only send the title command when it changes. Sending every frame
@@ -556,10 +561,8 @@ impl App {
                         egui::pos2(mac_clip_max_x, r.max.y),
                     );
                     let mac_clipped = painter.with_clip_rect(mac_clip_rect);
-                    let (ws_name, ws_id) = match self.active_workspace() {
-                        Some(w) => (Some(w.name.clone()), Some(w.id)),
-                        None => (None, None),
-                    };
+                    let ws_name = ws_name_for_title.clone();
+                    let ws_id = shown_ws.as_ref().map(|&(id, _, _)| id);
                     let git_branch = ws_id
                         .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
                     paint_titlebar_title(
@@ -896,10 +899,8 @@ impl App {
                         egui::pos2(clip_max_x, r.max.y),
                     );
                     let clipped = painter.with_clip_rect(clip_rect);
-                    let (ws_name, ws_id) = match self.active_workspace() {
-                        Some(w) => (Some(w.name.clone()), Some(w.id)),
-                        None => (None, None),
-                    };
+                    let ws_name = ws_name_for_title.clone();
+                    let ws_id = shown_ws.as_ref().map(|&(id, _, _)| id);
                     let git_branch = ws_id
                         .and_then(|id| self.workers.workspace_git_worker.get(id).map(|i| i.branch));
                     paint_titlebar_title(

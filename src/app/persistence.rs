@@ -155,12 +155,19 @@ pub(super) struct AppSession {
     /// in windows.json, because the indices name this file's `panes`.
     #[serde(default)]
     pub(super) window_nav_orders: Vec<SavedWindowNavOrder>,
+    /// The workspace list's row order, by workspace id. Empty in older
+    /// files: the list then starts in its old order (`workspace_order_sync`).
+    #[serde(default)]
+    pub(super) workspace_order: Vec<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct SavedWindowNavOrder {
     pub(super) window: WindowId,
     pub(super) order: Vec<usize>,
+    /// This window's workspace list order, like `AppSession.workspace_order`.
+    #[serde(default)]
+    pub(super) workspace_order: Vec<u64>,
 }
 
 /// A left nav order as indices into the saved panes; panes not saved
@@ -543,6 +550,7 @@ mod tests {
             group_layout: None,
             nav_order: Vec::new(),
             window_nav_orders: Vec::new(),
+            workspace_order: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();
@@ -719,6 +727,25 @@ mod tests {
         assert_eq!(restored.window_nav_orders.len(), 1);
         assert_eq!(restored.window_nav_orders[0].window, WindowId(3));
         assert_eq!(restored.window_nav_orders[0].order, vec![1, 0]);
+        // Saved before workspace orders existed: an empty one.
+        assert!(restored.window_nav_orders[0].workspace_order.is_empty());
+    }
+
+    #[test]
+    fn workspace_orders_roundtrip() {
+        let json = r#"{"workspace_order":[7,3,12],
+            "window_nav_orders":[{"window":3,"order":[],"workspace_order":[12,7]}]}"#;
+        let original: AppSession = serde_json::from_str(json).unwrap();
+        let text = serde_json::to_string(&original).unwrap();
+        let restored: AppSession = serde_json::from_str(&text).unwrap();
+        assert_eq!(restored.workspace_order, vec![7, 3, 12]);
+        assert_eq!(restored.window_nav_orders[0].workspace_order, vec![12, 7]);
+    }
+
+    #[test]
+    fn old_session_file_has_empty_workspace_order() {
+        let restored: AppSession = serde_json::from_str(r#"{"sessions":[]}"#).unwrap();
+        assert!(restored.workspace_order.is_empty());
     }
 
     #[test]
@@ -795,6 +822,7 @@ mod tests {
             }),
             nav_order: Vec::new(),
             window_nav_orders: Vec::new(),
+            workspace_order: Vec::new(),
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: AppSession = serde_json::from_str(&json).unwrap();

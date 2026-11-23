@@ -25,7 +25,10 @@ pub enum InfoBarPosition {
 /// Left nav rows per section that never move on their own (0 = sort every
 /// section by most recent).
 pub(super) const NAV_STABLE_ROWS_DEFAULT: usize = 7;
-pub(super) const NAV_STABLE_ROWS_MAX: usize = 100;
+/// Workspace list rows that never move on their own (0 = most recent first).
+pub(super) const WORKSPACE_STABLE_ROWS_DEFAULT: usize = 5;
+/// The most rows either list may keep in place.
+pub(super) const STABLE_ROWS_MAX: usize = 100;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -59,6 +62,9 @@ pub(super) struct AppSettings {
     /// The top rows of each left nav section that stay in place; a session
     /// used from below them moves to the top (`NavOrder`).
     pub(super) nav_stable_rows: usize,
+    /// The top rows of the workspace list that stay in place; a workspace
+    /// switched to from below them moves to the top (`NavOrder`).
+    pub(super) workspace_stable_rows: usize,
 }
 
 impl Default for AppSettings {
@@ -86,6 +92,7 @@ impl Default for AppSettings {
             show_tab_bar: true,
             workspace_color_on_titlebar: true,
             nav_stable_rows: NAV_STABLE_ROWS_DEFAULT,
+            workspace_stable_rows: WORKSPACE_STABLE_ROWS_DEFAULT,
         }
     }
 }
@@ -106,7 +113,8 @@ impl AppSettings {
 
     /// Values a hand-edited file may hold out of range, brought back in.
     fn sanitized(mut self) -> Self {
-        self.nav_stable_rows = self.nav_stable_rows.min(NAV_STABLE_ROWS_MAX);
+        self.nav_stable_rows = self.nav_stable_rows.min(STABLE_ROWS_MAX);
+        self.workspace_stable_rows = self.workspace_stable_rows.min(STABLE_ROWS_MAX);
         self
     }
 
@@ -157,9 +165,15 @@ mod tests {
     }
 
     #[test]
+    fn workspace_stable_rows_defaults_to_five() {
+        assert_eq!(AppSettings::default().workspace_stable_rows, 5);
+    }
+
+    #[test]
     fn old_settings_file_gets_default_stable_rows() {
         let s: AppSettings = serde_json::from_str(r#"{"font_size":14.0}"#).unwrap();
         assert_eq!(s.nav_stable_rows, 7);
+        assert_eq!(s.workspace_stable_rows, 5);
     }
 
     #[test]
@@ -176,9 +190,12 @@ mod tests {
     fn nav_stable_rows_clamped_on_load() {
         let s = AppSettings {
             nav_stable_rows: 5000,
+            workspace_stable_rows: 5000,
             ..Default::default()
         };
-        assert_eq!(s.sanitized().nav_stable_rows, 100);
+        let s = s.sanitized();
+        assert_eq!(s.nav_stable_rows, 100);
+        assert_eq!(s.workspace_stable_rows, 100);
     }
 
     #[test]

@@ -102,26 +102,6 @@ fn content_dir(
     }
 }
 
-/// Workspace colour for a pane, if it belongs to a workspace.
-///
-/// Terminal panes are matched by their live CWD, deferred ones by their saved
-/// CWD, and the rest by the workspace id recorded on the pane.
-fn content_ws_color(
-    content: &PaneContent,
-    terminal_cwd: impl FnOnce(u32) -> Option<PathBuf>,
-    for_cwd: impl Fn(&Path) -> Option<[u8; 3]>,
-    for_id: impl Fn(u64) -> Option<[u8; 3]>,
-) -> Option<[u8; 3]> {
-    match content {
-        PaneContent::Terminal(sid) => terminal_cwd(*sid).as_deref().and_then(&for_cwd),
-        PaneContent::DeferredTerminal { cwd, .. } => cwd.as_deref().and_then(&for_cwd),
-        PaneContent::FileEditor(ed) => ed.workspace_id.and_then(&for_id),
-        PaneContent::NoteEditor(ne) => ne.workspace_id.and_then(&for_id),
-        PaneContent::FileDiff(d) => d.workspace_id.and_then(&for_id),
-        PaneContent::ConflictResolver(_) => None,
-    }
-}
-
 /// What a new, never-saved buffer is called before its number.
 const UNTITLED_PREFIX: &str = "Untitled-";
 /// Second line of an untitled buffer's tooltip.
@@ -199,20 +179,13 @@ impl App {
         })
     }
 
-    /// Workspace color for a pane (by index), if the pane belongs to a workspace.
+    /// Workspace colour for a pane (by index): the colour of the workspace
+    /// it is grouped under (`App::pane_workspace`), so its row, tab, split
+    /// header and the title bar never disagree.
     pub(in crate::app) fn ws_color_for_pane(&self, pane_index: usize) -> Option<[u8; 3]> {
-        content_ws_color(
-            &self.pane_state.panes[pane_index].content,
-            |sid| self.session_cwd(sid),
-            |cwd| self.workspace_store.find_for_cwd(cwd).map(|w| w.color),
-            |id| {
-                self.workspace_store
-                    .workspaces
-                    .iter()
-                    .find(|w| w.id == id)
-                    .map(|w| w.color)
-            },
-        )
+        let pane = self.pane_state.panes.get(pane_index)?;
+        Self::pane_workspace(&self.session_state.sessions, &self.workspace_store, pane)
+            .map(|w| w.color)
     }
 
     /// A session's CWD, or `None` when the session is gone or has yet to
@@ -537,81 +510,180 @@ mod tests {
         assert_eq!(dir, Some(PathBuf::from("/live")));
     }
 
-    // ── Workspace colour ───────────────────────────────────────────────
+    // ── Workspace (and so its colour) ──────────────────────────────────
+    //
+    // Every colour place (session list row, tab, split header, title bar)
+    // reads `App::pane_workspace`, which is `pane_group_by` with the live
+    // terminal folder. These pin that one rule.
 
-    const RED: [u8; 3] = [255, 0, 0];
-    const BLUE: [u8; 3] = [0, 0, 255];
+    use crate::app::pane::PaneEntry;
+    use crate::workspace::{Workspace, WorkspaceStore};
 
-    fn by_cwd(p: &Path) -> Option<[u8; 3]> {
-        (p == Path::new("/work")).then_some(RED)
-    }
+    const PROJECT: u64 = 1;
+    const NESTED: u64 = 2;
+    const OPENED_IN: u64 = 3;
+    const DELETED: u64 = 99;
 
-    fn by_id(id: u64) -> Option<[u8; 3]> {
-        (id == 42).then_some(BLUE)
-    }
-
-    #[test]
-    fn terminal_colour_comes_from_its_live_cwd() {
-        let c = content_ws_color(
-            &PaneContent::Terminal(1),
-            |_| Some(PathBuf::from("/work")),
-            by_cwd,
-            by_id,
-        );
-        assert_eq!(c, Some(RED));
-    }
-
-    #[test]
-    fn terminal_without_a_cwd_has_no_colour() {
-        let c = content_ws_color(&PaneContent::Terminal(1), |_| None, by_cwd, by_id);
-        assert_eq!(c, None);
-    }
-
-    #[test]
-    fn deferred_terminal_colour_comes_from_its_saved_cwd() {
-        let c = content_ws_color(&deferred(Some("/work"), None), no_cwd, by_cwd, by_id);
-        assert_eq!(c, Some(RED));
-        let c = content_ws_color(&deferred(Some("/elsewhere"), None), no_cwd, by_cwd, by_id);
-        assert_eq!(c, None);
-    }
-
-    #[test]
-    fn file_panes_take_their_colour_from_the_recorded_workspace_id() {
-        let mut ed = editor("/a/b/main.rs", false, false);
-        if let PaneContent::FileEditor(state) = &mut ed {
-            state.workspace_id = Some(42);
+    fn store() -> WorkspaceStore {
+        let ws = |id: u64, path: &str| Workspace {
+            id,
+            name: format!("ws-{id}"),
+            path: PathBuf::from(path),
+            color: [id as u8, 0, 0],
+            host_window_id: None,
+            last_activated: 0,
+        };
+        WorkspaceStore {
+            workspaces: vec![
+                ws(PROJECT, "/ws/project"),
+                ws(NESTED, "/ws/project/packages/app"),
+                ws(OPENED_IN, "/ws/other"),
+            ],
         }
-        assert_eq!(content_ws_color(&ed, no_cwd, by_cwd, by_id), Some(BLUE));
+    }
 
-        let mut d = diff("/a/b/main.rs");
-        if let PaneContent::FileDiff(state) = &mut d {
-            state.workspace_id = Some(42);
+    fn pane(content: PaneContent, opened_in: Option<u64>) -> PaneEntry {
+        PaneEntry {
+            id: 1,
+            content,
+            manual_width: None,
+            last_size: (0, 0),
+            labels: vec![],
+            last_active_at: 0,
+            workspace_id: opened_in,
         }
-        assert_eq!(content_ws_color(&d, no_cwd, by_cwd, by_id), Some(BLUE));
+    }
+
+    fn group(content: PaneContent, opened_in: Option<u64>, live_cwd: Option<&str>) -> Option<u64> {
+        App::pane_group_by(&store(), &pane(content, opened_in), |_| {
+            live_cwd.map(PathBuf::from)
+        })
+    }
+
+    fn with_ws(mut content: PaneContent, id: u64) -> PaneContent {
+        match &mut content {
+            PaneContent::FileEditor(ed) => ed.workspace_id = Some(id),
+            PaneContent::FileDiff(d) => d.workspace_id = Some(id),
+            _ => unreachable!(),
+        }
+        content
+    }
+
+    #[test]
+    fn a_terminal_in_a_subfolder_takes_its_workspace() {
+        let term = || PaneContent::Terminal(1);
         assert_eq!(
-            content_ws_color(&note(Some(42)), no_cwd, by_cwd, by_id),
-            Some(BLUE)
+            group(term(), None, Some("/ws/project/src/deep")),
+            Some(PROJECT)
+        );
+        // The most specific workspace wins.
+        assert_eq!(
+            group(term(), None, Some("/ws/project/packages/app/src")),
+            Some(NESTED)
+        );
+    }
+
+    /// The missing-colour bug: a terminal outside every workspace folder (a
+    /// Claude conversation resumed where it began, a `cd` away) was grouped
+    /// under the workspace it was opened in but drawn with no colour.
+    #[test]
+    fn a_terminal_outside_every_workspace_keeps_the_one_it_was_opened_in() {
+        let term = PaneContent::Terminal(1);
+        assert_eq!(
+            group(term, Some(OPENED_IN), Some("/tmp/elsewhere")),
+            Some(OPENED_IN)
         );
     }
 
     #[test]
-    fn a_pane_in_no_workspace_has_no_colour() {
+    fn a_terminal_that_has_not_reported_a_folder_keeps_the_one_it_was_opened_in() {
         assert_eq!(
-            content_ws_color(&editor("/a/b/main.rs", false, false), no_cwd, by_cwd, by_id),
-            None
+            group(PaneContent::Terminal(1), Some(OPENED_IN), None),
+            Some(OPENED_IN)
         );
         assert_eq!(
-            content_ws_color(&conflict("/x"), no_cwd, by_cwd, by_id),
-            None
+            group(PaneContent::Terminal(1), Some(OPENED_IN), Some("")),
+            Some(OPENED_IN)
         );
     }
 
     #[test]
-    fn an_unknown_workspace_id_has_no_colour() {
-        let mut ed = editor("/a/b/main.rs", false, false);
-        if let PaneContent::FileEditor(state) = &mut ed {
-            state.workspace_id = Some(999);
+    fn a_folder_wins_over_the_workspace_it_was_opened_in() {
+        let term = PaneContent::Terminal(1);
+        assert_eq!(
+            group(term, Some(OPENED_IN), Some("/ws/project")),
+            Some(PROJECT)
+        );
+    }
+
+    #[test]
+    fn a_restored_terminal_not_started_yet_uses_its_saved_folder() {
+        assert_eq!(
+            group(deferred(Some("/ws/project/a"), None), Some(OPENED_IN), None),
+            Some(PROJECT)
+        );
+        assert_eq!(
+            group(deferred(Some(""), None), Some(OPENED_IN), None),
+            Some(OPENED_IN)
+        );
+        assert_eq!(
+            group(deferred(None, None), Some(OPENED_IN), None),
+            Some(OPENED_IN)
+        );
+    }
+
+    #[test]
+    fn files_go_by_their_folder_then_the_recorded_workspace() {
+        let in_project = with_ws(editor("/ws/project/src/main.rs", false, false), OPENED_IN);
+        assert_eq!(group(in_project, None, None), Some(PROJECT));
+        let outside = with_ws(editor("/tmp/notes.txt", false, false), OPENED_IN);
+        assert_eq!(group(outside, None, None), Some(OPENED_IN));
+        let diff_in = with_ws(diff("/ws/project/packages/app/x.rs"), OPENED_IN);
+        assert_eq!(group(diff_in, None, None), Some(NESTED));
+        let diff_out = with_ws(diff("/tmp/x.rs"), OPENED_IN);
+        assert_eq!(group(diff_out, None, None), Some(OPENED_IN));
+        assert_eq!(
+            group(conflict("/ws/project/a.rs"), None, None),
+            Some(PROJECT)
+        );
+        assert_eq!(
+            group(conflict("/tmp/a.rs"), Some(OPENED_IN), None),
+            Some(OPENED_IN)
+        );
+    }
+
+    #[test]
+    fn notes_use_their_workspace() {
+        assert_eq!(
+            group(note(Some(PROJECT)), Some(OPENED_IN), None),
+            Some(PROJECT)
+        );
+    }
+
+    #[test]
+    fn a_deleted_workspace_is_never_a_group() {
+        let term = PaneContent::Terminal(1);
+        assert_eq!(group(term, Some(DELETED), Some("/tmp")), None);
+        assert_eq!(
+            group(note(Some(DELETED)), Some(OPENED_IN), None),
+            Some(OPENED_IN)
+        );
+        let ed = with_ws(editor("/tmp/a.txt", false, false), DELETED);
+        assert_eq!(group(ed, None, None), None);
+    }
+
+    #[test]
+    fn non_terminals_never_ask_for_a_terminal_folder() {
+        let panics = |_: u32| -> Option<PathBuf> { panic!("terminal lookup for a non-terminal") };
+        let s = store();
+        for content in [
+            editor("/ws/project/a.rs", false, false),
+            diff("/ws/project/a.rs"),
+            note(Some(PROJECT)),
+            conflict("/ws/project/a.rs"),
+            deferred(Some("/ws/project"), None),
+        ] {
+            App::pane_group_by(&s, &pane(content, None), panics);
         }
-        assert_eq!(content_ws_color(&ed, no_cwd, by_cwd, by_id), None);
     }
 }

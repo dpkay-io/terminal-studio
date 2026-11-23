@@ -36,7 +36,9 @@ use super::settings::{windows_data_path, AppSettings};
 use super::title::shell_escape_arg;
 use super::ui::left_panel::nav_order::NavOrder;
 use super::ui::left_panel::LEFT_PANEL_WIDTH_RANGE;
+use super::ui::right_panel_size::restored_right_panel_width;
 use super::watcher::WatchState;
+use super::workspace_order_sync::restored_workspace_order;
 use super::{App, CloseAllTarget};
 
 /// Clamp a persisted panel ratio to a safe range, falling back to `default` for NaN/Infinity.
@@ -219,7 +221,7 @@ impl App {
             active_term_geo: None,
             last_focused_sid: None,
             active_term_ui_id: None,
-            resize_debounce: HashMap::new(),
+            resize_debounce: Default::default(),
             scroll_accum: HashMap::new(),
             workers: super::worker_manager::WorkerManager {
                 foreground_worker: ForegroundWorker::spawn(),
@@ -278,6 +280,9 @@ impl App {
             nav_order: Default::default(),
             nav_list_hovered: false,
             nav_panes_buf: Vec::new(),
+            workspace_order: Default::default(),
+            workspace_list_hovered: false,
+            workspace_items_buf: Vec::new(),
             nav_sections_buf: HashMap::new(),
             detected_urls: Vec::new(),
             detected_md_paths: Vec::new(),
@@ -602,28 +607,49 @@ impl App {
         })
     }
 
+    /// The workspace a pane belongs to: the single rule behind tab grouping,
+    /// the workspace filter, every workspace colour (session list, tab bar,
+    /// split header, title bar) and the workspace cards.
     pub(super) fn pane_group(
         sessions: &[SessionEntry],
         ws_store: &WorkspaceStore,
         pane: &PaneEntry,
     ) -> Option<u64> {
-        let cwd_match = match &pane.content {
-            PaneContent::Terminal(sid) => sessions.iter().find(|e| e.id == *sid).and_then(|e| {
-                let cwd = e.session.read().cwd.clone();
-                if cwd.as_os_str().is_empty() {
-                    return None;
-                }
-                ws_store.find_for_cwd(&cwd).map(|w| w.id)
-            }),
-            PaneContent::DeferredTerminal { cwd, .. } => cwd
-                .as_ref()
-                .and_then(|c| ws_store.find_for_cwd(c).map(|w| w.id)),
-            PaneContent::FileEditor(ed) => ed.workspace_id,
-            PaneContent::FileDiff(d) => ws_store.find_for_cwd(&d.path).map(|w| w.id),
-            PaneContent::NoteEditor(ne) => ne.workspace_id,
-            PaneContent::ConflictResolver(cr) => ws_store.find_for_cwd(&cr.path).map(|w| w.id),
+        Self::pane_group_by(ws_store, pane, |sid| {
+            sessions
+                .iter()
+                .find(|e| e.id == sid)
+                .map(|e| e.session.read().cwd.clone())
+        })
+    }
+
+    /// [`Self::pane_group`] with the terminal's live folder looked up by
+    /// `terminal_cwd`. In order: the workspace holding the pane's folder (its
+    /// shell's directory, a deferred terminal's saved one, a file's path),
+    /// then the workspace recorded on the content, then the one it was opened
+    /// in. A recorded workspace that has been deleted is skipped, so its
+    /// panes join "Other" instead of a group nothing else shows.
+    pub(super) fn pane_group_by(
+        ws_store: &WorkspaceStore,
+        pane: &PaneEntry,
+        terminal_cwd: impl FnOnce(u32) -> Option<PathBuf>,
+    ) -> Option<u64> {
+        let by_folder = |path: &Path| {
+            (!path.as_os_str().is_empty())
+                .then(|| ws_store.find_for_cwd(path))
+                .flatten()
+                .map(|w| w.id)
         };
-        cwd_match.or(pane.workspace_id)
+        let existing = |id: Option<u64>| id.filter(|&id| ws_store.find(id).is_some());
+        let own = match &pane.content {
+            PaneContent::Terminal(sid) => terminal_cwd(*sid).as_deref().and_then(by_folder),
+            PaneContent::DeferredTerminal { cwd, .. } => cwd.as_deref().and_then(by_folder),
+            PaneContent::FileEditor(ed) => by_folder(&ed.path).or(existing(ed.workspace_id)),
+            PaneContent::FileDiff(d) => by_folder(&d.path).or(existing(d.workspace_id)),
+            PaneContent::NoteEditor(ne) => existing(ne.workspace_id),
+            PaneContent::ConflictResolver(cr) => by_folder(&cr.path),
+        };
+        own.or_else(|| existing(pane.workspace_id))
     }
 
     /// The workspace a pane belongs to now (by `pane_group`: its folder
@@ -633,8 +659,7 @@ impl App {
         ws_store: &'a WorkspaceStore,
         pane: &PaneEntry,
     ) -> Option<&'a Workspace> {
-        let id = Self::pane_group(sessions, ws_store, pane)?;
-        ws_store.workspaces.iter().find(|w| w.id == id)
+        ws_store.find(Self::pane_group(sessions, ws_store, pane)?)
     }
 
     pub(super) fn pane_matches_tab_filter(
@@ -753,11 +778,29 @@ impl App {
     }
 
     pub(super) fn active_workspace(&self) -> Option<&Workspace> {
-        let ws_id = self.active_group?;
-        self.workspace_store
-            .workspaces
-            .iter()
-            .find(|w| w.id == ws_id)
+        self.workspace_store.find(self.active_group?)
+    }
+
+    /// The workspace of what is on screen: the focused pane's (by
+    /// `pane_group`, so it follows a `cd` at once), or the selected group
+    /// when no pane is focused. The title bar and the workspace cards show
+    /// this, so they always agree with the focused tab's row, tab and header.
+    pub(super) fn shown_group(&self) -> Option<u64> {
+        let focused = self
+            .pane_state
+            .active_pane_id
+            .and_then(|pid| self.pane_state.find(pid));
+        match focused {
+            Some(pane) => {
+                Self::pane_group(&self.session_state.sessions, &self.workspace_store, pane)
+            }
+            None => self.active_group,
+        }
+    }
+
+    /// The workspace behind [`Self::shown_group`], if it exists.
+    pub(super) fn shown_workspace(&self) -> Option<&Workspace> {
+        self.workspace_store.find(self.shown_group()?)
     }
 
     pub(super) fn open_workspace_in_new_window(&mut self, _ctx: &egui::Context, ws_id: u64) {
@@ -888,6 +931,11 @@ impl App {
         );
         swap(&mut self.nav_order, &mut view.nav_order);
         swap(&mut self.nav_list_hovered, &mut view.nav_list_hovered);
+        swap(&mut self.workspace_order, &mut view.workspace_order);
+        swap(
+            &mut self.workspace_list_hovered,
+            &mut view.workspace_list_hovered,
+        );
         {
             let temp = view.focused_group_id;
             view.focused_group_id = Some(self.pane_state.focused_group_id);
@@ -984,7 +1032,7 @@ impl App {
                 );
             }
             if let Some(v) = s.right_panel_width {
-                view.right_panel_width = v.clamp(80.0, 800.0);
+                view.right_panel_width = restored_right_panel_width(v);
             }
             let viewport_id = egui::ViewportId::from_hash_of(("extra_window", s.id.0));
             self.extra_windows.push(ExtraWindow {
@@ -1624,6 +1672,7 @@ impl App {
                 .collect(),
             group_layout,
             nav_order: saved_nav_indices(self.nav_order.order(), &pane_id_to_index),
+            workspace_order: self.workspace_order.order().to_vec(),
             window_nav_orders: self
                 .extra_windows
                 .iter()
@@ -1632,6 +1681,7 @@ impl App {
                 .map(|w| SavedWindowNavOrder {
                     window: w.id.clone(),
                     order: saved_nav_indices(w.view.nav_order.order(), &pane_id_to_index),
+                    workspace_order: w.view.workspace_order.order().to_vec(),
                 })
                 .collect(),
         };
@@ -1983,10 +2033,15 @@ impl App {
         let mut nav_panes = Vec::with_capacity(self.pane_state.panes.len());
         self.nav_panes_into(&mut nav_panes);
         self.nav_order = NavOrder::restore(&pane_ids.ids_at(&state.nav_order), &nav_panes);
+        let mut workspace_items = Vec::with_capacity(self.workspace_store.workspaces.len());
+        self.workspace_items_into(&mut workspace_items);
+        self.workspace_order = restored_workspace_order(&state.workspace_order, &workspace_items);
         // Extra windows are loaded (`load_windows`) before the session.
         for saved in &state.window_nav_orders {
             if let Some(w) = self.extra_windows.iter_mut().find(|w| w.id == saved.window) {
                 w.view.nav_order = NavOrder::restore(&pane_ids.ids_at(&saved.order), &nav_panes);
+                w.view.workspace_order =
+                    restored_workspace_order(&saved.workspace_order, &workspace_items);
             }
         }
 
@@ -2009,11 +2064,7 @@ impl App {
         } else {
             theme::LEFT_SIDEBAR_W
         };
-        self.right_panel_width = if state.right_panel_width.is_finite() {
-            state.right_panel_width.clamp(80.0, 800.0)
-        } else {
-            theme::RIGHT_SIDEBAR_W
-        };
+        self.right_panel_width = restored_right_panel_width(state.right_panel_width);
 
         self.right_tab = match &state.right_tab {
             SavedRightTab::Directory => RightTab::Directory,
@@ -2941,11 +2992,39 @@ mod tests {
         ));
     }
 
+    /// A store holding workspace 42, the one the filter tests' panes were
+    /// opened in (a workspace that no longer exists is no group at all).
+    fn store_with_42() -> WorkspaceStore {
+        WorkspaceStore {
+            workspaces: vec![workspace(42, "/projects/forty-two")],
+        }
+    }
+
+    #[test]
+    fn a_pane_of_a_deleted_workspace_is_listed_under_other() {
+        let pane = make_pane(1, Some(42), vec![]);
+        let ws = WorkspaceStore::default();
+        assert!(App::pane_matches_tab_filter(
+            &pane,
+            &[],
+            &ws,
+            Some(None),
+            None
+        ));
+        assert!(!App::pane_matches_tab_filter(
+            &pane,
+            &[],
+            &ws,
+            Some(Some(42)),
+            None
+        ));
+    }
+
     #[test]
     fn pane_passes_tab_filter_workspace_match() {
         let pane = make_pane(1, Some(42), vec![]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         // workspace_id=Some(42), filter=Some(Some(42)) → match
         assert!(App::pane_matches_tab_filter(
             &pane,
@@ -2960,7 +3039,7 @@ mod tests {
     fn pane_passes_tab_filter_workspace_mismatch() {
         let pane = make_pane(1, Some(42), vec![]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         // workspace_id=Some(42), filter=Some(Some(99)) → no match
         assert!(!App::pane_matches_tab_filter(
             &pane,
@@ -2975,7 +3054,7 @@ mod tests {
     fn pane_passes_tab_filter_label_match() {
         let pane = make_pane(1, None, vec![5, 10]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         assert!(App::pane_matches_tab_filter(
             &pane,
             &sessions,
@@ -2989,7 +3068,7 @@ mod tests {
     fn pane_passes_tab_filter_label_mismatch() {
         let pane = make_pane(1, None, vec![5, 10]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         assert!(!App::pane_matches_tab_filter(
             &pane,
             &sessions,
@@ -3003,7 +3082,7 @@ mod tests {
     fn pane_passes_tab_filter_both_filters_must_pass() {
         let pane = make_pane(1, Some(42), vec![10]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         // Both match → pass
         assert!(App::pane_matches_tab_filter(
             &pane,
@@ -3036,7 +3115,7 @@ mod tests {
         let pane_no_ws = make_pane(1, None, vec![]);
         let pane_with_ws = make_pane(2, Some(42), vec![]);
         let sessions: Vec<SessionEntry> = vec![];
-        let ws = WorkspaceStore::default();
+        let ws = store_with_42();
         // pane with no workspace → pane_group returns None → matches Some(None)
         assert!(App::pane_matches_tab_filter(
             &pane_no_ws,

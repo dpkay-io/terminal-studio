@@ -1,4 +1,4 @@
-use super::super::settings::{CursorStyle, NAV_STABLE_ROWS_MAX};
+use super::super::settings::{CursorStyle, STABLE_ROWS_MAX};
 use super::super::App;
 use crate::shortcuts::AppAction;
 use crate::theme;
@@ -12,6 +12,26 @@ const NAV_STABLE_ROWS_LABEL: &str = "Session list rows that stay in place:";
 const NAV_STABLE_ROWS_HINT: &str =
     "The top rows of each section in the session list never move on their own. \
      A session you use from below them moves to the top. 0 sorts by most recent.";
+const WORKSPACE_STABLE_ROWS_LABEL: &str = "Workspace list rows that stay in place:";
+const WORKSPACE_STABLE_ROWS_HINT: &str =
+    "The top rows of the workspace list never move on their own. \
+     A workspace you switch to from below them moves to the top. 0 sorts by most recent.";
+
+/// One "rows that stay in place" setting: label, number box, shared hint.
+/// Returns whether `rows` changed.
+fn stable_rows_setting(ui: &mut egui::Ui, label: &str, hint: &str, rows: &mut usize) -> bool {
+    ui.horizontal(|ui| {
+        ui.label(label).on_hover_text(hint);
+        ui.add(
+            egui::DragValue::new(rows)
+                .range(0..=STABLE_ROWS_MAX)
+                .speed(1.0),
+        )
+        .on_hover_text(hint)
+        .changed()
+    })
+    .inner
+}
 
 impl App {
     pub(in crate::app) fn render_settings_overlay(&mut self, ctx: &egui::Context) {
@@ -157,24 +177,20 @@ impl App {
 
                             ui.add_space(theme::SP_4);
 
-                            // Left nav rows that never move on their own.
-                            ui.horizontal(|ui| {
-                                ui.label(NAV_STABLE_ROWS_LABEL)
-                                    .on_hover_text(NAV_STABLE_ROWS_HINT);
-                                let mut rows = self.settings.nav_stable_rows;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut rows)
-                                            .range(0..=NAV_STABLE_ROWS_MAX)
-                                            .speed(1.0),
-                                    )
-                                    .on_hover_text(NAV_STABLE_ROWS_HINT)
-                                    .changed()
-                                {
-                                    self.settings.nav_stable_rows = rows;
-                                    settings_changed = true;
-                                }
-                            });
+                            // Left nav and workspace list rows that never
+                            // move on their own.
+                            settings_changed |= stable_rows_setting(
+                                ui,
+                                NAV_STABLE_ROWS_LABEL,
+                                NAV_STABLE_ROWS_HINT,
+                                &mut self.settings.nav_stable_rows,
+                            );
+                            settings_changed |= stable_rows_setting(
+                                ui,
+                                WORKSPACE_STABLE_ROWS_LABEL,
+                                WORKSPACE_STABLE_ROWS_HINT,
+                                &mut self.settings.workspace_stable_rows,
+                            );
 
                             // Show system monitor
                             {

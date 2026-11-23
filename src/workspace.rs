@@ -48,6 +48,11 @@ impl WorkspaceStore {
         }
     }
 
+    /// The workspace with this id, if it still exists.
+    pub fn find(&self, id: u64) -> Option<&Workspace> {
+        self.workspaces.iter().find(|w| w.id == id)
+    }
+
     pub fn find_for_path(&self, path: &Path) -> Option<&Workspace> {
         self.workspaces
             .iter()
@@ -433,6 +438,14 @@ mod tests {
         let result = store.find_for_cwd(&cwd);
         assert!(result.is_some());
         assert_eq!(result.unwrap().name, "Proj");
+    }
+
+    #[test]
+    fn find_by_id_only_finds_workspaces_that_exist() {
+        let store = make_store(vec![("A", "/a"), ("B", "/b")]);
+        assert_eq!(store.find(2).map(|w| w.name.as_str()), Some("B"));
+        assert!(store.find(3).is_none());
+        assert!(WorkspaceStore::default().find(1).is_none());
     }
 
     #[test]

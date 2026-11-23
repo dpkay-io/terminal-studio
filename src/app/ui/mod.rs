@@ -10,6 +10,7 @@ pub(in crate::app) mod left_panel;
 mod open_folders_dialog;
 mod pane_labels;
 mod pane_renderer;
+pub(in crate::app) mod right_panel_size;
 pub(super) use pane_renderer::{active_text_box_id, PaneContextAction};
 pub(crate) mod search_bar;
 mod settings_overlay;
