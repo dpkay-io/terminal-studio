@@ -455,6 +455,14 @@ impl App {
             AppAction::SplitVertical => {
                 self.deferred_split = Some(crate::pane_tree::SplitDir::Vertical);
             }
+            AppAction::Unsplit | AppAction::UnsplitAll => {
+                if let Some(request) = crate::app::unsplit::Unsplit::for_action(
+                    action,
+                    self.pane_state.focused_group_id,
+                ) {
+                    self.request_unsplit(request, ctx);
+                }
+            }
             AppAction::ZoomPane => {
                 if self.zoomed_pane_id.is_some() {
                     self.zoomed_pane_id = None;
@@ -615,6 +623,7 @@ impl App {
                     self.right_tab = super::super::pane::RightTab::Directory;
                 }
             }
+            AppAction::ToggleMarkdownPreview => self.toggle_markdown_preview(ctx),
             AppAction::CommandPalette | AppAction::OpenFileFinder => {}
             _ => {}
         }
@@ -776,12 +785,15 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         SwitchToLastSession,
         SplitHorizontal,
         SplitVertical,
+        Unsplit,
+        UnsplitAll,
         OpenSettings,
         NextWorkspace,
         PrevWorkspace,
         RightTabDirectory,
         RightTabGitDiff,
         ToggleNotes,
+        ToggleMarkdownPreview,
         DuplicateSession,
         CopySelection,
         FocusSessionSearch,

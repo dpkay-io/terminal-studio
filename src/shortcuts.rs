@@ -55,6 +55,10 @@ pub enum AppAction {
     // Pane splits
     SplitHorizontal,
     SplitVertical,
+    /// Leave split mode for one split: its tabs join the split beside it.
+    Unsplit,
+    /// Leave split mode entirely: every tab in one split.
+    UnsplitAll,
 
     // Workspace
     OpenSettings,
@@ -65,6 +69,9 @@ pub enum AppAction {
     RightTabDirectory,
     RightTabGitDiff,
     ToggleNotes,
+    /// The Markdown preview of the note or file in use (see
+    /// `app/preview_shortcut.rs`).
+    ToggleMarkdownPreview,
 
     // Session
     DuplicateSession,
@@ -141,12 +148,15 @@ impl AppAction {
             Self::SwitchToLastSession => "switch_to_last_session",
             Self::SplitHorizontal => "split_horizontal",
             Self::SplitVertical => "split_vertical",
+            Self::Unsplit => "unsplit",
+            Self::UnsplitAll => "unsplit_all",
             Self::OpenSettings => "open_settings",
             Self::NextWorkspace => "next_workspace",
             Self::PrevWorkspace => "prev_workspace",
             Self::RightTabDirectory => "right_tab_directory",
             Self::RightTabGitDiff => "right_tab_git_diff",
             Self::ToggleNotes => "toggle_notes",
+            Self::ToggleMarkdownPreview => "toggle_markdown_preview",
             Self::DuplicateSession => "duplicate_session",
             Self::CopySelection => "copy_selection",
             Self::FocusSessionSearch => "focus_session_search",
@@ -195,12 +205,15 @@ impl AppAction {
             "switch_to_last_session" => Some(Self::SwitchToLastSession),
             "split_horizontal" => Some(Self::SplitHorizontal),
             "split_vertical" => Some(Self::SplitVertical),
+            "unsplit" => Some(Self::Unsplit),
+            "unsplit_all" => Some(Self::UnsplitAll),
             "open_settings" => Some(Self::OpenSettings),
             "next_workspace" => Some(Self::NextWorkspace),
             "prev_workspace" => Some(Self::PrevWorkspace),
             "right_tab_directory" => Some(Self::RightTabDirectory),
             "right_tab_git_diff" => Some(Self::RightTabGitDiff),
             "toggle_notes" => Some(Self::ToggleNotes),
+            "toggle_markdown_preview" => Some(Self::ToggleMarkdownPreview),
             "duplicate_session" => Some(Self::DuplicateSession),
             "copy_selection" => Some(Self::CopySelection),
             "focus_session_search" => Some(Self::FocusSessionSearch),
@@ -250,12 +263,15 @@ impl AppAction {
             Self::SwitchToLastSession => "Switch to last session",
             Self::SplitHorizontal => "Split horizontal",
             Self::SplitVertical => "Split vertical",
+            Self::Unsplit => "Unsplit (tabs join the split beside it)",
+            Self::UnsplitAll => "Unsplit all (every tab in one split)",
             Self::OpenSettings => "Open settings",
             Self::NextWorkspace => "Next workspace",
             Self::PrevWorkspace => "Previous workspace",
             Self::RightTabDirectory => "Search in directory",
             Self::RightTabGitDiff => "Git diff panel",
             Self::ToggleNotes => "Toggle notes",
+            Self::ToggleMarkdownPreview => "Toggle Markdown preview",
             Self::DuplicateSession => "Duplicate session",
             Self::CopySelection => "Copy selection",
             Self::FocusSessionSearch => "Search sessions",
@@ -293,6 +309,8 @@ impl AppAction {
             self,
             Self::SplitHorizontal
                 | Self::SplitVertical
+                | Self::Unsplit
+                | Self::UnsplitAll
                 | Self::CloseCurrentPane
                 | Self::ToggleLeftSidebar
                 | Self::ToggleRightSidebar
@@ -532,12 +550,17 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
         ),
         (cs(Backslash), AppAction::SplitHorizontal),
         (cs(Minus), AppAction::SplitVertical),
+        // The split chord with Alt added: undo the split, keeping its tabs.
+        (cas(Backslash).with_shift(), AppAction::Unsplit),
         (cs(Comma), AppAction::OpenSettings),
         (cs(PageDown), AppAction::NextWorkspace),
         (cs(PageUp), AppAction::PrevWorkspace),
         (cs(D), AppAction::RightTabDirectory),
         (cs(G), AppAction::RightTabGitDiff),
         (cs(J), AppAction::ToggleNotes),
+        // M for Markdown. VS Code's Shift+V would take paste from Linux
+        // terminals (Ctrl+Shift+V).
+        (cs(M), AppAction::ToggleMarkdownPreview),
         (cs(K), AppAction::DuplicateSession),
         (cs(C), AppAction::CopySelection),
         (cs(F), AppAction::FocusSessionSearch),
@@ -929,6 +952,8 @@ impl ShortcutRegistry {
                 &[
                     AppAction::SplitHorizontal,
                     AppAction::SplitVertical,
+                    AppAction::Unsplit,
+                    AppAction::UnsplitAll,
                     AppAction::ZoomPane,
                     AppAction::FocusNextGroup,
                     AppAction::FocusPrevGroup,
@@ -954,6 +979,7 @@ impl ShortcutRegistry {
                 &[
                     AppAction::RightTabGitDiff,
                     AppAction::ToggleNotes,
+                    AppAction::ToggleMarkdownPreview,
                     AppAction::RevealInExplorer,
                 ],
             ),
@@ -1024,12 +1050,15 @@ mod tests {
         AppAction::SwitchToLastSession,
         AppAction::SplitHorizontal,
         AppAction::SplitVertical,
+        AppAction::Unsplit,
+        AppAction::UnsplitAll,
         AppAction::OpenSettings,
         AppAction::NextWorkspace,
         AppAction::PrevWorkspace,
         AppAction::RightTabDirectory,
         AppAction::RightTabGitDiff,
         AppAction::ToggleNotes,
+        AppAction::ToggleMarkdownPreview,
         AppAction::DuplicateSession,
         AppAction::CopySelection,
         AppAction::FocusSessionSearch,
@@ -1055,7 +1084,7 @@ mod tests {
     ];
 
     /// Actions deliberately shipped without a default chord.
-    const UNBOUND_BY_DEFAULT: &[AppAction] = &[AppAction::FocusFileSearch];
+    const UNBOUND_BY_DEFAULT: &[AppAction] = &[AppAction::FocusFileSearch, AppAction::UnsplitAll];
 
     /// Shortcuts macOS reserves by default (Spotlight, app and window
     /// switching, hide, minimize, quit, screenshots, Dock, character viewer,
@@ -1229,6 +1258,7 @@ mod tests {
             (AppAction::NewTerminalTab, "\u{21E7}\u{2318}N"),
             (AppAction::CloseCurrentPane, "\u{21E7}\u{2318}W"),
             (AppAction::SplitHorizontal, "\u{21E7}\u{2318}\\"),
+            (AppAction::Unsplit, "\u{2325}\u{21E7}\u{2318}\\"),
             (AppAction::CommandPalette, "\u{21E7}\u{2318}P"),
             (AppAction::OpenFileFinder, "\u{2318}P"),
             (AppAction::SwitchToTab1, "\u{2318}1"),

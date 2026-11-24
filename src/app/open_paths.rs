@@ -151,29 +151,25 @@ impl App {
             self.workspace_store.save();
             return id;
         };
-        let mut renamed_from = None;
+        // A rename moves the workspace's note file on the next frame
+        // (`NoteStore::sync` sees the new name).
         if let Some(ws) = self
             .workspace_store
             .workspaces
             .iter_mut()
             .find(|w| w.id == id)
         {
-            if ws.name != name {
-                renamed_from = Some(std::mem::replace(&mut ws.name, name.clone()));
-            }
+            ws.name = name;
             ws.color = color;
         }
         self.workspace_store.save();
-        if let Some(old) = renamed_from {
-            self.note_store.rename_file(id, &old, &name);
-        }
         id
     }
 
     /// Whether `path` opens showing its preview: Markdown does when the user
     /// last preferred previews.
     pub(super) fn default_editor_preview(&self, path: &Path) -> bool {
-        let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+        let is_md = crate::util::is_markdown_path(path);
         is_md && self.md_prefer_preview
     }
 

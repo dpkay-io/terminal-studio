@@ -68,6 +68,9 @@ pub(super) enum SavedPaneContent {
     },
     NoteEditor {
         workspace_id: Option<u64>,
+        /// Showing the Markdown preview (older files: editing).
+        #[serde(default)]
+        show_preview: bool,
     },
 }
 
@@ -137,6 +140,8 @@ pub(super) struct AppSession {
     pub(super) notes_panel_ratio: f32,
     #[serde(default)]
     pub(super) notes_panel_collapsed: bool,
+    #[serde(default)]
+    pub(super) notes_panel_preview: bool,
     #[serde(default = "default_left_panel_width")]
     pub(super) left_panel_width: f32,
     #[serde(default = "default_right_panel_width")]
@@ -471,13 +476,24 @@ mod tests {
     fn test_saved_pane_content_note_editor_roundtrip() {
         let original = SavedPaneContent::NoteEditor {
             workspace_id: Some(7),
+            show_preview: true,
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: SavedPaneContent = serde_json::from_str(&json).unwrap();
         match restored {
-            SavedPaneContent::NoteEditor { workspace_id } => {
+            SavedPaneContent::NoteEditor {
+                workspace_id,
+                show_preview,
+            } => {
                 assert_eq!(workspace_id, Some(7));
+                assert!(show_preview);
             }
+            _ => panic!("expected NoteEditor variant"),
+        }
+        // Files saved before the preview existed open for editing.
+        let old = r#"{"NoteEditor":{"workspace_id":7}}"#;
+        match serde_json::from_str::<SavedPaneContent>(old).unwrap() {
+            SavedPaneContent::NoteEditor { show_preview, .. } => assert!(!show_preview),
             _ => panic!("expected NoteEditor variant"),
         }
     }
@@ -525,7 +541,10 @@ mod tests {
                     workspace_id: None,
                 },
                 SavedPane {
-                    content: SavedPaneContent::NoteEditor { workspace_id: None },
+                    content: SavedPaneContent::NoteEditor {
+                        workspace_id: None,
+                        show_preview: false,
+                    },
                     manual_width: None,
                     labels: vec![],
                     last_active_at: 0,
@@ -540,6 +559,7 @@ mod tests {
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.3,
             notes_panel_collapsed: true,
+            notes_panel_preview: true,
             left_panel_width: 200.0,
             right_panel_width: 250.0,
             right_tab: SavedRightTab::Markdown(PathBuf::from("/docs/README.md")),
@@ -566,6 +586,7 @@ mod tests {
         assert!(!restored.workspace_panel_collapsed);
         assert!((restored.notes_panel_ratio - 0.3).abs() < f32::EPSILON);
         assert!(restored.notes_panel_collapsed);
+        assert!(restored.notes_panel_preview);
         match &restored.right_tab {
             SavedRightTab::Markdown(p) => assert_eq!(p, &PathBuf::from("/docs/README.md")),
             _ => panic!("expected Markdown variant"),
@@ -804,6 +825,7 @@ mod tests {
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
+            notes_panel_preview: false,
             left_panel_width: 180.0,
             right_panel_width: 180.0,
             right_tab: SavedRightTab::Directory,

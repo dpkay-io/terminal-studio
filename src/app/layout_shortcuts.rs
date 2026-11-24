@@ -8,6 +8,7 @@
 
 use super::input;
 use super::pane::PaneContent;
+use super::unsplit::Unsplit;
 use super::App;
 use crate::pane_tree::SplitDir;
 use crate::shortcuts::AppAction;
@@ -16,6 +17,7 @@ use crate::shortcuts::AppAction;
 #[derive(Default)]
 pub(super) struct LayoutRequests {
     pub(super) split: Option<SplitDir>,
+    pub(super) unsplit: Option<Unsplit>,
     pub(super) close_pane: bool,
     pub(super) activate_pane: Option<u32>,
 }
@@ -30,6 +32,9 @@ impl App {
         match action {
             AppAction::SplitHorizontal => requests.split = Some(SplitDir::Horizontal),
             AppAction::SplitVertical => requests.split = Some(SplitDir::Vertical),
+            AppAction::Unsplit | AppAction::UnsplitAll => {
+                requests.unsplit = Unsplit::for_action(action, self.pane_state.focused_group_id);
+            }
             AppAction::CloseCurrentPane => requests.close_pane = true,
             AppAction::ToggleLeftSidebar
             | AppAction::ToggleRightSidebar
@@ -98,15 +103,22 @@ impl App {
         self.vp_id("notes_textedit")
     }
 
-    /// The notes box has the keyboard.
+    /// The right panel's notes have the keyboard: their text box, or their
+    /// preview (`notes_preview_id`).
     pub(super) fn notes_has_focus(&self, ctx: &egui::Context) -> bool {
-        self.keyboard_focus(ctx) == Some(self.notes_text_id())
+        self.keyboard_focus(ctx)
+            .is_some_and(|id| self.notes_ids().contains(&id))
+    }
+
+    /// What has the keyboard while the right panel's notes do.
+    fn notes_ids(&self) -> [egui::Id; 2] {
+        [self.notes_text_id(), self.notes_preview_id()]
     }
 
     /// The widget with the keyboard as the user sees it: while focus is
     /// parked for a held Ctrl+Tab (`hold_extra_window_keys`), the one it
     /// was taken from.
-    fn keyboard_focus(&self, ctx: &egui::Context) -> Option<egui::Id> {
+    pub(super) fn keyboard_focus(&self, ctx: &egui::Context) -> Option<egui::Id> {
         seen_focus(self.parked_focus, ctx.memory(|m| m.focused()))
     }
 
@@ -132,7 +144,7 @@ impl App {
             && text_box_keys_reach_layout(
                 self.keyboard_focus(ctx),
                 super::ui::active_text_box_id(ctx),
-                self.notes_text_id(),
+                &self.notes_ids(),
             )
     }
 
@@ -215,16 +227,17 @@ fn focus_after_park(
 
 /// Whether a layout key pressed while a file editor or the notes box is in
 /// use belongs to the layout: only when the keyboard is in the active pane's
-/// own text box, the notes box, or nowhere. Never while a rename field, a
-/// filter box or any other input has it.
+/// own text box, the right panel's notes (`notes`: text box, preview), or
+/// nowhere. Never while a rename field, a filter box or any other input has
+/// it.
 fn text_box_keys_reach_layout(
     focused: Option<egui::Id>,
     active_text_box: Option<egui::Id>,
-    notes: egui::Id,
+    notes: &[egui::Id],
 ) -> bool {
     match focused {
         None => true,
-        Some(id) => Some(id) == active_text_box || id == notes,
+        Some(id) => Some(id) == active_text_box || notes.contains(&id),
     }
 }
 
@@ -234,6 +247,11 @@ mod tests {
 
     fn id(name: &str) -> egui::Id {
         egui::Id::unique(name)
+    }
+
+    /// The right panel's notes: text box and preview.
+    fn notes() -> [egui::Id; 2] {
+        [id("notes"), id("notes_preview")]
     }
 
     #[test]
@@ -277,7 +295,7 @@ mod tests {
         assert!(text_box_keys_reach_layout(
             None,
             Some(id("editor")),
-            id("notes")
+            &notes()
         ));
     }
 
@@ -286,17 +304,19 @@ mod tests {
         assert!(text_box_keys_reach_layout(
             Some(id("editor")),
             Some(id("editor")),
-            id("notes")
+            &notes()
         ));
     }
 
     #[test]
-    fn layout_keys_reach_layout_from_the_notes_box() {
-        assert!(text_box_keys_reach_layout(
-            Some(id("notes")),
-            Some(id("editor")),
-            id("notes")
-        ));
+    fn layout_keys_reach_layout_from_the_notes_box_or_preview() {
+        for focused in notes() {
+            assert!(text_box_keys_reach_layout(
+                Some(focused),
+                Some(id("editor")),
+                &notes()
+            ));
+        }
     }
 
     #[test]
@@ -304,12 +324,12 @@ mod tests {
         assert!(!text_box_keys_reach_layout(
             Some(id("rename")),
             Some(id("editor")),
-            id("notes")
+            &notes()
         ));
         assert!(!text_box_keys_reach_layout(
             Some(id("rename")),
             None,
-            id("notes")
+            &notes()
         ));
     }
 }

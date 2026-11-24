@@ -1,4 +1,5 @@
 use super::super::super::pane::PaneContent;
+use super::super::super::unsplit::{Unsplit, UNSPLIT_ALL_LABEL, UNSPLIT_LABEL};
 use super::super::super::{App, CloseAllTarget};
 use super::{sections, SessionListActions};
 use crate::app::ui::search_bar::{search_bar, search_bar_persistent};
@@ -886,10 +887,15 @@ impl App {
     fn render_section_header(&mut self, ui: &mut egui::Ui, group_id: Option<GroupId>, label: &str) {
         let t = theme::active();
         let is_focused = group_id == Some(self.pane_state.focused_group_id);
-        let (resp, painter) = ui.allocate_painter(
-            egui::vec2(ui.available_width(), theme::HEADER_H),
-            egui::Sense::hover(),
-        );
+        // Clicks only for a split's own header, whose right-click menu
+        // unsplits it; "Other" stays hover-only.
+        let sense = if group_id.is_some() {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        };
+        let (resp, painter) =
+            ui.allocate_painter(egui::vec2(ui.available_width(), theme::HEADER_H), sense);
         let rect = resp.rect;
 
         // Dropping on a header moves the payload into that split. Resolves
@@ -936,6 +942,29 @@ impl App {
             egui::FontId::proportional(theme::FONT_UI_XS),
             if is_focused { t.text } else { t.subtext0 },
         );
+
+        if let Some(gid) = group_id {
+            self.section_header_menu(&resp, gid);
+        }
+    }
+
+    /// A split section header's right-click menu: leave split mode for that
+    /// split or for all of them, keeping every tab open.
+    fn section_header_menu(&mut self, resp: &egui::Response, group_id: GroupId) {
+        let mut picked = None;
+        resp.context_menu(|ui| {
+            if ui.button(UNSPLIT_LABEL).clicked() {
+                picked = Some(Unsplit::Split(group_id));
+                ui.close();
+            }
+            if ui.button(UNSPLIT_ALL_LABEL).clicked() {
+                picked = Some(Unsplit::All);
+                ui.close();
+            }
+        });
+        if let Some(request) = picked {
+            self.request_unsplit(request, &resp.ctx);
+        }
     }
 
     /// Whether the session list shows this pane's row right now (its text,

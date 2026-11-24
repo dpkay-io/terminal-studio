@@ -25,9 +25,8 @@ use super::App;
 use crate::editor_group::GroupId;
 use crate::theme;
 
-/// Files larger than this are not opened in the editor (it holds the whole
-/// file in memory and lays out every line).
-pub(super) const MAX_OPEN_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// Files larger than this are not opened in the editor.
+pub(super) const MAX_OPEN_FILE_BYTES: u64 = crate::util::MAX_TEXT_FILE_BYTES;
 /// How much of a file is read to tell text from binary.
 const TEXT_SNIFF_BYTES: usize = 8 * 1024;
 /// How often the hover highlight follows the pointer: no mouse moves arrive

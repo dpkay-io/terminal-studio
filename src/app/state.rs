@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 const MAX_SESSIONS: usize = 30;
 
 use crate::editor_group::EditorGroup;
+use crate::notes::NoteStore;
 use crate::pane_tree::{PaneNode, RemoveResult};
 use crate::pty::foreground_worker::ForegroundWorker;
 use crate::pty::{available_shells, default_shell, SessionManager, ShellKind};
@@ -13,7 +14,7 @@ use crate::shortcuts::ShortcutRegistry;
 use crate::sys_monitor::SysMonitor;
 use crate::theme;
 use crate::updater::UpdateChecker;
-use crate::workspace::{NoteStore, WindowId, Workspace, WorkspaceStore};
+use crate::workspace::{WindowId, Workspace, WorkspaceStore};
 
 use alacritty_terminal::grid::Dimensions;
 
@@ -170,7 +171,7 @@ impl App {
         scrollback_saver.set_enabled(loaded_settings.save_scrollback_on_exit);
         let (subdir_load_tx, subdir_load_rx) = std::sync::mpsc::channel();
         let workspace_store = WorkspaceStore::load();
-        let note_store = NoteStore::load(&workspace_store.workspaces);
+        let note_store = NoteStore::load(&ctx, &workspace_store.workspaces);
         let mut app = App {
             session_manager: mgr,
             session_state: SessionState::new(),
@@ -185,6 +186,7 @@ impl App {
             workspace_edit_dialog: None,
             open_folder_dialog: None,
             open_queue: Default::default(),
+            note_file_picks: Default::default(),
             drop_pane_rects: Vec::new(),
             workspace_panel_ratio: 0.35,
             workspace_panel_collapsed: false,
@@ -193,6 +195,7 @@ impl App {
             label_registry: LabelRegistry::load(),
             notes_panel_ratio: 0.35,
             notes_panel_collapsed: false,
+            notes_panel_preview: false,
             left_panel_width: theme::LEFT_SIDEBAR_W,
             right_panel_width: theme::RIGHT_SIDEBAR_W,
             show_left_panel: true,
@@ -295,6 +298,7 @@ impl App {
             deferred_duplicate: false,
             deferred_split: None,
             deferred_close_pane: false,
+            deferred_unsplit: None,
             rename_pane_id: None,
             rename_text: String::new(),
             rename_in_tab_bar: false,
@@ -898,6 +902,7 @@ impl App {
             &mut self.notes_panel_collapsed,
             &mut view.notes_panel_collapsed,
         );
+        swap(&mut self.notes_panel_preview, &mut view.notes_panel_preview);
         swap(&mut self.left_panel_width, &mut view.left_panel_width);
         swap(&mut self.right_panel_width, &mut view.right_panel_width);
         swap(&mut self.show_left_panel, &mut view.show_left_panel);
@@ -966,6 +971,7 @@ impl App {
                 workspace_panel_collapsed: Some(w.view.workspace_panel_collapsed),
                 notes_panel_ratio: Some(w.view.notes_panel_ratio),
                 notes_panel_collapsed: Some(w.view.notes_panel_collapsed),
+                notes_panel_preview: Some(w.view.notes_panel_preview),
                 left_panel_width: Some(w.view.left_panel_width),
                 right_panel_width: Some(w.view.right_panel_width),
             })
@@ -1024,6 +1030,9 @@ impl App {
             }
             if let Some(v) = s.notes_panel_collapsed {
                 view.notes_panel_collapsed = v;
+            }
+            if let Some(v) = s.notes_panel_preview {
+                view.notes_panel_preview = v;
             }
             if let Some(v) = s.left_panel_width {
                 view.left_panel_width = v.clamp(
@@ -1587,6 +1596,7 @@ impl App {
                     },
                     PaneContent::NoteEditor(ne) => SavedPaneContent::NoteEditor {
                         workspace_id: ne.workspace_id,
+                        show_preview: ne.show_preview,
                     },
                     PaneContent::ConflictResolver(_) => return None,
                 };
@@ -1661,6 +1671,7 @@ impl App {
             workspace_panel_collapsed: self.workspace_panel_collapsed,
             notes_panel_ratio: self.notes_panel_ratio,
             notes_panel_collapsed: self.notes_panel_collapsed,
+            notes_panel_preview: self.notes_panel_preview,
             left_panel_width: self.left_panel_width,
             right_panel_width: self.right_panel_width,
             right_tab,
@@ -1699,7 +1710,8 @@ impl App {
 
     /// The save for quitting and restarting: capture every session whose
     /// output changed since its last capture, write the session file, and
-    /// wait for both (up to `FINAL_SAVE_TIMEOUT` each).
+    /// wait for both (up to `FINAL_SAVE_TIMEOUT` each); then write notes
+    /// edited in the last moment (up to `notes::FLUSH_TIMEOUT`).
     pub(super) fn save_session_final(&self) {
         use super::scrollback_saver::FINAL_SAVE_TIMEOUT;
         let saver = &self.workers.scrollback_saver;
@@ -1708,6 +1720,7 @@ impl App {
         }
         self.save_session();
         saver.flush(FINAL_SAVE_TIMEOUT);
+        self.note_store.flush(crate::notes::FLUSH_TIMEOUT);
     }
 
     /// The scrollback saver wrote a file the session file doesn't name yet.
@@ -1882,7 +1895,7 @@ impl App {
                     workspace_id,
                     untitled,
                 } => {
-                    let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+                    let is_md = crate::util::is_markdown_path(path);
                     PaneContent::FileEditor(FileEditorState {
                         path: path.clone(),
                         content: content.clone(),
@@ -1921,11 +1934,13 @@ impl App {
                         scroll_to_first_hunk: false,
                     })
                 }
-                SavedPaneContent::NoteEditor { workspace_id } => {
-                    PaneContent::NoteEditor(NoteEditorState {
-                        workspace_id: *workspace_id,
-                    })
-                }
+                SavedPaneContent::NoteEditor {
+                    workspace_id,
+                    show_preview,
+                } => PaneContent::NoteEditor(NoteEditorState {
+                    workspace_id: *workspace_id,
+                    show_preview: *show_preview,
+                }),
             };
             let pane_id = self.pane_state.next_pane_id;
             self.pane_state.next_pane_id += 1;
@@ -2056,6 +2071,7 @@ impl App {
         self.workspace_panel_collapsed = state.workspace_panel_collapsed;
         self.notes_panel_ratio = safe_ratio(state.notes_panel_ratio, 0.35);
         self.notes_panel_collapsed = state.notes_panel_collapsed;
+        self.notes_panel_preview = state.notes_panel_preview;
         self.left_panel_width = if state.left_panel_width.is_finite() {
             state.left_panel_width.clamp(
                 *LEFT_PANEL_WIDTH_RANGE.start(),
@@ -2406,7 +2422,7 @@ impl App {
             DragAction::InsertFileEditorPane { path, at_index } => {
                 let pane_id = self.pane_state.next_pane_id;
                 self.pane_state.next_pane_id += 1;
-                let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+                let is_md = crate::util::is_markdown_path(&path);
                 let entry = PaneEntry {
                     id: pane_id,
                     content: PaneContent::FileEditor(FileEditorState {
@@ -2503,6 +2519,7 @@ impl App {
                         id: pane_id,
                         content: PaneContent::NoteEditor(NoteEditorState {
                             workspace_id: ws_id,
+                            show_preview: self.notes_panel_preview,
                         }),
                         manual_width: None,
                         last_size: (0, 0),
@@ -2687,7 +2704,7 @@ impl App {
     ) -> Option<u32> {
         let pane_id = self.pane_state.next_pane_id;
         self.pane_state.next_pane_id += 1;
-        let is_md = path.extension().and_then(|e| e.to_str()) == Some("md");
+        let is_md = crate::util::is_markdown_path(&path);
         self.pane_state.panes.push(PaneEntry {
             id: pane_id,
             content: PaneContent::FileEditor(FileEditorState {
@@ -2778,6 +2795,7 @@ impl App {
             id: pane_id,
             content: PaneContent::NoteEditor(NoteEditorState {
                 workspace_id: ws_id,
+                show_preview: self.notes_panel_preview,
             }),
             manual_width: None,
             last_size: (0, 0),

@@ -176,7 +176,7 @@ impl App {
                     .path
                     .file_name()
                     .map(|n| format!("diff: {}", n.to_string_lossy())),
-                PaneContent::NoteEditor(_) => Some("Notes".to_string()),
+                PaneContent::NoteEditor(ne) => Some(self.note_title(ne.workspace_id)),
                 PaneContent::ConflictResolver(cr) => cr
                     .path
                     .file_name()

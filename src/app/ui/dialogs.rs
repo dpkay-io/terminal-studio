@@ -71,7 +71,7 @@ impl App {
                     .to_string();
                 Some((format!("diff: {}", name), theme::short_path(&d.path)))
             }
-            PaneContent::NoteEditor(_) => Some(("Notes".to_string(), String::new())),
+            PaneContent::NoteEditor(ne) => Some((self.note_title(ne.workspace_id), String::new())),
             PaneContent::ConflictResolver(cr) => {
                 let name = cr
                     .path
@@ -926,12 +926,8 @@ impl App {
         if save_it {
             if let Some(dlg) = self.workspace_edit_dialog.take() {
                 let new_name = dlg.name.trim().to_string();
-                let old_name = self
-                    .workspace_store
-                    .workspaces
-                    .iter()
-                    .find(|w| w.id == dlg.workspace_id)
-                    .map(|w| w.name.clone());
+                // A rename moves the workspace's note file on the next
+                // frame (`NoteStore::sync` sees the new name).
                 if let Some(ws) = self
                     .workspace_store
                     .workspaces
@@ -942,12 +938,6 @@ impl App {
                     ws.color = dlg.color.color();
                 }
                 self.workspace_store.save();
-                if let Some(old) = old_name {
-                    if old != new_name {
-                        self.note_store
-                            .rename_file(dlg.workspace_id, &old, &new_name);
-                    }
-                }
                 if let Some(ew) = self
                     .extra_windows
                     .iter_mut()
