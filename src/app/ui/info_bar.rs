@@ -1,4 +1,5 @@
 use super::super::settings::InfoBarPosition;
+use super::super::unsplit::{Unsplit, UNSPLIT_ALL_LABEL, UNSPLIT_LABEL};
 use super::super::App;
 use crate::editor_group::GroupId;
 use crate::pane_tree::SplitDir;
@@ -18,22 +19,28 @@ const REVEAL_ZONE_H_BUTTONS: f32 = 2.0;
 const CLOSE_ALL_LABEL: &str = "Close All Tabs in This Split";
 const CLOSE_ALL_HINT: &str = "Right-click to close all tabs in this split";
 const HIDE_TOOLTIP: &str = "Hide info bar (point at a pane's top-right corner to show it again)";
+/// One box: what is left once the split is gone (⊞ ⊟ are its split buttons).
+const UNSPLIT_ICON: &str = "\u{22A1}";
+const UNSPLIT_HINT: &str = "Its tabs join the split beside it; nothing is closed.\n\
+                            Right-click to unsplit all";
 
 /// Where everything in one info bar goes. The buttons are right-aligned in
-/// this order from the right edge: hide, move, close-all, split vertical,
-/// split horizontal. The text gets whatever is left of them, so it can never
-/// run under a button however many there are.
+/// this order from the right edge: hide, move, close, unsplit (only while
+/// there are splits), split vertical, split horizontal. The text gets
+/// whatever is left of them, so it can never run under a button however many
+/// there are.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct InfoBarLayout {
     text: egui::Rect,
     hide: egui::Rect,
     toggle: egui::Rect,
     close: egui::Rect,
+    unsplit: Option<egui::Rect>,
     split_v: egui::Rect,
     split_h: egui::Rect,
 }
 
-fn info_bar_layout(rect: egui::Rect) -> InfoBarLayout {
+fn info_bar_layout(rect: egui::Rect, with_unsplit: bool) -> InfoBarLayout {
     let pad_x = theme::SP_4;
     let btn_y = rect.center().y - BTN_SIZE / 2.0;
     let step = BTN_SIZE + theme::SP_1;
@@ -43,7 +50,9 @@ fn info_bar_layout(rect: egui::Rect) -> InfoBarLayout {
             egui::vec2(BTN_SIZE, BTN_SIZE),
         )
     };
-    let split_h = button(4);
+    // The split buttons sit after the unsplit slot when it is there.
+    let split_slot = if with_unsplit { 4 } else { 3 };
+    let split_h = button(split_slot + 1);
     let text_min_x = rect.min.x + pad_x;
     // A narrow split can push the buttons past the left edge; clamping keeps
     // the text rect from inverting, which egui would not draw correctly.
@@ -56,7 +65,8 @@ fn info_bar_layout(rect: egui::Rect) -> InfoBarLayout {
         hide: button(0),
         toggle: button(1),
         close: button(2),
-        split_v: button(3),
+        unsplit: with_unsplit.then(|| button(3)),
+        split_v: button(split_slot),
         split_h,
     }
 }
@@ -93,6 +103,9 @@ pub(in crate::app) enum InfoBarAction {
     /// Close the tab the split is showing, and only that one.
     CloseTab(u32),
     Split(GroupId, SplitDir),
+    /// Leave split mode: this split's tabs, or every split's, join one
+    /// split. Nothing is closed.
+    Unsplit(Unsplit),
     CloseAllInGroup(GroupId),
 }
 
@@ -184,7 +197,7 @@ impl App {
             );
         }
 
-        let layout = info_bar_layout(rect);
+        let layout = info_bar_layout(rect, has_multiple_groups);
         let text_rect = layout.text;
 
         // Text segments: session · workspace  ⎇ branch
@@ -292,6 +305,35 @@ impl App {
         .clicked()
         {
             action = InfoBarAction::Split(group_id, SplitDir::Vertical);
+        }
+
+        if let Some(unsplit_rect) = layout.unsplit {
+            let unsplit_resp = icon_button(
+                ui,
+                ui.scope_id().with(("info_bar_unsplit", group_id)),
+                unsplit_rect,
+                UNSPLIT_ICON,
+                theme::ICON_SM,
+                fg,
+                IconButtonStyle::Default,
+            )
+            .on_hover_text(format!(
+                "{}\n{UNSPLIT_HINT}",
+                self.shortcut_tooltip(UNSPLIT_LABEL, AppAction::Unsplit)
+            ));
+            if unsplit_resp.clicked() {
+                action = InfoBarAction::Unsplit(Unsplit::Split(group_id));
+            }
+            unsplit_resp.context_menu(|ui| {
+                if ui.button(UNSPLIT_LABEL).clicked() {
+                    action = InfoBarAction::Unsplit(Unsplit::Split(group_id));
+                    ui.close();
+                }
+                if ui.button(UNSPLIT_ALL_LABEL).clicked() {
+                    action = InfoBarAction::Unsplit(Unsplit::All);
+                    ui.close();
+                }
+            });
         }
 
         let close_resp = icon_button(
@@ -454,53 +496,83 @@ mod tests {
         )
     }
 
-    fn buttons(l: &InfoBarLayout) -> [egui::Rect; 5] {
-        [l.hide, l.toggle, l.close, l.split_v, l.split_h]
+    /// Every button drawn, right to left.
+    fn buttons(l: &InfoBarLayout) -> Vec<egui::Rect> {
+        [
+            Some(l.hide),
+            Some(l.toggle),
+            Some(l.close),
+            l.unsplit,
+            Some(l.split_v),
+            Some(l.split_h),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     #[test]
     fn layout_buttons_are_right_aligned_in_order_without_overlap() {
         let rect = bar(600.0);
-        let l = info_bar_layout(rect);
-        let b = buttons(&l);
-        assert_eq!(l.hide.max.x, rect.max.x - theme::SP_4);
-        for pair in b.windows(2) {
-            // Each button sits left of the previous one, with a gap.
-            assert!(pair[1].max.x < pair[0].min.x, "{pair:?}");
-        }
-        for r in b {
-            assert_eq!(r.size(), egui::vec2(BTN_SIZE, BTN_SIZE));
-            assert!((r.center().y - rect.center().y).abs() < f32::EPSILON);
-            assert!(rect.contains_rect(r));
+        for with_unsplit in [false, true] {
+            let l = info_bar_layout(rect, with_unsplit);
+            let b = buttons(&l);
+            assert_eq!(b.len(), if with_unsplit { 6 } else { 5 });
+            assert_eq!(l.hide.max.x, rect.max.x - theme::SP_4);
+            for pair in b.windows(2) {
+                // Each button sits left of the previous one, with a gap.
+                assert!(pair[1].max.x < pair[0].min.x, "{pair:?}");
+            }
+            for r in b {
+                assert_eq!(r.size(), egui::vec2(BTN_SIZE, BTN_SIZE));
+                assert!((r.center().y - rect.center().y).abs() < f32::EPSILON);
+                assert!(rect.contains_rect(r));
+            }
         }
     }
 
     #[test]
+    fn layout_unsplit_sits_between_close_and_the_split_buttons() {
+        let l = info_bar_layout(bar(600.0), true);
+        let unsplit = l.unsplit.expect("unsplit slot while there are splits");
+        assert!(unsplit.max.x < l.close.min.x);
+        assert!(l.split_v.max.x < unsplit.min.x);
+        // Without splits there is no gap where it would be.
+        let alone = info_bar_layout(bar(600.0), false);
+        assert!(alone.unsplit.is_none());
+        assert_eq!(alone.split_v, unsplit);
+    }
+
+    #[test]
     fn layout_text_never_runs_under_a_button() {
-        for width in [600.0, 200.0, 140.0] {
-            let l = info_bar_layout(bar(width));
-            for r in buttons(&l) {
-                assert!(
-                    l.text.max.x <= r.min.x,
-                    "width {width}: text {:?} vs {r:?}",
-                    l.text
-                );
+        for with_unsplit in [false, true] {
+            for width in [600.0, 200.0, 140.0] {
+                let l = info_bar_layout(bar(width), with_unsplit);
+                for r in buttons(&l) {
+                    assert!(
+                        l.text.max.x <= r.min.x,
+                        "width {width}: text {:?} vs {r:?}",
+                        l.text
+                    );
+                }
+                assert_eq!(l.text.min.x, bar(width).min.x + theme::SP_4);
             }
-            assert_eq!(l.text.min.x, bar(width).min.x + theme::SP_4);
         }
     }
 
     #[test]
     fn layout_text_rect_never_inverts_on_a_narrow_split() {
-        let l = info_bar_layout(bar(40.0));
-        assert!(l.text.width() >= 0.0);
-        assert_eq!(l.text.width(), 0.0);
+        for with_unsplit in [false, true] {
+            let l = info_bar_layout(bar(40.0), with_unsplit);
+            assert!(l.text.width() >= 0.0);
+            assert_eq!(l.text.width(), 0.0);
+        }
     }
 
     #[test]
     fn layout_text_spans_the_full_bar_height() {
         let rect = bar(600.0);
-        let l = info_bar_layout(rect);
+        let l = info_bar_layout(rect, true);
         assert_eq!(l.text.min.y, rect.min.y);
         assert_eq!(l.text.max.y, rect.max.y);
     }

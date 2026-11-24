@@ -8,7 +8,37 @@
 use super::super::pane::{PaneContent, SessionEntry};
 use super::super::title::{effective_title, session_title};
 use super::super::App;
+use crate::notes::NoteKey;
 use std::path::{Path, PathBuf};
+
+/// The group of panes outside every workspace, as the left nav names it.
+pub(in crate::app) const OTHER_GROUP_NAME: &str = "Other";
+const NOTES_TITLE: &str = "Notes";
+/// Between a note's title and its workspace.
+const NOTES_OWNER_SEPARATOR: &str = " \u{00b7} ";
+/// Tooltip line of a note kept in a file the user linked.
+const LINKED_NOTE_TIP: &str = "Linked to";
+/// Tooltip line of a note kept in the app's own notes folder.
+const OWN_NOTE_TIP: &str = "Kept in Terminal Studio's notes folder";
+
+/// A note's name: "Notes · <workspace>" (`owner`), so the notes of
+/// different workspaces read apart; just "Notes" when its workspace is gone.
+fn note_title(owner: Option<&str>) -> String {
+    match owner {
+        Some(name) => format!("{NOTES_TITLE}{NOTES_OWNER_SEPARATOR}{name}"),
+        None => NOTES_TITLE.to_string(),
+    }
+}
+
+/// A note's tooltip: its name, then where it is kept.
+fn note_tooltip(title: &str, link: Option<&Path>) -> String {
+    let mut tip = title.to_string();
+    match link {
+        Some(path) => append_line(&mut tip, &format!("{LINKED_NOTE_TIP} {}", path.display())),
+        None => append_line(&mut tip, OWN_NOTE_TIP),
+    }
+    tip
+}
 
 /// Display text for a pane.
 ///
@@ -18,6 +48,7 @@ fn content_display_text(
     content: &PaneContent,
     terminal_label: impl FnOnce(u32) -> String,
     ws_name: impl FnOnce(&Path) -> Option<String>,
+    note_label: impl FnOnce(NoteKey) -> String,
 ) -> String {
     match content {
         PaneContent::Terminal(sid) => terminal_label(*sid),
@@ -46,7 +77,7 @@ fn content_display_text(
             }
         }
         PaneContent::FileDiff(d) => format!("\u{21c4} {}", file_name(&d.path)),
-        PaneContent::NoteEditor(_) => "Notes".to_string(),
+        PaneContent::NoteEditor(ne) => note_label(ne.workspace_id),
         PaneContent::ConflictResolver(cr) => cr
             .path
             .file_name()
@@ -56,7 +87,11 @@ fn content_display_text(
 }
 
 /// Tooltip for a pane: full title, plus CWD and workspace where they apply.
-fn content_tooltip_text(content: &PaneContent, terminal_tip: impl FnOnce(u32) -> String) -> String {
+fn content_tooltip_text(
+    content: &PaneContent,
+    terminal_tip: impl FnOnce(u32) -> String,
+    note_tip: impl FnOnce(NoteKey) -> String,
+) -> String {
     match content {
         PaneContent::Terminal(sid) => terminal_tip(*sid),
         PaneContent::DeferredTerminal {
@@ -78,7 +113,7 @@ fn content_tooltip_text(content: &PaneContent, terminal_tip: impl FnOnce(u32) ->
         }
         PaneContent::FileEditor(ed) => ed.path.to_string_lossy().into_owned(),
         PaneContent::FileDiff(d) => format!("Diff: {}", d.path.to_string_lossy()),
-        PaneContent::NoteEditor(_) => "Notes".to_string(),
+        PaneContent::NoteEditor(ne) => note_tip(ne.workspace_id),
         PaneContent::ConflictResolver(cr) => {
             format!("Conflicts: {}", cr.path.to_string_lossy())
         }
@@ -149,14 +184,27 @@ impl App {
             &self.pane_state.panes[pane_index].content,
             |sid| self.terminal_display_text(sid),
             |cwd| self.ws_name_for_cwd(cwd),
+            |key| self.note_title(key),
         )
     }
 
     /// Compute the tooltip text for a tab: full title + CWD + workspace name.
     pub(in crate::app) fn tab_tooltip_text(&self, pane_index: usize) -> String {
-        content_tooltip_text(&self.pane_state.panes[pane_index].content, |sid| {
-            self.terminal_tooltip_text(sid)
-        })
+        content_tooltip_text(
+            &self.pane_state.panes[pane_index].content,
+            |sid| self.terminal_tooltip_text(sid),
+            |key| note_tooltip(&self.note_title(key), self.note_store.link(key)),
+        )
+    }
+
+    /// A note's name, the same in its row, tab, split header, pane header,
+    /// window title and dialogs: "Notes · <workspace>" ("Notes · Other" for
+    /// the notes of panes outside every workspace).
+    pub(in crate::app) fn note_title(&self, key: NoteKey) -> String {
+        match key {
+            None => note_title(Some(OTHER_GROUP_NAME)),
+            Some(id) => note_title(self.workspace_store.find(id).map(|w| w.name.as_str())),
+        }
     }
 
     /// Name for a new untitled buffer, after the ones already open.
@@ -289,7 +337,10 @@ mod tests {
     }
 
     fn note(workspace_id: Option<u64>) -> PaneContent {
-        PaneContent::NoteEditor(NoteEditorState { workspace_id })
+        PaneContent::NoteEditor(NoteEditorState {
+            workspace_id,
+            show_preview: false,
+        })
     }
 
     /// Panics if called — asserts an arm never reaches the terminal lookup.
@@ -348,7 +399,11 @@ mod tests {
     }
 
     fn display(content: &PaneContent) -> String {
-        content_display_text(content, no_terminal, no_ws)
+        content_display_text(content, no_terminal, no_ws, no_note)
+    }
+
+    fn no_note(_: NoteKey) -> String {
+        panic!("note lookup taken for a pane that is not a note");
     }
 
     // ── Display text ───────────────────────────────────────────────────
@@ -359,6 +414,7 @@ mod tests {
             &PaneContent::Terminal(7),
             |sid| format!("sess {sid}"),
             no_ws,
+            no_note,
         );
         assert_eq!(out, "sess 7");
     }
@@ -391,8 +447,28 @@ mod tests {
     }
 
     #[test]
-    fn note_pane_is_named_notes() {
-        assert_eq!(display(&note(Some(3))), "Notes");
+    fn note_pane_is_named_after_its_workspace() {
+        let out = content_display_text(&note(Some(3)), no_terminal, no_ws, |key| {
+            assert_eq!(key, Some(3));
+            note_title(Some("api"))
+        });
+        assert_eq!(out, "Notes \u{00b7} api");
+        assert_eq!(note_title(Some(OTHER_GROUP_NAME)), "Notes \u{00b7} Other");
+        // Its workspace was deleted: no name to add.
+        assert_eq!(note_title(None), "Notes");
+    }
+
+    #[test]
+    fn note_tooltip_says_where_the_note_is_kept() {
+        let tip = content_tooltip_text(&note(None), no_terminal, |key| {
+            assert_eq!(key, None);
+            note_tooltip("Notes \u{00b7} Other", Some(Path::new("/vault/todo.md")))
+        });
+        assert_eq!(tip, "Notes \u{00b7} Other\nLinked to /vault/todo.md");
+        assert_eq!(
+            note_tooltip("Notes", None),
+            format!("Notes\n{OWN_NOTE_TIP}")
+        );
     }
 
     #[test]
@@ -406,6 +482,7 @@ mod tests {
             &deferred(Some("/work/api"), Some("build")),
             no_terminal,
             |_| Some("api".to_string()),
+            no_note,
         );
         assert_eq!(out, "build");
     }
@@ -414,9 +491,12 @@ mod tests {
     fn deferred_terminal_with_a_blank_saved_title_falls_back_to_the_path() {
         // An empty saved title is the same as none — it must not win and blank
         // the tab.
-        let out = content_display_text(&deferred(Some("/work/api"), Some("")), no_terminal, |_| {
-            Some("api".to_string())
-        });
+        let out = content_display_text(
+            &deferred(Some("/work/api"), Some("")),
+            no_terminal,
+            |_| Some("api".to_string()),
+            no_note,
+        );
         assert_ne!(out, "");
     }
 
@@ -424,7 +504,7 @@ mod tests {
     fn deferred_terminal_without_a_cwd_skips_the_workspace_lookup() {
         // `no_ws` panics if called: an empty path must never be handed to the
         // workspace store, which would match on a prefix of everything.
-        let out = content_display_text(&deferred(None, None), no_terminal, no_ws);
+        let out = content_display_text(&deferred(None, None), no_terminal, no_ws, no_note);
         assert_eq!(out, effective_title("", Path::new(""), None, None, None));
     }
 
@@ -432,32 +512,43 @@ mod tests {
 
     #[test]
     fn terminal_tooltip_defers_to_the_session_lookup() {
-        let tip = content_tooltip_text(&PaneContent::Terminal(2), |sid| format!("tip {sid}"));
+        let tip = content_tooltip_text(
+            &PaneContent::Terminal(2),
+            |sid| format!("tip {sid}"),
+            no_note,
+        );
         assert_eq!(tip, "tip 2");
     }
 
     #[test]
     fn editor_tooltip_is_the_full_path() {
-        let tip = content_tooltip_text(&editor("/a/b/main.rs", true, false), no_terminal);
+        let tip = content_tooltip_text(&editor("/a/b/main.rs", true, false), no_terminal, no_note);
         assert_eq!(tip, PathBuf::from("/a/b/main.rs").to_string_lossy());
     }
 
     #[test]
     fn diff_and_conflict_tooltips_are_labelled() {
-        assert!(content_tooltip_text(&diff("/r/x.rs"), no_terminal).starts_with("Diff: "));
-        assert!(content_tooltip_text(&conflict("/r/x.rs"), no_terminal).starts_with("Conflicts: "));
+        assert!(content_tooltip_text(&diff("/r/x.rs"), no_terminal, no_note).starts_with("Diff: "));
+        assert!(
+            content_tooltip_text(&conflict("/r/x.rs"), no_terminal, no_note)
+                .starts_with("Conflicts: ")
+        );
     }
 
     #[test]
     fn deferred_tooltip_appends_the_cwd_on_its_own_line() {
-        let tip = content_tooltip_text(&deferred(Some("/work/api"), Some("build")), no_terminal);
+        let tip = content_tooltip_text(
+            &deferred(Some("/work/api"), Some("build")),
+            no_terminal,
+            no_note,
+        );
         assert_eq!(tip.lines().next(), Some("build"));
         assert_eq!(tip.lines().count(), 2);
     }
 
     #[test]
     fn deferred_tooltip_without_a_cwd_is_a_single_line() {
-        let tip = content_tooltip_text(&deferred(None, None), no_terminal);
+        let tip = content_tooltip_text(&deferred(None, None), no_terminal, no_note);
         assert_eq!(tip, "Terminal");
         assert_eq!(tip.lines().count(), 1);
     }

@@ -345,7 +345,7 @@ impl PaneState {
     /// starts from. Leaving it naming an erased group is what strands the next
     /// pane: `add_pane_to_group` silently no-ops on a group id that is not in
     /// the map, so the pane ends up in `panes` but in no group at all.
-    fn erase_group(&mut self, group_id: GroupId) {
+    pub(super) fn erase_group(&mut self, group_id: GroupId) {
         self.groups.remove(&group_id);
         match self.group_layout.remove_group(group_id) {
             GroupRemoveResult::CollapseToSibling(replacement) => {

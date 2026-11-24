@@ -24,6 +24,7 @@ pub(super) struct WindowView {
     pub(super) workspace_panel_collapsed: bool,
     pub(super) notes_panel_ratio: f32,
     pub(super) notes_panel_collapsed: bool,
+    pub(super) notes_panel_preview: bool,
 
     pub(super) left_panel_width: f32,
     pub(super) right_panel_width: f32,
@@ -69,6 +70,7 @@ impl WindowView {
             workspace_panel_collapsed: false,
             notes_panel_ratio: 0.30,
             notes_panel_collapsed: false,
+            notes_panel_preview: false,
             left_panel_width: crate::theme::LEFT_SIDEBAR_W,
             right_panel_width: crate::theme::RIGHT_SIDEBAR_W,
             show_left_panel: true,
@@ -116,6 +118,8 @@ pub(super) struct SavedExtraWindow {
     pub(super) notes_panel_ratio: Option<f32>,
     #[serde(default)]
     pub(super) notes_panel_collapsed: Option<bool>,
+    #[serde(default)]
+    pub(super) notes_panel_preview: Option<bool>,
     #[serde(default)]
     pub(super) left_panel_width: Option<f32>,
     #[serde(default)]

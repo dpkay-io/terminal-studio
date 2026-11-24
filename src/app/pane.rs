@@ -69,6 +69,11 @@ pub(super) fn text_hash(text: &str) -> u64 {
 }
 
 impl FileEditorState {
+    /// A Markdown file, which can show its preview.
+    pub(super) fn is_markdown(&self) -> bool {
+        crate::util::is_markdown_path(&self.path)
+    }
+
     /// Edits that are not in any file yet: an edited file, or an untitled
     /// buffer someone typed into.
     pub(super) fn has_unsaved_changes(&self) -> bool {
@@ -143,6 +148,8 @@ pub(super) struct FileDiffState {
 #[derive(Clone, Debug)]
 pub(super) struct NoteEditorState {
     pub(super) workspace_id: Option<u64>,
+    /// Showing the Markdown preview instead of the text box.
+    pub(super) show_preview: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -426,6 +433,7 @@ mod tests {
         });
         let note = PaneContent::NoteEditor(NoteEditorState {
             workspace_id: Some(99),
+            show_preview: false,
         });
         let conflict = PaneContent::ConflictResolver(ConflictResolverState {
             path: PathBuf::from("conflict.rs"),

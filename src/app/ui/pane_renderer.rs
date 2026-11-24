@@ -1,14 +1,16 @@
 use crate::ui_kit::TextEditFontHint as _;
 use std::sync::Arc;
 
+use super::super::editor_texts::{pane_text, EditorTexts};
 use super::super::feedback;
 use super::super::file_browser;
 use super::super::markdown::render_markdown;
-use super::super::pane::{NoteEditorState, PaneContent, PaneEntry, SessionEntry, TermSelection};
+use super::super::pane::{PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::{CursorStyle, InfoBarPosition};
 use super::super::{App, CloseAllTarget};
 use super::info_bar::InfoBarAction;
 use crate::editor_group::{GroupId, GroupNode};
+use crate::notes::NoteStore;
 use crate::pane_tree::{split_rect, SplitDir};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::syntax;
@@ -49,7 +51,10 @@ pub(in crate::app) enum PaneContextAction {
 pub(in crate::app) struct RenderCtx<'a> {
     pub sessions: &'a [SessionEntry],
     pub panes: &'a [PaneEntry],
-    pub editor_texts: &'a mut Vec<(u32, Option<String>)>,
+    /// Each editor pane's text as its text box edits it this frame.
+    pub editor_texts: &'a mut EditorTexts,
+    /// Where note editor panes' text is read from.
+    pub notes: &'a NoteStore,
     pub cursor_alpha: f32,
     pub focused_pane_id: Option<u32>,
     pub active_term_geo: &'a mut Option<TerminalGeometry>,
@@ -77,6 +82,12 @@ pub(in crate::app) struct RenderCtx<'a> {
     pub scrollbar_dragging: &'a mut bool,
     /// (pane_id, new side_by_side value) toggled this frame by the conflict resolver toolbar.
     pub conflict_view_toggles: &'a mut Vec<(u32, bool)>,
+    /// The header of the note drawn, when the pane is a note.
+    pub note_header: Option<super::notes_header::NotesHeaderInfo>,
+    /// Asked of a note header's link button this frame.
+    pub note_link_actions: &'a mut Vec<super::notes_header::NoteLinkAction>,
+    /// The preview toggles' hover text (with the shortcut).
+    pub preview_tips: super::notes_header::PreviewTips,
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -407,7 +418,7 @@ fn render_file_editor_leaf(
             );
         });
     } else {
-        let is_md = ed.path.extension().and_then(|e| e.to_str()) == Some("md");
+        let is_md = ed.is_markdown();
         let previewing = is_md && ed.show_preview;
         if is_md {
             ui.horizontal(|ui| {
@@ -437,6 +448,12 @@ fn render_file_editor_leaf(
                 if raw_resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
+                // Only the button that would switch says what it does.
+                let raw_resp = if previewing {
+                    raw_resp.on_hover_text(&rctx.preview_tips.edit)
+                } else {
+                    raw_resp
+                };
                 if raw_resp.clicked() && previewing {
                     rctx.editor_preview_toggles.push(pane_id);
                 }
@@ -454,6 +471,11 @@ fn render_file_editor_leaf(
                 if preview_resp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
+                let preview_resp = if previewing {
+                    preview_resp
+                } else {
+                    preview_resp.on_hover_text(&rctx.preview_tips.preview)
+                };
                 if preview_resp.clicked() && !previewing {
                     rctx.editor_preview_toggles.push(pane_id);
                 }
@@ -483,171 +505,166 @@ fn render_file_editor_leaf(
         let search_current_idx = rctx.text_search.current_index;
 
         if previewing {
-            if let Some(et) = rctx.editor_texts.iter().find(|(id, _)| *id == pane_id) {
-                if let Some(ref text) = et.1 {
-                    egui::ScrollArea::vertical()
-                        .id_salt(("editor_preview_scroll", pane_id))
-                        .auto_shrink([false; 2])
-                        .show(ui, |ui| {
-                            render_markdown(ui, text);
+            egui::ScrollArea::vertical()
+                .id_salt(("editor_preview_scroll", pane_id))
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    render_markdown(ui, &ed.content);
+                });
+        } else if let Some(et) = rctx
+            .editor_texts
+            .get_or_load(pane_id, || Some(ed.content.as_str()))
+        {
+            let (text, edited) = (&mut et.text, &mut et.edited);
+            let maybe_syntax = syntax::find_syntax_for_file(&ed.path);
+
+            egui::ScrollArea::both()
+                .id_salt(("editor_scroll", pane_id))
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    let line_count = if text.ends_with('\n') {
+                        text.lines().count() + 1
+                    } else {
+                        text.lines().count()
+                    }
+                    .max(1);
+                    let digits = ((line_count as f64).log10().floor() as usize) + 1;
+                    let char_w = 7.5_f32;
+                    let gutter_w = (digits as f32 + 1.5) * char_w;
+                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+
+                    let gutter_total_h = theme::SP_1 + line_count as f32 * line_h;
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+
+                        // Virtual line-number gutter: allocate full height,
+                        // paint only visible numbers.
+                        ui.vertical(|ui| {
+                            ui.set_min_width(gutter_w);
+                            let (gutter_rect, _) = ui.allocate_exact_size(
+                                egui::vec2(gutter_w, gutter_total_h),
+                                egui::Sense::hover(),
+                            );
+                            let clip = ui.clip_rect();
+                            let base_y = gutter_rect.min.y + theme::SP_1;
+                            let first = ((clip.min.y - base_y) / line_h).floor().max(0.0) as usize;
+                            let last = ((clip.max.y - base_y) / line_h)
+                                .ceil()
+                                .min(line_count as f32)
+                                as usize;
+                            let gutter_font = egui::FontId::monospace(
+                                ui.style().text_styles[&egui::TextStyle::Monospace].size,
+                            );
+                            let gutter_color = theme::active().overlay0;
+                            for n in (first + 1)..=(last.min(line_count)) {
+                                let y = base_y + (n - 1) as f32 * line_h + line_h / 2.0;
+                                ui.painter().text(
+                                    egui::pos2(gutter_rect.max.x - 4.0, y),
+                                    egui::Align2::RIGHT_CENTER,
+                                    format!("{:>width$}", n, width = digits),
+                                    gutter_font.clone(),
+                                    gutter_color,
+                                );
+                            }
                         });
-                }
-            }
-        } else if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
-            if let Some(ref mut text) = et.1 {
-                let maybe_syntax = syntax::find_syntax_for_file(&ed.path);
 
-                egui::ScrollArea::both()
-                    .id_salt(("editor_scroll", pane_id))
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
-                        let line_count = if text.ends_with('\n') {
-                            text.lines().count() + 1
-                        } else {
-                            text.lines().count()
-                        }
-                        .max(1);
-                        let digits = ((line_count as f64).log10().floor() as usize) + 1;
-                        let char_w = 7.5_f32;
-                        let gutter_w = (digits as f32 + 1.5) * char_w;
-                        let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                        let sep_rect = ui
+                            .allocate_exact_size(
+                                egui::vec2(1.0, gutter_total_h),
+                                egui::Sense::hover(),
+                            )
+                            .0;
+                        ui.painter()
+                            .rect_filled(sep_rect, 0.0, theme::active().surface1);
+                        ui.add_space(theme::SP_2);
 
-                        let gutter_total_h = theme::SP_1 + line_count as f32 * line_h;
-                        ui.horizontal_top(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-
-                            // Virtual line-number gutter: allocate full height,
-                            // paint only visible numbers.
-                            ui.vertical(|ui| {
-                                ui.set_min_width(gutter_w);
-                                let (gutter_rect, _) = ui.allocate_exact_size(
-                                    egui::vec2(gutter_w, gutter_total_h),
-                                    egui::Sense::hover(),
-                                );
-                                let clip = ui.clip_rect();
-                                let base_y = gutter_rect.min.y + theme::SP_1;
-                                let first =
-                                    ((clip.min.y - base_y) / line_h).floor().max(0.0) as usize;
-                                let last = ((clip.max.y - base_y) / line_h)
-                                    .ceil()
-                                    .min(line_count as f32)
-                                    as usize;
-                                let gutter_font = egui::FontId::monospace(
-                                    ui.style().text_styles[&egui::TextStyle::Monospace].size,
-                                );
-                                let gutter_color = theme::active().overlay0;
-                                for n in (first + 1)..=(last.min(line_count)) {
-                                    let y = base_y + (n - 1) as f32 * line_h + line_h / 2.0;
-                                    ui.painter().text(
-                                        egui::pos2(gutter_rect.max.x - 4.0, y),
-                                        egui::Align2::RIGHT_CENTER,
-                                        format!("{:>width$}", n, width = digits),
-                                        gutter_font.clone(),
-                                        gutter_color,
-                                    );
-                                }
-                            });
-
-                            let sep_rect = ui
-                                .allocate_exact_size(
-                                    egui::vec2(1.0, gutter_total_h),
-                                    egui::Sense::hover(),
-                                )
-                                .0;
-                            ui.painter()
-                                .rect_filled(sep_rect, 0.0, theme::active().surface1);
-                            ui.add_space(theme::SP_2);
-
-                            let te_resp = if let Some(syn) = maybe_syntax {
-                                let cache_id = egui::Id::unique(("syn_galley_cache", pane_id));
-                                let mut layouter =
-                                    |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                                        let s = buf.as_str();
-                                        let hash = text_fingerprint(s);
-                                        let current_theme = theme::active().id;
-                                        let cached: Option<SyntaxGalleyCache> =
-                                            ui.ctx().data(|d| d.get_temp(cache_id));
-                                        if let Some(c) = cached {
-                                            if c.text_hash == hash && c.theme_id == current_theme {
-                                                return c.galley;
-                                            }
+                        let te_resp = if let Some(syn) = maybe_syntax {
+                            let cache_id = egui::Id::unique(("syn_galley_cache", pane_id));
+                            let mut layouter =
+                                |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                                    let s = buf.as_str();
+                                    let hash = text_fingerprint(s);
+                                    let current_theme = theme::active().id;
+                                    let cached: Option<SyntaxGalleyCache> =
+                                        ui.ctx().data(|d| d.get_temp(cache_id));
+                                    if let Some(c) = cached {
+                                        if c.text_hash == hash && c.theme_id == current_theme {
+                                            return c.galley;
                                         }
-                                        let job =
-                                            syntax::highlight_layout_job(ui, s, syn, wrap_width);
-                                        let galley = ui.fonts_mut(|f| f.layout_job(job));
-                                        ui.ctx().data_mut(|d| {
-                                            d.insert_temp(
-                                                cache_id,
-                                                SyntaxGalleyCache {
-                                                    text_hash: hash,
-                                                    theme_id: current_theme,
-                                                    galley: galley.clone(),
-                                                },
-                                            )
-                                        });
-                                        galley
-                                    };
-                                ui.add(
-                                    egui::TextEdit::multiline(text)
-                                        .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .frame(crate::theme::frameless_text_edit())
-                                        .lock_focus(true)
-                                        .interactive(!modal_open)
-                                        .layouter(&mut layouter),
-                                )
-                            } else {
-                                ui.add(
-                                    egui::TextEdit::multiline(text)
-                                        .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .frame(crate::theme::frameless_text_edit())
-                                        .lock_focus(true)
-                                        .interactive(!modal_open),
-                                )
-                            };
-                            route_text_focus(ui, &te_resp, is_focused, modal_open);
+                                    }
+                                    let job = syntax::highlight_layout_job(ui, s, syn, wrap_width);
+                                    let galley = ui.fonts_mut(|f| f.layout_job(job));
+                                    ui.ctx().data_mut(|d| {
+                                        d.insert_temp(
+                                            cache_id,
+                                            SyntaxGalleyCache {
+                                                text_hash: hash,
+                                                theme_id: current_theme,
+                                                galley: galley.clone(),
+                                            },
+                                        )
+                                    });
+                                    galley
+                                };
+                            ui.add(
+                                egui::TextEdit::multiline(text)
+                                    .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY)
+                                    .frame(crate::theme::frameless_text_edit())
+                                    .lock_focus(true)
+                                    .interactive(!modal_open)
+                                    .layouter(&mut layouter),
+                            )
+                        } else {
+                            ui.add(
+                                egui::TextEdit::multiline(text)
+                                    .id_salt((FILE_EDITOR_TEXT_ID, pane_id))
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY)
+                                    .frame(crate::theme::frameless_text_edit())
+                                    .lock_focus(true)
+                                    .interactive(!modal_open),
+                            )
+                        };
+                        route_text_focus(ui, &te_resp, is_focused, modal_open);
+                        *edited |= te_resp.changed();
 
-                            if !search_highlights.is_empty() {
-                                let mono_id =
-                                    ui.style().text_styles[&egui::TextStyle::Monospace].clone();
-                                let cw = ui.fonts_mut(|f| {
-                                    f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
-                                        .rect
-                                        .width()
-                                });
-                                paint_search_highlights(
-                                    ui.painter(),
-                                    te_resp.rect.min,
-                                    line_h,
-                                    cw,
-                                    &search_highlights,
-                                    search_current_idx,
-                                    ui.clip_rect(),
-                                );
-                            }
+                        if !search_highlights.is_empty() {
+                            let mono_id =
+                                ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+                            let cw = ui.fonts_mut(|f| {
+                                f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
+                                    .rect
+                                    .width()
+                            });
+                            paint_search_highlights(
+                                ui.painter(),
+                                te_resp.rect.min,
+                                line_h,
+                                cw,
+                                &search_highlights,
+                                search_current_idx,
+                                ui.clip_rect(),
+                            );
+                        }
 
-                            if let Some(target_line) = scroll_target {
-                                let target_y = theme::SP_1 + target_line as f32 * line_h;
-                                let scroll_rect = egui::Rect::from_min_size(
-                                    egui::pos2(0.0, target_y),
-                                    egui::vec2(1.0, line_h),
-                                );
-                                ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
-                            }
-                        });
+                        if let Some(target_line) = scroll_target {
+                            let target_y = theme::SP_1 + target_line as f32 * line_h;
+                            let scroll_rect = egui::Rect::from_min_size(
+                                egui::pos2(0.0, target_y),
+                                egui::vec2(1.0, line_h),
+                            );
+                            ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+                        }
                     });
-            }
+                });
         }
 
         if is_focused && rctx.text_search.active {
             let current_text = rctx
                 .editor_texts
-                .iter()
-                .find(|(id, _)| *id == pane_id)
-                .and_then(|(_, t)| t.as_ref())
+                .shown(pane_id, Some(&ed.content))
                 .unwrap_or(&ed.content);
             render_text_search_bar(ui, pane_rect, current_text, rctx.text_search);
         }
@@ -665,29 +682,48 @@ fn render_file_editor_leaf(
     }
 }
 
+/// A notes pane: its header ("Notes · <workspace>", the preview toggle,
+/// the notes file button), then the text box or the Markdown preview.
 fn render_note_editor_leaf(
     ui: &mut egui::Ui,
-    ne: &NoteEditorState,
     pane_id: u32,
+    show_preview: bool,
     rctx: &mut RenderCtx<'_>,
 ) {
     let pane_rect = ui.max_rect();
     let t = theme::active();
     ui.painter().rect_filled(pane_rect, 0.0, t.bg_term);
 
-    let label = match ne.workspace_id {
-        Some(_) => "Workspace Notes",
-        None => "General Notes",
-    };
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(label)
-                .strong()
-                .size(theme::FONT_UI_LG)
-                .color(t.text),
-        );
-    });
+    // Find works on the text, so the text shows while it is open (the
+    // preview has no search bar or highlights).
+    let finding = rctx.focused_pane_id == Some(pane_id) && rctx.text_search.active;
+    let mut previewing = false;
+    if let Some(info) = rctx.note_header.as_ref() {
+        previewing = show_preview && info.is_markdown() && !finding;
+        let header = super::notes_header::NotesHeader {
+            info,
+            title: &info.title,
+            title_size: theme::FONT_UI_LG,
+            title_clickable: false,
+            previewing: info.is_markdown().then_some(previewing),
+            preview_tips: &rctx.preview_tips,
+        }
+        .show(ui, rctx.note_link_actions, |_| {});
+        if header.preview_toggled() {
+            rctx.editor_preview_toggles.push(pane_id);
+        }
+    }
     ui.separator();
+
+    if previewing {
+        if let Some(text) = pane_text(rctx.panes, rctx.notes, pane_id) {
+            egui::ScrollArea::vertical()
+                .id_salt(("note_preview_scroll", pane_id))
+                .auto_shrink([false; 2])
+                .show(ui, |ui| super::note_preview::render_note_preview(ui, text));
+        }
+        return;
+    }
 
     let is_focused = rctx.focused_pane_id == Some(pane_id);
     let search_active = is_focused && rctx.text_search.active;
@@ -707,61 +743,65 @@ fn render_note_editor_leaf(
     };
     let search_current_idx = rctx.text_search.current_index;
 
-    if let Some(et) = rctx.editor_texts.iter_mut().find(|(id, _)| *id == pane_id) {
-        if let Some(ref mut text) = et.1 {
-            let content_snapshot = if search_active {
-                Some(text.clone())
-            } else {
-                None
-            };
+    let (panes, notes) = (rctx.panes, rctx.notes);
+    if let Some(et) = rctx
+        .editor_texts
+        .get_or_load(pane_id, || pane_text(panes, notes, pane_id))
+    {
+        let (text, edited) = (&mut et.text, &mut et.edited);
+        let content_snapshot = if search_active {
+            Some(text.clone())
+        } else {
+            None
+        };
 
-            egui::ScrollArea::both()
-                .id_salt(("note_editor_scroll", pane_id))
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
-                    let te_resp = ui.add(
-                        egui::TextEdit::multiline(text)
-                            .font_with_hint(
-                                egui::TextStyle::Monospace,
-                                "Notes for this workspace\u{2026}",
-                            )
-                            .desired_width(f32::INFINITY)
-                            .frame(crate::theme::frameless_text_edit())
-                            .lock_focus(true)
-                            .interactive(!rctx.modal_open),
+        egui::ScrollArea::both()
+            .id_salt(("note_editor_scroll", pane_id))
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                let te_resp = ui.add(
+                    egui::TextEdit::multiline(text)
+                        .font_with_hint(
+                            egui::TextStyle::Monospace,
+                            super::note_preview::NOTES_PLACEHOLDER,
+                        )
+                        .desired_width(f32::INFINITY)
+                        .frame(crate::theme::frameless_text_edit())
+                        .lock_focus(true)
+                        .interactive(!rctx.modal_open),
+                );
+                route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
+                *edited |= te_resp.changed();
+                if !search_highlights.is_empty() {
+                    let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+                    let cw = ui.fonts_mut(|f| {
+                        f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
+                            .rect
+                            .width()
+                    });
+                    paint_search_highlights(
+                        ui.painter(),
+                        te_resp.rect.min,
+                        line_h,
+                        cw,
+                        &search_highlights,
+                        search_current_idx,
+                        ui.clip_rect(),
                     );
-                    route_text_focus(ui, &te_resp, is_focused, rctx.modal_open);
-                    if !search_highlights.is_empty() {
-                        let mono_id = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
-                        let cw = ui.fonts_mut(|f| {
-                            f.layout_no_wrap("0".to_string(), mono_id, egui::Color32::WHITE)
-                                .rect
-                                .width()
-                        });
-                        paint_search_highlights(
-                            ui.painter(),
-                            te_resp.rect.min,
-                            line_h,
-                            cw,
-                            &search_highlights,
-                            search_current_idx,
-                            ui.clip_rect(),
-                        );
-                    }
-                    if let Some(target_line) = scroll_target {
-                        let target_y = target_line as f32 * line_h;
-                        let scroll_rect = egui::Rect::from_min_size(
-                            egui::pos2(0.0, target_y),
-                            egui::vec2(1.0, line_h),
-                        );
-                        ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
-                    }
-                });
+                }
+                if let Some(target_line) = scroll_target {
+                    let target_y = target_line as f32 * line_h;
+                    let scroll_rect = egui::Rect::from_min_size(
+                        egui::pos2(0.0, target_y),
+                        egui::vec2(1.0, line_h),
+                    );
+                    ui.scroll_to_rect(scroll_rect, Some(egui::Align::Center));
+                }
+            });
 
-            if let Some(content) = content_snapshot {
-                render_text_search_bar(ui, pane_rect, &content, rctx.text_search);
-            }
+        if let Some(content) = content_snapshot {
+            render_text_search_bar(ui, pane_rect, &content, rctx.text_search);
         }
     }
 }
@@ -929,8 +969,8 @@ fn render_leaf_content(
                     rctx.diff_clear_scroll_to_first.push(pane_id);
                 }
             }
-            PaneContent::NoteEditor(ne) => {
-                render_note_editor_leaf(ui, ne, pane_id, rctx);
+            PaneContent::NoteEditor(ref ne) => {
+                render_note_editor_leaf(ui, pane_id, ne.show_preview, rctx);
             }
             PaneContent::ConflictResolver(ref state) => {
                 let result = super::conflict_resolver::render_conflict_resolver(ui, state);
@@ -1108,6 +1148,7 @@ fn apply_info_bar_action(app: &mut App, action: InfoBarAction, ctx: &egui::Conte
             // blink or a stray mouse move to schedule it.
             ctx.request_repaint();
         }
+        InfoBarAction::Unsplit(request) => app.request_unsplit(request, ctx),
         InfoBarAction::CloseTab(pane_id) => {
             app.request_close_tab(pane_id, crate::app::close_guard::TabClose::Pane)
         }
@@ -1124,7 +1165,7 @@ fn render_group_node(
     ui: &mut egui::Ui,
     node: &GroupNode,
     rect: egui::Rect,
-    editor_texts: &mut Vec<(u32, Option<String>)>,
+    editor_texts: &mut EditorTexts,
     clicked_pane_id: &mut Option<u32>,
     clicked_group_id: &mut Option<GroupId>,
     editor_saves: &mut Vec<u32>,
@@ -1284,14 +1325,21 @@ fn render_group_node(
                 let mut scrollbar_clear_restore = Vec::new();
                 let mut scrollbar_dragging = false;
                 let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
+                let mut note_link_actions = Vec::new();
+                let note_header = app.pane_state.find(pid).and_then(|p| match &p.content {
+                    PaneContent::NoteEditor(ne) => Some(app.notes_header_info(ne.workspace_id)),
+                    _ => None,
+                });
                 let focused_pane_id = if is_focused { Some(pid) } else { None };
                 let modal_open = app.any_modal_open();
+                let preview_tips = app.preview_tips();
 
                 {
                     let mut rctx = RenderCtx {
                         sessions: &app.session_state.sessions,
                         panes: &app.pane_state.panes,
                         editor_texts,
+                        notes: &app.note_store,
                         cursor_alpha: app.cursor_alpha,
                         focused_pane_id,
                         active_term_geo: &mut app.active_term_geo,
@@ -1316,9 +1364,14 @@ fn render_group_node(
                         scrollbar_clear_restore: &mut scrollbar_clear_restore,
                         scrollbar_dragging: &mut scrollbar_dragging,
                         conflict_view_toggles: &mut conflict_view_toggles,
+                        note_header,
+                        note_link_actions: &mut note_link_actions,
+                        preview_tips,
                     };
                     render_leaf_content(&mut leaf_ui, pid, is_focused, content_rect, &mut rctx);
                 }
+                let ctx = leaf_ui.ctx().clone();
+                app.run_note_link_actions(note_link_actions, &ctx);
 
                 // Apply diff mode changes
                 for (pane_id, new_mode) in diff_mode_changes {
@@ -1587,7 +1640,7 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         content_rect: egui::Rect,
-        editor_texts: &mut Vec<(u32, Option<String>)>,
+        editor_texts: &mut EditorTexts,
         clicked_pane_id: &mut Option<u32>,
         clicked_group_id: &mut Option<GroupId>,
         editor_saves: &mut Vec<u32>,

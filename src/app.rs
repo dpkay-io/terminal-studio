@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 use egui::FontId;
 
 use crate::editor_group::NavigationDir;
+use crate::notes::NoteStore;
 use crate::pane_tree::{PaneNode, SplitDir};
 use crate::pty::{default_shell, SessionManager, ShellKind};
 use crate::renderer::terminal_pass::TerminalGeometry;
 use crate::shortcuts::{AppAction, ShortcutRegistry};
 use crate::theme;
-use crate::workspace::{NoteStore, WindowId, WorkspaceStore};
+use crate::workspace::{WindowId, WorkspaceStore};
 use alacritty_terminal::{
     grid::{Dimensions, Scroll},
     term::TermMode,
@@ -29,6 +30,7 @@ mod cursor_blink;
 mod deferred_terminals;
 mod diff_parser;
 mod drag;
+mod editor_texts;
 mod feedback;
 mod file_browser;
 mod fonts;
@@ -47,12 +49,14 @@ mod macos_quit;
 mod markdown;
 mod multi_window;
 mod nav_order_sync;
+mod notes_link;
 mod open_paths;
 mod os_drop;
 mod pane;
 mod pane_state;
 mod pending_open;
 mod persistence;
+mod preview_shortcut;
 mod pty_resize;
 mod quit;
 mod restart;
@@ -66,6 +70,7 @@ mod state;
 mod term_context_menu;
 mod title;
 mod ui;
+mod unsplit;
 mod view_toggles;
 mod watcher;
 mod window_state;
@@ -90,11 +95,15 @@ use pane::{
 use pane_state::PaneState;
 use session_state::SessionState;
 use settings::AppSettings;
+use ui::note_preview::{render_note_preview, NOTES_PLACEHOLDER};
 
 use view_toggles::VIEW_TOGGLES;
 use watcher::WatchState;
 use worker_manager::WorkerManager;
 use workspace_ui::{OpenFolderDialog, WorkspaceDialog, WorkspaceEditDialog};
+
+/// The side panel's notes header title.
+const NOTES_PANEL_TITLE: &str = "Notes";
 
 #[derive(Clone, Copy, Default)]
 enum CloseAllTarget {
@@ -123,6 +132,8 @@ pub struct App {
     open_folder_dialog: Option<OpenFolderDialog>,
     /// Folders and files to open, from the folder picker and OS drops.
     open_queue: pending_open::OpenQueue,
+    /// Files picked to link a workspace's notes to, waiting to be linked.
+    note_file_picks: notes_link::NoteFilePicks,
     /// Each pane's content rect from this window's last frame, for OS drops.
     drop_pane_rects: Vec<(u32, egui::Rect)>,
 
@@ -134,6 +145,8 @@ pub struct App {
     label_registry: LabelRegistry,
     notes_panel_ratio: f32,
     notes_panel_collapsed: bool,
+    /// The side panel's notes show their Markdown preview.
+    notes_panel_preview: bool,
 
     left_panel_width: f32,
     right_panel_width: f32,
@@ -281,6 +294,9 @@ pub struct App {
     deferred_duplicate: bool,
     deferred_split: Option<crate::pane_tree::SplitDir>,
     deferred_close_pane: bool,
+    /// An unsplit asked for by a button or menu, run with the next frame's
+    /// layout changes (`unsplit.rs`).
+    deferred_unsplit: Option<unsplit::Unsplit>,
     /// Tab currently being renamed inline, and its edit buffer.
     rename_pane_id: Option<u32>,
     rename_text: String,
@@ -1731,12 +1747,14 @@ impl App {
         let mut git_merge_continue = false;
         let mut open_md_in_editor: Option<PathBuf> = None;
 
-        // Detect external note edits (throttled internally)
-        self.note_store
-            .check_external_changes(&self.workspace_store.workspaces);
+        // Note edits made in other apps, and edits here due to be saved.
+        self.note_store.sync(&self.workspace_store.workspaces);
 
-        // Snapshot current note so TextEdit can mutate it inside the closure
-        let mut note_text = self.note_store.get(self.active_group).to_string();
+        // A note typed into in the side panel this frame: (note, its text).
+        // The text is copied out of the store only while its text box is on
+        // screen, and only an edit sends it back.
+        let mut edited_panel_note: Option<(Option<u64>, String)> = None;
+        let mut note_link_actions: Vec<ui::notes_header::NoteLinkAction> = Vec::new();
         let mut pending_open_note: Option<Option<u64>> = None;
 
         // ── Right panel ──────────────────────────────────────────────────────
@@ -2438,108 +2456,101 @@ impl App {
                                 .rect_filled(content_rect, 0.0, theme::active().bg_term);
                         }
 
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), theme::HEADER_H),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                let notes_label = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new("Notes")
-                                            .strong()
-                                            .size(theme::FONT_UI_MD),
+                        let note_key = self.active_group;
+                        let notes_info = self.notes_header_info(note_key);
+                        let previewing = notes_info.is_markdown() && self.notes_panel_preview;
+                        let preview_tips = self.preview_tips();
+                        let toggle_tip =
+                            self.shortcut_tooltip("Toggle notes", AppAction::ToggleNotes);
+                        let collapsed = self.notes_panel_collapsed;
+                        let mut collapse_clicked = false;
+                        let header = ui::notes_header::NotesHeader {
+                            info: &notes_info,
+                            title: NOTES_PANEL_TITLE,
+                            title_size: theme::FONT_UI_MD,
+                            title_clickable: true,
+                            previewing: (!collapsed && notes_info.is_markdown())
+                                .then_some(previewing),
+                            preview_tips: &preview_tips,
+                        }
+                        .show(ui, &mut note_link_actions, |ui| {
+                            let square = egui::vec2(theme::HEADER_H, theme::HEADER_H);
+                            let arrow = if collapsed { "▶" } else { "▼" };
+                            collapse_clicked = ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(arrow).size(theme::FONT_UI_MD),
                                     )
-                                    .sense(egui::Sense::click()),
-                                );
-                                let auto_label = ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new("· autosaved")
-                                            .size(theme::FONT_UI_XS)
-                                            .color(theme::active().fg_muted),
+                                    .min_size(square)
+                                    .frame(false),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text(toggle_tip)
+                                .clicked();
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("\u{2B1C}").size(theme::FONT_UI_MD),
                                     )
-                                    .sense(egui::Sense::click()),
-                                );
-                                if notes_label.clicked() || auto_label.clicked() {
-                                    self.notes_panel_collapsed =
-                                        !self.notes_panel_collapsed;
-                                }
-                                if notes_label.hovered() || auto_label.hovered() {
-                                    ui.ctx()
-                                        .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let arrow = if self.notes_panel_collapsed {
-                                            "▶"
-                                        } else {
-                                            "▼"
-                                        };
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new(arrow)
-                                                        .size(theme::FONT_UI_MD),
-                                                )
-                                                .min_size(egui::vec2(
-                                                    theme::HEADER_H,
-                                                    theme::HEADER_H,
-                                                ))
-                                                .frame(false),
-                                            )
-                                            .on_hover_text(self.shortcut_tooltip("Toggle notes", AppAction::ToggleNotes))
-                                            .clicked()
-                                        {
-                                            self.notes_panel_collapsed =
-                                                !self.notes_panel_collapsed;
-                                        }
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("\u{2B1C}")
-                                                        .size(theme::FONT_UI_MD),
-                                                )
-                                                .min_size(egui::vec2(
-                                                    theme::HEADER_H,
-                                                    theme::HEADER_H,
-                                                ))
-                                                .frame(false),
-                                            )
-                                            .on_hover_text("Open in main pane")
-                                            .clicked()
-                                        {
-                                            pending_open_note = Some(self.active_group);
-                                        }
-                                    },
-                                );
-                            },
-                        );
+                                    .min_size(square)
+                                    .frame(false),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                .on_hover_text("Open in main pane")
+                                .clicked()
+                            {
+                                pending_open_note = Some(self.active_group);
+                            }
+                        });
+                        if collapse_clicked || header.title.clicked() {
+                            self.notes_panel_collapsed = !self.notes_panel_collapsed;
+                        }
+                        if header.preview_toggled() {
+                            self.notes_panel_preview = !self.notes_panel_preview;
+                        }
 
                         if !self.notes_panel_collapsed {
-                            egui::ScrollArea::both()
-                                .id_salt(self.vp_id("notes_scroll"))
-                                .auto_shrink([false; 2])
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut note_text)
-                                            .id(self.notes_text_id())
-                                            .font_with_hint(egui::TextStyle::Monospace, "Notes for this workspace…")
-                                            .desired_width(f32::INFINITY)
-                                            .frame(crate::theme::frameless_text_edit()),
-                                    );
-                                });
+                            if previewing {
+                                self.notes_preview_takes_keyboard(ui);
+                                egui::ScrollArea::vertical()
+                                    .id_salt(self.vp_id("notes_preview_scroll"))
+                                    .auto_shrink([false; 2])
+                                    .show(ui, |ui| {
+                                        render_note_preview(ui, self.note_store.get(note_key))
+                                    });
+                            } else {
+                                let mut note_text = self.note_store.get(note_key).to_string();
+                                let typed = egui::ScrollArea::both()
+                                    .id_salt(self.vp_id("notes_scroll"))
+                                    .auto_shrink([false; 2])
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut note_text)
+                                                .id(self.notes_text_id())
+                                                .font_with_hint(
+                                                    egui::TextStyle::Monospace,
+                                                    NOTES_PLACEHOLDER,
+                                                )
+                                                .desired_width(f32::INFINITY)
+                                                .frame(crate::theme::frameless_text_edit()),
+                                        )
+                                        .changed()
+                                    })
+                                    .inner;
+                                if typed {
+                                    edited_panel_note = Some((note_key, note_text));
+                                }
+                            }
                         }
                     });
                 });
         } // end if self.show_right_panel
 
-        // Persist note if it changed
-        {
-            let group = self.active_group;
-            if note_text != self.note_store.get(group) {
-                self.note_store
-                    .set(group, note_text, &self.workspace_store.workspaces);
-            }
+        if let Some((key, text)) = edited_panel_note {
+            self.note_store.set(key, text);
         }
+        self.run_note_link_actions(note_link_actions, ctx);
+        self.link_picked_note_files();
 
         if let Some(tab) = new_tab {
             self.right_tab = tab;
@@ -2667,22 +2678,8 @@ impl App {
         // File to open in editor (content loaded async after pane creation)
         let pending_open_editor: Option<PathBuf> = open_editor;
 
-        // ── Snapshot editor contents for TextEdit (must be mutable locals) ─
-        let mut editor_texts: Vec<(u32, Option<String>)> = self
-            .pane_state
-            .panes
-            .iter()
-            .map(|p| {
-                let text = match &p.content {
-                    PaneContent::FileEditor(ed) => Some(ed.content.clone()),
-                    PaneContent::NoteEditor(ne) => {
-                        Some(self.note_store.get(ne.workspace_id).to_string())
-                    }
-                    _ => None,
-                };
-                (p.id, text)
-            })
-            .collect();
+        // ── Editor text boxes' text: copied out as each one is drawn ─────
+        let mut editor_texts = editor_texts::EditorTexts::default();
 
         // ── Workspace colours per pane (before closure to avoid borrow conflict) ─
         #[allow(unused_variables)]
@@ -2761,6 +2758,7 @@ impl App {
         // Phase D: split / close-split requests collected from key handler
         let mut split_request: Option<SplitDir> = self.deferred_split.take();
         let mut close_split_pane: bool = std::mem::take(&mut self.deferred_close_pane);
+        let unsplit_request = self.deferred_unsplit.take();
         // Tab and split shortcuts pressed this frame (`layout_shortcuts`).
         let mut layout_requests = layout_shortcuts::LayoutRequests::default();
         // Phase D: split divider ratio changes (split_id, new_ratio)
@@ -3118,6 +3116,10 @@ impl App {
                 ctx.memory(|m| m.focused().map(|id| Some(id) != term_id).unwrap_or(false))
             };
             let modal_open = self.any_modal_open();
+
+            // Before the editor's and terminal's keys: it works from both,
+            // and from the right panel's notes.
+            self.run_preview_shortcut(ctx);
 
             // Global shortcuts that work even when a modal/dialog is open
             {
@@ -3936,6 +3938,12 @@ impl App {
             }
         }
 
+        // Unsplit: a split's tabs join its neighbour, nothing is closed.
+        if let Some(request) = layout_requests.unsplit.or(unsplit_request) {
+            self.apply_unsplit(request);
+            ctx.request_repaint();
+        }
+
         // Phase D-2: Handle Ctrl+Shift+W — close the focused pane
         if close_split_pane {
             if let Some(active_pid) = self.pane_state.active_pane_id {
@@ -4178,25 +4186,15 @@ impl App {
             }
         }
 
-        // 6. Editor text changes
-        for (pane_id, new_text) in &editor_texts {
-            if let Some(ref new_text) = new_text {
-                if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == *pane_id) {
-                    match pane.content {
-                        PaneContent::FileEditor(ref mut ed) if *new_text != ed.content => {
-                            ed.apply_edit(new_text.clone());
-                        }
-                        PaneContent::NoteEditor(ref ne)
-                            if *new_text != self.note_store.get(ne.workspace_id) =>
-                        {
-                            self.note_store.set(
-                                ne.workspace_id,
-                                new_text.clone(),
-                                &self.workspace_store.workspaces,
-                            );
-                        }
-                        _ => {}
+        // 6. Editor text changes: only what a text box edited this frame
+        for (pane_id, new_text) in editor_texts.into_edited() {
+            if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
+                match pane.content {
+                    PaneContent::FileEditor(ref mut ed) => ed.apply_edit(new_text),
+                    PaneContent::NoteEditor(ref ne) => {
+                        self.note_store.set(ne.workspace_id, new_text);
                     }
+                    _ => {}
                 }
             }
         }
@@ -4269,8 +4267,7 @@ impl App {
                 if let PaneContent::FileEditor(ref mut ed) = p.content {
                     match std::fs::write(&path, &ed.content) {
                         Ok(()) => {
-                            ed.show_preview =
-                                path.extension().and_then(|e| e.to_str()) == Some("md") && md_pref;
+                            ed.show_preview = crate::util::is_markdown_path(&path) && md_pref;
                             ed.path = path.clone();
                             ed.untitled = false;
                             ed.mark_saved();
@@ -4290,18 +4287,8 @@ impl App {
             }
         }
 
-        for toggle_id in &editor_preview_toggles {
-            if let Some(p) = self
-                .pane_state
-                .panes
-                .iter_mut()
-                .find(|p| p.id == *toggle_id)
-            {
-                if let PaneContent::FileEditor(ref mut ed) = p.content {
-                    ed.show_preview = !ed.show_preview;
-                    self.md_prefer_preview = ed.show_preview;
-                }
-            }
+        for toggle_id in editor_preview_toggles {
+            self.toggle_pane_preview(toggle_id);
         }
 
         // 8. PTY resize (per pane): each terminal's grid follows its pane once
@@ -4385,6 +4372,7 @@ impl App {
                     id: pane_id,
                     content: PaneContent::NoteEditor(NoteEditorState {
                         workspace_id: ws_id,
+                        show_preview: self.notes_panel_preview,
                     }),
                     manual_width: None,
                     last_size: (0, 0),

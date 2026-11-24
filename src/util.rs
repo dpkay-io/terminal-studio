@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Largest text file the app edits (the editor, a note): its text box holds
+/// the whole file in memory and lays out every line.
+pub const MAX_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
 pub fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -146,15 +150,34 @@ pub const REVEAL_IN_FILE_MANAGER_LABEL: &str = "Show in File Manager";
 
 /// Open the system file manager showing the parent folder of `path`, with the
 /// file/folder selected if the platform supports it.
-pub fn reveal_in_file_manager(path: &Path) {
-    let path = match path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => path.to_path_buf(),
-    };
+/// File extensions Markdown is written in.
+pub const MARKDOWN_EXTENSIONS: [&str; 4] = ["md", "markdown", "mdown", "mkd"];
+/// File extensions plain text is written in.
+pub const PLAIN_TEXT_EXTENSIONS: [&str; 2] = ["txt", "text"];
 
+/// Whether `path` names a Markdown file (by its extension, any case).
+pub fn is_markdown_path(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        MARKDOWN_EXTENSIONS
+            .iter()
+            .any(|m| e.eq_ignore_ascii_case(m))
+    })
+}
+
+pub fn reveal_in_file_manager(path: &Path) {
+    let path = path.to_path_buf();
+    // Off the UI thread: the path may be on a slow or network disk.
     std::thread::spawn(move || {
-        let _result = reveal_platform(&path);
+        let _result = reveal_platform(&nearest_existing(&path));
     });
+}
+
+/// `path` resolved, or its nearest folder that exists when it does not
+/// (a file not written yet is shown by its folder).
+fn nearest_existing(path: &Path) -> PathBuf {
+    path.ancestors()
+        .find_map(|p| p.canonicalize().ok())
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 #[cfg(target_os = "windows")]
@@ -237,6 +260,26 @@ pub fn paths_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn markdown_files_are_known_by_extension() {
+        for md in ["a.md", "b.MD", "c.markdown", "d.mdown", "/v/e.mkd"] {
+            assert!(is_markdown_path(Path::new(md)), "{md}");
+        }
+        for other in ["a.txt", "b", "c.md.bak", "md", ".md"] {
+            assert!(!is_markdown_path(Path::new(other)), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_revealed_by_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap();
+        assert_eq!(nearest_existing(&dir.path().join("gone/x.md")), real);
+        let file = dir.path().join("here.md");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(nearest_existing(&file), real.join("here.md"));
+    }
 
     #[test]
     fn test_data_dir_returns_some() {
