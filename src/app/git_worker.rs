@@ -1124,6 +1124,9 @@ mod tests {
         git(&["init", "-q"]);
         git(&["config", "user.email", "test@test.com"]);
         git(&["config", "user.name", "Test"]);
+        // The tests compare exact bytes; Git for Windows converts line
+        // endings on checkout unless the repository says not to.
+        git(&["config", "core.autocrlf", "false"]);
         std::fs::create_dir_all(tmp.join(SUBFOLDER)).unwrap();
         for file in ["tracked.txt", DEEP_FILE] {
             std::fs::write(tmp.join(file), "a\nb\nc\n").unwrap();
