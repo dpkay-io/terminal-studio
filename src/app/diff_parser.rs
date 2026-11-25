@@ -107,6 +107,33 @@ pub(super) fn parse_diff(raw: &str) -> Vec<DiffHunk> {
     hunks
 }
 
+/// The hunks of a whole file that is new to git (untracked, so `git diff`
+/// shows nothing for it): every line added, one hunk, so the diff view
+/// colours it and its change navigation has something to step to. Empty
+/// for an empty file. Pure.
+pub(super) fn new_file_hunks(new_content: &str) -> Vec<DiffHunk> {
+    let lines: Vec<DiffLine> = new_content
+        .lines()
+        .enumerate()
+        .map(|(i, line)| DiffLine {
+            kind: DiffLineKind::Added,
+            old_lineno: None,
+            new_lineno: Some(i + 1),
+            content: line.to_string(),
+        })
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    vec![DiffHunk {
+        old_start: 0,
+        old_count: 0,
+        new_start: 1,
+        new_count: lines.len(),
+        lines,
+    }]
+}
+
 fn parse_hunk_header(line: &str) -> Option<(usize, usize, usize, usize)> {
     let after_at = line.strip_prefix("@@ ")?;
     let rest = after_at.split(" @@").next()?;
@@ -298,6 +325,32 @@ pub(super) fn build_side_by_side_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_file_is_one_hunk_of_added_lines() {
+        let hunks = new_file_hunks("a\nb\n");
+        assert_eq!(hunks.len(), 1);
+        let h = &hunks[0];
+        assert_eq!(
+            (h.old_start, h.old_count, h.new_start, h.new_count),
+            (0, 0, 1, 2)
+        );
+        assert!(h.lines.iter().all(|l| l.kind == DiffLineKind::Added));
+        assert_eq!(h.lines[1].new_lineno, Some(2));
+        assert_eq!(h.lines[1].content, "b");
+        assert!(
+            new_file_hunks("").is_empty(),
+            "an empty file has no changes to show"
+        );
+    }
+
+    #[test]
+    fn a_new_file_shows_every_line_as_added_once() {
+        let content = "one\ntwo\nthree";
+        let lines = build_full_diff_lines("", content, &new_file_hunks(content));
+        assert_eq!(lines.len(), 3, "no line twice");
+        assert!(lines.iter().all(|l| l.kind == DiffLineKind::Added));
+    }
 
     #[test]
     fn test_parse_empty_diff() {

@@ -74,7 +74,9 @@ impl<'a> SubdirCache<'a> {
 }
 
 pub(super) struct DirData {
-    pub(super) is_git: bool,
+    /// The repository this folder is in (its top folder), if any: the git
+    /// panel's status paths are relative to it (`git_paths`).
+    pub(super) git_root: Option<PathBuf>,
     pub(super) git_diff: String,
     pub(super) git_status: String,
     pub(super) git_unpushed: Vec<(String, String)>,
@@ -86,9 +88,10 @@ pub(super) struct DirData {
 
 impl DirData {
     pub(super) fn new(path: &Path) -> Self {
-        let is_git = crate::util::find_git_root(path).is_some();
+        let git_root = crate::util::find_git_root(path);
+        let is_git = git_root.is_some();
         DirData {
-            is_git,
+            git_root,
             git_diff: String::new(),
             git_status: String::new(),
             git_unpushed: Vec::new(),
@@ -97,6 +100,11 @@ impl DirData {
             md_files: HashMap::new(),
             dir_entries: Arc::new(list_dir_entries(path)),
         }
+    }
+
+    /// Whether this folder is in a git repository.
+    pub(super) fn is_git(&self) -> bool {
+        self.git_root.is_some()
     }
 }
 

@@ -783,6 +783,7 @@ mod tests {
             group_layout: crate::editor_group::GroupNode::Leaf { group_id: 0 },
             focused_group_id: 0,
             next_group_id: 1,
+            zoom: Default::default(),
         };
         for id in &ids {
             ps.pane_trees.insert(
@@ -1133,6 +1134,7 @@ mod tests {
             group_layout: crate::editor_group::GroupNode::Leaf { group_id: 0 },
             focused_group_id: 0,
             next_group_id: 1,
+            zoom: Default::default(),
         };
 
         // Create a single group with all panes

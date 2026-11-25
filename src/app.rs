@@ -26,6 +26,7 @@ pub(crate) mod claude_session;
 mod close_guard;
 pub(crate) mod closed_sessions;
 pub(super) mod conflict_parser;
+mod content_zoom;
 mod cursor_blink;
 mod deferred_terminals;
 mod diff_parser;
@@ -36,6 +37,7 @@ mod file_browser;
 mod fonts;
 mod git_cmd;
 mod git_diff;
+mod git_paths;
 mod git_worker;
 mod input;
 mod labels;
@@ -74,6 +76,7 @@ mod unsplit;
 mod view_toggles;
 mod watcher;
 mod window_state;
+mod window_zoom;
 mod worker_manager;
 mod workspace_colors;
 mod workspace_git_worker;
@@ -507,6 +510,13 @@ impl eframe::App for App {
 
         self.restart_if_due();
         self.save_session_if_saver_asked();
+        let now = Instant::now();
+        if self.pane_state.zoom.take_settled_change(now) {
+            self.save_session();
+        } else if let Some(wait) = self.pane_state.zoom.save_wait(now) {
+            // A frame then, to save it.
+            ctx.request_repaint_after(wait);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -989,7 +999,7 @@ impl eframe::App for App {
             // Drain completed diff results and update pending FileDiff panes
             let diff_results = self.workers.git_worker.take_diff_results();
             for dr in diff_results {
-                let hunks = diff_parser::parse_diff(&dr.raw_diff);
+                let hunks = dr.hunks;
                 if let Some(pane_id) = self.pending_diff_panes.remove(&dr.path) {
                     if let Some(pane) = self.pane_state.panes.iter_mut().find(|p| p.id == pane_id) {
                         if let PaneContent::FileDiff(ref mut d) = pane.content {
@@ -1615,6 +1625,8 @@ impl App {
         // Use pane-aware CWD so the right panel stays in sync with
         // non-terminal panes (FileEditor, FileDiff, NoteEditor, etc.).
         let active_cwd = self.active_pane_cwd();
+        // The git panel's file paths are from here (its repository root).
+        let active_git_base = self.active_git_base();
         let active_tab = self.right_tab.clone();
 
         // Snapshot data from the watch state. Heavy fields (dir_entries,
@@ -1650,7 +1662,7 @@ impl App {
                         None
                     };
                     PanelSnap {
-                        is_git: d.is_git,
+                        is_git: d.is_git(),
                         git_status: d.git_status.clone(),
                         git_unpushed: d.git_unpushed.clone(),
                         git_refreshing: self.workers.git_worker.is_manual_git_inflight(cwd),
@@ -2287,7 +2299,7 @@ impl App {
                                             self.push_in_progress,
                                             self.push_error.as_deref(),
                                             git_refreshing,
-                                            active_cwd.as_deref(),
+                                            active_git_base.as_deref(),
                                             &mut self.drag_state,
                                             &merge_operation,
                                             &self.optimistic_git_overrides,
@@ -2331,22 +2343,28 @@ impl App {
                                         }
                                     }
                                     RightTab::Markdown(md_path) => {
-                                        ui.horizontal(|ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("\u{2B1C} Open in Pane")
-                                                            .size(theme::FONT_UI_SM),
-                                                    )
-                                                    .corner_radius(theme::R_SM),
-                                                )
-                                                .on_hover_text("Open this file in the main editor area")
-                                                .clicked()
-                                            {
-                                                open_md_in_editor = Some(md_path.clone());
-                                            }
-                                        });
-                                        ui.add_space(theme::SP_2);
+                                        // The notes header's row: name, then the
+                                        // same ⬜ that opens it in a pane. Always a
+                                        // preview here, so no 👁.
+                                        let name = ui::file_name(md_path);
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(ui.available_width(), theme::HEADER_H),
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.spacing_mut().item_spacing.x =
+                                                    ui::preview_header::ICON_GAP;
+                                                if ui::preview_header::open_in_pane_button(ui).clicked() {
+                                                    open_md_in_editor = Some(md_path.clone());
+                                                }
+                                                ui::preview_header::TitleRow {
+                                                    title: &name,
+                                                    title_size: theme::FONT_UI_MD,
+                                                    toggle: None,
+                                                }
+                                                .show(ui, None);
+                                            },
+                                        );
+                                        ui.separator();
                                         let content = md_active_content
                                             .as_deref()
                                             .map(|s| s.as_str())
@@ -2468,7 +2486,6 @@ impl App {
                             info: &notes_info,
                             title: NOTES_PANEL_TITLE,
                             title_size: theme::FONT_UI_MD,
-                            title_clickable: true,
                             previewing: (!collapsed && notes_info.is_markdown())
                                 .then_some(previewing),
                             preview_tips: &preview_tips,
@@ -2487,22 +2504,11 @@ impl App {
                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                 .on_hover_text(toggle_tip)
                                 .clicked();
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("\u{2B1C}").size(theme::FONT_UI_MD),
-                                    )
-                                    .min_size(square)
-                                    .frame(false),
-                                )
-                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                .on_hover_text("Open in main pane")
-                                .clicked()
-                            {
+                            if ui::preview_header::open_in_pane_button(ui).clicked() {
                                 pending_open_note = Some(self.active_group);
                             }
                         });
-                        if collapse_clicked || header.title.clicked() {
+                        if collapse_clicked {
                             self.notes_panel_collapsed = !self.notes_panel_collapsed;
                         }
                         if header.preview_toggled() {
@@ -2516,7 +2522,11 @@ impl App {
                                     .id_salt(self.vp_id("notes_preview_scroll"))
                                     .auto_shrink([false; 2])
                                     .show(ui, |ui| {
-                                        render_note_preview(ui, self.note_store.get(note_key))
+                                        render_note_preview(
+                                            ui,
+                                            self.note_store.get(note_key),
+                                            content_zoom::ZOOM_DEFAULT,
+                                        )
                                     });
                             } else {
                                 let mut note_text = self.note_store.get(note_key).to_string();
@@ -3123,8 +3133,9 @@ impl App {
 
             // Global shortcuts that work even when a modal/dialog is open
             {
+                let text_box_has_keyboard = self.text_box_has_keyboard(ctx);
                 let consumed = ctx.input_mut(|i| {
-                    if let Some(action) = self.shortcut_registry.consume_where(i, AppAction::is_global) {
+                    if let Some(action) = self.shortcut_registry.consume_global(i, text_box_has_keyboard) {
                         Some(action)
                     } else if (self.show_shortcut_help || self.term_search.active || self.text_search.active || self.show_global_search) && i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
                         if self.show_global_search {
@@ -3138,6 +3149,7 @@ impl App {
                         None
                     }
                 });
+                let consumed = consumed.filter(|&action| !window_zoom::run(ctx, action));
                 match consumed {
                     Some(action) if VIEW_TOGGLES.contains(&action) => {
                         self.toggle_view(action);
@@ -4406,8 +4418,8 @@ impl App {
             if clicked_at.elapsed() >= DOUBLE_CLICK_WINDOW {
                 let rel_path = path.clone();
                 self.pending_diff_click = None;
-                if let Some(cwd) = self.active_pane_cwd() {
-                    let full_path = cwd.join(&rel_path);
+                if let Some(base) = self.active_git_base() {
+                    let full_path = base.join(&rel_path);
                     let existing_id = self
                         .pane_state
                         .panes
@@ -4453,8 +4465,8 @@ impl App {
                             pane_id,
                             None,
                         );
-                        self.pending_diff_panes.insert(full_path, pane_id);
-                        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                        self.pending_diff_panes.insert(full_path.clone(), pane_id);
+                        self.workers.git_worker.enqueue_diff(full_path);
                         self.activate_and_scroll_to_pane(pane_id);
                     }
                 }
@@ -4463,8 +4475,8 @@ impl App {
 
         // 9b-conflict. Conflicted file clicked → open ConflictResolver pane
         if let Some(rel_path) = git_open_conflict_file {
-            if let Some(cwd) = self.active_pane_cwd() {
-                let full_path = cwd.join(&rel_path);
+            if let Some(base) = self.active_git_base() {
+                let full_path = base.join(&rel_path);
                 let existing_id = self
                     .pane_state
                     .panes
@@ -4539,8 +4551,8 @@ impl App {
                     self.pending_diff_click = None;
                 }
             }
-            if let Some(cwd) = self.active_pane_cwd() {
-                let full_path = cwd.join(&rel_path);
+            if let Some(base) = self.active_git_base() {
+                let full_path = base.join(&rel_path);
                 let preview = self.default_editor_preview(&full_path);
                 self.open_file_in_editor(full_path, preview, ctx);
             }

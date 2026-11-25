@@ -84,6 +84,10 @@ pub(super) struct SavedPane {
     pub(super) last_active_at: u64,
     #[serde(default)]
     pub(super) workspace_id: Option<u64>,
+    /// The pane's zoom (⌘ / Ctrl + scroll); absent at 100 % and in older
+    /// session files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) zoom: Option<f32>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -305,6 +309,7 @@ mod tests {
             labels: vec![],
             last_active_at: 0,
             workspace_id: None,
+            zoom: None,
         };
         let state = AppSession {
             sessions: vec![saved(Some("10-1.zst")), saved(None)],
@@ -526,6 +531,7 @@ mod tests {
                     labels: vec![],
                     last_active_at: 0,
                     workspace_id: None,
+                    zoom: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::FileEditor {
@@ -539,6 +545,7 @@ mod tests {
                     labels: vec![],
                     last_active_at: 0,
                     workspace_id: None,
+                    zoom: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::NoteEditor {
@@ -549,6 +556,7 @@ mod tests {
                     labels: vec![],
                     last_active_at: 0,
                     workspace_id: None,
+                    zoom: None,
                 },
             ],
             active_pane_index: Some(1),
@@ -623,6 +631,7 @@ mod tests {
             labels: vec![1, 9, 100],
             last_active_at: 0,
             workspace_id: None,
+            zoom: None,
         };
         let json = serde_json::to_string(&pane).unwrap();
         let loaded: SavedPane = serde_json::from_str(&json).unwrap();
@@ -634,6 +643,27 @@ mod tests {
         let json = r#"{"content":{"Terminal":{"session_index":0}},"manual_width":null}"#;
         let loaded: SavedPane = serde_json::from_str(json).unwrap();
         assert_eq!(loaded.labels, Vec::<u32>::new());
+    }
+
+    #[test]
+    fn a_panes_zoom_is_saved_and_old_files_have_none() {
+        let pane = |zoom| SavedPane {
+            content: SavedPaneContent::FileDiff {
+                path: PathBuf::from("/repo/a.rs"),
+            },
+            manual_width: None,
+            labels: vec![],
+            last_active_at: 0,
+            workspace_id: None,
+            zoom,
+        };
+        let json = serde_json::to_string(&pane(Some(1.5))).unwrap();
+        let loaded: SavedPane = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.zoom, Some(1.5));
+        let json = serde_json::to_string(&pane(None)).unwrap();
+        assert!(!json.contains("zoom"), "100 % writes nothing: {json}");
+        let old = r#"{"content":{"Terminal":{"session_index":0}},"manual_width":null}"#;
+        assert_eq!(serde_json::from_str::<SavedPane>(old).unwrap().zoom, None);
     }
 
     // ── Group layout persistence tests ──────────────────────────
@@ -808,6 +838,7 @@ mod tests {
                     labels: vec![],
                     last_active_at: 0,
                     workspace_id: None,
+                    zoom: None,
                 },
                 SavedPane {
                     content: SavedPaneContent::Terminal { session_index: 0 },
@@ -815,6 +846,7 @@ mod tests {
                     labels: vec![],
                     last_active_at: 0,
                     workspace_id: None,
+                    zoom: None,
                 },
             ],
             active_pane_index: Some(0),

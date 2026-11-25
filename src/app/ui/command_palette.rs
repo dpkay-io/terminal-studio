@@ -433,7 +433,7 @@ impl App {
     }
 
     fn execute_palette_action(&mut self, action: AppAction, ctx: &egui::Context) {
-        if self.toggle_view(action) {
+        if self.toggle_view(action) || crate::app::window_zoom::run(ctx, action) {
             return;
         }
         match action {
@@ -814,6 +814,9 @@ fn all_palette_actions(registry: &ShortcutRegistry) -> Vec<PaletteEntry> {
         MoveTabToDownGroup,
         RevealInExplorer,
         OpenFileFinder,
+        ZoomWindowIn,
+        ZoomWindowOut,
+        ZoomWindowReset,
     ];
 
     actions

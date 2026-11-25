@@ -158,6 +158,7 @@ impl App {
         }
 
         limit_ui_passes(&cc.egui_ctx);
+        super::window_zoom::disable_builtin_shortcuts(&cc.egui_ctx);
         apply_theme_visuals(&cc.egui_ctx);
 
         cc.egui_ctx.set_fonts(super::fonts::definitions());
@@ -555,6 +556,20 @@ impl App {
     }
 
     /// Derive CWD from the active pane, regardless of its content type.
+    /// The folder the git panel's file paths are relative to: the active
+    /// pane's repository root (a terminal may be in a folder inside it), or
+    /// its folder outside a repository. Read from the watcher's data: no file
+    /// system access here.
+    pub(super) fn active_git_base(&self) -> Option<PathBuf> {
+        let cwd = self.active_pane_cwd()?;
+        let root = self
+            .watch_state
+            .as_ref()
+            .and_then(|ws| ws.dir_data.get(&cwd))
+            .and_then(|d| d.git_root.as_deref());
+        Some(super::git_paths::status_base(&cwd, root))
+    }
+
     pub(super) fn active_pane_cwd(&self) -> Option<PathBuf> {
         let pane = self
             .pane_state
@@ -1606,6 +1621,7 @@ impl App {
                     labels: p.labels.clone(),
                     last_active_at: p.last_active_at,
                     workspace_id: p.workspace_id,
+                    zoom: self.pane_state.zoom.saved(p.id),
                 })
             })
             .collect();
@@ -1945,6 +1961,9 @@ impl App {
             let pane_id = self.pane_state.next_pane_id;
             self.pane_state.next_pane_id += 1;
             pane_ids.push(pane_id);
+            if let Some(zoom) = saved.zoom {
+                self.pane_state.zoom.restore(pane_id, zoom);
+            }
             self.pane_state.panes.push(PaneEntry {
                 id: pane_id,
                 content,
@@ -1969,17 +1988,8 @@ impl App {
 
         for pane in &self.pane_state.panes {
             if let PaneContent::FileDiff(d) = &pane.content {
-                let ws = self.workspace_store.find_for_cwd(&d.path);
-                let cwd = ws
-                    .map(|w| w.path.clone())
-                    .or_else(|| d.path.parent().map(|p| p.to_path_buf()));
-                if let Some(cwd) = cwd {
-                    if let Ok(rel) = d.path.strip_prefix(&cwd) {
-                        let rel_path = rel.to_string_lossy().to_string();
-                        self.pending_diff_panes.insert(d.path.clone(), pane.id);
-                        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
-                    }
-                }
+                self.pending_diff_panes.insert(d.path.clone(), pane.id);
+                self.workers.git_worker.enqueue_diff(d.path.clone());
             }
         }
 
@@ -2456,8 +2466,8 @@ impl App {
                 });
             }
             DragAction::InsertDiffPane { rel_path, at_index } => {
-                if let Some(cwd) = self.active_pane_cwd() {
-                    let full_path = cwd.join(&rel_path);
+                if let Some(base) = self.active_git_base() {
+                    let full_path = base.join(&rel_path);
                     let pane_id = self.pane_state.next_pane_id;
                     self.pane_state.next_pane_id += 1;
                     let entry = PaneEntry {
@@ -2488,8 +2498,8 @@ impl App {
                         pane_id,
                         None,
                     );
-                    self.pending_diff_panes.insert(full_path, pane_id);
-                    self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+                    self.pending_diff_panes.insert(full_path.clone(), pane_id);
+                    self.workers.git_worker.enqueue_diff(full_path);
                     self.activate_pane(pane_id);
                 }
             }
@@ -2735,12 +2745,11 @@ impl App {
         Some(pane_id)
     }
 
-    /// Create a diff pane for `rel_path` under the active pane's cwd and queue
-    /// the diff job. Returns `None` when there is no active cwd to resolve
-    /// `rel_path` against.
+    /// Create a diff pane for `rel_path` (a status path, from the active
+    /// pane's repository root) and queue the diff job. Returns `None` when
+    /// there is no active folder to resolve `rel_path` against.
     fn create_diff_pane(&mut self, rel_path: String) -> Option<u32> {
-        let cwd = self.active_pane_cwd()?;
-        let full_path = cwd.join(&rel_path);
+        let full_path = self.active_git_base()?.join(&rel_path);
         let pane_id = self.pane_state.next_pane_id;
         self.pane_state.next_pane_id += 1;
         self.pane_state.panes.push(PaneEntry {
@@ -2765,8 +2774,8 @@ impl App {
             last_active_at: crate::util::now_millis(),
             workspace_id: self.active_group,
         });
-        self.pending_diff_panes.insert(full_path, pane_id);
-        self.workers.git_worker.enqueue_diff(&cwd, rel_path);
+        self.pending_diff_panes.insert(full_path.clone(), pane_id);
+        self.workers.git_worker.enqueue_diff(full_path);
         Some(pane_id)
     }
 
