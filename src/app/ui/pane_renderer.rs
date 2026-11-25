@@ -1,10 +1,11 @@
 use crate::ui_kit::TextEditFontHint as _;
 use std::sync::Arc;
 
+use super::super::content_zoom::{scale_text_styles, PaneZoom, ZoomRequest};
 use super::super::editor_texts::{pane_text, EditorTexts};
 use super::super::feedback;
 use super::super::file_browser;
-use super::super::markdown::render_markdown;
+use super::super::markdown::render_markdown_zoomed;
 use super::super::pane::{PaneContent, PaneEntry, SessionEntry, TermSelection};
 use super::super::settings::{CursorStyle, InfoBarPosition};
 use super::super::{App, CloseAllTarget};
@@ -27,8 +28,15 @@ fn text_fingerprint(s: &str) -> u64 {
 struct SyntaxGalleyCache {
     text_hash: u64,
     theme_id: crate::theme::ThemeId,
+    /// The text's size when laid out: a zoom lays it out again.
+    font_size: f32,
     galley: std::sync::Arc<egui::Galley>,
 }
+
+/// The digit the editor's line-number gutter is measured by.
+const GUTTER_DIGIT: char = '0';
+/// The gutter's room beyond its digits, in digit widths.
+const GUTTER_PAD_CHARS: f32 = 1.5;
 
 /// Actions emitted by the 3-dot context menu on split panes.
 #[allow(dead_code)]
@@ -87,7 +95,39 @@ pub(in crate::app) struct RenderCtx<'a> {
     /// Asked of a note header's link button this frame.
     pub note_link_actions: &'a mut Vec<super::notes_header::NoteLinkAction>,
     /// The preview toggles' hover text (with the shortcut).
-    pub preview_tips: super::notes_header::PreviewTips,
+    pub preview_tips: super::preview_header::PreviewTips,
+    /// Each document pane's zoom.
+    pub pane_zoom: &'a PaneZoom,
+    /// Zoom asked for over a pane this frame, applied after it is drawn.
+    pub zoom_requests: &'a mut Vec<(u32, ZoomRequest)>,
+}
+
+/// A document pane's zoom this frame. A zoom asked for with the pointer
+/// over it (⌘ / Ctrl + scroll, a pinch) is queued for the next frame.
+fn document_zoom(
+    ui: &egui::Ui,
+    pane_id: u32,
+    pane_rect: egui::Rect,
+    rctx: &mut RenderCtx<'_>,
+) -> f32 {
+    if let Some(request) = super::zoom_badge::zoom_input(ui, pane_rect) {
+        rctx.zoom_requests.push((pane_id, request));
+    }
+    rctx.pane_zoom.get(pane_id)
+}
+
+/// The zoom badge over a document pane, drawn after its content; a click
+/// on it queues going back to 100 %.
+fn document_zoom_badge(
+    ui: &mut egui::Ui,
+    pane_id: u32,
+    pane_rect: egui::Rect,
+    zoom: f32,
+    rctx: &mut RenderCtx<'_>,
+) {
+    if super::zoom_badge::zoom_badge(ui, pane_rect, zoom) {
+        rctx.zoom_requests.push((pane_id, ZoomRequest::Reset));
+    }
 }
 
 // ── Leaf renderers ──────────────────────────────────────────────────────────
@@ -421,67 +461,25 @@ fn render_file_editor_leaf(
         let is_md = ed.is_markdown();
         let previewing = is_md && ed.show_preview;
         if is_md {
-            ui.horizontal(|ui| {
-                let t = theme::active();
-                let raw_color = if !previewing { t.text } else { t.overlay0 };
-                let preview_color = if previewing { t.text } else { t.overlay0 };
-                let raw_bg = if !previewing {
-                    t.surface2
-                } else {
-                    egui::Color32::TRANSPARENT
-                };
-                let preview_bg = if previewing {
-                    t.surface2
-                } else {
-                    egui::Color32::TRANSPARENT
-                };
-                let raw_resp = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new("Raw")
-                            .size(theme::FONT_UI_SM)
-                            .color(raw_color),
-                    )
-                    .fill(raw_bg)
-                    .corner_radius(egui::CornerRadius::same(theme::R_MD))
-                    .min_size(egui::vec2(56.0, 20.0)),
-                );
-                if raw_resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                // Only the button that would switch says what it does.
-                let raw_resp = if previewing {
-                    raw_resp.on_hover_text(&rctx.preview_tips.edit)
-                } else {
-                    raw_resp
-                };
-                if raw_resp.clicked() && previewing {
-                    rctx.editor_preview_toggles.push(pane_id);
-                }
-                ui.add_space(theme::SP_1);
-                let preview_resp = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new("Preview")
-                            .size(theme::FONT_UI_SM)
-                            .color(preview_color),
-                    )
-                    .fill(preview_bg)
-                    .corner_radius(egui::CornerRadius::same(theme::R_MD))
-                    .min_size(egui::vec2(56.0, 20.0)),
-                );
-                if preview_resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                let preview_resp = if previewing {
-                    preview_resp
-                } else {
-                    preview_resp.on_hover_text(&rctx.preview_tips.preview)
-                };
-                if preview_resp.clicked() && !previewing {
-                    rctx.editor_preview_toggles.push(pane_id);
-                }
-            });
+            // The same title row as a note's: the name, 👁 beside it.
+            let name = super::file_name(&ed.path);
+            let header = super::preview_header::PreviewHeader {
+                row: super::preview_header::TitleRow {
+                    title: &name,
+                    title_size: theme::FONT_UI_LG,
+                    toggle: Some(super::preview_header::PreviewToggle {
+                        on: previewing,
+                        tips: &rctx.preview_tips,
+                    }),
+                },
+            }
+            .show(ui);
+            if header.preview_toggled() {
+                rctx.editor_preview_toggles.push(pane_id);
+            }
             ui.separator();
         }
+        let zoom = document_zoom(ui, pane_id, pane_rect, rctx);
 
         let is_focused = rctx.focused_pane_id == Some(pane_id);
         // While a dialog is up its keys are its own: an Enter that confirms
@@ -509,7 +507,7 @@ fn render_file_editor_leaf(
                 .id_salt(("editor_preview_scroll", pane_id))
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    render_markdown(ui, &ed.content);
+                    render_markdown_zoomed(ui, &ed.content, zoom);
                 });
         } else if let Some(et) = rctx
             .editor_texts
@@ -522,6 +520,7 @@ fn render_file_editor_leaf(
                 .id_salt(("editor_scroll", pane_id))
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
+                    scale_text_styles(ui.style_mut(), zoom);
                     let line_count = if text.ends_with('\n') {
                         text.lines().count() + 1
                     } else {
@@ -529,8 +528,10 @@ fn render_file_editor_leaf(
                     }
                     .max(1);
                     let digits = ((line_count as f64).log10().floor() as usize) + 1;
-                    let char_w = 7.5_f32;
-                    let gutter_w = (digits as f32 + 1.5) * char_w;
+                    let mono_font = ui.style().text_styles[&egui::TextStyle::Monospace].clone();
+                    // Measured, so the gutter grows with the zoom.
+                    let char_w = ui.fonts_mut(|f| f.glyph_width(&mono_font, GUTTER_DIGIT));
+                    let gutter_w = (digits as f32 + GUTTER_PAD_CHARS) * char_w;
                     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
                     let gutter_total_h = theme::SP_1 + line_count as f32 * line_h;
@@ -585,10 +586,15 @@ fn render_file_editor_leaf(
                                     let s = buf.as_str();
                                     let hash = text_fingerprint(s);
                                     let current_theme = theme::active().id;
+                                    let font_size =
+                                        ui.style().text_styles[&egui::TextStyle::Monospace].size;
                                     let cached: Option<SyntaxGalleyCache> =
                                         ui.ctx().data(|d| d.get_temp(cache_id));
                                     if let Some(c) = cached {
-                                        if c.text_hash == hash && c.theme_id == current_theme {
+                                        if c.text_hash == hash
+                                            && c.theme_id == current_theme
+                                            && c.font_size == font_size
+                                        {
                                             return c.galley;
                                         }
                                     }
@@ -600,6 +606,7 @@ fn render_file_editor_leaf(
                                             SyntaxGalleyCache {
                                                 text_hash: hash,
                                                 theme_id: current_theme,
+                                                font_size,
                                                 galley: galley.clone(),
                                             },
                                         )
@@ -668,6 +675,7 @@ fn render_file_editor_leaf(
                 .unwrap_or(&ed.content);
             render_text_search_bar(ui, pane_rect, current_text, rctx.text_search);
         }
+        document_zoom_badge(ui, pane_id, pane_rect, zoom, rctx);
 
         // Match on the key event's own modifiers: a quick Cmd+S can be released
         // before the frame samples the live modifier state. Only the active
@@ -704,7 +712,6 @@ fn render_note_editor_leaf(
             info,
             title: &info.title,
             title_size: theme::FONT_UI_LG,
-            title_clickable: false,
             previewing: info.is_markdown().then_some(previewing),
             preview_tips: &rctx.preview_tips,
         }
@@ -714,14 +721,18 @@ fn render_note_editor_leaf(
         }
     }
     ui.separator();
+    let zoom = document_zoom(ui, pane_id, pane_rect, rctx);
 
     if previewing {
         if let Some(text) = pane_text(rctx.panes, rctx.notes, pane_id) {
             egui::ScrollArea::vertical()
                 .id_salt(("note_preview_scroll", pane_id))
                 .auto_shrink([false; 2])
-                .show(ui, |ui| super::note_preview::render_note_preview(ui, text));
+                .show(ui, |ui| {
+                    super::note_preview::render_note_preview(ui, text, zoom)
+                });
         }
+        document_zoom_badge(ui, pane_id, pane_rect, zoom, rctx);
         return;
     }
 
@@ -759,6 +770,7 @@ fn render_note_editor_leaf(
             .id_salt(("note_editor_scroll", pane_id))
             .auto_shrink([false; 2])
             .show(ui, |ui| {
+                scale_text_styles(ui.style_mut(), zoom);
                 let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
                 let te_resp = ui.add(
                     egui::TextEdit::multiline(text)
@@ -804,6 +816,7 @@ fn render_note_editor_leaf(
             render_text_search_bar(ui, pane_rect, &content, rctx.text_search);
         }
     }
+    document_zoom_badge(ui, pane_id, pane_rect, zoom, rctx);
 }
 
 #[derive(Default)]
@@ -841,6 +854,7 @@ fn render_file_diff_leaf(
     ui.separator();
 
     let is_focused = rctx.focused_pane_id == Some(pane_id);
+    let zoom = document_zoom(ui, pane_id, pane_rect, rctx);
 
     let scroll_target = if d.scroll_to_first_hunk && !d.hunks.is_empty() {
         Some(0_usize)
@@ -852,27 +866,29 @@ fn render_file_diff_leaf(
         .id_salt(("diff_scroll", pane_id))
         .auto_shrink([false; 2])
         .show(ui, |ui| {
+            scale_text_styles(ui.style_mut(), zoom);
+            let content = super::super::git_diff::DiffContent {
+                old_content: &d.old_content,
+                new_content: &d.new_content,
+                hunks: &d.hunks,
+                old_highlights: d.old_highlights.as_deref(),
+                new_highlights: d.new_highlights.as_deref(),
+            };
             match d.diff_mode {
                 super::super::diff_parser::DiffViewMode::Inline => {
                     super::super::git_diff::render_inline_diff_full(
                         ui,
-                        &d.old_content,
-                        &d.new_content,
-                        &d.hunks,
-                        d.old_highlights.as_deref(),
-                        d.new_highlights.as_deref(),
+                        &content,
                         scroll_target,
+                        zoom,
                     );
                 }
                 super::super::diff_parser::DiffViewMode::SideBySide => {
                     super::super::git_diff::render_side_by_side_diff(
                         ui,
-                        &d.old_content,
-                        &d.new_content,
-                        &d.hunks,
-                        d.old_highlights.as_deref(),
-                        d.new_highlights.as_deref(),
+                        &content,
                         scroll_target,
+                        zoom,
                     );
                 }
             }
@@ -893,6 +909,7 @@ fn render_file_diff_leaf(
     if is_focused && rctx.text_search.active {
         render_text_search_bar(ui, pane_rect, &d.new_content, rctx.text_search);
     }
+    document_zoom_badge(ui, pane_id, pane_rect, zoom, rctx);
 
     DiffLeafResult {
         mode_change: toolbar.mode_change,
@@ -973,7 +990,10 @@ fn render_leaf_content(
                 render_note_editor_leaf(ui, pane_id, ne.show_preview, rctx);
             }
             PaneContent::ConflictResolver(ref state) => {
-                let result = super::conflict_resolver::render_conflict_resolver(ui, state);
+                let pane_rect = ui.max_rect();
+                let zoom = document_zoom(ui, pane_id, pane_rect, rctx);
+                let result = super::conflict_resolver::render_conflict_resolver(ui, state, zoom);
+                document_zoom_badge(ui, pane_id, pane_rect, zoom, rctx);
                 if let Some(ca) = result.action {
                     rctx.pane_context_actions
                         .push(PaneContextAction::ConflictResolve {
@@ -1325,6 +1345,7 @@ fn render_group_node(
                 let mut scrollbar_clear_restore = Vec::new();
                 let mut scrollbar_dragging = false;
                 let mut conflict_view_toggles: Vec<(u32, bool)> = Vec::new();
+                let mut zoom_requests: Vec<(u32, ZoomRequest)> = Vec::new();
                 let mut note_link_actions = Vec::new();
                 let note_header = app.pane_state.find(pid).and_then(|p| match &p.content {
                     PaneContent::NoteEditor(ne) => Some(app.notes_header_info(ne.workspace_id)),
@@ -1367,8 +1388,23 @@ fn render_group_node(
                         note_header,
                         note_link_actions: &mut note_link_actions,
                         preview_tips,
+                        pane_zoom: &app.pane_state.zoom,
+                        zoom_requests: &mut zoom_requests,
                     };
                     render_leaf_content(&mut leaf_ui, pid, is_focused, content_rect, &mut rctx);
+                }
+                if !zoom_requests.is_empty() {
+                    for (pane_id, request) in zoom_requests {
+                        app.pane_state.zoom.apply(pane_id, request);
+                    }
+                    // Drawn at the new size next frame, without waiting for
+                    // the pointer to move.
+                    leaf_ui.ctx().request_repaint();
+                }
+                {
+                    let super::super::pane_state::PaneState { panes, zoom, .. } =
+                        &mut app.pane_state;
+                    zoom.retain_open(|id| panes.iter().any(|p| p.id == id));
                 }
                 let ctx = leaf_ui.ctx().clone();
                 app.run_note_link_actions(note_link_actions, &ctx);

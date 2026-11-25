@@ -778,6 +778,52 @@ fn file_context_menu(
     }
 }
 
+const HUNK_PREV_ICON: &str = "\u{2191}";
+const HUNK_NEXT_ICON: &str = "\u{2193}";
+const PREV_CHANGE_TIP: &str = "Previous change";
+const NEXT_CHANGE_TIP: &str = "Next change";
+const NO_CHANGES_TIP: &str = "No changes to step through";
+/// What the position label says when there are no changes.
+const NO_CHANGES_LABEL: &str = "No changes";
+
+/// Where the change navigation is ("2/5"), or that there is nothing to
+/// step through. Pure.
+fn hunk_position_label(hunk_count: usize, current_hunk: usize) -> String {
+    if hunk_count == 0 {
+        NO_CHANGES_LABEL.to_string()
+    } else {
+        format!("{}/{hunk_count}", current_hunk.min(hunk_count - 1) + 1)
+    }
+}
+
+/// One of the change arrows; greyed out while there is nowhere to go.
+/// Whether it was clicked.
+fn hunk_nav_button(ui: &mut egui::Ui, icon: &str, enabled: bool, tip: &str) -> bool {
+    let t = theme::active();
+    let resp = ui.add_enabled(
+        enabled,
+        egui::Button::new(
+            egui::RichText::new(icon)
+                .size(theme::FONT_UI_MD)
+                .color(if enabled { t.text } else { t.overlay0 }),
+        )
+        .frame(false),
+    );
+    let resp = if enabled {
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+    } else {
+        resp
+    };
+    let resp = if tip.is_empty() {
+        resp
+    } else if enabled {
+        resp.on_hover_text(tip)
+    } else {
+        resp.on_disabled_hover_text(tip)
+    };
+    enabled && resp.clicked()
+}
+
 pub(super) struct DiffToolbarResult {
     pub(super) mode_change: Option<DiffViewMode>,
     pub(super) scroll_to_hunk: Option<usize>,
@@ -825,51 +871,44 @@ pub(super) fn render_diff_toolbar(
             }
         }
 
-        if hunk_count > 0 {
-            ui.add_space(theme::SP_4);
-            ui.add(egui::Separator::default().vertical().spacing(theme::SP_2));
-            ui.add_space(theme::SP_2);
+        // Always there, so the change arrows never seem to vanish: with
+        // nothing to step to they are greyed out and say so.
+        ui.add_space(theme::SP_4);
+        ui.add(egui::Separator::default().vertical().spacing(theme::SP_2));
+        ui.add_space(theme::SP_2);
 
-            let has_prev = current_hunk > 0;
-            let has_next = current_hunk + 1 < hunk_count;
+        let has_prev = hunk_count > 0 && current_hunk > 0;
+        let has_next = current_hunk + 1 < hunk_count;
+        let nav_tip = |enabled: bool, tip: &'static str| {
+            if hunk_count == 0 {
+                NO_CHANGES_TIP
+            } else if enabled {
+                tip
+            } else {
+                ""
+            }
+        };
 
-            let prev_btn = ui.add_enabled(
-                has_prev,
-                egui::Button::new(
-                    egui::RichText::new("\u{2191}")
-                        .size(theme::FONT_UI_MD)
-                        .color(if has_prev { t.text } else { t.overlay0 }),
-                )
-                .frame(false),
-            );
-            if prev_btn.hovered() && has_prev {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if prev_btn.on_hover_text("Previous change").clicked() && has_prev {
-                scroll_to_hunk = Some(current_hunk - 1);
-            }
-
-            ui.label(
-                egui::RichText::new(format!("{}/{}", current_hunk + 1, hunk_count))
-                    .size(theme::FONT_UI_SM)
-                    .color(t.subtext0),
-            );
-
-            let next_btn = ui.add_enabled(
-                has_next,
-                egui::Button::new(
-                    egui::RichText::new("\u{2193}")
-                        .size(theme::FONT_UI_MD)
-                        .color(if has_next { t.text } else { t.overlay0 }),
-                )
-                .frame(false),
-            );
-            if next_btn.hovered() && has_next {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if next_btn.on_hover_text("Next change").clicked() && has_next {
-                scroll_to_hunk = Some(current_hunk + 1);
-            }
+        if hunk_nav_button(
+            ui,
+            HUNK_PREV_ICON,
+            has_prev,
+            nav_tip(has_prev, PREV_CHANGE_TIP),
+        ) {
+            scroll_to_hunk = Some(current_hunk - 1);
+        }
+        ui.label(
+            egui::RichText::new(hunk_position_label(hunk_count, current_hunk))
+                .size(theme::FONT_UI_SM)
+                .color(t.subtext0),
+        );
+        if hunk_nav_button(
+            ui,
+            HUNK_NEXT_ICON,
+            has_next,
+            nav_tip(has_next, NEXT_CHANGE_TIP),
+        ) {
+            scroll_to_hunk = Some(current_hunk + 1);
         }
     });
 
@@ -932,6 +971,28 @@ fn paint_highlighted_line(
     }
 }
 
+/// Syntax-highlighted lines of a file, one span list per line.
+type HighlightedLines = [Vec<(egui::Color32, String)>];
+
+/// What a diff view draws: the file at `HEAD` and now, and the changes.
+#[derive(Clone, Copy)]
+pub(super) struct DiffContent<'a> {
+    pub(super) old_content: &'a str,
+    pub(super) new_content: &'a str,
+    pub(super) hunks: &'a [super::diff_parser::DiffHunk],
+    pub(super) old_highlights: Option<&'a HighlightedLines>,
+    pub(super) new_highlights: Option<&'a HighlightedLines>,
+}
+
+/// A diff line's line-number gutter width, at 100 %.
+const DIFF_GUTTER_W: f32 = 36.0;
+/// The +/− column's width, at 100 %.
+const DIFF_INDICATOR_W: f32 = 16.0;
+/// The narrowest a line's text column gets.
+const DIFF_MIN_CONTENT_W: f32 = 200.0;
+/// A monospace glyph, to measure how wide a line's text is.
+const WIDTH_PROBE_CHAR: char = '0';
+
 fn compute_hunk_start_indices(
     lines: &[super::diff_parser::DiffLine],
     hunks: &[super::diff_parser::DiffHunk],
@@ -957,24 +1018,39 @@ fn compute_hunk_start_indices(
     starts
 }
 
+/// Lines are sized by `ui`'s monospace text style; `zoom` scales the
+/// rest (gutters, fonts set here) to match it.
 pub(super) fn render_inline_diff_full(
     ui: &mut egui::Ui,
-    old_content: &str,
-    new_content: &str,
-    hunks: &[super::diff_parser::DiffHunk],
-    old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
-    new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    content: &DiffContent<'_>,
     scroll_to_hunk: Option<usize>,
+    zoom: f32,
 ) {
+    let DiffContent {
+        old_content,
+        new_content,
+        hunks,
+        old_highlights,
+        new_highlights,
+    } = *content;
     use super::diff_parser::build_full_diff_lines;
 
     let lines = build_full_diff_lines(old_content, new_content, hunks);
     let t = theme::active();
-    let gutter_w = 36.0_f32;
-    let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
-    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let gutter_w = DIFF_GUTTER_W * zoom;
+    let indicator_w = DIFF_INDICATOR_W * zoom;
+    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM * zoom);
+    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS * zoom);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
+    // As wide as the longest line, so a zoomed-in diff scrolls sideways
+    // instead of cutting lines off.
+    let char_w = ui.fonts_mut(|f| f.glyph_width(&font_mono, WIDTH_PROBE_CHAR));
+    let longest = lines
+        .iter()
+        .map(|l| l.content.chars().count())
+        .max()
+        .unwrap_or(0);
+    let content_w = longest as f32 * char_w + theme::SP_4 * zoom;
 
     let hunk_starts = compute_hunk_start_indices(&lines, hunks);
     let scroll_target_line = scroll_to_hunk.and_then(|idx| hunk_starts.get(idx).copied());
@@ -1045,8 +1121,10 @@ pub(super) fn render_inline_diff_full(
             }
 
             let avail = ui.available_width();
-            let (content_rect, _) =
-                ui.allocate_exact_size(egui::vec2(avail.max(200.0), line_h), egui::Sense::hover());
+            let (content_rect, _) = ui.allocate_exact_size(
+                egui::vec2(avail.max(content_w).max(DIFF_MIN_CONTENT_W), line_h),
+                egui::Sense::hover(),
+            );
             if let Some(bg) = bg_color {
                 ui.painter().rect_filled(content_rect, 0.0, bg);
             }
@@ -1113,15 +1191,21 @@ fn compute_sbs_hunk_start_indices(
     starts
 }
 
+/// Lines are sized by `ui`'s monospace text style; `zoom` scales the
+/// rest (gutters, fonts set here) to match it.
 pub(super) fn render_side_by_side_diff(
     ui: &mut egui::Ui,
-    old_content: &str,
-    new_content: &str,
-    hunks: &[super::diff_parser::DiffHunk],
-    old_highlights: Option<&[Vec<(egui::Color32, String)>]>,
-    new_highlights: Option<&[Vec<(egui::Color32, String)>]>,
+    content: &DiffContent<'_>,
     scroll_to_hunk: Option<usize>,
+    zoom: f32,
 ) {
+    let DiffContent {
+        old_content,
+        new_content,
+        hunks,
+        old_highlights,
+        new_highlights,
+    } = *content;
     use super::diff_parser::{build_full_diff_lines, build_side_by_side_lines};
 
     let full = build_full_diff_lines(old_content, new_content, hunks);
@@ -1130,10 +1214,10 @@ pub(super) fn render_side_by_side_diff(
     let t = theme::active();
     let total_w = ui.available_width();
     let half_w = (total_w / 2.0 - 1.0).max(100.0);
-    let gutter_w = 36.0_f32;
-    let indicator_w = 16.0_f32;
-    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM);
-    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS);
+    let gutter_w = DIFF_GUTTER_W * zoom;
+    let indicator_w = DIFF_INDICATOR_W * zoom;
+    let font_mono = egui::FontId::monospace(theme::FONT_UI_SM * zoom);
+    let gutter_font = egui::FontId::monospace(theme::FONT_UI_XS * zoom);
     let line_h = ui.text_style_height(&egui::TextStyle::Monospace);
 
     ui.horizontal(|ui| {
@@ -1143,7 +1227,7 @@ pub(super) fn render_side_by_side_diff(
             egui::pos2(left_header.min.x + theme::SP_2, left_header.center().y),
             egui::Align2::LEFT_CENTER,
             "HEAD",
-            egui::FontId::proportional(theme::FONT_UI_SM),
+            egui::FontId::proportional(theme::FONT_UI_SM * zoom),
             t.subtext0,
         );
         let (sep_rect, _) =
@@ -1155,7 +1239,7 @@ pub(super) fn render_side_by_side_diff(
             egui::pos2(right_header.min.x + theme::SP_2, right_header.center().y),
             egui::Align2::LEFT_CENTER,
             "Working Tree",
-            egui::FontId::proportional(theme::FONT_UI_SM),
+            egui::FontId::proportional(theme::FONT_UI_SM * zoom),
             t.subtext0,
         );
     });
@@ -1301,6 +1385,134 @@ fn render_sbs_cell(
             line.kind,
             t,
             lay.font_mono,
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::egui_test_frames::run_ui;
+
+    #[test]
+    fn the_position_reads_where_the_navigation_is() {
+        assert_eq!(hunk_position_label(0, 0), NO_CHANGES_LABEL);
+        assert_eq!(hunk_position_label(5, 1), "2/5");
+        assert_eq!(hunk_position_label(3, 9), "3/3", "never past the last");
+    }
+
+    /// The text of every shape a frame painted.
+    fn painted_text(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// One frame of the toolbar: what it painted, the area it took, and
+    /// what it asked for.
+    fn toolbar_frame(
+        ctx: &egui::Context,
+        input: egui::RawInput,
+        hunks: usize,
+        current: usize,
+    ) -> (Vec<String>, egui::Rect, Option<usize>) {
+        let mut out = None;
+        let output = run_ui(ctx, input, |ui| {
+            let result = render_diff_toolbar(ui, DiffViewMode::Inline, hunks, current);
+            out = Some((ui.min_rect(), result.scroll_to_hunk));
+        });
+        let (rect, scroll) = out.expect("the frame ran");
+        (painted_text(&output), rect, scroll)
+    }
+
+    #[test]
+    fn the_change_arrows_show_even_without_changes() {
+        let ctx = egui::Context::default();
+        let (text, ..) = toolbar_frame(&ctx, egui::RawInput::default(), 0, 0);
+        assert!(text.iter().any(|t| t == HUNK_PREV_ICON), "{text:?}");
+        assert!(text.iter().any(|t| t == HUNK_NEXT_ICON), "{text:?}");
+        assert!(text.iter().any(|t| t == NO_CHANGES_LABEL), "{text:?}");
+
+        let (text, ..) = toolbar_frame(&ctx, egui::RawInput::default(), 3, 0);
+        assert!(text.iter().any(|t| t == "1/3"), "{text:?}");
+    }
+
+    fn click(pos: egui::Pos2) -> egui::RawInput {
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        egui::RawInput {
+            events: vec![egui::Event::PointerMoved(pos), press(true), press(false)],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_next_arrow_steps_to_the_next_change_and_stops_at_the_last() {
+        let ctx = egui::Context::default();
+        let (_, rect, _) = toolbar_frame(&ctx, egui::RawInput::default(), 3, 0);
+        // The ↓ is the toolbar's last widget.
+        let next = egui::pos2(rect.right() - 4.0, rect.center().y);
+        let (.., asked) = toolbar_frame(&ctx, click(next), 3, 0);
+        assert_eq!(asked, Some(1));
+        let (_, rect, _) = toolbar_frame(&ctx, egui::RawInput::default(), 3, 2);
+        let next = egui::pos2(rect.right() - 4.0, rect.center().y);
+        let (.., asked) = toolbar_frame(&ctx, click(next), 3, 2);
+        assert_eq!(asked, None, "nothing after the last change");
+        let (_, rect, _) = toolbar_frame(&ctx, egui::RawInput::default(), 0, 0);
+        let next = egui::pos2(rect.right() - 4.0, rect.center().y);
+        let (.., asked) = toolbar_frame(&ctx, click(next), 0, 0);
+        assert_eq!(asked, None, "no changes, nowhere to go");
+    }
+
+    #[test]
+    fn a_zoomed_diff_is_taller_and_as_wide_as_its_longest_line() {
+        let long_line = "x".repeat(400);
+        let new = format!("short\n{long_line}\n");
+        let hunks = super::super::diff_parser::new_file_hunks(&new);
+        let content = DiffContent {
+            old_content: "",
+            new_content: &new,
+            hunks: &hunks,
+            old_highlights: None,
+            new_highlights: None,
+        };
+        let size = |zoom: f32| {
+            let ctx = egui::Context::default();
+            let mut size = egui::Vec2::ZERO;
+            let narrow = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(600.0, 400.0),
+                )),
+                ..Default::default()
+            };
+            let _ = run_ui(&ctx, narrow, |ui| {
+                size = ui
+                    .vertical(|ui| {
+                        crate::app::content_zoom::scale_text_styles(ui.style_mut(), zoom);
+                        render_inline_diff_full(ui, &content, None, zoom);
+                    })
+                    .response
+                    .rect
+                    .size();
+            });
+            size
+        };
+        let (normal, zoomed) = (size(1.0), size(2.0));
+        // Rows grow with the text; the gap between them stays.
+        assert!(zoomed.y > normal.y * 1.4, "{zoomed:?} vs {normal:?}");
+        assert!(
+            zoomed.x > normal.x * 1.5,
+            "lines are not cut off: {zoomed:?} vs {normal:?}"
         );
     }
 }

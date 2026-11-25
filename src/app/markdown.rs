@@ -549,7 +549,14 @@ const MAX_DOC_WIDTH: f32 = 980.0;
 /// Line height relative to font size for prose.
 const LINE_HEIGHT: f32 = 1.45;
 
+/// `content` rendered as Markdown, as designed.
 pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
+    render_markdown_zoomed(ui, content, crate::app::content_zoom::ZOOM_DEFAULT);
+}
+
+/// `content` rendered as Markdown with every size (text, spacing, the
+/// page's width) multiplied by `zoom`, as a browser zooms a page.
+pub(super) fn render_markdown_zoomed(ui: &mut egui::Ui, content: &str, zoom: f32) {
     let blocks = cached_parse(ui, content);
 
     let avail = ui.available_width().max(0.0);
@@ -557,8 +564,8 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         theme::SP_6
     } else {
         theme::SP_2
-    };
-    let doc_w = (avail - side * 2.0).clamp(0.0, MAX_DOC_WIDTH);
+    } * zoom;
+    let doc_w = (avail - side * 2.0).clamp(0.0, MAX_DOC_WIDTH * zoom);
 
     let body = ui
         .style()
@@ -566,11 +573,13 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         .get(&egui::TextStyle::Body)
         .map(|f| f.size)
         .unwrap_or(13.0)
-        .max(theme::FONT_UI_LG);
+        .max(theme::FONT_UI_LG)
+        * zoom;
 
     let th = theme::active();
     let mut rc = RenderCtx {
         body,
+        zoom,
         widget_idx: 0,
     };
     let tone = Tone {
@@ -584,8 +593,8 @@ pub(super) fn render_markdown(ui: &mut egui::Ui, content: &str) {
         .inner_margin(theme::margin_sides(
             side,
             side,
-            theme::SP_4,
-            theme::SP_6 * 2.0,
+            rc.px(theme::SP_4),
+            rc.px(theme::SP_6 * 2.0),
         ))
         .show(ui, |ui| {
             ui.set_max_width(doc_w);
@@ -613,6 +622,8 @@ fn cached_parse(ui: &egui::Ui, content: &str) -> Arc<Vec<Block>> {
 
 struct RenderCtx {
     body: f32,
+    /// What every fixed size is multiplied by.
+    zoom: f32,
     /// Running counter used to give scroll areas stable, unique ids.
     widget_idx: usize,
 }
@@ -621,6 +632,10 @@ impl RenderCtx {
     fn next_id(&mut self) -> usize {
         self.widget_idx += 1;
         self.widget_idx
+    }
+    /// A designed size at this zoom.
+    fn px(&self, v: f32) -> f32 {
+        v * self.zoom
     }
     fn block_gap(&self) -> f32 {
         (self.body * 0.8).round()
@@ -655,10 +670,10 @@ fn render_block(ui: &mut egui::Ui, block: &Block, rc: &mut RenderCtx, tone: Tone
     match block {
         Block::Heading { level, text } => {
             let size = match level {
-                1 => theme::FONT_HEADING_1 + 4.0,
-                2 => theme::FONT_HEADING_1,
-                3 => theme::FONT_HEADING_2,
-                4 => theme::FONT_STATUS,
+                1 => rc.px(theme::FONT_HEADING_1 + 4.0),
+                2 => rc.px(theme::FONT_HEADING_1),
+                3 => rc.px(theme::FONT_HEADING_2),
+                4 => rc.px(theme::FONT_STATUS),
                 _ => rc.body + 1.0,
             };
             let color = if *level >= 6 {
@@ -678,7 +693,7 @@ fn render_block(ui: &mut egui::Ui, block: &Block, rc: &mut RenderCtx, tone: Tone
             };
             inline_label(ui, text, &style);
             if *level <= 2 {
-                ui.add_space(theme::SP_3);
+                ui.add_space(rc.px(theme::SP_3));
                 let w = ui.available_width();
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(w, theme::STROKE_THIN), Sense::hover());
@@ -719,17 +734,17 @@ fn render_block(ui: &mut egui::Ui, block: &Block, rc: &mut RenderCtx, tone: Tone
                     style: SpanStyle::default(),
                 }];
                 inline_label(ui, &marker, &style);
-                ui.add_space(theme::SP_3);
+                ui.add_space(rc.px(theme::SP_3));
                 ui.vertical(|ui| render_blocks(ui, blocks, rc, tone));
             });
         }
         Block::Rule => {
-            ui.add_space(theme::SP_2);
+            ui.add_space(rc.px(theme::SP_2));
             let w = ui.available_width();
             let (rect, _) =
                 ui.allocate_exact_size(egui::vec2(w, theme::STROKE_THIN), Sense::hover());
             ui.painter().rect_filled(rect, 0.0, th.md_heading_rule);
-            ui.add_space(theme::SP_2);
+            ui.add_space(rc.px(theme::SP_2));
         }
     }
 }
@@ -838,10 +853,10 @@ fn is_external_url(url: &str) -> bool {
 fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
     let th = theme::active();
     let id = rc.next_id();
-    let font = FontId::monospace(theme::FONT_UI_MD);
+    let font = FontId::monospace(rc.px(theme::FONT_UI_MD));
     let bg = [th.md_code_bg.r(), th.md_code_bg.g(), th.md_code_bg.b()];
     let plain_fg = theme::ensure_readable([th.md_code.r(), th.md_code.g(), th.md_code.b()], bg);
-    let line_height = Some((theme::FONT_UI_MD * 1.4).round());
+    let line_height = Some((rc.px(theme::FONT_UI_MD) * 1.4).round());
 
     let mut job = LayoutJob::default();
     let syn = if lang.is_empty() {
@@ -877,17 +892,17 @@ fn render_code(ui: &mut egui::Ui, lang: &str, code: &str, rc: &mut RenderCtx) {
     egui::Frame::NONE
         .fill(th.md_code_bg)
         .stroke(Stroke::new(theme::STROKE_THIN, th.md_code_border))
-        .inner_margin(theme::margin_xy(theme::SP_5, theme::SP_4))
+        .inner_margin(theme::margin_xy(rc.px(theme::SP_5), rc.px(theme::SP_4)))
         .corner_radius(egui::CornerRadius::same(theme::R_MD))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if !lang.is_empty() {
                 ui.label(
                     egui::RichText::new(lang)
-                        .size(theme::FONT_UI_XS)
+                        .size(rc.px(theme::FONT_UI_XS))
                         .color(th.fg_muted),
                 );
-                ui.add_space(theme::SP_2);
+                ui.add_space(rc.px(theme::SP_2));
             }
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
             egui::ScrollArea::horizontal()
@@ -918,7 +933,7 @@ fn render_list(
         Some(s) => {
             let last = s + items.len().saturating_sub(1) as u64;
             let digits = last.to_string().len() as f32;
-            (digits + 1.0) * rc.body * 0.6 + theme::SP_2
+            (digits + 1.0) * rc.body * 0.6 + rc.px(theme::SP_2)
         }
         None => rc.body * 1.3,
     };
@@ -926,7 +941,7 @@ fn render_list(
 
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
-            ui.add_space(theme::SP_2);
+            ui.add_space(rc.px(theme::SP_2));
         }
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = Vec2::ZERO;
@@ -944,7 +959,7 @@ fn render_list(
                         )
                     });
                     let pos = egui::pos2(
-                        rect.right() - galley.size().x - theme::SP_3,
+                        rect.right() - galley.size().x - rc.px(theme::SP_3),
                         rect.center().y - galley.size().y / 2.0,
                     );
                     painter.galley(pos, galley, th.md_bullet);
@@ -958,7 +973,7 @@ fn render_list(
             ui.vertical(|ui| {
                 for (bi, block) in item.blocks.iter().enumerate() {
                     if bi > 0 {
-                        ui.add_space(theme::SP_3);
+                        ui.add_space(rc.px(theme::SP_3));
                     }
                     match block {
                         Block::List { start, items } => {
@@ -1053,10 +1068,10 @@ fn render_quote(
             se: theme::R_MD,
         })
         .inner_margin(theme::margin_sides(
-            bar_w + theme::SP_5,
-            theme::SP_5,
-            theme::SP_4,
-            theme::SP_4,
+            bar_w + rc.px(theme::SP_5),
+            rc.px(theme::SP_5),
+            rc.px(theme::SP_4),
+            rc.px(theme::SP_4),
         ))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1075,7 +1090,7 @@ fn render_quote(
                     ..InlineStyle::prose(rc, inner_tone)
                 };
                 inline_label(ui, &spans, &style);
-                ui.add_space(theme::SP_2);
+                ui.add_space(rc.px(theme::SP_2));
             }
             render_blocks(ui, blocks, rc, inner_tone);
         });
@@ -1176,8 +1191,8 @@ fn render_table(
         return;
     }
     let id = rc.next_id();
-    let pad_x = theme::SP_5;
-    let pad_y = theme::SP_3;
+    let pad_x = rc.px(theme::SP_5);
+    let pad_y = rc.px(theme::SP_3);
     let border = theme::STROKE_THIN;
 
     let body_style = InlineStyle {
@@ -1314,7 +1329,7 @@ fn render_table(
             .id_salt(("md_table_scroll", id))
             .show(ui, |ui| {
                 draw(ui);
-                ui.add_space(theme::SP_4);
+                ui.add_space(rc.px(theme::SP_4));
             });
     } else {
         draw(ui);

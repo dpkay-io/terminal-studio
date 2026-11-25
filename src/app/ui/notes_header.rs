@@ -1,7 +1,8 @@
 //! The notes header, the same in the right panel's notes and in a notes
-//! pane: the title, the Markdown preview toggle (👁) beside it, a warning
-//! (⚠) only while something is wrong, and on the right the notes file
-//! button (⚙) with its menu, before whatever buttons the caller adds.
+//! pane: the title row every Markdown view shares (`preview_header`: the
+//! title, the preview toggle 👁 beside it), a warning (⚠) only while
+//! something is wrong, and on the right the notes file button (⚙) with its
+//! menu, before whatever buttons the caller adds.
 //!
 //! A note lives in Terminal Studio's own file unless the user picks a file
 //! of their own (an Obsidian vault page, a text file), which is then edited
@@ -9,18 +10,17 @@
 
 use std::path::{Path, PathBuf};
 
+use super::preview_header::{
+    HeaderResponse, PreviewTips, PreviewToggle, TitleBadge, TitleRow, ICON_GAP,
+};
 use crate::notes::{NoteKey, NoteStatus};
 use crate::theme;
 
 /// The notes file button's icon.
 const FILE_ICON: &str = "\u{2699}";
-/// The Markdown preview toggle's icon.
-const PREVIEW_ICON: &str = "👁";
 /// Shown while saving or linking has a problem.
 const PROBLEM_ICON: &str = "\u{26A0}";
 
-const PREVIEW_TIP: &str = "Preview Markdown";
-const EDIT_TIP: &str = "Back to editing";
 const FILE_MENU_HEADING: &str = "Notes file";
 const DEFAULT_FILE_LABEL: &str = "Default";
 const DEFAULT_FILE_TIP: &str = "Keep these notes in Terminal Studio's notes folder. A linked \
@@ -75,56 +75,12 @@ pub(in crate::app) fn note_is_markdown(link: Option<&std::path::Path>) -> bool {
     link.is_none_or(crate::util::is_markdown_path)
 }
 
-/// What hovering a preview toggle says, with its shortcut: one for each
-/// state, so a toggle can say what clicking it does.
-pub(in crate::app) struct PreviewTips {
-    /// While the text shows.
-    pub(in crate::app) preview: String,
-    /// While the preview shows.
-    pub(in crate::app) edit: String,
-}
-
-impl PreviewTips {
-    /// The tips, each passed through `with_shortcut` (which adds the chord).
-    pub(in crate::app) fn new(with_shortcut: impl Fn(&str) -> String) -> Self {
-        Self {
-            preview: with_shortcut(PREVIEW_TIP),
-            edit: with_shortcut(EDIT_TIP),
-        }
-    }
-
-    /// What clicking the toggle does now.
-    pub(in crate::app) fn for_state(&self, previewing: bool) -> &str {
-        if previewing {
-            &self.edit
-        } else {
-            &self.preview
-        }
-    }
-}
-
-/// The header's parts, as drawn this frame.
-pub(in crate::app) struct HeaderResponse {
-    pub(in crate::app) title: egui::Response,
-    /// The preview toggle, when shown.
-    pub(in crate::app) preview: Option<egui::Response>,
-}
-
-impl HeaderResponse {
-    /// Whether the preview toggle was clicked.
-    pub(in crate::app) fn preview_toggled(&self) -> bool {
-        self.preview.as_ref().is_some_and(egui::Response::clicked)
-    }
-}
-
 /// A notes header to draw.
 pub(in crate::app) struct NotesHeader<'a> {
     pub(in crate::app) info: &'a NotesHeaderInfo,
     /// What the title says ("Notes", "Notes · api").
     pub(in crate::app) title: &'a str,
     pub(in crate::app) title_size: f32,
-    /// Whether clicking the title does something (collapses the panel).
-    pub(in crate::app) title_clickable: bool,
     /// Whether the preview is showing; `None` hides the toggle (not
     /// Markdown, or nothing shown under the header).
     pub(in crate::app) previewing: Option<bool>,
@@ -150,134 +106,27 @@ impl NotesHeader<'_> {
                 ui.spacing_mut().item_spacing.x = ICON_GAP;
                 trailing(ui);
                 file_button(ui, self.info, problem.as_ref(), actions);
-                let (title, preview) = ui
-                    .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add_space(TITLE_INSET);
-                        let toggle_w = if self.previewing.is_some() {
-                            TITLE_GAP + TOGGLE_W + ICON_GAP
-                        } else {
-                            0.0
-                        };
-                        let natural = title_galley(ui, &self, f32::INFINITY).size().x;
-                        let fit =
-                            fit_title(ui.available_width() - toggle_w, natural, problem.is_some());
-                        let title = title_label(ui, &self, fit.title_w);
-                        let preview = self.previewing.map(|on| {
-                            ui.add_space(TITLE_GAP);
-                            preview_toggle(ui, on, self.preview_tips.for_state(on))
-                        });
-                        if let (true, Some(problem)) = (fit.show_badge, &problem) {
-                            problem_badge(ui, problem);
-                        }
-                        (title, preview)
-                    })
-                    .inner;
-                HeaderResponse { title, preview }
+                let badge = problem.as_ref().map(|p| TitleBadge {
+                    width: BADGE_W,
+                    draw: Box::new(move |ui: &mut egui::Ui| problem_badge(ui, p)),
+                });
+                TitleRow {
+                    title: self.title,
+                    title_size: self.title_size,
+                    toggle: self.previewing.map(|on| PreviewToggle {
+                        on,
+                        tips: self.preview_tips,
+                    }),
+                }
+                .show(ui, badge)
             },
         )
         .inner
     }
 }
 
-/// Gap between the header's icons: they are framed squares, so a wide gap
-/// would only take the title's room.
-const ICON_GAP: f32 = theme::SP_1;
-/// Space before the title, so it lines up with the pane's info bar text.
-const TITLE_INSET: f32 = theme::SP_2;
-/// Space between the title and the preview toggle, so the toggle's frame
-/// never touches the text.
-const TITLE_GAP: f32 = theme::SP_2;
-/// The preview toggle's width.
-const TOGGLE_W: f32 = theme::ICON_LG + 2.0 * theme::ICON_PAD;
 /// The ⚠'s width.
 const BADGE_W: f32 = theme::ICON_MD + 2.0 * theme::ICON_PAD;
-/// The 👁 glyph's size: emoji glyphs are drawn smaller than symbols, so it
-/// takes a larger size to match the ⚙ beside it.
-const PREVIEW_ICON_SIZE: f32 = theme::FONT_STATUS;
-
-/// How the title and the ⚠ share the room left of the preview toggle.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct TitleFit {
-    title_w: f32,
-    show_badge: bool,
-}
-
-/// The title comes first: the ⚠ shows only when the whole title still fits
-/// beside it. Without it the ⚙ still takes the problem's colour and says
-/// what happened. Pure.
-fn fit_title(room: f32, title_natural_w: f32, has_problem: bool) -> TitleFit {
-    let room = room.max(0.0);
-    let with_badge = room - (BADGE_W + ICON_GAP);
-    if has_problem && with_badge >= title_natural_w {
-        TitleFit {
-            title_w: with_badge,
-            show_badge: true,
-        }
-    } else {
-        TitleFit {
-            title_w: room,
-            show_badge: false,
-        }
-    }
-}
-
-/// The title laid out on one line no wider than `max_width`.
-fn title_galley(
-    ui: &egui::Ui,
-    header: &NotesHeader<'_>,
-    max_width: f32,
-) -> std::sync::Arc<egui::Galley> {
-    crate::ui_kit::one_line_elided(
-        ui,
-        header.title,
-        egui::FontId::proportional(header.title_size),
-        theme::active().text,
-        max_width,
-    )
-}
-
-/// The title, ellipsised to `max_width` (whole on hover).
-fn title_label(ui: &mut egui::Ui, header: &NotesHeader<'_>, max_width: f32) -> egui::Response {
-    let galley = title_galley(ui, header, max_width);
-    let elided = galley.elided;
-    let sense = if header.title_clickable {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let mut resp = ui.add(egui::Label::new(galley).sense(sense));
-    if header.title_clickable {
-        resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    }
-    if elided {
-        resp = crate::ui_kit::full_hover_text(resp, header.title);
-    }
-    resp
-}
-
-/// The 👁 toggle: lit while the preview shows (the text colour on the
-/// selection fill, which an accent icon would barely show on).
-fn preview_toggle(ui: &mut egui::Ui, on: bool, tip: &str) -> egui::Response {
-    let t = theme::active();
-    let color = if on { t.text } else { t.fg_muted };
-    // Exactly this size: the title's room was worked out from it. Button
-    // padding would make it wider; the square itself pads the glyph.
-    ui.scope(|ui| {
-        ui.spacing_mut().button_padding = egui::Vec2::ZERO;
-        ui.add_sized(
-            egui::vec2(TOGGLE_W, theme::HEADER_H - 2.0 * ICON_GAP),
-            egui::Button::selectable(
-                on,
-                egui::RichText::new(PREVIEW_ICON)
-                    .size(PREVIEW_ICON_SIZE)
-                    .color(color),
-            ),
-        )
-    })
-    .inner
-    .on_hover_cursor(egui::CursorIcon::PointingHand)
-    .on_hover_text(tip)
-}
 
 /// How a problem reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -626,38 +475,11 @@ mod tests {
     }
 
     #[test]
-    fn the_title_keeps_its_room_before_the_warning_shows() {
-        let room = 100.0;
-        let badge = BADGE_W + ICON_GAP;
-        // Fits with the warning beside it.
-        let fit = fit_title(room, room - badge, true);
-        assert!(fit.show_badge);
-        assert_eq!(fit.title_w, room - badge);
-        // Would be cut short: the warning gives way (the gear says it).
-        let fit = fit_title(room, room - badge + 1.0, true);
-        assert!(!fit.show_badge);
-        assert_eq!(fit.title_w, room);
-        // No problem, no warning; no room never goes negative.
-        assert!(!fit_title(room, 10.0, false).show_badge);
-        assert_eq!(fit_title(-5.0, 10.0, true).title_w, 0.0);
-    }
-
-    #[test]
     fn only_markdown_notes_can_be_previewed() {
         assert!(info(None, NoteStatus::Synced).is_markdown());
         assert!(info(Some(VAULT), NoteStatus::Synced).is_markdown());
         assert!(!info(Some("/vault/todo.txt"), NoteStatus::Synced).is_markdown());
         assert!(note_is_markdown(Some(Path::new("/vault/Todo.MARKDOWN"))));
-    }
-
-    #[test]
-    fn the_toggle_says_what_a_click_does_with_its_shortcut() {
-        let tips = PreviewTips::new(|tip| format!("{tip} (\u{21E7}\u{2318}M)"));
-        assert_eq!(
-            tips.for_state(false),
-            "Preview Markdown (\u{21E7}\u{2318}M)"
-        );
-        assert_eq!(tips.for_state(true), "Back to editing (\u{21E7}\u{2318}M)");
     }
 
     /// The actions a menu's rows give, in order.
@@ -786,7 +608,6 @@ mod tests {
                 info,
                 title: &info.title,
                 title_size: theme::FONT_UI_MD,
-                title_clickable: true,
                 previewing: Some(false),
                 preview_tips: &tips,
             }
@@ -819,7 +640,10 @@ mod tests {
         assert!(toggle.right() < gear.left(), "the gear is on the right");
 
         let (_, title_clicked, toggled) = header_frame(&ctx, &own, click(title.center()));
-        assert!(title_clicked && !toggled);
+        assert!(
+            !title_clicked && !toggled,
+            "a click on the title does nothing (it never collapses the notes)"
+        );
         let (_, title_clicked, toggled) = header_frame(&ctx, &own, click(toggle.center()));
         assert!(toggled && !title_clicked);
 

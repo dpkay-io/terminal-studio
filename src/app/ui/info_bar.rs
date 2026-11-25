@@ -118,10 +118,10 @@ impl App {
     }
 
     /// Where a revealed info bar goes: where new splits open theirs, or the
-    /// top when an older settings file made hidden the default.
+    /// default place when an older settings file made hidden the default.
     pub(in crate::app) fn revealed_info_bar_position(&self) -> InfoBarPosition {
         match self.settings.info_bar_position {
-            InfoBarPosition::Hidden => InfoBarPosition::Top,
+            InfoBarPosition::Hidden => InfoBarPosition::default(),
             shown => shown,
         }
     }
@@ -472,8 +472,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn info_bar_position_default_is_top() {
-        assert_eq!(InfoBarPosition::default(), InfoBarPosition::Top);
+    fn info_bar_position_default_is_bottom() {
+        assert_eq!(InfoBarPosition::default(), InfoBarPosition::Bottom);
     }
 
     #[test]

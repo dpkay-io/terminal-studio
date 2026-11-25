@@ -142,7 +142,7 @@ impl App {
                 RightTab::GitDiff => self
                     .active_pane_cwd()
                     .and_then(|cwd| self.watch_state.as_ref()?.dir_data.get(&cwd))
-                    .map(|d| d.is_git)
+                    .map(|d| d.is_git())
                     .unwrap_or(false),
                 RightTab::Markdown(p) => self
                     .shown_md_tabs

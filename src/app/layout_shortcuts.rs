@@ -110,6 +110,13 @@ impl App {
             .is_some_and(|id| self.notes_ids().contains(&id))
     }
 
+    /// A text box has the keyboard (a file or note editor, the notes, a
+    /// rename or search field): the chords it acts on itself are its own.
+    pub(super) fn text_box_has_keyboard(&self, ctx: &egui::Context) -> bool {
+        self.keyboard_focus(ctx)
+            .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some())
+    }
+
     /// What has the keyboard while the right panel's notes do.
     fn notes_ids(&self) -> [egui::Id; 2] {
         [self.notes_text_id(), self.notes_preview_id()]

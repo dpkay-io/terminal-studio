@@ -16,8 +16,9 @@ pub enum CursorStyle {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InfoBarPosition {
-    #[default]
     Top,
+    /// New splits put their info bar under the pane.
+    #[default]
     Bottom,
     Hidden,
 }
@@ -52,8 +53,8 @@ pub(super) struct AppSettings {
     pub(super) save_scrollback_on_exit: bool,
     pub(super) log_level: LogLevel,
     pub(super) info_bar_position: InfoBarPosition,
-    /// A row of tabs above each split, one per tab it holds. The session
-    /// list shows every tab either way.
+    /// A row of tabs above each split, one per tab it holds (off until
+    /// turned on). The session list shows every tab either way.
     pub(super) show_tab_bar: bool,
     /// The title bar takes the active workspace's colour. The tab bar and
     /// the session list mark each tab's workspace colour either way, so this
@@ -89,7 +90,7 @@ impl Default for AppSettings {
             save_scrollback_on_exit: true,
             log_level: LogLevel::default(),
             info_bar_position: InfoBarPosition::default(),
-            show_tab_bar: true,
+            show_tab_bar: false,
             workspace_color_on_titlebar: true,
             nav_stable_rows: NAV_STABLE_ROWS_DEFAULT,
             workspace_stable_rows: WORKSPACE_STABLE_ROWS_DEFAULT,
@@ -157,6 +158,22 @@ mod tests {
         assert!(!s.scroll_on_output);
         assert_eq!(s.default_shell, None);
         assert!(!s.show_sys_monitor);
+        assert!(!s.show_tab_bar, "the tab bar is off until turned on");
+        assert_eq!(s.info_bar_position, InfoBarPosition::Bottom);
+    }
+
+    #[test]
+    fn saved_tab_bar_and_info_bar_choices_are_kept() {
+        let s: AppSettings =
+            serde_json::from_str(r#"{"show_tab_bar":true,"info_bar_position":"Top"}"#).unwrap();
+        assert!(s.show_tab_bar);
+        assert_eq!(s.info_bar_position, InfoBarPosition::Top);
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(
+            !old.show_tab_bar,
+            "a file without them gets the new defaults"
+        );
+        assert_eq!(old.info_bar_position, InfoBarPosition::Bottom);
     }
 
     #[test]

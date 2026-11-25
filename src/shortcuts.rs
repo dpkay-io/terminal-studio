@@ -122,6 +122,11 @@ pub enum AppAction {
 
     // Window
     ToggleFullscreen,
+    /// The whole window bigger, as a browser's Zoom In (`app/window_zoom.rs`).
+    ZoomWindowIn,
+    ZoomWindowOut,
+    /// The whole window back to 100 %.
+    ZoomWindowReset,
 }
 
 impl AppAction {
@@ -179,6 +184,9 @@ impl AppAction {
             Self::MoveTabToDownGroup => "move_tab_to_down_group",
             Self::RevealInExplorer => "reveal_in_explorer",
             Self::ToggleFullscreen => "toggle_fullscreen",
+            Self::ZoomWindowIn => "zoom_window_in",
+            Self::ZoomWindowOut => "zoom_window_out",
+            Self::ZoomWindowReset => "zoom_window_reset",
         }
     }
 
@@ -236,6 +244,9 @@ impl AppAction {
             "move_tab_to_down_group" => Some(Self::MoveTabToDownGroup),
             "reveal_in_explorer" => Some(Self::RevealInExplorer),
             "toggle_fullscreen" => Some(Self::ToggleFullscreen),
+            "zoom_window_in" => Some(Self::ZoomWindowIn),
+            "zoom_window_out" => Some(Self::ZoomWindowOut),
+            "zoom_window_reset" => Some(Self::ZoomWindowReset),
             _ => None,
         }
     }
@@ -294,6 +305,9 @@ impl AppAction {
             Self::MoveTabToDownGroup => "Move tab to group below",
             Self::RevealInExplorer => "Reveal file in explorer",
             Self::ToggleFullscreen => "Toggle full screen",
+            Self::ZoomWindowIn => "Zoom in (whole window)",
+            Self::ZoomWindowOut => "Zoom out (whole window)",
+            Self::ZoomWindowReset => "Actual size (whole window)",
         }
     }
 
@@ -340,9 +354,24 @@ impl AppAction {
                 | Self::OpenFileFinder
                 | Self::SearchTerminal
                 | Self::ToggleFullscreen
+                | Self::ZoomWindowIn
+                | Self::ZoomWindowOut
+                | Self::ZoomWindowReset
         )
     }
 }
+
+/// The keys a focused text box acts on with the primary modifier held
+/// (select all, copy, paste, cut, undo, redo), whatever else is held: egui's
+/// text box matches them ignoring Shift and Alt, so ⇧⌘Z is redo there.
+pub const TEXT_EDITING_PRIMARY_KEYS: [egui::Key; 6] = [
+    egui::Key::A,
+    egui::Key::C,
+    egui::Key::V,
+    egui::Key::X,
+    egui::Key::Y,
+    egui::Key::Z,
+];
 
 const IS_MAC: bool = cfg!(target_os = "macos");
 
@@ -367,10 +396,13 @@ pub fn alt_modifier_label() -> &'static str {
 }
 
 /// egui reports the shifted symbol for some keys; bindings store the base key.
+/// `+` is Shift+= on most keyboards, so a dedicated `+` key (the keypad's,
+/// or a layout's own) reads as `=` too.
 fn unshifted_key(key: egui::Key) -> egui::Key {
     match key {
         egui::Key::Questionmark => egui::Key::Slash,
         egui::Key::Pipe => egui::Key::Backslash,
+        egui::Key::Plus => egui::Key::Equals,
         other => other,
     }
 }
@@ -446,6 +478,12 @@ impl Shortcut {
 
     pub fn label(&self) -> String {
         self.label_on(IS_MAC)
+    }
+
+    /// Whether a focused text box acts on this chord itself (undo, redo,
+    /// copy…), so a shortcut on it would take that from the text box.
+    pub fn is_text_editing(&self) -> bool {
+        self.ctrl && TEXT_EDITING_PRIMARY_KEYS.contains(&self.key)
     }
 
     fn label_on(&self, is_mac: bool) -> String {
@@ -586,6 +624,15 @@ fn standard_default_bindings() -> Vec<(Shortcut, AppAction)> {
             AppAction::RevealInExplorer,
         ),
         (Shortcut::key(F11), AppAction::ToggleFullscreen),
+        // The browser chords. Zoom In also answers Shift+=, which is `+` on
+        // most keyboards (as egui's own zoom keys did).
+        (Shortcut::primary(Equals), AppAction::ZoomWindowIn),
+        (
+            Shortcut::primary(Equals).with_shift(),
+            AppAction::ZoomWindowIn,
+        ),
+        (Shortcut::primary(Minus), AppAction::ZoomWindowOut),
+        (Shortcut::primary(Num0), AppAction::ZoomWindowReset),
     ];
     bindings.extend(tab_bindings(cs));
     bindings
@@ -811,6 +858,25 @@ pub fn key_from_name(name: &str) -> Option<egui::Key> {
     }
 }
 
+/// A keybindings file's chords plus the default chords of every action it
+/// binds to nothing (one added since the file was written: the window zoom
+/// keys, for instance), unless the file uses that chord for something else.
+fn with_missing_defaults(
+    mut bindings: Vec<(Shortcut, AppAction)>,
+    defaults: Vec<(Shortcut, AppAction)>,
+) -> Vec<(Shortcut, AppAction)> {
+    let missing: Vec<_> = defaults
+        .into_iter()
+        .filter(|(chord, action)| {
+            !bindings
+                .iter()
+                .any(|(bound, bound_action)| bound_action == action || bound == chord)
+        })
+        .collect();
+    bindings.extend(missing);
+    bindings
+}
+
 pub struct ShortcutGroup {
     pub name: &'static str,
     pub entries: Vec<(AppAction, Shortcut)>,
@@ -826,14 +892,8 @@ pub struct ShortcutRegistry {
 impl ShortcutRegistry {
     pub fn new() -> Self {
         let config = KeybindingsConfig::load();
-        let bindings = config.to_shortcut_pairs();
-
-        // Fall back to defaults if no valid bindings were loaded
-        let bindings = if bindings.is_empty() {
-            default_bindings()
-        } else {
-            bindings
-        };
+        // With no valid bindings loaded, every default is missing.
+        let bindings = with_missing_defaults(config.to_shortcut_pairs(), default_bindings());
         let registry = Self::with_bindings(bindings, os_reserved_shortcuts());
         registry.log_os_conflicts();
         registry
@@ -855,8 +915,19 @@ impl ShortcutRegistry {
         }
     }
 
+    /// A registry of `bindings` with nothing reserved by the OS.
+    #[cfg(test)]
+    pub(crate) fn for_tests(bindings: Vec<(Shortcut, AppAction)>) -> Self {
+        Self::with_bindings(bindings, Vec::new())
+    }
+
     fn with_bindings(bindings: Vec<(Shortcut, AppAction)>, os_reserved: Vec<Shortcut>) -> Self {
-        let labels = bindings.iter().map(|(s, a)| (*a, s.label())).collect();
+        // An action's first chord is the one shown (Zoom In: ⌘=, not ⇧⌘=),
+        // as `find_shortcut` gives it.
+        let mut labels = HashMap::new();
+        for (shortcut, action) in &bindings {
+            labels.entry(*action).or_insert_with(|| shortcut.label());
+        }
         ShortcutRegistry {
             bindings,
             labels,
@@ -879,10 +950,19 @@ impl ShortcutRegistry {
     }
 
     pub fn match_event(&self, key: &egui::Key, mods: &egui::Modifiers) -> Option<AppAction> {
+        self.binding_for(key, mods).map(|(_, action)| action)
+    }
+
+    /// The binding `key` with `mods` matches.
+    fn binding_for(
+        &self,
+        key: &egui::Key,
+        mods: &egui::Modifiers,
+    ) -> Option<(&Shortcut, AppAction)> {
         self.bindings
             .iter()
             .find(|(s, _)| s.matches(key, mods))
-            .map(|(_, a)| *a)
+            .map(|(s, a)| (s, *a))
     }
 
     /// Removes the first pressed key whose binding satisfies `wanted`.
@@ -891,22 +971,49 @@ impl ShortcutRegistry {
         input: &mut egui::InputState,
         wanted: impl Fn(AppAction) -> bool,
     ) -> Option<AppAction> {
-        let index = input
-            .events
-            .iter()
-            .position(|event| self.pressed_action(event).is_some_and(&wanted))?;
+        self.consume_binding(input, |_, action| wanted(action))
+    }
+
+    /// Removes the first pressed key of a global action (`is_global`). While
+    /// a text box has the keyboard, a chord it acts on itself stays its own:
+    /// ⇧⌘Z is redo there, not Zoom pane.
+    pub fn consume_global(
+        &self,
+        input: &mut egui::InputState,
+        text_box_has_keyboard: bool,
+    ) -> Option<AppAction> {
+        self.consume_binding(input, |shortcut, action| {
+            action.is_global() && !(text_box_has_keyboard && shortcut.is_text_editing())
+        })
+    }
+
+    /// Removes the first pressed key whose chord and action satisfy `wanted`.
+    fn consume_binding(
+        &self,
+        input: &mut egui::InputState,
+        wanted: impl Fn(&Shortcut, AppAction) -> bool,
+    ) -> Option<AppAction> {
+        let index = input.events.iter().position(|event| {
+            self.pressed_binding(event)
+                .is_some_and(|(shortcut, action)| wanted(shortcut, action))
+        })?;
         let event = input.events.remove(index);
         self.pressed_action(&event)
     }
 
     fn pressed_action(&self, event: &egui::Event) -> Option<AppAction> {
+        self.pressed_binding(event).map(|(_, action)| action)
+    }
+
+    /// The binding a key press matches.
+    fn pressed_binding(&self, event: &egui::Event) -> Option<(&Shortcut, AppAction)> {
         match event {
             egui::Event::Key {
                 key,
                 pressed: true,
                 modifiers,
                 ..
-            } => self.match_event(key, modifiers),
+            } => self.binding_for(key, modifiers),
             _ => None,
         }
     }
@@ -1002,6 +1109,14 @@ impl ShortcutRegistry {
                 ],
             ),
             (
+                "Zoom",
+                &[
+                    AppAction::ZoomWindowIn,
+                    AppAction::ZoomWindowOut,
+                    AppAction::ZoomWindowReset,
+                ],
+            ),
+            (
                 "Help",
                 &[AppAction::ToggleShortcutHelp, AppAction::CommandPalette],
             ),
@@ -1081,7 +1196,13 @@ mod tests {
         AppAction::MoveTabToDownGroup,
         AppAction::RevealInExplorer,
         AppAction::ToggleFullscreen,
+        AppAction::ZoomWindowIn,
+        AppAction::ZoomWindowOut,
+        AppAction::ZoomWindowReset,
     ];
+
+    /// Actions with a second default chord.
+    const BOUND_TWICE_BY_DEFAULT: &[AppAction] = &[AppAction::ZoomWindowIn];
 
     /// Actions deliberately shipped without a default chord.
     const UNBOUND_BY_DEFAULT: &[AppAction] = &[AppAction::FocusFileSearch, AppAction::UnsplitAll];
@@ -1180,6 +1301,9 @@ mod tests {
         for is_mac in [MAC, OTHER] {
             let bindings = table(is_mac);
             for (i, (_, action)) in bindings.iter().enumerate() {
+                if BOUND_TWICE_BY_DEFAULT.contains(action) {
+                    continue;
+                }
                 assert!(
                     !bindings[i + 1..].iter().any(|(_, a)| a == action),
                     "{action:?} bound twice (mac={is_mac})"
@@ -1269,6 +1393,9 @@ mod tests {
             (AppAction::OpenQuickSwitcher, "\u{2303}\u{21E7}Space"),
             (AppAction::RevealInExplorer, "\u{2325}\u{2318}R"),
             (AppAction::ToggleFullscreen, "\u{2303}\u{2318}F"),
+            (AppAction::ZoomWindowIn, "\u{2318}="),
+            (AppAction::ZoomWindowOut, "\u{2318}-"),
+            (AppAction::ZoomWindowReset, "\u{2318}0"),
         ];
         for (action, label) in cases {
             assert_eq!(find(action).as_deref(), Some(label), "{action:?}");
@@ -1418,6 +1545,82 @@ mod tests {
     }
 
     #[test]
+    fn a_text_box_keeps_the_chords_it_edits_with() {
+        // ⇧⌘Z / Ctrl+Shift+Z: Zoom pane, but redo in a text box.
+        let zoom_pane = chord_of(AppAction::ZoomPane);
+        assert!(zoom_pane.is_text_editing());
+        for (text_box, want) in [(false, Some(AppAction::ZoomPane)), (true, None)] {
+            let mut input = egui::InputState::default();
+            input.events.push(key_event(&zoom_pane, true));
+            assert_eq!(registry().consume_global(&mut input, text_box), want);
+            assert_eq!(input.events.is_empty(), want.is_some(), "left for the box");
+        }
+    }
+
+    #[test]
+    fn every_global_chord_works_in_a_text_box_unless_the_box_edits_with_it() {
+        for (shortcut, action) in default_bindings() {
+            if !action.is_global() {
+                continue;
+            }
+            let mut input = egui::InputState::default();
+            input.events.push(key_event(&shortcut, true));
+            let taken = registry().consume_global(&mut input, true);
+            if shortcut.is_text_editing() {
+                assert_eq!(taken, None, "{action:?} takes a text box's key");
+            } else {
+                assert_eq!(taken, Some(action), "{action:?} from a text box");
+            }
+        }
+    }
+
+    #[test]
+    fn a_shown_chord_is_an_actions_first() {
+        let reg = registry();
+        assert_eq!(
+            reg.label_for(AppAction::ZoomWindowIn),
+            Some(Shortcut::primary(egui::Key::Equals).label().as_str())
+        );
+        assert_eq!(
+            reg.find_shortcut(AppAction::ZoomWindowIn),
+            Some(&Shortcut::primary(egui::Key::Equals))
+        );
+    }
+
+    #[test]
+    fn a_keybindings_file_gets_the_defaults_it_does_not_bind() {
+        use egui::Key::*;
+        let defaults = vec![
+            (Shortcut::primary(N), AppAction::NewTerminalTab),
+            (Shortcut::primary(Equals), AppAction::ZoomWindowIn),
+            (
+                Shortcut::primary(Equals).with_shift(),
+                AppAction::ZoomWindowIn,
+            ),
+            (Shortcut::primary(Minus), AppAction::ZoomWindowOut),
+            (Shortcut::primary(Num0), AppAction::ZoomWindowReset),
+        ];
+        let file = vec![
+            // Rebound: its default is not added back.
+            (Shortcut::primary(T), AppAction::NewTerminalTab),
+            // Uses Zoom out's default chord for something else.
+            (Shortcut::primary(Minus), AppAction::SplitVertical),
+        ];
+        let merged = with_missing_defaults(file.clone(), defaults.clone());
+        let mut want = file;
+        want.extend([
+            defaults[1].clone(),
+            defaults[2].clone(),
+            defaults[4].clone(),
+        ]);
+        assert_eq!(merged, want);
+        assert_eq!(
+            with_missing_defaults(Vec::new(), defaults.clone()),
+            defaults
+        );
+    }
+
+    #[test]
     fn os_reserved_actions_are_reported() {
         let quick = chord_of(AppAction::OpenQuickSwitcher);
         let reg = ShortcutRegistry::with_bindings(default_bindings(), vec![quick]);
@@ -1455,7 +1658,8 @@ mod tests {
         // Editors keep these for typing; a layout shortcut on one of them
         // would break copy, paste, undo or cursor movement in a file.
         use egui::Key::*;
-        let editing = [A, C, V, X, Y, Z, ArrowLeft, ArrowRight, ArrowUp, ArrowDown];
+        let mut editing = TEXT_EDITING_PRIMARY_KEYS.to_vec();
+        editing.extend([ArrowLeft, ArrowRight, ArrowUp, ArrowDown]);
         for bindings in [standard_default_bindings(), mac_default_bindings()] {
             for (shortcut, action) in bindings {
                 if action.arranges_layout() {

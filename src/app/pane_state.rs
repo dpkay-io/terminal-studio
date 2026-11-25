@@ -40,6 +40,8 @@ pub(super) struct PaneState {
     pub(super) group_layout: GroupNode,
     pub(super) focused_group_id: GroupId,
     pub(super) next_group_id: u32,
+    /// Each document pane's zoom (⌘ / Ctrl + scroll over it).
+    pub(super) zoom: super::content_zoom::PaneZoom,
 }
 
 impl PaneState {
@@ -54,6 +56,7 @@ impl PaneState {
             group_layout: GroupNode::Leaf { group_id: 0 },
             focused_group_id: 0,
             next_group_id: 1,
+            zoom: super::content_zoom::PaneZoom::default(),
         }
     }
 

@@ -122,6 +122,9 @@ pub(super) fn detect_merge_operation(dir: &std::path::Path) -> MergeOperation {
     MergeOperation::None
 }
 
+/// The ignore file the git panel's "Add to .gitignore" writes to.
+const GITIGNORE_FILE: &str = ".gitignore";
+
 enum Job {
     GitInfo(PathBuf),
     Stage {
@@ -134,10 +137,8 @@ enum Job {
     },
     StageAll(PathBuf),
     UnstageAll(PathBuf),
-    Diff {
-        cwd: PathBuf,
-        rel_path: String,
-    },
+    /// The changes to one file (absolute path).
+    Diff(PathBuf),
     UnpushedCommits(PathBuf),
     Commit {
         cwd: PathBuf,
@@ -169,11 +170,33 @@ enum Job {
     CherryPickContinue(PathBuf),
 }
 
+/// A file's text at `HEAD`, its text now, and the changes between them.
+/// A file git does not know yet (untracked, so `git diff` shows nothing)
+/// is all added lines, so the diff view colours it and its change arrows
+/// have something to step to.
+fn file_diff(full_path: &Path) -> (String, String, Vec<super::diff_parser::DiffHunk>) {
+    let new_content = std::fs::read_to_string(full_path).unwrap_or_default();
+    // From the repository root, where both `HEAD:<path>` and `-- <path>`
+    // read the path from (a terminal may be in any folder inside it).
+    let Some((root, rel_path)) = super::git_paths::locate(full_path) else {
+        return (String::new(), new_content, Vec::new());
+    };
+    let in_head = super::git_cmd::git_output(&["show", &format!("HEAD:{rel_path}")], &root);
+    let raw_diff =
+        super::git_cmd::git_output(&["diff", "HEAD", "--", &rel_path], &root).unwrap_or_default();
+    let mut hunks = super::diff_parser::parse_diff(&raw_diff);
+    if hunks.is_empty() && in_head.is_none() {
+        hunks = super::diff_parser::new_file_hunks(&new_content);
+    }
+    (in_head.unwrap_or_default(), new_content, hunks)
+}
+
 pub(super) struct DiffResult {
     pub(super) path: PathBuf,
     pub(super) old_content: String,
     pub(super) new_content: String,
-    pub(super) raw_diff: String,
+    /// Parsed here, off the UI thread.
+    pub(super) hunks: Vec<super::diff_parser::DiffHunk>,
     pub(super) old_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
     pub(super) new_highlights: Option<Vec<Vec<(egui::Color32, String)>>>,
     pub(super) highlight_theme: crate::theme::ThemeId,
@@ -257,7 +280,8 @@ impl GitWorker {
                                 manual_git_inflight_bg.lock().remove(&p);
                             }
                             Job::Stage { cwd, path } => {
-                                if super::git_cmd::git_status_ok(&["add", "--", &path], &cwd) {
+                                let root = super::git_paths::repo_root_or_self(&cwd);
+                                if super::git_cmd::git_status_ok(&["add", "--", &path], &root) {
                                     let (diff, status) = run_git_info(&cwd);
                                     let merge_op = detect_merge_operation(&cwd);
                                     results_bg
@@ -268,9 +292,10 @@ impl GitWorker {
                                 stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
                             Job::Unstage { cwd, path } => {
+                                let root = super::git_paths::repo_root_or_self(&cwd);
                                 if super::git_cmd::git_status_ok(
                                     &["reset", "HEAD", "--", &path],
-                                    &cwd,
+                                    &root,
                                 ) {
                                     let (diff, status) = run_git_info(&cwd);
                                     let merge_op = detect_merge_operation(&cwd);
@@ -303,20 +328,8 @@ impl GitWorker {
                                 }
                                 stage_ops_bg.fetch_sub(1, Ordering::Release);
                             }
-                            Job::Diff { cwd, rel_path } => {
-                                let old_content = super::git_cmd::git_output(
-                                    &["show", &format!("HEAD:{}", rel_path)],
-                                    &cwd,
-                                )
-                                .unwrap_or_default();
-                                let raw_diff = super::git_cmd::git_output(
-                                    &["diff", "HEAD", "--", &rel_path],
-                                    &cwd,
-                                )
-                                .unwrap_or_default();
-                                let new_content = std::fs::read_to_string(cwd.join(&rel_path))
-                                    .unwrap_or_default();
-                                let full_path = cwd.join(&rel_path);
+                            Job::Diff(full_path) => {
+                                let (old_content, new_content, hunks) = file_diff(&full_path);
 
                                 let syntax = crate::syntax::find_syntax_for_file(&full_path);
                                 let old_highlights = syntax.and_then(|syn| {
@@ -338,7 +351,7 @@ impl GitWorker {
                                     path: full_path,
                                     old_content,
                                     new_content,
-                                    raw_diff,
+                                    hunks,
                                     old_highlights,
                                     new_highlights,
                                     highlight_theme: crate::theme::active().id,
@@ -440,7 +453,10 @@ impl GitWorker {
                                 results_bg.lock().last_commit_msg.insert(cwd, msg);
                             }
                             Job::Gitignore { cwd, pattern } => {
-                                let gitignore_path = cwd.join(".gitignore");
+                                // The repository's own `.gitignore`: the
+                                // pattern is a path from its root.
+                                let gitignore_path =
+                                    super::git_paths::repo_root_or_self(&cwd).join(GITIGNORE_FILE);
                                 let result = (|| -> Result<PathBuf, String> {
                                     let mut content = std::fs::read_to_string(&gitignore_path)
                                         .unwrap_or_default();
@@ -467,9 +483,10 @@ impl GitWorker {
                                 results_bg.lock().gitignore_results.push(result);
                             }
                             Job::Revert { cwd, path } => {
+                                let root = super::git_paths::repo_root_or_self(&cwd);
                                 let result = match super::git_cmd::git_stderr_on_fail(
                                     &["checkout", "HEAD", "--", &path],
-                                    &cwd,
+                                    &root,
                                 ) {
                                     Ok(_) => {
                                         let (diff, status) = run_git_info(&cwd);
@@ -485,7 +502,7 @@ impl GitWorker {
                                 results_bg.lock().revert_results.push(result);
                             }
                             Job::DeleteFile { cwd, path } => {
-                                let full = cwd.join(&path);
+                                let full = super::git_paths::repo_root_or_self(&cwd).join(&path);
                                 let result = if full.is_dir() {
                                     std::fs::remove_dir_all(&full)
                                 } else {
@@ -697,11 +714,10 @@ impl GitWorker {
         self.stage_ops_inflight.load(Ordering::Acquire) > 0
     }
 
-    pub(super) fn enqueue_diff(&self, cwd: &Path, rel_path: String) {
-        let _ = self.tx.send(Job::Diff {
-            cwd: cwd.to_path_buf(),
-            rel_path,
-        });
+    /// Asks for the changes to `file` (absolute); the result carries the
+    /// same path.
+    pub(super) fn enqueue_diff(&self, file: PathBuf) {
+        let _ = self.tx.send(Job::Diff(file));
     }
 
     pub(super) fn take_diff_results(&self) -> Vec<DiffResult> {
@@ -1090,5 +1106,154 @@ mod tests {
         assert_eq!(content.trim(), "original");
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// A repo with `tracked.txt` and `sub/deep.txt` committed ("a b c")
+    /// then edited (b → B), and `new.txt` never added.
+    fn repo_with_changes(suffix: &str) -> PathBuf {
+        let tmp = std::env::temp_dir().join(format!("file_diff_{suffix}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&tmp)
+                .output()
+                .unwrap();
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@test.com"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::create_dir_all(tmp.join(SUBFOLDER)).unwrap();
+        for file in ["tracked.txt", DEEP_FILE] {
+            std::fs::write(tmp.join(file), "a\nb\nc\n").unwrap();
+        }
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        for file in ["tracked.txt", DEEP_FILE] {
+            std::fs::write(tmp.join(file), "a\nB\nc\n").unwrap();
+        }
+        std::fs::write(tmp.join("new.txt"), "x\ny\n").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn an_edited_file_has_its_changed_hunk() {
+        let repo = repo_with_changes("edited");
+        let (old, new, hunks) = file_diff(&repo.join("tracked.txt"));
+        assert_eq!(old, "a\nb\nc\n");
+        assert_eq!(new, "a\nB\nc\n");
+        assert_eq!(hunks.len(), 1);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_new_untracked_file_is_one_added_hunk() {
+        let repo = repo_with_changes("untracked");
+        let (old, new, hunks) = file_diff(&repo.join("new.txt"));
+        assert_eq!(old, "", "nothing at HEAD");
+        assert_eq!(new, "x\ny\n");
+        assert_eq!(hunks.len(), 1, "the arrows have a change to step to");
+        assert_eq!(hunks[0].new_count, 2);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn the_diff_job_sends_its_hunks() {
+        let repo = repo_with_changes("job");
+        let worker = GitWorker::spawn(egui::Context::default());
+        worker.enqueue_diff(repo.join("new.txt"));
+        let mut result = None;
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(r) = worker.take_diff_results().into_iter().next() {
+                result = Some(r);
+                break;
+            }
+        }
+        let result = result.expect("the diff job finished");
+        assert_eq!(result.path, repo.join("new.txt"));
+        assert_eq!(result.hunks.len(), 1);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// A folder inside the test repo, and a committed file in it.
+    const SUBFOLDER: &str = "sub";
+    const DEEP_FILE: &str = "sub/deep.txt";
+
+    /// What `git` prints in `repo` for `args`.
+    fn git_in(repo: &Path, args: &[&str]) -> String {
+        super::super::git_cmd::git_output(args, repo).unwrap_or_default()
+    }
+
+    /// Waits for `take` to give something, up to five seconds.
+    fn wait_for<T>(mut take: impl FnMut() -> Option<T>) -> Option<T> {
+        for _ in 0..100 {
+            if let Some(v) = take() {
+                return Some(v);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+
+    #[test]
+    fn a_file_in_a_subfolder_has_its_diff() {
+        let repo = repo_with_changes("deep");
+        let (old, new, hunks) = file_diff(&repo.join(DEEP_FILE));
+        assert_eq!(old, "a\nb\nc\n", "read at HEAD from the repository root");
+        assert_eq!(new, "a\nB\nc\n");
+        assert_eq!(hunks.len(), 1);
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn status_paths_act_on_the_right_file_from_a_subfolder() {
+        // A terminal in `sub/`: the panel's paths are from the repository
+        // root (`sub/deep.txt`), as `git status --porcelain` gives them.
+        let repo = repo_with_changes("from_sub");
+        let status = git_in(&repo.join(SUBFOLDER), &["status", "--porcelain"]);
+        assert!(
+            status.contains(DEEP_FILE),
+            "porcelain paths are root-relative: {status}"
+        );
+        let cwd = repo.join(SUBFOLDER);
+        let worker = GitWorker::spawn(egui::Context::default());
+
+        worker.enqueue_stage(&cwd, DEEP_FILE.to_string());
+        assert!(wait_for(|| worker.take_all_git().remove(&cwd)).is_some());
+        assert_eq!(
+            git_in(&repo, &["diff", "--cached", "--name-only"]).trim(),
+            DEEP_FILE
+        );
+
+        worker.enqueue_unstage(&cwd, DEEP_FILE.to_string());
+        assert!(wait_for(|| worker.take_all_git().remove(&cwd)).is_some());
+        assert_eq!(
+            git_in(&repo, &["diff", "--cached", "--name-only"]).trim(),
+            ""
+        );
+
+        worker.enqueue_revert(&cwd, DEEP_FILE.to_string());
+        let reverted = wait_for(|| worker.take_revert_results().into_iter().next());
+        assert!(matches!(reverted, Some(Ok(_))), "{reverted:?}");
+        assert_eq!(
+            std::fs::read_to_string(repo.join(DEEP_FILE)).unwrap(),
+            "a\nb\nc\n"
+        );
+
+        worker.enqueue_gitignore(&cwd, "new.txt".to_string());
+        assert!(wait_for(|| worker.take_gitignore_results().into_iter().next()).is_some());
+        assert!(
+            repo.join(GITIGNORE_FILE).is_file(),
+            "the repository's own ignore file"
+        );
+        assert!(!cwd.join(GITIGNORE_FILE).exists());
+
+        worker.enqueue_delete(&cwd, "new.txt".to_string());
+        let deleted = wait_for(|| worker.take_delete_results().into_iter().next());
+        assert!(matches!(deleted, Some(Ok(_))), "{deleted:?}");
+        assert!(!repo.join("new.txt").exists());
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }

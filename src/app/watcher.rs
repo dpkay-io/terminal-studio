@@ -631,7 +631,7 @@ mod tests {
 
     fn empty_dir_data() -> DirData {
         DirData {
-            is_git: true,
+            git_root: Some(PathBuf::from("/test/project")),
             git_diff: String::new(),
             git_status: String::new(),
             git_unpushed: Vec::new(),
@@ -689,11 +689,11 @@ mod tests {
 
         let mut existing = empty_dir_data();
         existing.git_status = "M old.rs".to_string();
-        existing.is_git = false;
+        existing.git_root = None;
         ws.dir_data.insert(path.clone(), existing);
 
         let mut fresh = empty_dir_data();
-        fresh.is_git = true;
+        fresh.git_root = Some(path.clone());
         tx.send(WatchResult::DirAdded {
             path: path.clone(),
             data: fresh,
@@ -701,7 +701,7 @@ mod tests {
         .unwrap();
         ws.drain_results();
 
-        assert!(ws.dir_data[&path].is_git);
+        assert!(ws.dir_data[&path].is_git());
         assert_eq!(ws.dir_data[&path].git_status, "M old.rs");
     }
 

@@ -3,7 +3,8 @@
 //! in use, and works while typing in it.
 
 use super::pane::PaneContent;
-use super::ui::notes_header::{note_is_markdown, PreviewTips};
+use super::ui::notes_header::note_is_markdown;
+use super::ui::preview_header::PreviewTips;
 use super::App;
 use crate::shortcuts::AppAction;
 
